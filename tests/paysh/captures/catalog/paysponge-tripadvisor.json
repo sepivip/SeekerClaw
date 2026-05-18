@@ -1,7 +1,7 @@
 {
   "_meta": {
     "label": "paysponge-tripadvisor-402",
-    "capturedAt": "2026-05-15T13:11:36.380Z",
+    "capturedAt": "2026-05-12T11:15:06.279Z",
     "source": "probe-catalog",
     "payMdPath": "providers/paysponge/tripadvisor/PAY.md",
     "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
@@ -10,20 +10,20 @@
   "method": "GET",
   "status": 402,
   "headers": {
-    "date": "Fri, 15 May 2026 13:11:36 GMT",
+    "date": "Tue, 12 May 2026 11:15:06 GMT",
     "content-type": "application/json",
     "transfer-encoding": "chunked",
     "connection": "keep-alive",
     "access-control-allow-credentials": "true",
+    "cf-cache-status": "DYNAMIC",
     "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQYXltZW50IHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly90cmlwYWR2aXNvci54NDAyLnBheXNwb25nZS5jb20vYXBpL3YxL2xvY2F0aW9uL25lYXJieV9zZWFyY2giLCJkZXNjcmlwdGlvbiI6IlNlcnZpY2U6IFRyaXBhZHZpc29yIChodHRwczovL3RyaXBhZHZpc29yLng0MDIucGF5c3BvbmdlLmNvbS9hcGkvdjEvbG9jYXRpb24vbmVhcmJ5X3NlYXJjaCkiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL2pzb24ifSwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1Ojg0NTMiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiMHg4MzM1ODlmQ0Q2ZURiNkUwOGY0YzdDMzJENGY3MWI1NGJkQTAyOTEzIiwicGF5VG8iOiIweDYzMDJEOWU2REJCMjJmRUMzYzM1MDU1MTU2OEJiMzlCNGIzNUFkNTciLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiJFUGpGV2RkNUF1ZnFTU3FlTTJxTjF4enliYXBDOEc0d0VHR2tad3lURHQxdiIsInBheVRvIjoiOTI0Nlhyc0FFS0g2aEF5RVFlNVB2ZHBVTDFwNUt0ajljN3lTbndRbjZvaXMiLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJmZWVQYXllciI6IjJ3S3VwTFI5cTZ3WFlwcHc4R3IyTnZXeEtCVXFtNFBQSktrUWZveEhEQmc0In19XSwiZXh0ZW5zaW9ucyI6eyJiYXphYXIiOnsiaW5mbyI6eyJpbnB1dCI6eyJ0eXBlIjoiaHR0cCIsIm1ldGhvZCI6IkdFVCIsInF1ZXJ5UGFyYW1zIjp7fX0sIm91dHB1dCI6eyJ0eXBlIjoianNvbiIsImV4YW1wbGUiOnt9fX0sInNjaGVtYSI6eyIkc2NoZW1hIjoiaHR0cHM6Ly9qc29uLXNjaGVtYS5vcmcvZHJhZnQvMjAyMC0xMi9zY2hlbWEiLCJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJpbnB1dCI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJ0eXBlIjp7InR5cGUiOiJzdHJpbmciLCJjb25zdCI6Imh0dHAifSwibWV0aG9kIjp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbIkdFVCIsIkhFQUQiLCJERUxFVEUiXX0sInF1ZXJ5UGFyYW1zIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbInR5cGUiLCJtZXRob2QiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfSwib3V0cHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyIsImNvbnN0IjoianNvbiJ9LCJleGFtcGxlIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6dHJ1ZX19LCJyZXF1aXJlZCI6WyJ0eXBlIl0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19LCJyZXF1aXJlZCI6WyJpbnB1dCJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9fX19",
-    "rndr-id": "ef4f6592-c53b-4946",
+    "rndr-id": "fb273b5a-fba1-4adb",
     "server": "cloudflare",
     "vary": "Origin, Accept-Encoding",
     "x-render-origin-server": "Render",
-    "cf-cache-status": "DYNAMIC",
-    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=ucTM4BWLOXHwkyjiHkgEH0SaDa6tnbbtHWP0awTNxFKlPXIfV9RGnOVPaR4ckMZ%2FQKBxTDmYTxlHs8qlge%2FdfvTX4OC%[REDACTED]%3D\"}]}",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=uLP7aG75dPBs7ju2pKZJ%2Bi02E%2BJJSTzN1JGPOO2wO0xzpF1kL%2F9%2BaO2m8CNp3uoDFx4Yc6%[REDACTED]%3D\"}]}",
     "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
-    "cf-ray": "9fc263b6adacd0ff-SOF",
+    "cf-ray": "9fa900eb1b32d0da-SOF",
     "alt-svc": "h3=\":443\"; ma=86400"
   },
   "body": {

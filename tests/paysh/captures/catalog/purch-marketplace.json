@@ -1,7 +1,7 @@
 {
   "_meta": {
     "label": "purch-marketplace-402",
-    "capturedAt": "2026-05-15T13:11:36.403Z",
+    "capturedAt": "2026-05-12T11:13:35.287Z",
     "source": "probe-catalog",
     "payMdPath": "providers/purch/marketplace/PAY.md",
     "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
@@ -27,10 +27,11 @@
     "origin-agent-cluster": "?1",
     "x-download-options": "noopen",
     "x-permitted-cross-domain-policies": "none",
-    "x-cloud-trace-context": "[REDACTED]",
-    "date": "Fri, 15 May 2026 13:11:36 GMT",
+    "date": "Tue, 12 May 2026 11:13:34 GMT",
+    "content-length": "2",
     "server": "Google Frontend",
-    "content-length": "2"
+    "x-cloud-trace-context": "[REDACTED]",
+    "traceparent": "[REDACTED]"
   },
   "body": {}
 }

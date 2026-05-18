@@ -1,7 +1,7 @@
 {
   "_meta": {
     "label": "paysponge-screenshotone-402",
-    "capturedAt": "2026-05-15T13:11:36.659Z",
+    "capturedAt": "2026-05-12T11:15:06.550Z",
     "source": "probe-catalog",
     "payMdPath": "providers/paysponge/screenshotone/PAY.md",
     "note": "Sanitized per BAT-582 v1.6 contract amendment 6."
@@ -10,20 +10,20 @@
   "method": "GET",
   "status": 402,
   "headers": {
-    "date": "Fri, 15 May 2026 13:11:37 GMT",
+    "date": "Tue, 12 May 2026 11:15:06 GMT",
     "content-type": "application/json",
     "transfer-encoding": "chunked",
     "connection": "keep-alive",
     "access-control-allow-credentials": "true",
     "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQYXltZW50IHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9zY3JlZW5zaG90b25lLng0MDIucGF5c3BvbmdlLmNvbS9hbmltYXRlIiwiZGVzY3JpcHRpb24iOiJTZXJ2aWNlOiBTY3JlZW5zaG90T25lIChodHRwczovL3NjcmVlbnNob3RvbmUueDQwMi5wYXlzcG9uZ2UuY29tL2FuaW1hdGUpIiwibWltZVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIn0sImFjY2VwdHMiOlt7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo4NDUzIiwiYW1vdW50IjoiMjAwMDAiLCJhc3NldCI6IjB4ODMzNTg5ZkNENmVEYjZFMDhmNGM3QzMyRDRmNzFiNTRiZEEwMjkxMyIsInBheVRvIjoiMHg2MzAyRDllNkRCQjIyZkVDM2MzNTA1NTE1NjhCYjM5QjRiMzVBZDU3IiwibWF4VGltZW91dFNlY29uZHMiOjMwMCwiZXh0cmEiOnsibmFtZSI6IlVTRCBDb2luIiwidmVyc2lvbiI6IjIifX0seyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJzb2xhbmE6NWV5a3Q0VXNGdjhQOE5KZFRSRXBZMXZ6cUtxWkt2ZHAiLCJhbW91bnQiOiIyMDAwMCIsImFzc2V0IjoiRVBqRldkZDVBdWZxU1NxZU0ycU4xeHp5YmFwQzhHNHdFR0drWnd5VER0MXYiLCJwYXlUbyI6IjkyNDZYcnNBRUtINmhBeUVRZTVQdmRwVUwxcDVLdGo5Yzd5U253UW42b2lzIiwibWF4VGltZW91dFNlY29uZHMiOjMwMCwiZXh0cmEiOnsiZmVlUGF5ZXIiOiIyd0t1cExSOXE2d1hZcHB3OEdyMk52V3hLQlVxbTRQUEpLa1Fmb3hIREJnNCJ9fV0sImV4dGVuc2lvbnMiOnsiYmF6YWFyIjp7ImluZm8iOnsiaW5wdXQiOnsidHlwZSI6Imh0dHAiLCJtZXRob2QiOiJHRVQiLCJxdWVyeVBhcmFtcyI6e319LCJvdXRwdXQiOnsidHlwZSI6Impzb24iLCJleGFtcGxlIjp7fX19LCJzY2hlbWEiOnsiJHNjaGVtYSI6Imh0dHBzOi8vanNvbi1zY2hlbWEub3JnL2RyYWZ0LzIwMjAtMTIvc2NoZW1hIiwidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiaW5wdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJodHRwIn0sIm1ldGhvZCI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJHRVQiLCJIRUFEIiwiREVMRVRFIl19LCJxdWVyeVBhcmFtcyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e30sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19LCJyZXF1aXJlZCI6WyJ0eXBlIiwibWV0aG9kIl0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX0sIm91dHB1dCI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJ0eXBlIjp7InR5cGUiOiJzdHJpbmciLCJjb25zdCI6Impzb24ifSwiZXhhbXBsZSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOnRydWV9fSwicmVxdWlyZWQiOlsidHlwZSJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9fSwicmVxdWlyZWQiOlsiaW5wdXQiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX19fQ==",
-    "rndr-id": "5d5b1628-03a1-49f8",
+    "rndr-id": "b512c472-ace1-4397",
     "server": "cloudflare",
     "vary": "Origin, Accept-Encoding",
     "x-render-origin-server": "Render",
     "cf-cache-status": "DYNAMIC",
-    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=yNOywaZ2QhDPaj6tcKQriTdRJgLIOGzzlZ%2B3UpslNkZB%2BkYUkb3TR8m5%[REDACTED]%3D%3D\"}]}",
+    "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=Vy5cMP4cYQwGimm0KFno5yyXJXdISPSqWsFTQHpCfxfzkfV71EoRQj7zQs6qy1fG%[REDACTED]%2FIylJV1hQ%3D%3D\"}]}",
     "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
-    "cf-ray": "9fc263b60af88ef0-SOF",
+    "cf-ray": "9fa900e9cc183dc0-SOF",
     "alt-svc": "h3=\":443\"; ma=86400"
   },
   "body": {
