@@ -192,7 +192,7 @@ Required: same `id`/`service_id`/`name`/`upstream_ref`/`endpoint`/`verification`
 |---|---|---|
 | `evidence_basis` | enum | For `requires_binary_response` and `unverified_paid_response_shape` only. Values: `paid-response-observed` (settled + observed binary), `openapi-response-content-type` (openapi `responses` declares image/* / video/* / audio/* / application/octet-stream), `product-family-inference` (service's published product is image/video gen — weakest evidence, conservative refuse). Introduced PR #378 R10 — preserve from v1 migration. |
 | `note` | string (markdown) | Free-form per-entry explanation. Useful for documenting specific HTTP error codes, audit findings, deferred BAT pointers. Distinct from the bucket-wide `reasons[<bucket>].explanation` — the note is entry-specific. |
-| `audit_pending` | array | Lists sibling endpoints found by the BAT-706 audit that aren't catalogued. Each entry: `{method, path, cost_usdc, deferred_to: "BAT-XXX"}`. Empty array (or omitted) if the audit found no extras. As endpoints get promoted to catalog.json, drop them from this list. |
+| `audit_pending` | array | Lists sibling endpoints found by the BAT-706 audit that aren't catalogued. Each entry: `{method, path, cost_usdc, deferred_to: "BAT-XXX" \| null}`. `deferred_to` is a BAT ticket id when a follow-up exists, OR `null` when the endpoint is unscheduled (no ticket yet — we know it's there, but haven't decided when/how to catalog it). Empty array (or omitted) if the audit found no extras. As endpoints get promoted to catalog.json, drop them from this list. When a `null`-deferred endpoint gets a ticket, update its `deferred_to` to the ticket id. |
 
 ### Catalog ↔ unsupported lifecycle
 

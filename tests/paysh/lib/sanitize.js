@@ -43,7 +43,10 @@ const HEADER_DENYLIST = new Set([
     // the long-base64 redactor misses because of `s=` lookbehind interaction
     // (the `=` in `?s=` is in the base64 alphabet so the negative lookbehind
     // blocks the match start). These headers carry zero protocol value for
-    // x402 fixtures and can be dropped entirely.
+    // x402 fixtures. Header VALUES become "[REDACTED]" via the HEADER_DENYLIST
+    // path in sanitizeHeaders() — the header KEY stays in the fixture so a
+    // reviewer can still see which transport-noise headers were present (and
+    // that we intentionally scrubbed them, vs forgot to capture them).
     'report-to',     // W3C Reporting API; URL has `?s=<token>` Cloudflare NEL identifier
     'nel',           // Network Error Logging policy
     'rndr-id',       // Render.com request id
