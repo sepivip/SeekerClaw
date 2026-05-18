@@ -8,7 +8,7 @@
  *   - app/src/main/assets/default-skills/paysh-catalog/catalog.json (v1)
  *   - app/src/main/assets/default-skills/paysh-catalog/unsupported.json (v1)
  *   - tests/paysh/captures/catalog/*.json (per-service 402 captures)
- *   - tests/paysh/captures/textbelt-text-v2-success.json (textbelt live-pay capture)
+ *   - tests/paysh/captures/textbelt-text-402.json (textbelt live-pay capture)
  *   - tests/paysh/catalog-audit.md (BAT-706 full-audit parsed_ok table for audit_pending)
  *
  * Writes (after validation per paysh-catalog/SCHEMA.md):
@@ -26,7 +26,7 @@ const path = require('path');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SKILL_DIR = path.join(REPO_ROOT, 'app/src/main/assets/default-skills/paysh-catalog');
 const CAPTURE_DIR = path.join(REPO_ROOT, 'tests/paysh/captures/catalog');
-const TEXTBELT_CAPTURE = path.join(REPO_ROOT, 'tests/paysh/captures/textbelt-text-v2-success.json');
+const TEXTBELT_CAPTURE = path.join(REPO_ROOT, 'tests/paysh/captures/textbelt-text-402.json');
 const AUDIT_REPORT = path.join(REPO_ROOT, 'tests/paysh/catalog-audit.md');
 
 const CATALOG_PATH = path.join(SKILL_DIR, 'catalog.json');
@@ -48,8 +48,13 @@ const CATALOG_CAPTURE_MAP = {
     'stablecrypto-market-data': 'merit-systems-stablecrypto_market-data.json',
     'stableenrich': 'merit-systems-stableenrich_enrichment.json',
     'purch': 'purch-marketplace.json',
-    // textbelt-sms uses the live-pay capture (probe-catalog only hit free GET /status)
-    'textbelt-sms': '__TEXTBELT__',
+    // textbelt-sms: use the 402 CHALLENGE capture (per SCHEMA.md, verification
+    // with probe_status=parsed_ok requires a 402 fixture, not a settle-success
+    // capture). The challenge fixture at tests/paysh/captures/textbelt-text-402.json
+    // is the proper one. R6-2 fix (BAT-769 PR #380) corrected this from the
+    // BAT-761 mapping that pointed at the v2-success fixture
+    // (status=200), which was inconsistent with the parsed_ok contract.
+    'textbelt-sms': '__TEXTBELT_402__',
 };
 
 // ── R7-3: v1 catalog entries to demote to unsupported during migration ──────
@@ -150,7 +155,7 @@ function splitUrl(url) {
 
 /** Get relative capture path under tests/paysh/ */
 function captureRelPath(captureName) {
-    if (captureName === '__TEXTBELT__') return 'tests/paysh/captures/textbelt-text-v2-success.json';
+    if (captureName === '__TEXTBELT_402__') return 'tests/paysh/captures/textbelt-text-402.json';
     return `tests/paysh/captures/catalog/${captureName}`;
 }
 
@@ -211,7 +216,7 @@ function parseAuditReport() {
 function buildCatalogEntry(v1Entry) {
     const captureName = CATALOG_CAPTURE_MAP[v1Entry.id];
     if (!captureName) throw new Error(`No capture mapping for v1 catalog id "${v1Entry.id}"`);
-    const capturePath = captureName === '__TEXTBELT__'
+    const capturePath = captureName === '__TEXTBELT_402__'
         ? TEXTBELT_CAPTURE
         : path.join(CAPTURE_DIR, captureName);
     if (!fs.existsSync(capturePath)) {
@@ -220,7 +225,7 @@ function buildCatalogEntry(v1Entry) {
     const capture = readJson(capturePath);
 
     let operator, slug, pay_md_path, service_url, endpointPath, endpointMethod;
-    if (captureName === '__TEXTBELT__') {
+    if (captureName === '__TEXTBELT_402__') {
         // R4-4: derive URL+method from the textbelt capture (live-pay 200
         // response). The capture already records the canonical paid POST URL.
         // Pre-fix hardcoded the URL string here — duplicating the capture's url
@@ -574,7 +579,7 @@ function main() {
         // Construct an upstream slug from the capture's payMdPath (we know the
         // entry has a capture or we wouldn't have a v1 catalog entry for it).
         const captureName = CATALOG_CAPTURE_MAP[v1CatEntry.id];
-        if (!captureName || captureName === '__TEXTBELT__') {
+        if (!captureName || captureName === '__TEXTBELT_402__') {
             throw new Error(`Demotion mapping incomplete for ${v1CatEntry.id} — no resolvable capture for upstream_ref synthesis`);
         }
         const capture = readJson(path.join(CAPTURE_DIR, captureName));

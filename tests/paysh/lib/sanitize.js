@@ -163,30 +163,27 @@ function sanitizeString(s, opts = {}) {
     }
     out = out.replace(SECRET_PREFIX_RE, REDACTED);
     if (!opts.preserveBase64Hex) {
-        // BAT-769 R2-5 + R5-2: JSON Schema $ref pointers (`#/components/schemas/Foo`,
-        // `#/paths/...`, etc.) have a long path-shaped tail that LONG_BASE64_RE
-        // false-positives on. They're public schema metadata, never secrets.
-        // Detect-and-skip strings that look like JSON Schema refs.
+        // R6-1 final decision: NO JSON Schema $ref exception. Earlier R2-5
+        // added one (skip redaction for `^#\/[A-Za-z0-9/_-]+$` strings) so
+        // legitimate $refs like `#/components/schemas/FunctionCallOutputInput`
+        // wouldn't be over-redacted by LONG_BASE64_RE. R5-2 narrowed it to
+        // ≤128 chars to close one attack vector. R6-1 surfaced that even
+        // 128 chars is enough to hide a real secret in a path-shaped wrapper
+        // (e.g. `#/components/schemas/<40+ char base64 token>` totals ~62
+        // chars, well under the cap). The honest security trade-off is to
+        // accept over-redaction of $refs — fixtures lose schema-ref aesthetics
+        // but x402 protocol verification still works (X402_PUBLIC_FIELDS
+        // allowlist preserves the fields validators actually read).
         //
-        // R5-2 narrowing: the original R2-5 exception was `^#\/[A-Za-z0-9/_-]+$`
-        // with no length cap — an attacker could hide a secret as
-        // `#/components/schemas/<long-token>` and slip through. Realistic JSON
-        // Schema $refs are well under 128 chars (the longest in pay.sh openapi
-        // we've seen is ~50 chars: `#/components/schemas/FunctionCallOutputInput`).
-        // Cap the exception at 128 chars so the secret-hiding attack vector
-        // closes — anything longer falls back to normal redaction.
-        const isJsonSchemaRef = out.length <= 128 && /^#\/[A-Za-z0-9/_-]+$/.test(out);
-        if (!isJsonSchemaRef) {
-            // BAT-582 R25 (order matters): apply LONG_BASE64_RE FIRST so a
-            // base64 token like "AAAA...AAAA==" (which is also valid hex up
-            // to the padding) is captured WITH its `=` padding in one
-            // match. If LONG_HEX_RE ran first, it would greedily match the
-            // hex-valid prefix and leave the `==` orphaned in the output —
-            // partial redaction. Base64 first means the entire token gets
-            // redacted as a single unit.
-            out = out.replace(LONG_BASE64_RE, REDACTED);
-            out = out.replace(LONG_HEX_RE, REDACTED);
-        }
+        // BAT-582 R25 (order matters): apply LONG_BASE64_RE FIRST so a
+        // base64 token like "AAAA...AAAA==" (which is also valid hex up
+        // to the padding) is captured WITH its `=` padding in one
+        // match. If LONG_HEX_RE ran first, it would greedily match the
+        // hex-valid prefix and leave the `==` orphaned in the output —
+        // partial redaction. Base64 first means the entire token gets
+        // redacted as a single unit.
+        out = out.replace(LONG_BASE64_RE, REDACTED);
+        out = out.replace(LONG_HEX_RE, REDACTED);
     }
     return out;
 }

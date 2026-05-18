@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "label": "paysponge-perplexity-search-402",
-    "capturedAt": "2026-05-18T10:23:37.016Z",
-    "source": "BAT-769 R2 re-capture (sanitize.js R2 fixes applied: report-to/nel/rndr-id denylisted; JSON Schema $refs no longer over-redacted)",
+    "label": "perplexity-search-402",
+    "capturedAt": "2026-05-18T11:28:20.891Z",
+    "source": "BAT-769 R6 re-capture (R6-1 fix: dropped JSON Schema $ref exception in sanitize.js — schema $refs are now correctly subject to LONG_BASE64_RE; over-redaction acceptable since x402 protocol fields are preserved separately)",
     "payMdPath": "providers/paysponge/perplexity/PAY.md",
     "note": "Captured to support v2 catalog entry perplexity-search in BAT-769."
   },
@@ -10,7 +10,7 @@
   "method": "POST",
   "status": 402,
   "headers": {
-    "date": "Mon, 18 May 2026 10:23:37 GMT",
+    "date": "Mon, 18 May 2026 11:28:21 GMT",
     "content-type": "application/json",
     "transfer-encoding": "chunked",
     "connection": "keep-alive",
@@ -23,7 +23,7 @@
     "cf-cache-status": "DYNAMIC",
     "report-to": "[REDACTED]",
     "nel": "[REDACTED]",
-    "cf-ray": "9fda25c169c5d0eb-SOF",
+    "cf-ray": "9fda849478608ef0-SOF",
     "alt-svc": "h3=\":443\"; ma=86400"
   },
   "body": {

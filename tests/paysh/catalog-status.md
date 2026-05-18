@@ -1,7 +1,7 @@
 # paysh-catalog maintenance status
 
-Generated: 2026-05-18T10:40:01.572Z
-Catalog generated_at: 2026-05-18T10:39:50.012Z
+Generated: 2026-05-18T11:28:51.639Z
+Catalog generated_at: 2026-05-18T11:28:51.526Z
 Manifest last checked: 2026-05-16T17:51:08.251Z (run `node tests/paysh/probe-catalog.js --drift --write-checked-at` to refresh — bare `--drift` is a pure check and won't update this timestamp)
 Freshness window: 30 days
 

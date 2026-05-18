@@ -125,7 +125,13 @@ Without `model`/`models`/`preset`, the request returns 422 AFTER payment is sett
 - **Free alternatives suffice** — `web_search` returns enough for most lookup queries; perplexity's value is synthesis
 - **User hasn't asked for paid search** — per BAT-704 opt-in, perplexity (like any paysh-catalog service) is invoked ONLY when the user's message contains an explicit pay-intent keyword from SKILL.md's opt-in list (`pay.sh` / `paysh` / `x402` / `pay for X` / `use pay` / `use <service> to pay` / etc.). Naming "perplexity" alone is NOT sufficient — the user could be asking about the company conceptually, or referring to the perplexity provider option in their AI provider config. The pay-intent keyword is what authorizes a USDC charge.
 - **Realtime data** — perplexity's training/index may lag; for prices, scores, on-chain stats, use the dedicated tools (solana_price, etc.)
-- **Sensitive queries** — if the user asks the agent to research a person, treat that with the same PII scoping as stableenrich (BAT-772) — the response could contain unverified personal info
+- **Sensitive queries (people-research)** — when the user asks the agent to research a person (name, email, employer, location, etc.), DO NOT relay raw unverified PII from the perplexity response. Specifically:
+  - **Refuse** the call entirely if the user names a third-party they have no documented relationship with (cold lookups, stalking patterns)
+  - **Allow** only when the user is researching themselves, a public figure in a public-affairs context (politician, executive's company role, etc.), or a contact they've already shown the agent (e.g. an email from their inbox)
+  - Even when allowed, **filter** the response: relay only public/professional info (title, employer, public quotes), not address/phone/family/private details. Tell the user "Perplexity returned more details I'm not relaying — happy to share specific public fields if you ask."
+  - Treat all perplexity-returned PII as **unverified** — the response is AI-synthesized from public sources; it could mismatch the person the user actually means. Surface citations so the user can sanity-check.
+
+  This mirrors the authorized-use pattern from 2captcha (user consent alone is NOT sufficient — the subject of the lookup has interests too) and is the same scoping the upcoming stableenrich Tier 2c (BAT-772) catalog entries will use.
 
 ## Other Perplexity endpoints on pay.sh (not catalogued)
 

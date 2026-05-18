@@ -279,7 +279,7 @@ Validation failure aborts the migration run and prints which entry/field failed.
 
 Existing user devices have v1 catalog files in `workspace/skills/paysh-catalog/`. The plan:
 
-1. Bump `SKILL.md` frontmatter `version: "1.3.0"` → `"1.4.0"` — triggers `ConfigManager.seedSkill()` re-seed per the BAT-699 R6 pattern
+1. Bump `SKILL.md` frontmatter `version` on EVERY catalog-affecting change — triggers `ConfigManager.seedSkill()` re-seed per the BAT-699 R6 pattern. Version history: `1.3.0` (BAT-704 opt-in gate, last v1 schema) → `1.4.0` (BAT-761 v2 schema migration) → `1.5.0` (BAT-769 perplexity catalog entries) → bump again on the next catalog change (BAT-766, BAT-768, etc.). On every future catalog edit, bump the version so existing installs re-seed.
 2. seedSkill uses the existing stage-then-swap atomicity (BAT-699 R7) to swap v1 → v2 files
 3. User-added catalog entries (rare but possible) are preserved by the stage-then-swap merge logic
 4. Agent in `SKILL.md` body explicitly handles v2 schema (no v1 readers in the agent — re-seed is mandatory)
