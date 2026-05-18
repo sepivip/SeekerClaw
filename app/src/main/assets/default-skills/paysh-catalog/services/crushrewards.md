@@ -56,9 +56,19 @@ Returns active discounts / promo codes / sale prices in the category. Surface th
 <a id="analyst-inflation"></a>
 ## `analyst-inflation` — US consumer-price inflation index
 
-`GET /v1/analyst/inflation`
+`GET /v1/analyst/inflation?<query-string>`
 
-Returns live US CPI-style inflation index built from Crushrewards' retail-price scraping. Useful when training-data CPI numbers are stale and the user asks "what's current US inflation" or "are prices going up".
+| Param | Example | Notes |
+|---|---|---|
+| `category` | `category=electronics` | High-level category name |
+| `category_id` | `category_id=1` | Numeric category id (alternative to `category`) |
+| `department` | `department=Electronics` | Retail department |
+| `country` | `country=us` | Country filter |
+| `from` | `from=2026-04-01` | ISO date (window start) |
+| `to` | `to=2026-05-01` | ISO date (window end) |
+| `granularity` | `granularity=weekly` | Time bucket: `daily` / `weekly` / `monthly` |
+
+Per bazaar schema, all params are optional but at least one filter combination (category OR department + date window) gives meaningful results. Returns live US CPI-style inflation index built from Crushrewards' retail-price scraping. Useful when training-data CPI numbers are stale and the user asks "what's current US inflation" or "are prices going up in electronics".
 
 $0.02 (2x the shopper endpoints) — slightly pricier because of the analysis layer.
 

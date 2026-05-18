@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated_at": "2026-05-18T12:41:57.683Z",
+  "generated_at": "2026-05-18T13:24:08.806Z",
   "manifest_checked_at": "2026-05-16T17:51:08.251Z",
   "source": "BAT-761 v2 schema + BAT-769 perplexity + BAT-768+766 Tier 1 extras (stablecrypto + same-provider)",
   "entries": [
@@ -1221,7 +1221,7 @@
       },
       "endpoint": {
         "method": "GET",
-        "path": "/api/v1/location/probe/details",
+        "path": "/api/v1/location/{locationId}/details",
         "cost_usdc": 0.01
       },
       "intents": [
@@ -1253,7 +1253,7 @@
       },
       "endpoint": {
         "method": "GET",
-        "path": "/api/v1/location/probe/reviews",
+        "path": "/api/v1/location/{locationId}/reviews",
         "cost_usdc": 0.01
       },
       "intents": [
@@ -1285,7 +1285,7 @@
       },
       "endpoint": {
         "method": "GET",
-        "path": "/api/v1/location/probe/photos",
+        "path": "/api/v1/location/{locationId}/photos",
         "cost_usdc": 0.01
       },
       "intents": [
