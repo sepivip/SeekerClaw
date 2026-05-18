@@ -3,7 +3,7 @@
 AI-powered document parsing — turn PDFs, scanned images, or invoices into structured data. Two catalogued endpoints:
 
 - **[`extract`](#extract)** — AI-extraction with layout awareness (tables, key-value pairs, structured fields) ($0.05)
-- **[`parse`](#parse)** — Lower-cost raw text/structure parse (no AI extraction layer) ($0.05)
+- **[`parse`](#parse)** — raw text/structure parse (no AI extraction layer) ($0.05)
 
 Both endpoints live behind the paysponge x402 gateway:
 - Base: `https://api.paysponge.com`
@@ -12,7 +12,7 @@ Both endpoints live behind the paysponge x402 gateway:
 ## When to use which / vs free alternatives
 
 - **Use `extract`** for invoices, receipts, financial statements — anywhere you need named fields (line items, totals, dates) pulled out of unstructured layouts.
-- **Use `parse`** for raw OCR / text-from-document where you just need the words and basic structure (paragraphs / tables) without AI-driven field extraction. Sometimes cheaper or faster when the user only needs the text.
+- **Use `parse`** for raw OCR / text-from-document where you just need the words and basic structure (paragraphs / tables) without AI-driven field extraction. Same $0.05 cost as `extract` — pick `parse` based on shape of output you need (raw text vs structured fields), not on price.
 - **Don't use Reducto** for simple text-from-PDF — `web_fetch` on a publicly-hosted PDF often works for plain-text content. Reserve Reducto for layout-aware extraction or OCR.
 - Both endpoints are $0.05 each — confirm with the user before invoking if their question could be answered cheaper.
 

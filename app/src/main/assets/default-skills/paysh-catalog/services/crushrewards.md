@@ -26,21 +26,32 @@ Returns JSON listing prices across retailers (Amazon, Walmart, Costco, Home Depo
 <a id="shopper-price-history"></a>
 ## `shopper-price-history` — historical chart
 
-`GET /v1/shopper/price-history?q=<URL-encoded-product>&days=<N>`
+`GET /v1/shopper/price-history?q=<URL-encoded-product>&from=<ISO-date>&to=<ISO-date>`
 
 | Param | Example | Notes |
 |---|---|---|
-| `q` | `q=PlayStation%205%20slim` | Product query string (required) |
-| `days` | `days=90` | Days of history; common values 30/90/365 |
+| `q` | `q=airpods` | Product query string (required, per bazaar schema) |
+| `from` | `from=2026-04-01` | ISO date (start of window) |
+| `to` | `to=2026-05-01` | ISO date (end of window) |
+| `country` | `country=us` | Optional country filter |
+| `retailer` | `retailer=amazon` | Optional retailer filter |
 
-Returns price points over time across retailers. Surface: current price, lowest in window + when, "down 12% from peak", etc.
+Returns price points over the date window across retailers. Surface: current price, lowest in window + when, "down 12% from peak", etc.
 
 <a id="shopper-deal-finder"></a>
 ## `shopper-deal-finder` — active deals
 
-`GET /v1/shopper/deal-finder?q=<URL-encoded-product>` (or `?category=<...>` for category-level deals)
+`GET /v1/shopper/deal-finder?category=<cat>&min_discount_pct=<N>&limit=<N>`
 
-Returns active discounts / promo codes / sale prices. Surface the top 3-5 deals with retailer + discount % + final price + expiry.
+| Param | Example | Notes |
+|---|---|---|
+| `category` | `category=electronics` | Product category (required, per bazaar schema) |
+| `min_discount_pct` | `min_discount_pct=10` | Minimum discount % filter |
+| `limit` | `limit=20` | Cap returned deals |
+| `country` | `country=us` | Optional country filter |
+| `retailer` | `retailer=amazon` | Optional retailer filter |
+
+Returns active discounts / promo codes / sale prices in the category. Surface the top 3-5 deals with retailer + discount % + final price + expiry.
 
 <a id="analyst-inflation"></a>
 ## `analyst-inflation` — US consumer-price inflation index

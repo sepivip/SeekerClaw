@@ -39,6 +39,8 @@ Plain text result from Wolfram. Return the answer concisely.
 
 `GET https://wolframalpha.x402.paysponge.com/v2/query?input=<URL-encoded-query>&output=json`
 
+**Note on bazaar schema:** the committed 402 capture's bazaar `info.input.queryParams` is empty (`{}` with `additionalProperties: false`) — but Wolfram's real `/v2/query` API REQUIRES `input` and accepts `output` (json/xml). The bazaar schema is incomplete; the agent must construct the URL with these params or Wolfram returns a 422-style error AFTER payment.
+
 ### When to pick v2-query over v1-result
 
 - User asks "show your work" / "step by step" — v2 returns intermediate pods (Solution / Steps / Alternative forms)
