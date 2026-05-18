@@ -1,0 +1,149 @@
+{
+  "_meta": {
+    "label": "tripadvisor-location-details-402",
+    "capturedAt": "2026-05-18T12:26:35.029Z",
+    "source": "BAT-768+766 combined probe",
+    "payMdPath": "providers/paysponge/tripadvisor/PAY.md",
+    "note": "Captured to support v2 catalog entry tripadvisor-location-details in BAT-768+766 combined PR."
+  },
+  "url": "https://tripadvisor.x402.paysponge.com/api/v1/location/probe/details",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "date": "Mon, 18 May 2026 12:26:45 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "access-control-allow-credentials": "true",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQYXltZW50IHJlcXVpcmVkIiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly90cmlwYWR2aXNvci54NDAyLnBheXNwb25nZS5jb20vYXBpL3YxL2xvY2F0aW9uL3Byb2JlL2RldGFpbHMiLCJkZXNjcmlwdGlvbiI6IlNlcnZpY2U6IFRyaXBhZHZpc29yIChodHRwczovL3RyaXBhZHZpc29yLng0MDIucGF5c3BvbmdlLmNvbS9hcGkvdjEvbG9jYXRpb24vcHJvYmUvZGV0YWlscykiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL2pzb24ifSwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1Ojg0NTMiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiMHg4MzM1ODlmQ0Q2ZURiNkUwOGY0YzdDMzJENGY3MWI1NGJkQTAyOTEzIiwicGF5VG8iOiIweDYzMDJEOWU2REJCMjJmRUMzYzM1MDU1MTU2OEJiMzlCNGIzNUFkNTciLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiJFUGpGV2RkNUF1ZnFTU3FlTTJxTjF4enliYXBDOEc0d0VHR2tad3lURHQxdiIsInBheVRvIjoiOTI0Nlhyc0FFS0g2aEF5RVFlNVB2ZHBVTDFwNUt0ajljN3lTbndRbjZvaXMiLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJmZWVQYXllciI6IjJ3S3VwTFI5cTZ3WFlwcHc4R3IyTnZXeEtCVXFtNFBQSktrUWZveEhEQmc0In19XSwiZXh0ZW5zaW9ucyI6eyJiYXphYXIiOnsicm91dGVUZW1wbGF0ZSI6Ii9hcGkvdjEvbG9jYXRpb24vOmxvY2F0aW9uSWQvZGV0YWlscyIsImluZm8iOnsiaW5wdXQiOnsidHlwZSI6Imh0dHAiLCJtZXRob2QiOiJHRVQiLCJwYXRoUGFyYW1zIjp7ImxvY2F0aW9uSWQiOiJwcm9iZSJ9LCJxdWVyeVBhcmFtcyI6e319LCJvdXRwdXQiOnsidHlwZSI6Impzb24iLCJleGFtcGxlIjp7fX19LCJzY2hlbWEiOnsiJHNjaGVtYSI6Imh0dHBzOi8vanNvbi1zY2hlbWEub3JnL2RyYWZ0LzIwMjAtMTIvc2NoZW1hIiwidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiaW5wdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJodHRwIn0sIm1ldGhvZCI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJHRVQiLCJIRUFEIiwiREVMRVRFIl19LCJwYXRoUGFyYW1zIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImxvY2F0aW9uSWQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsibG9jYXRpb25JZCJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9LCJxdWVyeVBhcmFtcyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e30sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19LCJyZXF1aXJlZCI6WyJ0eXBlIiwibWV0aG9kIiwicGF0aFBhcmFtcyJdLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2V9LCJvdXRwdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJqc29uIn0sImV4YW1wbGUiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp0cnVlfX0sInJlcXVpcmVkIjpbInR5cGUiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbImlucHV0Il0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX19fX0=",
+    "rndr-id": "[REDACTED]",
+    "server": "cloudflare",
+    "vary": "Origin, Accept-Encoding",
+    "x-render-origin-server": "[REDACTED]",
+    "cf-cache-status": "DYNAMIC",
+    "report-to": "[REDACTED]",
+    "nel": "[REDACTED]",
+    "cf-ray": "9fdada20fe2dd0eb-SOF",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": {
+    "x402Version": 2,
+    "error": "Payment required",
+    "resource": {
+      "url": "https://tripadvisor.x402.paysponge.com/api/v1/location/probe/details",
+      "description": "Service: Tripadvisor (https://tripadvisor.x402.paysponge.com/api/v1/location/probe/details)",
+      "mimeType": "application/json"
+    },
+    "accepts": [
+      {
+        "scheme": "exact",
+        "network": "eip155:8453",
+        "amount": "10000",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "payTo": "0x6302D9e6DBB22fEC3c350551568Bb39B4b35Ad57",
+        "maxTimeoutSeconds": 300,
+        "extra": {
+          "name": "USD Coin",
+          "version": "2"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "amount": "10000",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "payTo": "9246XrsAEKH6hAyEQe5PvdpUL1p5Ktj9c7ySnwQn6ois",
+        "maxTimeoutSeconds": 300,
+        "extra": {
+          "feePayer": "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+        }
+      }
+    ],
+    "extensions": {
+      "bazaar": {
+        "routeTemplate": "/api/v1/location/:locationId/details",
+        "info": {
+          "input": {
+            "type": "http",
+            "method": "GET",
+            "pathParams": {
+              "locationId": "probe"
+            },
+            "queryParams": {}
+          },
+          "output": {
+            "type": "json",
+            "example": {}
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "GET",
+                    "HEAD",
+                    "DELETE"
+                  ]
+                },
+                "pathParams": {
+                  "type": "object",
+                  "properties": {
+                    "locationId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "locationId"
+                  ],
+                  "additionalProperties": false
+                },
+                "queryParams": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "pathParams"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "json"
+                },
+                "example": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

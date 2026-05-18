@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "generated_at": "2026-05-18T11:28:51.526Z",
+  "generated_at": "2026-05-18T12:41:57.683Z",
   "manifest_checked_at": "2026-05-16T17:51:08.251Z",
-  "source": "BAT-761 v2 schema + BAT-769 Tier 1c perplexity catalog entries",
+  "source": "BAT-761 v2 schema + BAT-769 perplexity + BAT-768+766 Tier 1 extras (stablecrypto + same-provider)",
   "entries": [
     {
       "id": "wolfram-alpha",
@@ -359,6 +359,1081 @@
         "last_probed_at": "2026-05-18T11:28:20.891Z",
         "last_capture_path": "tests/paysh/captures/perplexity-agent-402.json",
         "last_captured_at": "2026-05-18T11:28:20.891Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-price",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Price",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/price",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "price of",
+        "how much is",
+        "current price",
+        "spot price",
+        "coin price",
+        "token price",
+        "what is X worth"
+      ],
+      "summary": "Current spot price for any CoinGecko-tracked coin. Use for \"what is the price of X\" queries. $0.01 per call.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-price",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-price-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-markets",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Markets (top coins)",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/markets",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "top coins",
+        "market cap ranking",
+        "biggest cryptocurrencies",
+        "coin list",
+        "top crypto by market cap"
+      ],
+      "summary": "List of coins by market cap with price/volume/24h-change. Use for \"top coins by market cap\" / \"biggest cryptocurrencies\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-markets",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-markets-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-chart",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Price Chart",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/chart",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "price chart",
+        "price history",
+        "how has X performed",
+        "price over time",
+        "historical price"
+      ],
+      "summary": "Historical price chart data for a coin over a time range. Use for \"price chart of X\" / \"how has X performed\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-chart",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-chart-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-ohlc",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko OHLC Candles",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/ohlc",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "ohlc",
+        "candle data",
+        "candlestick",
+        "technical analysis",
+        "price candles"
+      ],
+      "summary": "Open-high-low-close candle data for a coin. Use for technical analysis / candlestick chart queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-ohlc",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-ohlc-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-top-movers",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Top Movers",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/top-movers",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "top movers",
+        "top gainers",
+        "top losers",
+        "what is pumping",
+        "biggest gains today",
+        "biggest losers today",
+        "pumps and dumps"
+      ],
+      "summary": "Top gainers and losers in the last 24h. Use for \"what is pumping\" / \"biggest gains today\" / \"biggest losers today\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-top-movers",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-top-movers-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-trending",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Trending Coins",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/trending",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "trending coins",
+        "trending crypto",
+        "what is trending",
+        "most searched",
+        "hot coins"
+      ],
+      "summary": "Top-searched coins on CoinGecko in the last 24h. Use for \"what is trending\" / \"what is everyone looking at\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-trending",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-trending-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-categories",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Categories",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/categories",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "coin categories",
+        "crypto categories",
+        "category market cap",
+        "sector breakdown",
+        "defi tokens",
+        "layer 1 comparison"
+      ],
+      "summary": "List of CoinGecko categories (e.g. DeFi, Layer-1, Memes) with market cap data. Use for \"what categories are hot\" / \"Layer-1 comparison\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-categories",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-categories-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-onchain-pool",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Onchain Pool Detail",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/onchain/pool",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "dex pool",
+        "pool data",
+        "on-chain pool",
+        "raydium pool",
+        "orca pool",
+        "pool details",
+        "pool volume",
+        "pool tvl"
+      ],
+      "summary": "On-chain DEX pool data for a specific pool (price, volume, TVL, recent trades). Use for \"details on pool X\" / \"is this Raydium pool legit\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-onchain-pool",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-onchain-pool-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-coingecko-onchain-trending",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto CoinGecko Trending On-chain Pools",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/coingecko/onchain/trending",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "trending pools",
+        "hot dex pools",
+        "new dex pools",
+        "most-traded pools"
+      ],
+      "summary": "Trending DEX pools across chains (most-traded recent pools). Use for \"trending pools\" / \"what new pool should I watch\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "coingecko-onchain-trending",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-coingecko-onchain-trending-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-protocols",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Protocols (TVL list)",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/protocols",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "defi protocols",
+        "protocol tvl",
+        "tvl list",
+        "top defi",
+        "protocols on solana",
+        "protocols on chain X"
+      ],
+      "summary": "Full DeFi protocol list with TVL, 1d/7d change, chain breakdown. Use for \"top DeFi protocols\" / \"protocols on Solana\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-protocols",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-protocols-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-protocol",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Single Protocol",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/protocol",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "protocol tvl",
+        "protocol detail",
+        "how much is in raydium",
+        "how much is in marinade",
+        "protocol stats"
+      ],
+      "summary": "TVL + breakdown for ONE named DeFi protocol (e.g. Raydium, Marinade). Use when user asks about a specific protocol.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-protocol",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-protocol-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-chains",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Chains (TVL by chain)",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/chains",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "chain tvl",
+        "tvl by chain",
+        "chain comparison",
+        "which chain has most",
+        "top chains"
+      ],
+      "summary": "TVL totals per blockchain (Solana, Ethereum, Base, etc.). Use for \"which chain has most TVL\" / \"chain comparison\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-chains",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-chains-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-chain-tvl",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Single Chain TVL",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/chain-tvl",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "chain tvl history",
+        "solana tvl",
+        "ethereum tvl",
+        "chain tvl over time"
+      ],
+      "summary": "Detailed TVL history for ONE chain. Use for \"Solana TVL history\" / \"how has chain X TVL changed\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-chain-tvl",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-chain-tvl-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-yields-pools",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Yields Pools",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/yields/pools",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "yield farming",
+        "yields",
+        "apy",
+        "liquidity mining",
+        "best yield pools",
+        "highest apy",
+        "farming opportunities"
+      ],
+      "summary": "Yield farming pools across DeFi protocols with APY/TVL/IL risk. Use for \"best yield farming\" / \"highest APY\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-yields-pools",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-yields-pools-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-yields-perps",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Perps Yields",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/yields/perps",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "perps yields",
+        "perps funding rates",
+        "funding rate arbitrage",
+        "delta neutral",
+        "perps farming"
+      ],
+      "summary": "Funding-rate yields on perp protocols. Use for \"perps funding rates\" / \"delta-neutral farming\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-yields-perps",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-yields-perps-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-stablecoins",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Stablecoins",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/stablecoins",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "stablecoins",
+        "stablecoin market cap",
+        "usdc supply",
+        "usdt supply",
+        "is usdc depegging",
+        "stablecoin chain breakdown"
+      ],
+      "summary": "Stablecoin market caps + chain distribution + peg health. Use for \"stablecoin market cap\" / \"is USDC depegging\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-stablecoins",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-stablecoins-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-dex-overview",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama DEX Overview",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/dex-overview",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "dex volume",
+        "dex overview",
+        "aggregate dex volume",
+        "solana dex volume",
+        "eth dex volume"
+      ],
+      "summary": "Aggregated DEX volume across chains (24h, 7d, 30d). Use for \"DEX volume\" / \"Solana DEX volume\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-dex-overview",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-dex-overview-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-fees-overview",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Fees Overview",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/fees-overview",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "fees",
+        "protocol fees",
+        "fee revenue",
+        "profitable protocols",
+        "protocol earnings"
+      ],
+      "summary": "Protocol fees + revenue across DeFi. Use for \"which protocols make most fees\" / \"fee revenue\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-fees-overview",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-fees-overview-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-derivatives-overview",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Derivatives Overview",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/derivatives-overview",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "derivatives volume",
+        "perp volume",
+        "perps market",
+        "derivatives overview"
+      ],
+      "summary": "Derivatives volume across perp DEXes and centralized derivatives venues. Use for \"perp volume\" / \"derivatives market\" queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-derivatives-overview",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-derivatives-overview-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "stablecrypto-defillama-coins-prices-historical",
+      "service_id": "stablecrypto-market-data",
+      "name": "StableCrypto DeFiLlama Historical Prices",
+      "upstream_ref": {
+        "operator": "merit-systems",
+        "slug": "stablecrypto/market-data",
+        "pay_md_path": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+        "service_url": "https://stablecrypto.dev"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/api/defillama/coins/prices-historical",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "historical price",
+        "price on date",
+        "price at timestamp",
+        "backtest",
+        "past price",
+        "price snapshot"
+      ],
+      "summary": "Historical price for one or more coins at a specific timestamp. Use for \"what was the price of X on date Y\" / backtesting queries.",
+      "doc_file": "services/stablecrypto-market-data.md",
+      "doc_anchor": "defillama-coins-prices-historical",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/stablecrypto-defillama-coins-prices-historical-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "wolframalpha-v2-query",
+      "service_id": "wolframalpha",
+      "name": "Wolfram Alpha (v2 Query)",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "wolframalpha",
+        "pay_md_path": "providers/paysponge/wolframalpha/PAY.md",
+        "service_url": "https://wolframalpha.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/v2/query",
+        "cost_usdc": 0.02
+      },
+      "intents": [
+        "structured wolfram",
+        "wolfram pods",
+        "step by step solution",
+        "wolfram v2",
+        "detailed math",
+        "wolfram structured"
+      ],
+      "summary": "Wolfram v2 Query API — structured JSON output (pods/subpods) for advanced computations. More detail than v1/result (which returns plain text). Use when the user wants structured data or step-by-step solutions.",
+      "doc_file": "services/wolfram-alpha.md",
+      "doc_anchor": "v2-query",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/wolframalpha-v2-query-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "rentcast-avm-value",
+      "service_id": "rentcast",
+      "name": "Rentcast Property Value (AVM)",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "rentcast",
+        "pay_md_path": "providers/paysponge/rentcast/PAY.md",
+        "service_url": "https://rentcast.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/avm/value",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "property value",
+        "home value",
+        "avm",
+        "what is this house worth",
+        "property estimate",
+        "zestimate",
+        "property worth"
+      ],
+      "summary": "Automated Valuation Model: estimated current sale value for a US property by address. Use for \"what is this property worth\" / Zillow-Zestimate-style queries.",
+      "doc_file": "services/rentcast.md",
+      "doc_anchor": "avm-value",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/rentcast-avm-value-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "rentcast-properties",
+      "service_id": "rentcast",
+      "name": "Rentcast Property Lookup",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "rentcast",
+        "pay_md_path": "providers/paysponge/rentcast/PAY.md",
+        "service_url": "https://rentcast.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/properties",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "property record",
+        "property lookup",
+        "property details",
+        "house details",
+        "beds baths",
+        "property tax record"
+      ],
+      "summary": "Property record (size, beds, baths, year built, tax records) for a US address. Use for \"tell me about this property\" / property research queries.",
+      "doc_file": "services/rentcast.md",
+      "doc_anchor": "properties",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/rentcast-properties-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "rentcast-listings-sale",
+      "service_id": "rentcast",
+      "name": "Rentcast Sale Listings",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "rentcast",
+        "pay_md_path": "providers/paysponge/rentcast/PAY.md",
+        "service_url": "https://rentcast.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/listings/sale",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "homes for sale",
+        "houses for sale",
+        "sale listings",
+        "real estate listings",
+        "mls listings"
+      ],
+      "summary": "Active for-sale listings in a US market (filtered by city/zip/price/beds). Use for \"homes for sale in X\" queries.",
+      "doc_file": "services/rentcast.md",
+      "doc_anchor": "listings-sale",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/rentcast-listings-sale-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "rentcast-listings-rental",
+      "service_id": "rentcast",
+      "name": "Rentcast Long-term Rental Listings",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "rentcast",
+        "pay_md_path": "providers/paysponge/rentcast/PAY.md",
+        "service_url": "https://rentcast.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/listings/rental/long-term",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "rentals",
+        "rental listings",
+        "apartments for rent",
+        "houses for rent",
+        "long-term rental",
+        "rent listings"
+      ],
+      "summary": "Active long-term rental listings in a US market. Use for \"rentals in X\" / \"apartments for rent\" queries.",
+      "doc_file": "services/rentcast.md",
+      "doc_anchor": "listings-rental",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/rentcast-listings-rental-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "tripadvisor-search",
+      "service_id": "tripadvisor",
+      "name": "Tripadvisor Location Search",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "tripadvisor",
+        "pay_md_path": "providers/paysponge/tripadvisor/PAY.md",
+        "service_url": "https://tripadvisor.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/v1/location/search",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "tripadvisor search",
+        "find on tripadvisor",
+        "search by name",
+        "find restaurant by name",
+        "find hotel by name"
+      ],
+      "summary": "Search Tripadvisor by query string (NOT geo). Use when user gives a place name (\"La Tartine in Paris\") rather than coordinates. For coord-based search use the nearby_search entry.",
+      "doc_file": "services/tripadvisor.md",
+      "doc_anchor": "search",
+      "verification": {
+        "last_probed_at": "2026-05-11T15:07:56.569Z",
+        "last_capture_path": "tests/paysh/captures/tripadvisor-search-402.json",
+        "last_captured_at": "2026-05-11T15:07:56.569Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "tripadvisor-location-details",
+      "service_id": "tripadvisor",
+      "name": "Tripadvisor Location Details",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "tripadvisor",
+        "pay_md_path": "providers/paysponge/tripadvisor/PAY.md",
+        "service_url": "https://tripadvisor.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/v1/location/probe/details",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "location details",
+        "place details",
+        "restaurant details",
+        "hotel details",
+        "attraction details"
+      ],
+      "summary": "Full details for a specific Tripadvisor location ID (hours, photos count, rating, address). Use after a search/nearby_search returns a location ID.",
+      "doc_file": "services/tripadvisor.md",
+      "doc_anchor": "location-details",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/tripadvisor-location-details-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "tripadvisor-location-reviews",
+      "service_id": "tripadvisor",
+      "name": "Tripadvisor Location Reviews",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "tripadvisor",
+        "pay_md_path": "providers/paysponge/tripadvisor/PAY.md",
+        "service_url": "https://tripadvisor.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/v1/location/probe/reviews",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "reviews",
+        "tripadvisor reviews",
+        "what people say about",
+        "place reviews",
+        "restaurant reviews"
+      ],
+      "summary": "Recent reviews for a specific Tripadvisor location. Use to surface what visitors say about a place.",
+      "doc_file": "services/tripadvisor.md",
+      "doc_anchor": "location-reviews",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/tripadvisor-location-reviews-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "tripadvisor-location-photos",
+      "service_id": "tripadvisor",
+      "name": "Tripadvisor Location Photos",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "tripadvisor",
+        "pay_md_path": "providers/paysponge/tripadvisor/PAY.md",
+        "service_url": "https://tripadvisor.x402.paysponge.com"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/api/v1/location/probe/photos",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "photos",
+        "pictures",
+        "place photos",
+        "restaurant photos",
+        "hotel photos",
+        "attraction photos"
+      ],
+      "summary": "Photo URLs for a specific Tripadvisor location. Returns links; the agent surfaces URLs to the user (cannot embed images directly).",
+      "doc_file": "services/tripadvisor.md",
+      "doc_anchor": "location-photos",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/tripadvisor-location-photos-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "reducto-parse",
+      "service_id": "reducto",
+      "name": "Reducto Document Parser (parse mode)",
+      "upstream_ref": {
+        "operator": "paysponge",
+        "slug": "reducto",
+        "pay_md_path": "providers/paysponge/reducto/PAY.md",
+        "service_url": "https://api.paysponge.com"
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/x402/purchase/svc_d672d90ggvqqygj60/parse",
+        "cost_usdc": 0.05
+      },
+      "intents": [
+        "parse pdf",
+        "ocr pdf",
+        "extract text from document",
+        "document text",
+        "pdf text",
+        "image ocr"
+      ],
+      "summary": "Lower-cost parse mode — extracts text + structure from PDFs/images. Use when user wants raw OCR/text without Reducto extract mode's AI-extraction layer. Complements existing /extract entry.",
+      "doc_file": "services/reducto.md",
+      "doc_anchor": "parse",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/reducto-parse-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "crushrewards-analyst-inflation",
+      "service_id": "crushrewards-pricing",
+      "name": "Crushrewards Inflation Index",
+      "upstream_ref": {
+        "operator": "crushrewards",
+        "slug": "pricing",
+        "pay_md_path": "providers/crushrewards/pricing/PAY.md",
+        "service_url": "https://api.crushrewards.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/v1/analyst/inflation",
+        "cost_usdc": 0.02
+      },
+      "intents": [
+        "inflation",
+        "consumer prices",
+        "cpi",
+        "is X getting more expensive",
+        "price inflation",
+        "us inflation"
+      ],
+      "summary": "Live US consumer-price inflation index derived from retail-price scraping. Use for \"is X getting more expensive\" / \"current US inflation rate\" queries.",
+      "doc_file": "services/crushrewards.md",
+      "doc_anchor": "analyst-inflation",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/crushrewards-analyst-inflation-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "crushrewards-shopper-price-history",
+      "service_id": "crushrewards-pricing",
+      "name": "Crushrewards Price History",
+      "upstream_ref": {
+        "operator": "crushrewards",
+        "slug": "pricing",
+        "pay_md_path": "providers/crushrewards/pricing/PAY.md",
+        "service_url": "https://api.crushrewards.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/v1/shopper/price-history",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "price history",
+        "has X gone up",
+        "is this a good deal",
+        "historic product price",
+        "price trend product"
+      ],
+      "summary": "Historical price chart for a specific product across US retailers. Use for \"has X gone up in price\" / \"is this a good deal\" queries.",
+      "doc_file": "services/crushrewards.md",
+      "doc_anchor": "shopper-price-history",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/crushrewards-shopper-price-history-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
+        "probe_status": "parsed_ok"
+      }
+    },
+    {
+      "id": "crushrewards-shopper-deal-finder",
+      "service_id": "crushrewards-pricing",
+      "name": "Crushrewards Deal Finder",
+      "upstream_ref": {
+        "operator": "crushrewards",
+        "slug": "pricing",
+        "pay_md_path": "providers/crushrewards/pricing/PAY.md",
+        "service_url": "https://api.crushrewards.dev"
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/v1/shopper/deal-finder",
+        "cost_usdc": 0.01
+      },
+      "intents": [
+        "deals on",
+        "best deals",
+        "discounts on",
+        "deal finder",
+        "sale on",
+        "whats on sale"
+      ],
+      "summary": "Active deals/discounts on a product across major US retailers. Use for \"deals on X\" / \"best discounts right now\" queries.",
+      "doc_file": "services/crushrewards.md",
+      "doc_anchor": "shopper-deal-finder",
+      "verification": {
+        "last_probed_at": "2026-05-18T12:26:35.029Z",
+        "last_capture_path": "tests/paysh/captures/crushrewards-shopper-deal-finder-402.json",
+        "last_captured_at": "2026-05-18T12:26:35.029Z",
         "probe_status": "parsed_ok"
       }
     }

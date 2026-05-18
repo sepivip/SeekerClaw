@@ -54,6 +54,42 @@ const EXPECTATIONS = {
     // both Solana-USDC parseable, both $0.01.
     'perplexity-search-402.json':          { detect: true,  buildOk: true  },
     'perplexity-agent-402.json':           { detect: true,  buildOk: true  },
+    // BAT-768: StableCrypto market-data extras (20 POST endpoints, all $0.01,
+    // header-delivered payment-required). CoinGecko + DefiLlama sub-APIs.
+    'stablecrypto-coingecko-price-402.json':                   { detect: true, buildOk: true },
+    'stablecrypto-coingecko-markets-402.json':                 { detect: true, buildOk: true },
+    'stablecrypto-coingecko-chart-402.json':                   { detect: true, buildOk: true },
+    'stablecrypto-coingecko-ohlc-402.json':                    { detect: true, buildOk: true },
+    'stablecrypto-coingecko-top-movers-402.json':              { detect: true, buildOk: true },
+    'stablecrypto-coingecko-trending-402.json':                { detect: true, buildOk: true },
+    'stablecrypto-coingecko-categories-402.json':              { detect: true, buildOk: true },
+    'stablecrypto-coingecko-onchain-pool-402.json':            { detect: true, buildOk: true },
+    'stablecrypto-coingecko-onchain-trending-402.json':        { detect: true, buildOk: true },
+    'stablecrypto-defillama-protocols-402.json':               { detect: true, buildOk: true },
+    'stablecrypto-defillama-protocol-402.json':                { detect: true, buildOk: true },
+    'stablecrypto-defillama-chains-402.json':                  { detect: true, buildOk: true },
+    'stablecrypto-defillama-chain-tvl-402.json':               { detect: true, buildOk: true },
+    'stablecrypto-defillama-yields-pools-402.json':            { detect: true, buildOk: true },
+    'stablecrypto-defillama-yields-perps-402.json':            { detect: true, buildOk: true },
+    'stablecrypto-defillama-stablecoins-402.json':             { detect: true, buildOk: true },
+    'stablecrypto-defillama-dex-overview-402.json':            { detect: true, buildOk: true },
+    'stablecrypto-defillama-fees-overview-402.json':           { detect: true, buildOk: true },
+    'stablecrypto-defillama-derivatives-overview-402.json':    { detect: true, buildOk: true },
+    'stablecrypto-defillama-coins-prices-historical-402.json': { detect: true, buildOk: true },
+    // BAT-766: Same-provider extras (13 endpoints across 5 existing services).
+    'wolframalpha-v2-query-402.json':              { detect: true, buildOk: true },
+    'rentcast-avm-value-402.json':                 { detect: true, buildOk: true },
+    'rentcast-properties-402.json':                { detect: true, buildOk: true },
+    'rentcast-listings-sale-402.json':             { detect: true, buildOk: true },
+    'rentcast-listings-rental-402.json':           { detect: true, buildOk: true },
+    // tripadvisor-search-402.json — entry already exists above; not re-added (would be duplicate key)
+    'tripadvisor-location-details-402.json':       { detect: true, buildOk: true },
+    'tripadvisor-location-reviews-402.json':       { detect: true, buildOk: true },
+    'tripadvisor-location-photos-402.json':        { detect: true, buildOk: true },
+    'reducto-parse-402.json':                      { detect: true, buildOk: true },
+    'crushrewards-analyst-inflation-402.json':     { detect: true, buildOk: true },
+    'crushrewards-shopper-price-history-402.json': { detect: true, buildOk: true },
+    'crushrewards-shopper-deal-finder-402.json':   { detect: true, buildOk: true },
     // BAT-582 v1.6 quirk: pay.sh's "free" status endpoint returns 402
     // with amount=0 (instead of 200 OK). Our build correctly rejects
     // zero demand as invalid_demand — free-via-x402 isn't a supported

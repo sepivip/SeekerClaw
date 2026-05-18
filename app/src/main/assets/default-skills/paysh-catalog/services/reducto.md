@@ -1,17 +1,27 @@
 # Reducto Document Parser (paysponge)
 
-AI-powered document parsing — turn PDFs, scanned images, or invoices into structured data.
+AI-powered document parsing — turn PDFs, scanned images, or invoices into structured data. Two catalogued endpoints:
 
-## Endpoint
+- **[`extract`](#extract)** — AI-extraction with layout awareness (tables, key-value pairs, structured fields) ($0.05)
+- **[`parse`](#parse)** — Lower-cost raw text/structure parse (no AI extraction layer) ($0.05)
 
-- **URL pattern:** `https://api.paysponge.com/x402/purchase/svc_d672d90ggvqqygj60/extract`
-- **Method:** POST (JSON body)
-- **Cost:** $0.05 USDC per call (Solana mainnet)
-- **Suggested max_usdc:** `"0.15"` (decimal STRING)
+Both endpoints live behind the paysponge x402 gateway:
+- Base: `https://api.paysponge.com`
+- Path prefix: `/x402/purchase/svc_d672d90ggvqqygj60/`
 
-## Body construction
+## When to use which / vs free alternatives
 
-Standard Reducto `/extract` payload:
+- **Use `extract`** for invoices, receipts, financial statements — anywhere you need named fields (line items, totals, dates) pulled out of unstructured layouts.
+- **Use `parse`** for raw OCR / text-from-document where you just need the words and basic structure (paragraphs / tables) without AI-driven field extraction. Sometimes cheaper or faster when the user only needs the text.
+- **Don't use Reducto** for simple text-from-PDF — `web_fetch` on a publicly-hosted PDF often works for plain-text content. Reserve Reducto for layout-aware extraction or OCR.
+- Both endpoints are $0.05 each — confirm with the user before invoking if their question could be answered cheaper.
+
+<a id="extract"></a>
+## `extract` — AI extraction
+
+`POST https://api.paysponge.com/x402/purchase/svc_d672d90ggvqqygj60/extract`
+
+### Body construction
 
 ```json
 {
@@ -23,13 +33,23 @@ Standard Reducto `/extract` payload:
 }
 ```
 
-Pass `document_url` as the source. Reducto fetches it server-side — the URL must be publicly reachable.
+`document_url` must be publicly reachable (Reducto fetches server-side). Returns JSON with parsed sections, tables, and key-value pairs.
 
-## When to use vs free alternatives
+<a id="parse"></a>
+## `parse` — raw text / structure
 
-- **Use Reducto** for actual extraction of tables, line items, structured fields from PDFs / scanned docs. Especially valuable for invoices, receipts, financial statements.
-- **Don't use Reducto** for simple text-from-PDF — `web_fetch` on a publicly-hosted PDF often works for plain-text content. Reserve Reducto for layout-aware extraction.
+`POST https://api.paysponge.com/x402/purchase/svc_d672d90ggvqqygj60/parse`
 
-## Response shape
+### Body construction
 
-JSON with parsed sections, tables, and key-value pairs. Costs more than most services ($0.05) — confirm with the user before invoking if their question could be answered cheaper.
+```json
+{
+  "document_url": "https://example.com/doc.pdf"
+}
+```
+
+Similar to extract but skips the AI-extraction layer — returns text + basic structure (paragraphs, table boundaries) but no named-field extraction. Use when the user wants the raw text or a quick OCR pass.
+
+## Response surfacing
+
+For both endpoints — surface only the part the user asked about (the line items they wanted, the specific field, the OCR'd paragraph). Don't dump the full parsed JSON.

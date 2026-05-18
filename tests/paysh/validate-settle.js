@@ -120,6 +120,44 @@ const SETTLE_CAPTURES = [
         expectDelivery: 'body',
         expectResourceUrlPrefix: 'https://pplx.x402.paysponge.com',
     },
+    // BAT-768: StableCrypto market-data extras (20 endpoints). All POST, all
+    // $0.01, header-delivered payment-required (base64). Service base
+    // stablecrypto.dev (merit-systems gateway).
+    { file: 'stablecrypto-coingecko-price-402.json',                   expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-markets-402.json',                 expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-chart-402.json',                   expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-ohlc-402.json',                    expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-top-movers-402.json',              expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-trending-402.json',                expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-categories-402.json',              expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-onchain-pool-402.json',            expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-coingecko-onchain-trending-402.json',        expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-protocols-402.json',               expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-protocol-402.json',                expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-chains-402.json',                  expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-chain-tvl-402.json',               expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-yields-pools-402.json',            expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-yields-perps-402.json',            expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-stablecoins-402.json',             expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-dex-overview-402.json',            expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-fees-overview-402.json',           expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-derivatives-overview-402.json',    expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    { file: 'stablecrypto-defillama-coins-prices-historical-402.json', expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'https://stablecrypto.dev' },
+    // BAT-766: Same-provider extras. Body-delivered (paysponge convention) for
+    // wolframalpha/rentcast/tripadvisor/reducto; header-delivered for crushrewards.
+    { file: 'wolframalpha-v2-query-402.json',              expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://wolframalpha.x402.paysponge.com' },
+    { file: 'rentcast-avm-value-402.json',                 expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://rentcast.x402.paysponge.com' },
+    { file: 'rentcast-properties-402.json',                expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://rentcast.x402.paysponge.com' },
+    { file: 'rentcast-listings-sale-402.json',             expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://rentcast.x402.paysponge.com' },
+    { file: 'rentcast-listings-rental-402.json',           expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://rentcast.x402.paysponge.com' },
+    // tripadvisor-search-402.json — entry already exists above; not re-added (would be duplicate file key with stricter expectPayTo/expectFeePayer assertions)
+    { file: 'tripadvisor-location-details-402.json',       expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://tripadvisor.x402.paysponge.com' },
+    { file: 'tripadvisor-location-reviews-402.json',       expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://tripadvisor.x402.paysponge.com' },
+    { file: 'tripadvisor-location-photos-402.json',        expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://tripadvisor.x402.paysponge.com' },
+    { file: 'reducto-parse-402.json',                      expectV2: true, expectDelivery: 'body',   expectResourceUrlPrefix: 'https://api.paysponge.com' },
+    { file: 'crushrewards-analyst-inflation-402.json',     expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'http://api.crushrewards.dev' },
+    { file: 'crushrewards-shopper-price-history-402.json', expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'http://api.crushrewards.dev' },
+    { file: 'crushrewards-shopper-deal-finder-402.json',   expectV2: true, expectDelivery: 'header', expectResourceUrlPrefix: 'http://api.crushrewards.dev' },
 ];
 
 // Detect which delivery mode a capture uses by calling the parser's own

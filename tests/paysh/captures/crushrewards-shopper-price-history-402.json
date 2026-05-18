@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "label": "crushrewards-shopper-price-history-402",
+    "capturedAt": "2026-05-18T12:26:35.029Z",
+    "source": "BAT-768+766 combined probe",
+    "payMdPath": "providers/crushrewards/pricing/PAY.md",
+    "note": "Captured to support v2 catalog entry crushrewards-shopper-price-history in BAT-768+766 combined PR."
+  },
+  "url": "https://api.crushrewards.dev/v1/shopper/price-history",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "date": "Mon, 18 May 2026 12:26:48 GMT",
+    "content-type": "application/problem+json",
+    "content-length": "170",
+    "connection": "keep-alive",
+    "cache-control": "no-store",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cDovL2FwaS5jcnVzaHJld2FyZHMuZGV2L3YxL3Nob3BwZXIvcHJpY2UtaGlzdG9yeSIsImRlc2NyaXB0aW9uIjoiU2hvcHBlciBwcmljaW5nIHF1ZXJ5IC0gJDAuMDEgcGVyIHJlcXVlc3QifSwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoic29sYW5hOjVleWt0NFVzRnY4UDhOSmRUUkVwWTF2enFLcVpLdmRwIiwiYW1vdW50IjoiMTAwMDAiLCJhc3NldCI6IkVQakZXZGQ1QXVmcVNTcWVNMnFOMXh6eWJhcEM4RzR3RUdHa1p3eVREdDF2IiwicGF5VG8iOiIyaFlZN3dIaFhzb1duc2tRUnpZRlVOSDdZYm9YTk1FcWJHbkFGSHBSdUIyVyIsIm1heFRpbWVvdXRTZWNvbmRzIjo2MCwiZXh0cmEiOnsiZmVlUGF5ZXIiOiJBZXBXcHEzR1F3TDhDZUtNdFp5S3RLUGE3VzkxQ295Z2gzcm9wQUphcFZkVSIsImRlY2ltYWxzIjo2LCJyZWNlbnRCbG9ja2hhc2giOiI0dmVNMzNyNU42WnB5eEI4ZWZ3YVM1ZGhTQ1Yxb0cxaEtyOUdRU3ZpWEtoWSIsInRva2VuUHJvZ3JhbSI6IlRva2Vua2VnUWZlWnlpTndBSmJOYkdLUEZYQ1d1QnZmOVNzNjIzVlE1REEiLCJmZWF0dXJlcyI6eyJ4U2V0dGxlbWVudEFjY291bnRTdXBwb3J0ZWQiOnRydWV9fX0seyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJzb2xhbmE6NWV5a3Q0VXNGdjhQOE5KZFRSRXBZMXZ6cUtxWkt2ZHAiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiRVBqRldkZDVBdWZxU1NxZU0ycU4xeHp5YmFwQzhHNHdFR0drWnd5VER0MXYiLCJwYXlUbyI6IjJoWVk3d0hoWHNvV25za1FSellGVU5IN1lib1hOTUVxYkduQUZIcFJ1QjJXIiwibWF4VGltZW91dFNlY29uZHMiOjYwLCJleHRyYSI6eyJmZWVQYXllciI6IkFlcFdwcTNHUXdMOENlS010WnlLdEtQYTdXOTFDb3lnaDNyb3BBSmFwVmRVIiwiZGVjaW1hbHMiOjYsInJlY2VudEJsb2NraGFzaCI6IjR2ZU0zM3I1TjZacHl4QjhlZndhUzVkaFNDVjFvRzFoS3I5R1FTdmlYS2hZIiwidG9rZW5Qcm9ncmFtIjoiVG9rZW5rZWdRZmVaeWlOd0FKYk5iR0tQRlhDV3VCdmY5U3M2MjNWUTVEQSIsImZlYXR1cmVzIjp7InhTZXR0bGVtZW50QWNjb3VudFN1cHBvcnRlZCI6dHJ1ZX19fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo4NDUzIiwiYW1vdW50IjoiMTAwMDAiLCJhc3NldCI6IjB4ODMzNTg5ZkNENmVEYjZFMDhmNGM3QzMyRDRmNzFiNTRiZEEwMjkxMyIsInBheVRvIjoiMHhlMmU2NjJjRjIxOTAyNUFGQzBDOUJmODUwYjZhMkIwYTBiNTUxN2ZlIiwibWF4VGltZW91dFNlY29uZHMiOjMwMCwiZXh0cmEiOnsibmFtZSI6IlVTRCBDb2luIiwidmVyc2lvbiI6IjIiLCJjaGFpbklkIjo4NDUzLCJ2ZXJpZnlpbmdDb250cmFjdCI6IjB4ODMzNTg5ZkNENmVEYjZFMDhmNGM3QzMyRDRmNzFiNTRiZEEwMjkxMyJ9fV0sImV4dGVuc2lvbnMiOnsiYmF6YWFyIjp7ImluZm8iOnsiaW5wdXQiOnsidHlwZSI6Imh0dHAiLCJtZXRob2QiOiJHRVQiLCJxdWVyeVBhcmFtcyI6eyJxIjoiYWlycG9kcyIsImNvdW50cnkiOiJ1cyIsInJldGFpbGVyIjoiYW1hem9uIiwiZnJvbSI6IjIwMjYtMDQtMDEiLCJ0byI6IjIwMjYtMDUtMDEifX0sIm91dHB1dCI6eyJ0eXBlIjoianNvbiJ9fSwic2NoZW1hIjp7IiRzY2hlbWEiOiJodHRwczovL2pzb24tc2NoZW1hLm9yZy9kcmFmdC8yMDIwLTEyL3NjaGVtYSIsInR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImlucHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyIsImNvbnN0IjoiaHR0cCJ9LCJtZXRob2QiOnsidHlwZSI6InN0cmluZyIsImVudW0iOlsiR0VUIiwiSEVBRCIsIkRFTEVURSJdfSwicXVlcnlQYXJhbXMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicmVxdWlyZWQiOlsicSJdLCJwcm9wZXJ0aWVzIjp7InEiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MSwiZGVzY3JpcHRpb24iOiJTZWFyY2ggcXVlcnkgKHByb2R1Y3QgbmFtZSwga2V5d29yZCwgb3IgY2F0ZWdvcnkgdGVybSkiLCJleGFtcGxlIjoiYWlycG9kcyJ9LCJjb3VudHJ5Ijp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbInVzIiwiY2EiXSwiZGVmYXVsdCI6InVzIiwiZGVzY3JpcHRpb24iOiJDb3VudHJ5ICh1cyBvciBjYSkiLCJleGFtcGxlIjoidXMifSwicmV0YWlsZXIiOnsidHlwZSI6InN0cmluZyIsImVudW0iOlsiYW1hem9uIiwid2FsbWFydCIsImNvc3RjbyIsImhvbWVkZXBvdCIsIm5vcmRzdHJvbSIsImlrZWEiXSwiZGVzY3JpcHRpb24iOiJGaWx0ZXIgdG8gYSBzcGVjaWZpYyByZXRhaWxlciIsImV4YW1wbGUiOiJhbWF6b24ifSwiZnJvbSI6eyJ0eXBlIjoic3RyaW5nIiwiZm9ybWF0IjoiZGF0ZSIsImRlc2NyaXB0aW9uIjoiU3RhcnQgZGF0ZSAoSVNPIDg2MDEsIGRlZmF1bHRzIHRvIDMwIGRheXMgYWdvKSIsImV4YW1wbGUiOiIyMDI2LTA0LTAxIn0sInRvIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJkYXRlIiwiZGVzY3JpcHRpb24iOiJFbmQgZGF0ZSAoSVNPIDg2MDEsIGRlZmF1bHRzIHRvIG5vdykiLCJleGFtcGxlIjoiMjAyNi0wNS0wMSJ9fX0sImhlYWRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjp7InR5cGUiOiJzdHJpbmcifX19LCJyZXF1aXJlZCI6WyJ0eXBlIiwibWV0aG9kIl0sImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZX0sIm91dHB1dCI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJ0eXBlIjp7InR5cGUiOiJzdHJpbmcifSwiZXhhbXBsZSI6eyJ0eXBlIjoib2JqZWN0In19LCJyZXF1aXJlZCI6WyJ0eXBlIl19fSwicmVxdWlyZWQiOlsiaW5wdXQiXX19fX0=",
+    "rndr-id": "[REDACTED]",
+    "server": "cloudflare",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"api.crushrewards.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-18T12:31:48.139Z\"",
+    "x-render-origin-server": "[REDACTED]",
+    "x-request-id": "019e3b0d-9b4d-779f-9ea7-58df8dc85ed1",
+    "cf-cache-status": "DYNAMIC",
+    "cf-ray": "9fdada303d216e48-SOF",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": {
+    "type": "https://api.crushrewards.dev/errors/payment-required",
+    "title": "Payment Required",
+    "status": 402,
+    "detail": "Payment Required",
+    "instance": "/v1/shopper/price-history"
+  }
+}

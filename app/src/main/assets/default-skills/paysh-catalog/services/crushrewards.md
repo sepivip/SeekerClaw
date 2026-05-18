@@ -1,35 +1,60 @@
-# Crushrewards Shopper (crushrewards)
+# Crushrewards (crushrewards)
 
-Find the best price for a product across major US retailers — Amazon, Walmart, Costco, Home Depot, Target, etc.
+US retail / shopping / pricing data. Four catalogued endpoints:
 
-## Endpoint
+- **[`shopper-best-price`](#shopper-best-price)** — find cheapest retailer for a product ($0.01)
+- **[`shopper-price-history`](#shopper-price-history)** — historical price chart for a product across retailers ($0.01)
+- **[`shopper-deal-finder`](#shopper-deal-finder)** — active deals/discounts on a product ($0.01)
+- **[`analyst-inflation`](#analyst-inflation)** — live US consumer-price inflation index ($0.02)
 
-- **URL pattern:** `https://api.crushrewards.dev/v1/shopper/best-price?<query>`
-- **Method:** GET
-- **Cost:** $0.01 USDC per call (Solana mainnet — Solana-native, multi-chain offer with both sol+sol+base)
-- **Suggested max_usdc:** `"0.05"` (decimal STRING)
-
-## Query construction
-
-Pass the product name or query string in `q`:
-
-```
-?q=PlayStation+5+slim
-?q=Dyson+V11+vacuum
-?q=Nespresso+Vertuo+pods
-```
-
-URL-encode the value with `encodeURIComponent`. Spaces become `%20`; URL-reserved chars (`&`, `=`, `?`, `+`, etc.) get percent-encoded; chars `A-Z a-z 0-9 - _ . ~ ! * ' ( )` stay unchanged (per the JS spec). Do NOT use `+` for spaces.
+Service URL base: `https://api.crushrewards.dev`. All GET; URL-encode query strings with `encodeURIComponent` (spaces → `%20`, never `+`).
 
 ## When to use vs free alternatives
 
-- **Use Crushrewards** when the user wants to compare prices across multiple major US retailers in one call — typical "where can I buy X cheapest" question.
+- **Use Crushrewards** when the user wants live US retail pricing, price history, or deal alerts — typical "where can I buy X cheapest" / "is X a good deal" / "has X gone up in price" questions.
 - **Don't use Crushrewards** for non-US shoppers, niche/specialty retailers outside its index, or when the user already knows where they want to buy.
 
-## Response shape
+<a id="shopper-best-price"></a>
+## `shopper-best-price` — cheapest retailer
 
-JSON listing prices across the retailer network with retailer name, price, in-stock status, link. Return the top 3 cheapest with retailer name + price.
+`GET /v1/shopper/best-price?q=<URL-encoded-product>`
+
+Examples: `?q=PlayStation%205%20slim` / `?q=Dyson%20V11%20vacuum` / `?q=Nespresso%20Vertuo%20pods`
+
+Returns JSON listing prices across retailers (Amazon, Walmart, Costco, Home Depot, Target, etc.) with retailer name, price, in-stock status, link. Return the top 3 cheapest with retailer + price.
+
+<a id="shopper-price-history"></a>
+## `shopper-price-history` — historical chart
+
+`GET /v1/shopper/price-history?q=<URL-encoded-product>&days=<N>`
+
+| Param | Example | Notes |
+|---|---|---|
+| `q` | `q=PlayStation%205%20slim` | Product query string (required) |
+| `days` | `days=90` | Days of history; common values 30/90/365 |
+
+Returns price points over time across retailers. Surface: current price, lowest in window + when, "down 12% from peak", etc.
+
+<a id="shopper-deal-finder"></a>
+## `shopper-deal-finder` — active deals
+
+`GET /v1/shopper/deal-finder?q=<URL-encoded-product>` (or `?category=<...>` for category-level deals)
+
+Returns active discounts / promo codes / sale prices. Surface the top 3-5 deals with retailer + discount % + final price + expiry.
+
+<a id="analyst-inflation"></a>
+## `analyst-inflation` — US consumer-price inflation index
+
+`GET /v1/analyst/inflation`
+
+Returns live US CPI-style inflation index built from Crushrewards' retail-price scraping. Useful when training-data CPI numbers are stale and the user asks "what's current US inflation" or "are prices going up".
+
+$0.02 (2x the shopper endpoints) — slightly pricier because of the analysis layer.
+
+## Other Crushrewards endpoints on pay.sh (not catalogued)
+
+BAT-706 audit found 9 additional sibling endpoints (`/marketing/competitive-landscape`, `/marketing/brand-tracker`, `/marketing/promo-intelligence`, `/marketing/share-of-shelf`, `/marketing/price-positioning`, `/shopper/price-drop-alert`, `/analyst/price-dispersion`, `/analyst/retailer-index`, `/analyst/category-summary`). Most target marketing/analytics professionals — not surfaced as user-facing intents yet. Deferred.
 
 ## Notes
 
-- Solana-native — one of two services in the catalog without an EVM-only fallback path. Cheap and fast.
+- Solana-native multi-chain offer (sol+sol+base) — same low-cost path as Wolfram.

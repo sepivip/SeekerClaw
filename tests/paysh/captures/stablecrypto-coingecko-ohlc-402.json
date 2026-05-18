@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "label": "stablecrypto-coingecko-ohlc-402",
+    "capturedAt": "2026-05-18T12:26:35.029Z",
+    "source": "BAT-768+766 combined probe",
+    "payMdPath": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+    "note": "Captured to support v2 catalog entry stablecrypto-coingecko-ohlc in BAT-768+766 combined PR."
+  },
+  "url": "https://stablecrypto.dev/api/coingecko/ohlc",
+  "method": "POST",
+  "status": 402,
+  "headers": {
+    "cache-control": "no-store",
+    "content-length": "0",
+    "content-type": "application/json",
+    "date": "Mon, 18 May 2026 12:26:36 GMT",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9zdGFibGVjcnlwdG8uZGV2L2FwaS9jb2luZ2Vja28vb2hsYyIsIm1ldGhvZCI6IlBPU1QiLCJkZXNjcmlwdGlvbiI6IkdldCBPSExDIGNhbmRsZXN0aWNrIGRhdGEiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL2pzb24ifSwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1Ojg0NTMiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiMHg4MzM1ODlmQ0Q2ZURiNkUwOGY0YzdDMzJENGY3MWI1NGJkQTAyOTEzIiwicGF5VG8iOiIweDEyNEY2MjBiNEYzYjUzNTU5Q2Q5MTQ4YzliMUIyNzczY2ExMDQ0NzgiLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiJFUGpGV2RkNUF1ZnFTU3FlTTJxTjF4enliYXBDOEc0d0VHR2tad3lURHQxdiIsInBheVRvIjoiR2Vkc3JtQ0hUaGhZcENWbXhCdUNWYXJpaVhYZVZOOGlKUHRidVhEb3VKM0siLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJmZWVQYXllciI6IkFlcFdwcTNHUXdMOENlS010WnlLdEtQYTdXOTFDb3lnaDNyb3BBSmFwVmRVIiwiZGVjaW1hbHMiOjYsInJlY2VudEJsb2NraGFzaCI6IkF1ZFNDenJ6QlZGQnpNU3hNTW8xbTdmMjNzdTZ3OXFnck1nZnh0VW1lYVNKIiwidG9rZW5Qcm9ncmFtIjoiVG9rZW5rZWdRZmVaeWlOd0FKYk5iR0tQRlhDV3VCdmY5U3M2MjNWUTVEQSIsImZlYXR1cmVzIjp7InhTZXR0bGVtZW50QWNjb3VudFN1cHBvcnRlZCI6dHJ1ZX19fV0sImV4dGVuc2lvbnMiOnsiYmF6YWFyIjp7ImluZm8iOnsiaW5wdXQiOnsidHlwZSI6Imh0dHAiLCJtZXRob2QiOiJQT1NUIiwiYm9keVR5cGUiOiJqc29uIiwiYm9keSI6e319fSwic2NoZW1hIjp7IiRzY2hlbWEiOiJodHRwczovL2pzb24tc2NoZW1hLm9yZy9kcmFmdC8yMDIwLTEyL3NjaGVtYSIsInR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImlucHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyIsImNvbnN0IjoiaHR0cCJ9LCJtZXRob2QiOnsidHlwZSI6InN0cmluZyIsImVudW0iOlsiUE9TVCIsIlBVVCIsIlBBVENIIl19LCJib2R5VHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJqc29uIiwiZm9ybS1kYXRhIiwidGV4dCJdfSwiYm9keSI6eyIkc2NoZW1hIjoiaHR0cHM6Ly9qc29uLXNjaGVtYS5vcmcvZHJhZnQvMjAyMC0xMi9zY2hlbWEiLCJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJpZCI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJDb2luIElEIn0sInZzX2N1cnJlbmN5Ijp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6IlRhcmdldCBjdXJyZW5jeSJ9LCJkYXlzIjp7InR5cGUiOiJzdHJpbmciLCJkZXNjcmlwdGlvbiI6IkRhdGEgcmFuZ2UgKDEsIDcsIDE0LCAzMCwgOTAsIDE4MCwgMzY1KSJ9LCJwcmVjaXNpb24iOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiaWQiLCJ2c19jdXJyZW5jeSIsImRheXMiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbInR5cGUiLCJtZXRob2QiLCJib2R5VHlwZSIsImJvZHkiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbImlucHV0Il19fX19",
+    "server": "Vercel",
+    "strict-transport-security": "max-age=63072000",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"stablecrypto.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-18T12:31:36.665Z\"",
+    "x-matched-path": "/api/coingecko/ohlc",
+    "x-vercel-cache": "MISS",
+    "x-vercel-id": "fra1::iad1::5gbzh-1779107196468-1294809b6b01"
+  },
+  "body": ""
+}

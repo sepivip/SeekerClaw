@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "label": "stablecrypto-defillama-coins-prices-historical-402",
+    "capturedAt": "2026-05-18T12:26:35.029Z",
+    "source": "BAT-768+766 combined probe",
+    "payMdPath": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+    "note": "Captured to support v2 catalog entry stablecrypto-defillama-coins-prices-historical in BAT-768+766 combined PR."
+  },
+  "url": "https://stablecrypto.dev/api/defillama/coins/prices-historical",
+  "method": "POST",
+  "status": 402,
+  "headers": {
+    "cache-control": "no-store",
+    "content-length": "0",
+    "content-type": "application/json",
+    "date": "Mon, 18 May 2026 12:26:42 GMT",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9zdGFibGVjcnlwdG8uZGV2L2FwaS9kZWZpbGxhbWEvY29pbnMvcHJpY2VzLWhpc3RvcmljYWwiLCJtZXRob2QiOiJQT1NUIiwiZGVzY3JpcHRpb24iOiJHZXQgaGlzdG9yaWNhbCBwcmljZXMgZm9yIHRva2VucyBhdCBhIHNwZWNpZmljIHRpbWVzdGFtcCIsIm1pbWVUeXBlIjoiYXBwbGljYXRpb24vanNvbiJ9LCJhY2NlcHRzIjpbeyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MyIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiIweDgzMzU4OWZDRDZlRGI2RTA4ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMiLCJwYXlUbyI6IjB4MTI0RjYyMGI0RjNiNTM1NTlDZDkxNDhjOWIxQjI3NzNjYTEwNDQ3OCIsIm1heFRpbWVvdXRTZWNvbmRzIjozMDAsImV4dHJhIjp7Im5hbWUiOiJVU0QgQ29pbiIsInZlcnNpb24iOiIyIn19LHsic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoic29sYW5hOjVleWt0NFVzRnY4UDhOSmRUUkVwWTF2enFLcVpLdmRwIiwiYW1vdW50IjoiMTAwMDAiLCJhc3NldCI6IkVQakZXZGQ1QXVmcVNTcWVNMnFOMXh6eWJhcEM4RzR3RUdHa1p3eVREdDF2IiwicGF5VG8iOiJHZWRzcm1DSFRoaFlwQ1ZteEJ1Q1ZhcmlpWFhlVk44aUpQdGJ1WERvdUozSyIsIm1heFRpbWVvdXRTZWNvbmRzIjozMDAsImV4dHJhIjp7ImZlZVBheWVyIjoiQWVwV3BxM0dRd0w4Q2VLTXRaeUt0S1BhN1c5MUNveWdoM3JvcEFKYXBWZFUiLCJkZWNpbWFscyI6NiwicmVjZW50QmxvY2toYXNoIjoiQ1ZkeFFvelByUVJueHJoTm15VWk1dTdLcXY1U3dKTHl3QW50OWdtWWtwelIiLCJ0b2tlblByb2dyYW0iOiJUb2tlbmtlZ1FmZVp5aU53QUpiTmJHS1BGWENXdUJ2ZjlTczYyM1ZRNURBIiwiZmVhdHVyZXMiOnsieFNldHRsZW1lbnRBY2NvdW50U3VwcG9ydGVkIjp0cnVlfX19XSwiZXh0ZW5zaW9ucyI6eyJiYXphYXIiOnsiaW5mbyI6eyJpbnB1dCI6eyJ0eXBlIjoiaHR0cCIsIm1ldGhvZCI6IlBPU1QiLCJib2R5VHlwZSI6Impzb24iLCJib2R5Ijp7fX19LCJzY2hlbWEiOnsiJHNjaGVtYSI6Imh0dHBzOi8vanNvbi1zY2hlbWEub3JnL2RyYWZ0LzIwMjAtMTIvc2NoZW1hIiwidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiaW5wdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJodHRwIn0sIm1ldGhvZCI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJQT1NUIiwiUFVUIiwiUEFUQ0giXX0sImJvZHlUeXBlIjp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbImpzb24iLCJmb3JtLWRhdGEiLCJ0ZXh0Il19LCJib2R5Ijp7IiRzY2hlbWEiOiJodHRwczovL2pzb24tc2NoZW1hLm9yZy9kcmFmdC8yMDIwLTEyL3NjaGVtYSIsInR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InRpbWVzdGFtcCI6eyJ0eXBlIjoibnVtYmVyIiwiZGVzY3JpcHRpb24iOiJVbml4IHRpbWVzdGFtcCJ9LCJjb2lucyI6eyJ0eXBlIjoic3RyaW5nIiwiZGVzY3JpcHRpb24iOiJDb21tYS1zZXBhcmF0ZWQgY29pbiBJRHMifSwic2VhcmNoV2lkdGgiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsidGltZXN0YW1wIiwiY29pbnMiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbInR5cGUiLCJtZXRob2QiLCJib2R5VHlwZSIsImJvZHkiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbImlucHV0Il19fX19",
+    "server": "Vercel",
+    "strict-transport-security": "max-age=63072000",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"stablecrypto.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-18T12:31:42.035Z\"",
+    "x-matched-path": "/api/defillama/coins/prices-historical",
+    "x-vercel-cache": "MISS",
+    "x-vercel-id": "fra1::iad1::7pz45-1779107201828-6fee0c8de070"
+  },
+  "body": ""
+}

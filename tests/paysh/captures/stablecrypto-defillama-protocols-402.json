@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "label": "stablecrypto-defillama-protocols-402",
+    "capturedAt": "2026-05-18T12:26:35.029Z",
+    "source": "BAT-768+766 combined probe",
+    "payMdPath": "providers/merit-systems/stablecrypto/market-data/PAY.md",
+    "note": "Captured to support v2 catalog entry stablecrypto-defillama-protocols in BAT-768+766 combined PR."
+  },
+  "url": "https://stablecrypto.dev/api/defillama/protocols",
+  "method": "POST",
+  "status": 402,
+  "headers": {
+    "cache-control": "no-store",
+    "content-length": "0",
+    "content-type": "application/json",
+    "date": "Mon, 18 May 2026 12:26:38 GMT",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9zdGFibGVjcnlwdG8uZGV2L2FwaS9kZWZpbGxhbWEvcHJvdG9jb2xzIiwibWV0aG9kIjoiUE9TVCIsImRlc2NyaXB0aW9uIjoiTGlzdCBhbGwgRGVGaSBwcm90b2NvbHMgd2l0aCBUVkwiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL2pzb24ifSwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1Ojg0NTMiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiMHg4MzM1ODlmQ0Q2ZURiNkUwOGY0YzdDMzJENGY3MWI1NGJkQTAyOTEzIiwicGF5VG8iOiIweDEyNEY2MjBiNEYzYjUzNTU5Q2Q5MTQ4YzliMUIyNzczY2ExMDQ0NzgiLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiJFUGpGV2RkNUF1ZnFTU3FlTTJxTjF4enliYXBDOEc0d0VHR2tad3lURHQxdiIsInBheVRvIjoiR2Vkc3JtQ0hUaGhZcENWbXhCdUNWYXJpaVhYZVZOOGlKUHRidVhEb3VKM0siLCJtYXhUaW1lb3V0U2Vjb25kcyI6MzAwLCJleHRyYSI6eyJmZWVQYXllciI6IkFlcFdwcTNHUXdMOENlS010WnlLdEtQYTdXOTFDb3lnaDNyb3BBSmFwVmRVIiwiZGVjaW1hbHMiOjYsInJlY2VudEJsb2NraGFzaCI6IlpFcVV2a0ZOQ3FWVWk1UjFkaUJxOWloMjhicnZVazRUdTd5ZWhQaWZUeWoiLCJ0b2tlblByb2dyYW0iOiJUb2tlbmtlZ1FmZVp5aU53QUpiTmJHS1BGWENXdUJ2ZjlTczYyM1ZRNURBIiwiZmVhdHVyZXMiOnsieFNldHRsZW1lbnRBY2NvdW50U3VwcG9ydGVkIjp0cnVlfX19XSwiZXh0ZW5zaW9ucyI6eyJiYXphYXIiOnsiaW5mbyI6eyJpbnB1dCI6eyJ0eXBlIjoiaHR0cCIsIm1ldGhvZCI6IlBPU1QiLCJib2R5VHlwZSI6Impzb24iLCJib2R5Ijp7fX19LCJzY2hlbWEiOnsiJHNjaGVtYSI6Imh0dHBzOi8vanNvbi1zY2hlbWEub3JnL2RyYWZ0LzIwMjAtMTIvc2NoZW1hIiwidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiaW5wdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJodHRwIn0sIm1ldGhvZCI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJQT1NUIiwiUFVUIiwiUEFUQ0giXX0sImJvZHlUeXBlIjp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbImpzb24iLCJmb3JtLWRhdGEiLCJ0ZXh0Il19LCJib2R5Ijp7IiRzY2hlbWEiOiJodHRwczovL2pzb24tc2NoZW1hLm9yZy9kcmFmdC8yMDIwLTEyL3NjaGVtYSIsInR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbInR5cGUiLCJtZXRob2QiLCJib2R5VHlwZSIsImJvZHkiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfX0sInJlcXVpcmVkIjpbImlucHV0Il19fX19",
+    "server": "Vercel",
+    "strict-transport-security": "max-age=63072000",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"stablecrypto.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-18T12:31:38.681Z\"",
+    "x-matched-path": "/api/defillama/protocols",
+    "x-vercel-cache": "MISS",
+    "x-vercel-id": "fra1::iad1::fgpq9-1779107198476-d0c546897c5b"
+  },
+  "body": ""
+}

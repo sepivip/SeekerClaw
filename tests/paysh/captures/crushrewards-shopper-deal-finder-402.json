@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "label": "crushrewards-shopper-deal-finder-402",
+    "capturedAt": "2026-05-18T12:26:35.029Z",
+    "source": "BAT-768+766 combined probe",
+    "payMdPath": "providers/crushrewards/pricing/PAY.md",
+    "note": "Captured to support v2 catalog entry crushrewards-shopper-deal-finder in BAT-768+766 combined PR."
+  },
+  "url": "https://api.crushrewards.dev/v1/shopper/deal-finder",
+  "method": "GET",
+  "status": 402,
+  "headers": {
+    "date": "Mon, 18 May 2026 12:26:48 GMT",
+    "content-type": "application/problem+json",
+    "content-length": "168",
+    "connection": "keep-alive",
+    "cache-control": "no-store",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cDovL2FwaS5jcnVzaHJld2FyZHMuZGV2L3YxL3Nob3BwZXIvZGVhbC1maW5kZXIiLCJkZXNjcmlwdGlvbiI6IlNob3BwZXIgcHJpY2luZyBxdWVyeSAtICQwLjAxIHBlciByZXF1ZXN0In0sImFjY2VwdHMiOlt7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiJFUGpGV2RkNUF1ZnFTU3FlTTJxTjF4enliYXBDOEc0d0VHR2tad3lURHQxdiIsInBheVRvIjoiMmhZWTd3SGhYc29XbnNrUVJ6WUZVTkg3WWJvWE5NRXFiR25BRkhwUnVCMlciLCJtYXhUaW1lb3V0U2Vjb25kcyI6NjAsImV4dHJhIjp7ImZlZVBheWVyIjoiQWVwV3BxM0dRd0w4Q2VLTXRaeUt0S1BhN1c5MUNveWdoM3JvcEFKYXBWZFUiLCJkZWNpbWFscyI6NiwicmVjZW50QmxvY2toYXNoIjoiNHZlTTMzcjVONlpweXhCOGVmd2FTNWRoU0NWMW9HMWhLcjlHUVN2aVhLaFkiLCJ0b2tlblByb2dyYW0iOiJUb2tlbmtlZ1FmZVp5aU53QUpiTmJHS1BGWENXdUJ2ZjlTczYyM1ZRNURBIiwiZmVhdHVyZXMiOnsieFNldHRsZW1lbnRBY2NvdW50U3VwcG9ydGVkIjp0cnVlfX19LHsic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoic29sYW5hOjVleWt0NFVzRnY4UDhOSmRUUkVwWTF2enFLcVpLdmRwIiwiYW1vdW50IjoiMTAwMDAiLCJhc3NldCI6IkVQakZXZGQ1QXVmcVNTcWVNMnFOMXh6eWJhcEM4RzR3RUdHa1p3eVREdDF2IiwicGF5VG8iOiIyaFlZN3dIaFhzb1duc2tRUnpZRlVOSDdZYm9YTk1FcWJHbkFGSHBSdUIyVyIsIm1heFRpbWVvdXRTZWNvbmRzIjo2MCwiZXh0cmEiOnsiZmVlUGF5ZXIiOiJBZXBXcHEzR1F3TDhDZUtNdFp5S3RLUGE3VzkxQ295Z2gzcm9wQUphcFZkVSIsImRlY2ltYWxzIjo2LCJyZWNlbnRCbG9ja2hhc2giOiI0dmVNMzNyNU42WnB5eEI4ZWZ3YVM1ZGhTQ1Yxb0cxaEtyOUdRU3ZpWEtoWSIsInRva2VuUHJvZ3JhbSI6IlRva2Vua2VnUWZlWnlpTndBSmJOYkdLUEZYQ1d1QnZmOVNzNjIzVlE1REEiLCJmZWF0dXJlcyI6eyJ4U2V0dGxlbWVudEFjY291bnRTdXBwb3J0ZWQiOnRydWV9fX0seyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MyIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiIweDgzMzU4OWZDRDZlRGI2RTA4ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMiLCJwYXlUbyI6IjB4ZTJlNjYyY0YyMTkwMjVBRkMwQzlCZjg1MGI2YTJCMGEwYjU1MTdmZSIsIm1heFRpbWVvdXRTZWNvbmRzIjozMDAsImV4dHJhIjp7Im5hbWUiOiJVU0QgQ29pbiIsInZlcnNpb24iOiIyIiwiY2hhaW5JZCI6ODQ1MywidmVyaWZ5aW5nQ29udHJhY3QiOiIweDgzMzU4OWZDRDZlRGI2RTA4ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMifX1dLCJleHRlbnNpb25zIjp7ImJhemFhciI6eyJpbmZvIjp7ImlucHV0Ijp7InR5cGUiOiJodHRwIiwibWV0aG9kIjoiR0VUIiwicXVlcnlQYXJhbXMiOnsiY2F0ZWdvcnkiOiJlbGVjdHJvbmljcyIsImNvdW50cnkiOiJ1cyIsInJldGFpbGVyIjoiYW1hem9uIiwibWluX2Rpc2NvdW50X3BjdCI6IjEwIiwibGltaXQiOiIyMCJ9fSwib3V0cHV0Ijp7InR5cGUiOiJqc29uIn19LCJzY2hlbWEiOnsiJHNjaGVtYSI6Imh0dHBzOi8vanNvbi1zY2hlbWEub3JnL2RyYWZ0LzIwMjAtMTIvc2NoZW1hIiwidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiaW5wdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJodHRwIn0sIm1ldGhvZCI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJHRVQiLCJIRUFEIiwiREVMRVRFIl19LCJxdWVyeVBhcmFtcyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJjYXRlZ29yeSJdLCJwcm9wZXJ0aWVzIjp7ImNhdGVnb3J5Ijp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjEsImRlc2NyaXB0aW9uIjoiUHJvZHVjdCBjYXRlZ29yeSAoZS5nLiwgZWxlY3Ryb25pY3MsIGdyb2NlcnksIGJlYXV0eSkuIEZ1enp5IGh1bWFuLXJlYWRhYmxlIGlucHV0IOKAlCB0aGUgcmVzb2x2ZXIgbWFwcyBpdCB0aHJvdWdoIHRpZXIgMS00IChpZCDihpIgZXhhY3QgbmFtZSDihpIgdHJpZ3JhbSDihpIgZW1iZWRkaW5nIGtOTikgdG8gYSBjYW5vbmljYWwgY2F0ZWdvcnlfaWQuIFBhaXIgd2l0aCBgY2F0ZWdvcnlfaWRgIGlmIHlvdSBoYXZlIGEgZGV0ZXJtaW5pc3RpYyBpZCBmcm9tIGEgcHJpb3IgY2FsbC4iLCJleGFtcGxlIjoiZWxlY3Ryb25pY3MifSwiY291bnRyeSI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJ1cyIsImNhIl0sImRlZmF1bHQiOiJ1cyIsImRlc2NyaXB0aW9uIjoiQ291bnRyeSAodXMgb3IgY2EpIiwiZXhhbXBsZSI6InVzIn0sInJldGFpbGVyIjp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbImFtYXpvbiIsIndhbG1hcnQiLCJjb3N0Y28iLCJob21lZGVwb3QiLCJub3Jkc3Ryb20iLCJpa2VhIl0sImRlc2NyaXB0aW9uIjoiRmlsdGVyIHRvIGEgc3BlY2lmaWMgcmV0YWlsZXIiLCJleGFtcGxlIjoiYW1hem9uIn0sIm1pbl9kaXNjb3VudF9wY3QiOnsidHlwZSI6ImludGVnZXIiLCJkZWZhdWx0IjoxMCwiZGVzY3JpcHRpb24iOiJNaW5pbXVtIGRpc2NvdW50IHBlcmNlbnRhZ2UgKGRlZmF1bHQgMTApIiwiZXhhbXBsZSI6MTB9LCJsaW1pdCI6eyJ0eXBlIjoiaW50ZWdlciIsImRlZmF1bHQiOjIwLCJtYXhpbXVtIjo1MCwiZGVzY3JpcHRpb24iOiJNYXggcmVzdWx0cyB0byByZXR1cm4gKGRlZmF1bHQgMjAsIG1heCA1MCkiLCJleGFtcGxlIjoyMH19fSwiaGVhZGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOnsidHlwZSI6InN0cmluZyJ9fX0sInJlcXVpcmVkIjpbInR5cGUiLCJtZXRob2QiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfSwib3V0cHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyJ9LCJleGFtcGxlIjp7InR5cGUiOiJvYmplY3QifX0sInJlcXVpcmVkIjpbInR5cGUiXX19LCJyZXF1aXJlZCI6WyJpbnB1dCJdfX19fQ==",
+    "rndr-id": "[REDACTED]",
+    "server": "cloudflare",
+    "www-authenticate": "Payment id=\"[REDACTED]\", realm=\"api.crushrewards.dev\", method=\"tempo\", intent=\"charge\", request=\"[REDACTED]\", expires=\"2026-05-18T12:31:48.318Z\"",
+    "x-render-origin-server": "[REDACTED]",
+    "x-request-id": "019e3b0d-9c7e-7647-8723-609f693ad299",
+    "cf-cache-status": "DYNAMIC",
+    "cf-ray": "9fdada338f436e48-SOF",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "body": {
+    "type": "https://api.crushrewards.dev/errors/payment-required",
+    "title": "Payment Required",
+    "status": 402,
+    "detail": "Payment Required",
+    "instance": "/v1/shopper/deal-finder"
+  }
+}

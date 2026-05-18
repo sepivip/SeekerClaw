@@ -1,7 +1,7 @@
 ---
 name: paysh-catalog
 description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for'. Stay dormant otherwise; defer to free tools. Full keyword list and policy in SKILL.md body."
-version: "1.5.0"
+version: "1.6.0"
 metadata:
   openclaw:
     emoji: "🛒"
@@ -89,7 +89,7 @@ Why it activates: contains `pay.sh` + naming a paid lookup.
 
 User: *"What can you pay for?"*
 
-Why it activates: matches the capability-ask phrase *"what can you pay for"*. (NOT every message containing the word "pay" — only the specific capability-ask phrases listed in the opt-in section above.) Agent reads `catalog.json`, lists the 11 supported entries (across 10 services — perplexity has 2 endpoints, all others 1) with costs, mentions the 63 known-but-not-usable ones. No `agent_pay` call.
+Why it activates: matches the capability-ask phrase *"what can you pay for"*. (NOT every message containing the word "pay" — only the specific capability-ask phrases listed in the opt-in section above.) Agent reads `catalog.json`, lists the 44 supported entries (across 10 services — many services have multiple endpoints now: stablecrypto-market-data has 21, perplexity has 2, others 1-5 each) with costs, mentions the 63 known-but-not-usable ones. No `agent_pay` call. For "what can you pay for" the agent should GROUP by service in the reply (e.g. "Wolfram Alpha — 2 endpoints (math facts, structured pods); Tripadvisor — 5 endpoints (search, details, reviews, photos); StableCrypto — 21 endpoints (CoinGecko price/chart/markets, DefiLlama TVL/yields)") rather than dumping 44 individual lines.
 
 ### Does NOT activate → vanilla answer
 
@@ -107,7 +107,7 @@ Why it stays dormant: not an x402 query at all. Use `solana_balance` directly. T
 
 ## Reading the catalog efficiently
 
-`catalog.json` is small (currently 11 entries across 10 services, ~12KB in v2 schema — perplexity has 2 endpoints catalogued, others have 1 each). Always load it first to pick the entry. Then `read` only the matching `entry.doc_file` — never load every services/*.md at once. That's the whole point of the per-entry / per-service-doc layout.
+`catalog.json` is small-ish (currently 44 entries across 10 services, ~30KB in v2 schema — services are now genuinely multi-endpoint: stablecrypto-market-data has 21 endpoints, tripadvisor has 5, rentcast has 5, crushrewards has 4, wolframalpha/reducto/perplexity have 2, others 1). Always load it first to pick the entry by intent match. Then `read` only the matching `entry.doc_file` (potentially scrolling to `entry.doc_anchor` within it) — never load every services/*.md at once. That's the whole point of the per-entry / per-service-doc layout.
 
 v2 schema (see `SCHEMA.md` in this folder for the full spec):
 - One entry per ENDPOINT (not per service) — a service exposing N catalogued endpoints has N entries, all sharing the same `service_id`
