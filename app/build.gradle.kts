@@ -263,7 +263,16 @@ dependencies {
     implementation("androidx.browser:browser:1.8.0")
 
     // Solana Mobile Wallet Adapter
-    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.3")
+    // Bumped 2.0.3 → 2.0.4 (BAT-697 commit 1). 2.0.4 ships the security fix
+    // ("Address Security Alerts 58, 63-66" — solana-mobile/mobile-wallet-adapter#791)
+    // without bumping androidx.core transitively past 1.16.x. Going to 2.0.5+
+    // (or 2.1.0) pulls androidx.core:1.17.0 which requires compileSdk 36 — out
+    // of scope for this BAT (we're on compileSdk 35; bumping it cascades to AGP /
+    // target-SDK migration work). Tracked as a follow-up.
+    // Must device-test existing solana_send / solana_swap flows BEFORE adding
+    // any V2 trigger code (per Codex round-2: stage MWA bump as its own commit,
+    // regression-check first).
+    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.4")
 
     // Solana transaction building (pure Kotlin)
     implementation("org.sol4k:sol4k:0.4.2")
