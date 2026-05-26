@@ -34,8 +34,15 @@ const {
 const {
     routeAndSign,
     signCancelViaBurner,
+    signZeroCapTxViaBurner,
     recordJupiterOwnership,
 } = require('../wallet/dispatch');
+
+// BAT-697 PR B: Jupiter Trigger V2 adapter. Activated when
+// `config.useTriggerV2 === true` (default false). V1 paths in
+// jupiter_trigger_* handlers remain the shipping default until the staged
+// rollout (live smoke → default flip → V1 deletion) lands in subsequent PRs.
+const triggerV2 = require('../jupiter/trigger-v2');
 
 // BAT-255: Safe number-to-decimal-string conversion (imported from index.js shared state)
 let numberToDecimalString;
@@ -250,6 +257,543 @@ const tools = [
         }
     },
 ];
+
+// ============================================================================
+// JUPITER TRIGGER V2 HELPERS (BAT-697 PR B)
+// ============================================================================
+//
+// V2 endpoints are gated behind `config.useTriggerV2`. The V1 handlers below
+// branch at the top: if the flag is true, delegate to the helper below;
+// otherwise continue the existing V1 path unchanged.
+//
+// V2 flow (create):
+//   1. authenticate(walletPubkey, signers)        → JWT (cached 24h-60s)
+//   2. ensureVault(walletPubkey, token)           → lazy register on first use
+//   3. depositCraft(...)                          → unsigned deposit tx + depositRequestId
+//   4. routeAndSign with broadcast callback that:
+//        - signs deposit (main MWA or burner-with-reservation, both via routeAndSign)
+//        - POSTs signed deposit to /trigger/v2/orders/price via submitCreateOrder
+//        - returns { signature } on create success, { error } on hard failure
+//      routeAndSign handles burner reserve/sign/commit-or-release atomically.
+//   5. recordJupiterOwnership(id, wallet) — fire-and-forget bookkeeping
+//
+// V2 flow (cancel):
+//   1. ownership lookup (same as V1) → creatorRole
+//   2. authenticate that wallet                    → JWT
+//   3. cancelStep1(orderId, pubkey, token)         → unsigned cancel tx + cancelRequestId
+//   4. sign:
+//        - burner-owned → signCancelViaBurner (zero-cap reservation, ownership-gated)
+//        - main/unknown → /solana/sign-only via MWA
+//   5. confirmCancel(orderId, pubkey, token, signedTx, cancelRequestId)
+//
+// V2 flow (list):
+//   1. main wallet only (scope cut — burner-routed orders need separate auth)
+//   2. authenticate main → JWT
+//   3. listOrders(pubkey, token, status, page)
+//
+// AMBIGUOUS-CREATE RECOVERY (Codex round-2 §5)
+// --------------------------------------------
+// The adapter's submitCreateOrder() runs recovery on 5xx / network drop /
+// missing-id-after-200. Recovery queries /orders/history; if a matching
+// order is found, returns success with `recovered: true`. If not found,
+// returns `create_ambiguous_no_recovery` — the deposit MAY have moved
+// funds into the Jupiter vault. We treat this as broadcast success
+// (commits the burner cap conservatively) and surface a warning to the
+// user with the depositRequestId for manual recovery via Jupiter UI.
+// Rationale: cap over-count > under-count for user safety.
+//
+// MESSAGE-CHALLENGE DEFERRED
+// --------------------------
+// PR B uses transaction-challenge for both wallets — there is no
+// `/burner/sign-message` or `/solana/sign-message` bridge endpoint yet.
+// The adapter's signers.signMessage parameter is `null` for both wallets;
+// the adapter falls through to transaction-challenge per Codex round-2 #3
+// ("unsupported-method/capability error"). A follow-up BAT can add the
+// bridge endpoints and pass a non-null signMessage to take the cheaper
+// message-only path.
+
+/**
+ * Build signers object for trigger-v2.authenticate() based on wallet role.
+ * signMessage is null in PR B (see "MESSAGE-CHALLENGE DEFERRED" above).
+ */
+function _buildAuthSigners(walletRole) {
+    if (walletRole === 'burner') {
+        return {
+            signTransaction: async (txB64) => {
+                const r = await signZeroCapTxViaBurner({
+                    unsignedTxBase64: txB64,
+                    flowName: 'trigger-v2-auth',
+                });
+                if (!r.ok) return { error: r.error, reason: r.reason };
+                return r.signedTxBase64;
+            },
+            signMessage: null,
+        };
+    }
+    return {
+        signTransaction: async (txB64) => {
+            try { await ensureWalletAuthorized(); }
+            catch (e) { return { error: 'wallet_not_authorized', reason: e.message }; }
+            const r = await androidBridgeCall('/solana/sign-only', { transaction: txB64 }, 120000);
+            if (r.error) return { error: 'sign_failed', reason: r.error };
+            if (!r.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+            return r.signedTransaction;
+        },
+        signMessage: null,
+    };
+}
+
+/**
+ * Resolve `triggerCondition` for V2 from explicit input or from the
+ * input/output token relationship. Returns 'above' | 'below' | null
+ * (null only when both are unstable, e.g., a custom altcoin pair without
+ * an obvious stable side).
+ *
+ * Rules:
+ *   - Explicit input wins.
+ *   - input is a stablecoin (USDC/USDT) → buying outputToken → 'below'
+ *     (trigger when output price drops to triggerPriceUsd or lower)
+ *   - output is a stablecoin → selling inputToken → 'above'
+ *     (trigger when input price rises to triggerPriceUsd or higher)
+ *   - neither obvious → null; caller must pass explicit triggerCondition
+ */
+const _STABLE_MINTS = new Set([
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+]);
+function _inferTriggerCondition(inputMint, outputMint, explicit) {
+    if (explicit === 'above' || explicit === 'below') return explicit;
+    if (_STABLE_MINTS.has(inputMint) && !_STABLE_MINTS.has(outputMint)) return 'below';
+    if (_STABLE_MINTS.has(outputMint) && !_STABLE_MINTS.has(inputMint)) return 'above';
+    return null;
+}
+
+async function _jupiterTriggerCreateV2(input, _chatId) {
+    if (!config.jupiterApiKey) {
+        return {
+            error: 'Jupiter API key required',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+        };
+    }
+    try {
+        // 1. Resolve tokens (mirrors V1).
+        const inputToken = await resolveToken(input.inputToken);
+        const outputToken = await resolveToken(input.outputToken);
+        if (!inputToken || inputToken.ambiguous) {
+            return { error: 'Could not resolve input token', details: inputToken?.ambiguous
+                ? `Multiple tokens match "${input.inputToken}". Use the full mint address.`
+                : `Token "${input.inputToken}" not found.` };
+        }
+        if (inputToken.warning && inputToken.decimals == null) {
+            return { error: 'Unverified input token with missing metadata', details: inputToken.warning };
+        }
+        if (!outputToken || outputToken.ambiguous) {
+            return { error: 'Could not resolve output token', details: outputToken?.ambiguous
+                ? `Multiple tokens match "${input.outputToken}". Use the full mint address.`
+                : `Token "${input.outputToken}" not found.` };
+        }
+        if (outputToken.warning && outputToken.decimals == null) {
+            return { error: 'Unverified output token with missing metadata', details: outputToken.warning };
+        }
+
+        // 2. Token-2022 shield check (Trigger V2 also rejects Token-2022).
+        try {
+            const mints = [inputToken.address, outputToken.address].join(',');
+            const shieldRes = await jupiterRequest({
+                hostname: 'api.jup.ag',
+                path: `/ultra/v1/shield?mints=${encodeURIComponent(mints)}`,
+                method: 'GET',
+                headers: { 'x-api-key': config.jupiterApiKey },
+            });
+            if (shieldRes.status === 200) {
+                const shieldData = typeof shieldRes.data === 'string' ? JSON.parse(shieldRes.data) : shieldRes.data;
+                for (const [mint, info] of Object.entries(shieldData || {})) {
+                    if (info && (info.tokenType === 'token-2022' || info.isToken2022)) {
+                        const sym = mint === inputToken.address ? inputToken.symbol : outputToken.symbol;
+                        return {
+                            error: 'Token-2022 not supported for limit orders',
+                            details: `${sym} (${mint}) is a Token-2022 token. Use a regular swap instead.`,
+                        };
+                    }
+                }
+            }
+        } catch (shieldErr) {
+            log(`[Jupiter Trigger V2] Token-2022 check skipped: ${shieldErr.message}`, 'DEBUG');
+        }
+
+        // 3. Routing decision (V1 parity — same caps/preflight call).
+        const { routeFor: _routeForTriggerV2 } = require('../caps/preflight');
+        const routingHint = await _routeForTriggerV2('jupiter_trigger_create', input);
+
+        // 4. Resolve wallet address — burner pubkey if routing=burner, MWA pubkey otherwise.
+        let walletAddress;
+        if (routingHint.routingDecision === 'burner') {
+            try {
+                const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                    walletAddress = burnerStatus.pubkey;
+                }
+            } catch (_) { /* fall through */ }
+        }
+        if (!walletAddress) {
+            try { walletAddress = getConnectedWalletAddress(); }
+            catch (e) { return { error: e.message }; }
+        }
+
+        // 5. Parse inputAmount → raw atomic units (BigInt-safe).
+        let inputAmountAtomic;
+        try {
+            inputAmountAtomic = parseInputAmountToLamports(numberToDecimalString(input.inputAmount), inputToken.decimals);
+        } catch (e) {
+            return { error: 'Invalid input amount', details: e.message };
+        }
+
+        // 6. Compute USD value of inputAmount via jupiterPrice for the $10 min check.
+        let inputUsdValue;
+        try {
+            const priceData = await jupiterPrice([inputToken.address]);
+            const priceEntry = priceData && (priceData[inputToken.address] || priceData.data?.[inputToken.address]);
+            const usdPrice = priceEntry && (priceEntry.usdPrice ?? priceEntry.price);
+            if (!Number.isFinite(Number(usdPrice)) || Number(usdPrice) <= 0) {
+                return { error: 'price_unavailable', reason: `Could not fetch USD price for ${inputToken.symbol} — required for $10 minimum check.` };
+            }
+            inputUsdValue = Number(input.inputAmount) * Number(usdPrice);
+        } catch (e) {
+            return { error: 'price_lookup_failed', reason: e.message };
+        }
+
+        // 7. Resolve V2-specific args (with V1-compat fallbacks).
+        const triggerPriceUsd = Number(input.triggerPriceUsd ?? input.triggerPrice);
+        const slippageBps = input.slippageBps != null ? Number(input.slippageBps) : triggerV2.DEFAULT_SLIPPAGE_BPS;
+        const expiresAtMs = input.expiresAt != null
+            ? Number(input.expiresAt) * (Number(input.expiresAt) < 10_000_000_000 ? 1000 : 1) // accept s or ms
+            : (input.expiryTime != null ? Number(input.expiryTime) * 1000 : Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const triggerCondition = _inferTriggerCondition(inputToken.address, outputToken.address, input.triggerCondition);
+        if (!triggerCondition) {
+            return {
+                error: 'trigger_condition_required',
+                reason: 'Could not infer triggerCondition from token pair. Pass triggerCondition: "above" or "below" explicitly.',
+            };
+        }
+
+        // 8. Semantic validation (pure — fail fast before any network work).
+        const validation = triggerV2.validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippageBps });
+        if (!validation.ok) {
+            return { error: validation.error, reason: validation.reason };
+        }
+
+        // 9. Authenticate (cached 24h-60s per pubkey).
+        const walletRole = routingHint.routingDecision === 'burner' ? 'burner' : 'main';
+        const authSigners = _buildAuthSigners(walletRole);
+        const authResult = await triggerV2.authenticate(walletAddress, authSigners);
+        if (!authResult.ok) {
+            return { error: authResult.error, reason: authResult.reason };
+        }
+        const token = authResult.token;
+
+        // 10. Ensure vault (lazy — only on first create per wallet).
+        const vaultResult = await triggerV2.ensureVault(walletAddress, token);
+        if (!vaultResult.ok) {
+            return { error: vaultResult.error, reason: vaultResult.reason };
+        }
+        const vaultAddress = vaultResult.vaultAddress;
+
+        // 11. Craft deposit.
+        const craftResult = await triggerV2.depositCraft({
+            pubkey: walletAddress,
+            token,
+            inputMint: inputToken.address,
+            inputAmount: String(inputAmountAtomic),
+        });
+        if (!craftResult.ok) {
+            return { error: craftResult.error, reason: craftResult.reason };
+        }
+        const { transaction: unsignedDepositTx, depositRequestId, recoveryContext } = craftResult;
+
+        // 12. Verify deposit tx fee payer matches active wallet — guard against
+        // a malicious craft response that would route funds from the wrong wallet.
+        try {
+            const verification = verifySwapTransaction(unsignedDepositTx, walletAddress);
+            if (!verification.valid) {
+                return { error: `Deposit tx rejected: ${verification.error}` };
+            }
+        } catch (verifyErr) {
+            return { error: `Could not verify deposit tx: ${verifyErr.message}` };
+        }
+
+        // 13. routeAndSign for the deposit signing + orders/price POST.
+        const orderArgs = {
+            inputMint: inputToken.address,
+            inputAmount: String(inputAmountAtomic),
+            outputMint: outputToken.address,
+            triggerMint: outputToken.address,
+            triggerPriceUsd,
+            triggerCondition,
+            slippageBps,
+            expiresAtMs,
+        };
+        let submitWarning = null;
+        const dispatchResult = await routeAndSign({
+            toolName: 'jupiter_trigger_create',
+            toolArgs: input,
+            unsignedTxBase64: unsignedDepositTx,
+            broadcastVia: 'jupiter',
+            flowName: 'jupiter_trigger_create_v2',
+            broadcast: async (txOrUnsigned, _signer, ctx) => {
+                let signedDeposit;
+                if (ctx && ctx.signed) {
+                    signedDeposit = txOrUnsigned;
+                } else {
+                    try { await ensureWalletAuthorized(); }
+                    catch (e) { return { error: 'wallet_not_authorized', reason: e.message }; }
+                    const signRes = await androidBridgeCall('/solana/sign-only', { transaction: txOrUnsigned }, 120000);
+                    if (signRes.error) return { error: 'sign_failed', reason: signRes.error };
+                    if (!signRes.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+                    signedDeposit = signRes.signedTransaction;
+                }
+                const submitRes = await triggerV2.submitCreateOrder({
+                    token,
+                    recoveryContext,
+                    depositSignedTx: signedDeposit,
+                    order: orderArgs,
+                });
+                if (submitRes.ok) {
+                    if (submitRes.recovered) {
+                        submitWarning = submitRes.recoveryNote || 'Order recovered from /orders/history after lost create response.';
+                    }
+                    return { signature: submitRes.txSignature, trigger: submitRes };
+                }
+                // Ambiguous-no-recovery: deposit MAY have moved funds. Conservative —
+                // treat as broadcast success so the burner cap is committed
+                // (over-count is safer than under-count). Surface a clear warning
+                // including the depositRequestId so the user can reconcile via
+                // Jupiter UI.
+                if (submitRes.error === 'create_ambiguous_no_recovery') {
+                    submitWarning =
+                        `Trigger V2 create response was lost AND /orders/history showed no matching order. ` +
+                        `Deposit may still be in flight in Jupiter's vault. Check Jupiter UI for ` +
+                        `depositRequestId=${depositRequestId}. ` +
+                        `Your wallet's burner cap has been committed conservatively — if the deposit ` +
+                        `did NOT land on-chain, the cap will regenerate at the next daily window.`;
+                    return { signature: null, trigger: submitRes };
+                }
+                return { error: submitRes.error, reason: submitRes.reason };
+            },
+        });
+
+        if (!dispatchResult.ok) {
+            return { error: dispatchResult.error, reason: dispatchResult.reason };
+        }
+
+        const orderResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || {};
+        const orderId = orderResult.id || null;
+
+        // 14. Record ownership (fire-and-forget; failure logs only, doesn't unwind).
+        if (orderId) {
+            await recordJupiterOwnership(orderId, dispatchResult.wallet, 'jupiter_trigger_create_v2');
+        } else {
+            log('[Jupiter Trigger V2] No orderId from create — ownership not recorded', 'WARN');
+        }
+
+        const warnings = [];
+        if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
+        if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
+        if (submitWarning) warnings.push(submitWarning);
+
+        return {
+            success: true,
+            orderId,
+            txSignature: orderResult.txSignature || dispatchResult.signature || null,
+            depositRequestId,
+            inputToken: `${inputToken.symbol} (${inputToken.address})`,
+            outputToken: `${outputToken.symbol} (${outputToken.address})`,
+            inputAmount: input.inputAmount,
+            triggerPriceUsd,
+            triggerCondition,
+            slippageBps,
+            expiresAt: Math.floor(expiresAtMs / 1000),
+            wallet: dispatchResult.wallet,
+            vaultAddress,
+            recovered: orderResult.recovered === true || undefined,
+            warnings: warnings.length > 0 ? warnings : undefined,
+        };
+    } catch (e) {
+        return { error: e.message };
+    }
+}
+
+async function _jupiterTriggerListV2(input, _chatId) {
+    if (!config.jupiterApiKey) {
+        return {
+            error: 'Jupiter API key required',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+        };
+    }
+    try {
+        let walletAddress;
+        try { walletAddress = getConnectedWalletAddress(); }
+        catch (e) { return { error: e.message }; }
+
+        if (input.status && !['active', 'history'].includes(input.status)) {
+            return { error: 'Invalid status value', details: 'status must be either "active" or "history"' };
+        }
+        if (input.page != null && (!Number.isInteger(Number(input.page)) || Number(input.page) <= 0)) {
+            return { error: 'Invalid page value', details: 'page must be a positive integer' };
+        }
+
+        // Scope cut for PR B: V2 list authenticates the MAIN wallet only.
+        // Listing burner-routed orders requires authenticating the burner
+        // pubkey separately — deferred to a follow-up BAT to avoid surfacing
+        // a "sign to view your orders" prompt for users with no burner orders.
+        const authSigners = _buildAuthSigners('main');
+        const authResult = await triggerV2.authenticate(walletAddress, authSigners);
+        if (!authResult.ok) return { error: authResult.error, reason: authResult.reason };
+
+        const listResult = await triggerV2.listOrders({
+            pubkey: walletAddress,
+            token: authResult.token,
+            status: input.status,
+            page: input.page != null ? Number(input.page) : undefined,
+        });
+        if (!listResult.ok) return { error: listResult.error, reason: listResult.reason };
+
+        return {
+            success: true,
+            count: listResult.orders.length,
+            wallet: walletAddress,
+            note: 'V2 list shows main-wallet orders only. Burner-routed orders need separate auth (follow-up).',
+            orders: listResult.orders.map(order => ({
+                orderId: order.id || order.orderId,
+                orderType: order.orderType,
+                inputMint: order.inputMint,
+                outputMint: order.outputMint,
+                inputAmount: order.inputAmount,
+                triggerPriceUsd: order.triggerPriceUsd,
+                triggerCondition: order.triggerCondition,
+                slippageBps: order.slippageBps,
+                status: order.status,
+                vaultState: order.vaultState,
+                expiresAt: order.expiresAt,
+                createdAt: order.createdAt,
+            })),
+        };
+    } catch (e) {
+        return { error: e.message };
+    }
+}
+
+async function _jupiterTriggerCancelV2(input, _chatId) {
+    if (!config.jupiterApiKey) {
+        return {
+            error: 'Jupiter API key required',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+        };
+    }
+    try {
+        if (!input.orderId || String(input.orderId).trim() === '') {
+            return { error: 'orderId is required' };
+        }
+        const orderId = String(input.orderId).trim();
+
+        // 1. Ownership lookup (same as V1).
+        let creatorRole = 'unknown';
+        try {
+            const lookup = await androidBridgeCall(
+                '/jupiter/order-owner/get',
+                { orderId },
+                5000,
+            );
+            if (lookup && !lookup.error && (lookup.creatorWalletRole === 'burner' || lookup.creatorWalletRole === 'main')) {
+                creatorRole = lookup.creatorWalletRole;
+            }
+        } catch (_) { /* fall through to MWA path */ }
+
+        // 2. Resolve wallet address per creator role.
+        let walletAddress;
+        if (creatorRole === 'burner') {
+            try {
+                const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                    walletAddress = burnerStatus.pubkey;
+                }
+            } catch (_) { /* fall through */ }
+            if (!walletAddress) {
+                log('[Jupiter Trigger V2] burner-owned cancel but burner pubkey unavailable — falling back to MWA', 'WARN');
+                creatorRole = 'main';
+            }
+        }
+        if (!walletAddress) {
+            try { walletAddress = getConnectedWalletAddress(); }
+            catch (e) { return { error: e.message }; }
+        }
+
+        // 3. Authenticate the relevant wallet (cached per-pubkey).
+        const walletRole = creatorRole === 'burner' ? 'burner' : 'main';
+        const authSigners = _buildAuthSigners(walletRole);
+        const authResult = await triggerV2.authenticate(walletAddress, authSigners);
+        if (!authResult.ok) return { error: authResult.error, reason: authResult.reason };
+        const token = authResult.token;
+
+        // 4. Cancel step 1 — get unsigned cancel tx.
+        const step1 = await triggerV2.cancelStep1({ orderId, pubkey: walletAddress, token });
+        if (!step1.ok) return { error: step1.error, reason: step1.reason };
+
+        // 5. Verify cancel tx fee payer.
+        try {
+            const verification = verifySwapTransaction(step1.transaction, walletAddress);
+            if (!verification.valid) return { error: `Cancel tx rejected: ${verification.error}` };
+        } catch (e) {
+            return { error: `Could not verify cancel tx: ${e.message}` };
+        }
+
+        // 6. Sign + confirm-cancel — routed to burner or main path.
+        let signedCancelB64;
+        let signWallet;
+        if (creatorRole === 'burner') {
+            // Use signZeroCapTxViaBurner (cancel doesn't consume cap principal,
+            // and signCancelViaBurner is broadcast-coupled). We POST confirm-cancel
+            // separately below — so this is sign-only, then explicit POST.
+            const signRes = await signZeroCapTxViaBurner({
+                unsignedTxBase64: step1.transaction,
+                flowName: 'jupiter_trigger_cancel_v2',
+            });
+            if (!signRes.ok) return { error: signRes.error, reason: signRes.reason };
+            signedCancelB64 = signRes.signedTxBase64;
+            signWallet = 'burner';
+        } else {
+            try { await ensureWalletAuthorized(); }
+            catch (e) { return { error: 'wallet_not_authorized', reason: e.message }; }
+            const signRes = await androidBridgeCall('/solana/sign-only', { transaction: step1.transaction }, 120000);
+            if (signRes.error) return { error: signRes.error };
+            if (!signRes.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+            signedCancelB64 = signRes.signedTransaction;
+            signWallet = 'main';
+        }
+
+        // 7. Confirm cancel.
+        const confirmRes = await triggerV2.confirmCancel({
+            orderId,
+            pubkey: walletAddress,
+            token,
+            signedTransaction: signedCancelB64,
+            cancelRequestId: step1.cancelRequestId,
+        });
+        if (!confirmRes.ok) return { error: confirmRes.error, reason: confirmRes.reason };
+
+        return {
+            success: true,
+            orderId: confirmRes.id,
+            txSignature: confirmRes.txSignature,
+            status: 'cancelled',
+            wallet: signWallet,
+            creatorRole,
+        };
+    } catch (e) {
+        return { error: e.message };
+    }
+}
+
+// ============================================================================
 
 const handlers = {
     async solana_address(input, chatId) {
@@ -856,6 +1400,12 @@ const handlers = {
     // ========== JUPITER API TOOLS ==========
 
     async jupiter_trigger_create(input, chatId) {
+        // BAT-697 PR B: gate on useTriggerV2 flag. Default false → V1 path
+        // below. Flag flips in commit 4 of the staged rollout.
+        if (config.useTriggerV2 === true) {
+            return _jupiterTriggerCreateV2(input, chatId);
+        }
+
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
@@ -1121,6 +1671,10 @@ const handlers = {
     },
 
     async jupiter_trigger_list(input, chatId) {
+        if (config.useTriggerV2 === true) {
+            return _jupiterTriggerListV2(input, chatId);
+        }
+
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
@@ -1204,6 +1758,10 @@ const handlers = {
     },
 
     async jupiter_trigger_cancel(input, chatId) {
+        if (config.useTriggerV2 === true) {
+            return _jupiterTriggerCancelV2(input, chatId);
+        }
+
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',

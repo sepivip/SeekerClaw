@@ -360,8 +360,83 @@ async function recordJupiterOwnership(orderId, creatorWalletRole, flowName = 'ju
     }
 }
 
+/**
+ * BAT-697 PR B — sign a Jupiter Trigger V2 auth-challenge / deposit /
+ * confirm-cancel transaction via the burner WITHOUT consuming cap
+ * principal. Used for transaction-challenge V2 auth flows where the
+ * tx is a Memo-only auth payload (no value movement) and for the
+ * "sign a single tx, no broadcast" subpath shared by V2 cancel
+ * step-2 and ambiguous-create recovery.
+ *
+ * Differs from signCancelViaBurner in three ways:
+ *   - Caller controls broadcast (or skips it entirely — useful for auth
+ *     challenges where the "broadcast" is just POSTing to /auth/verify).
+ *   - No ownership tracking (no order ID exists yet for auth or for
+ *     create-deposit).
+ *   - 0-amount reservation: confirms burner is configured but never
+ *     touches cap state; always released, never committed.
+ *
+ * Returns { ok: true, signedTxBase64 } or { ok: false, error, reason }.
+ *
+ * Callers MUST call the broadcast/HTTP step themselves and not bake
+ * cap-state semantics around it — this helper is signing-only.
+ */
+async function signZeroCapTxViaBurner({ unsignedTxBase64, flowName = 'zero-cap-sign' }) {
+    const burner = getWallet('burner');
+    if (!burner) {
+        return { ok: false, error: 'no_burner_wallet', reason: 'getWallet("burner") returned null' };
+    }
+    const reserveRes = await androidBridgeCall('/burner/reserve', {
+        name: 'burner.pertx.sol',
+        atomicAmount: '0',
+        ttlMs: 60000,
+    }, 5000);
+    if (!reserveRes || reserveRes.error || !reserveRes.reservationId) {
+        return {
+            ok: false,
+            error: reserveRes && reserveRes.error ? reserveRes.error : 'reserve_failed',
+            reason: reserveRes && reserveRes.reason ? reserveRes.reason : 'zero-cap reservation failed',
+        };
+    }
+    const reservationId = reserveRes.reservationId;
+
+    let signedTxBase64;
+    try {
+        const signed = await burner.signer().signTransaction(unsignedTxBase64, { reservationId });
+        if (!signed || signed.error) {
+            await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');
+            return {
+                ok: false,
+                error: signed && signed.error ? signed.error : 'sign_failed',
+                reason: signed && signed.reason ? signed.reason : 'signing failed',
+            };
+        }
+        signedTxBase64 = signed.signedTxBase64;
+        if (!signedTxBase64) {
+            await _release(reservationId, 'no_signed_tx');
+            return { ok: false, error: 'sign_failed', reason: 'no signedTxBase64 in response' };
+        }
+    } catch (e) {
+        await _release(reservationId, 'sign_threw');
+        return { ok: false, error: 'sign_failed', reason: e.message };
+    }
+
+    // Always release — zero-cap reservation never accumulates spend.
+    try {
+        await androidBridgeCall('/burner/release', {
+            reservationId,
+            reason: `${flowName}_complete`,
+        }, 5000);
+    } catch (e) {
+        log(`[${flowName}] release after zero-cap sign failed: ${e.message}`, 'WARN');
+    }
+
+    return { ok: true, signedTxBase64 };
+}
+
 module.exports = {
     routeAndSign,
     signCancelViaBurner,
+    signZeroCapTxViaBurner,
     recordJupiterOwnership,
 };

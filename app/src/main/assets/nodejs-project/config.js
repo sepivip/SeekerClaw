@@ -490,6 +490,13 @@ if (config.exaApiKey) config.exaApiKey = normalizeSecret(config.exaApiKey);
 if (config.tavilyApiKey) config.tavilyApiKey = normalizeSecret(config.tavilyApiKey);
 if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.firecrawlApiKey);
 
+// BAT-697 PR B: Jupiter Trigger V2 adapter feature flag. Default false —
+// V1 remains the shipping path until the staged-rollout commits (live smoke
+// → default flip → V1 removal) land in subsequent PRs. Normalize to a real
+// boolean so handlers can branch on `config.useTriggerV2 === true` without
+// truthy-coercing a string "false".
+config.useTriggerV2 = config.useTriggerV2 === true;
+
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
 const MCP_SERVERS = (config.mcpServers || [])
     .map((server) => {

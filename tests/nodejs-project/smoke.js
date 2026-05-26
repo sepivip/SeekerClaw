@@ -163,6 +163,9 @@ const SKIP_REASONS = {
     'wallet/index.js': 'singleton registry; requires burner-wallet.js + main-wallet.js',
     'wallet/dispatch.js': 'requires bridge.js + caps/preflight (BAT-582 Phase 5 routing helper)',
     'caps/preflight.js': 'requires bridge.js for /burner/status reads',
+    // BAT-697 PR B — Jupiter Trigger V2 adapter requires http.js (which
+    // requires config.js). Pure JS otherwise; --check covers parse errors.
+    'jupiter/trigger-v2.js': 'requires http.js → config.js (BAT-697 Trigger V2 adapter)',
 };
 
 const GREEN = '\x1b[32m';
