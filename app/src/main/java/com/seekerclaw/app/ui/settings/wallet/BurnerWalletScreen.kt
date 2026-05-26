@@ -218,12 +218,6 @@ fun BurnerWalletScreen(onBack: () -> Unit) {
                             refreshKey += 1
                         }
                     },
-                    onRotate = {
-                        scope.launch {
-                            wipeBurner(context, keyVault, capEnforcer)
-                            refreshKey += 1
-                        }
-                    },
                 )
             }
 
@@ -278,8 +272,18 @@ private fun HeroBanner() {
             fontWeight = FontWeight.ExtraBold,
             color = SeekerClawColors.Error,
         )
+        // BAT-936: expanded with AI-agent risks. Caps live at the tool-arg
+        // preflight layer (agent_pay USDC, solana_send SOL/USDC, solana_swap
+        // SOL/USDC input); they don't bound what's inside the actual signed
+        // transaction bytes — a tricked agent can still sign drain contracts,
+        // SPL approvals, or arbitrary token transfers. Balance management is
+        // the real safety rule, hence "only fund what you can afford to lose."
         Text(
-            text = "Burner uses Solana mainnet. Funds can be lost. Treat as disposable. SeekerClaw cannot recover this key.",
+            text = "Burner runs on Solana mainnet. Funds can be lost — treat as disposable. " +
+                "SeekerClaw cannot recover this key. The agent can be tricked (prompt " +
+                "injection, malicious contracts, model error) into signing transactions " +
+                "you didn't intend. Caps limit SOL/USDC sends but cannot block every " +
+                "case. Only fund what you can afford to lose.",
             fontFamily = RethinkSans,
             fontSize = 13.sp,
             color = SeekerClawColors.TextPrimary,
@@ -459,7 +463,6 @@ private fun ConfiguredStateSection(
     onRefreshBalances: () -> Unit,
     onCapsChanged: (BurnerCaps) -> Unit,
     onWipe: () -> Unit,
-    onRotate: () -> Unit,
 ) {
     // Balances render as decimal strings when fetched, "balance unavailable"
     // when null (fetch never ran OR fetch failed). Loading state is hoisted
@@ -493,22 +496,10 @@ private fun ConfiguredStateSection(
         isRefreshing = balancesLoading,
     )
 
-    val initialCaps = remember(s) {
-        BurnerCaps(
-            perTxSol = s?.let { WalletAmountFormat.formatLamportsToSol(it.capPerTxSol) }?.takeIf { it != "0.00" } ?: "",
-            dailySol = s?.let { WalletAmountFormat.formatLamportsToSol(it.capDailySol) }?.takeIf { it != "0.00" } ?: "",
-            perTxUsdc = s?.let { WalletAmountFormat.formatMicroUnitsToUsdc(it.capPerTxUsdc) }?.takeIf { it != "0.00" } ?: "",
-            dailyUsdc = s?.let { WalletAmountFormat.formatMicroUnitsToUsdc(it.capDailyUsdc) }?.takeIf { it != "0.00" } ?: "",
-        )
-    }
-
-    CardSurface {
-        CapsConfigSection(
-            initial = initialCaps,
-            onSave = onCapsChanged,
-        )
-    }
-
+    // BAT-936: Funding card placed BEFORE caps. A user who just pasted a
+    // burner key needs to know HOW TO FUND it before they think about
+    // caps; pre-936 the funding address was buried below the caps editor,
+    // which was wrong sequencing for the first-time path.
     val fundingContext = LocalContext.current
     val fundingHaptic = LocalHapticFeedback.current
     CardSurface {
@@ -544,11 +535,26 @@ private fun ConfiguredStateSection(
         //   dependency, and Phase 3 ships under a no-new-deps rule.
     }
 
+    val initialCaps = remember(s) {
+        BurnerCaps(
+            perTxSol = s?.let { WalletAmountFormat.formatLamportsToSol(it.capPerTxSol) }?.takeIf { it != "0.00" } ?: "",
+            dailySol = s?.let { WalletAmountFormat.formatLamportsToSol(it.capDailySol) }?.takeIf { it != "0.00" } ?: "",
+            perTxUsdc = s?.let { WalletAmountFormat.formatMicroUnitsToUsdc(it.capPerTxUsdc) }?.takeIf { it != "0.00" } ?: "",
+            dailyUsdc = s?.let { WalletAmountFormat.formatMicroUnitsToUsdc(it.capDailyUsdc) }?.takeIf { it != "0.00" } ?: "",
+        )
+    }
+
+    CardSurface {
+        CapsConfigSection(
+            initial = initialCaps,
+            onSave = onCapsChanged,
+        )
+    }
+
     CardSurface {
         DangerZoneSection(
             burnerAddress = pubkey,
             onWipeClick = onWipe,
-            onRotateClick = onRotate,
         )
     }
 }
