@@ -95,12 +95,6 @@ async function _post(path, body, token) {
     return _parseResponse(res);
 }
 
-async function _patch(path, body, token) {
-    const headers = { ..._authHeaders(token), 'Content-Type': 'application/json' };
-    const res = await httpRequest({ hostname: JUPITER_HOST, path, method: 'PATCH', headers }, body);
-    return _parseResponse(res);
-}
-
 async function _get(path, token) {
     const res = await httpRequest({ hostname: JUPITER_HOST, path, method: 'GET', headers: _authHeaders(token) });
     return _parseResponse(res);
@@ -655,8 +649,17 @@ async function submitCreateOrder({ token, recoveryContext, depositSignedTx, orde
         return { ok: false, error: 'invalid_input', reason: 'depositSignedTx required' };
     }
 
+    // BAT-697 LIVE-SMOKE MUST-VERIFY: the orderType/orderSubType pair on the
+    // create POST is unconfirmed against the live API. deposit/craft uses
+    // { orderType:'price', orderSubType:'single' }; we mirror that family here
+    // for internal consistency rather than the bare orderType:'single' the
+    // first draft sent. Commit-3 live smoke MUST confirm the exact wire shape
+    // Jupiter expects (it may want only orderType, only orderSubType, or
+    // neither since the path already says /orders/price). Adjust here once
+    // verified — this is the single most likely create-rejection cause.
     const createBody = {
-        orderType: 'single',
+        orderType: 'price',
+        orderSubType: 'single',
         depositRequestId: recoveryContext.depositRequestId,
         depositSignedTx,
         userPubkey: recoveryContext.walletPubkey,
@@ -705,29 +708,64 @@ async function submitCreateOrder({ token, recoveryContext, depositSignedTx, orde
  *
  * Sequence:
  *   1. Wait 5s for any in-flight settle on Jupiter's side.
- *   2. Query /orders/history filtered by walletPubkey; look for the most
- *      recent active or pending_deposit order matching our inputMint +
- *      inputAmount (recorded in `ctx`).
- *   3. If found → success, with `recovered: true` flag.
- *   4. If not found → return orphan-deposit advisory with the
+ *   2. Query /orders/history filtered by walletPubkey.
+ *   3. Match PRIMARILY on depositRequestId (unique to this attempt) when the
+ *      history row carries it — the only definitive correlation. Fall back to
+ *      a heuristic (inputMint + inputAmount + non-terminal status + tight
+ *      time window) ONLY when no row exposes depositRequestId.
+ *   4. If found → success, with `recovered: true` flag.
+ *   5. If not found → return orphan-deposit advisory with the
  *      depositRequestId so the user can check Jupiter UI manually.
  *
  * NEVER auto-retries the create POST — non-idempotent + funds-moving.
  */
+// States that mean the order is live (deposit landed / order working). An
+// order in any OTHER state — including a terminal failure that still carries
+// vaultState:'pending_deposit' — must NOT be reported as a recovered success,
+// or we'd commit the burner cap for a dead order and tell the user it worked.
+const _RECOVERY_LIVE_STATUSES = new Set(['active', 'pending_deposit', 'open']);
+const _RECOVERY_TERMINAL_FAIL = new Set(['failed', 'cancelled', 'canceled', 'expired', 'rejected', 'closed']);
+
 async function _recoverFromAmbiguousCreate(ctx, token) {
     log(`[trigger-v2] recovery: waiting 5s before /orders/history query for depositRequestId=${ctx.depositRequestId}`, 'INFO');
     await new Promise(r => setTimeout(r, 5000));
 
     const histRes = await _get(`/trigger/v2/orders/history?walletPubkey=${encodeURIComponent(ctx.walletPubkey)}&limit=20`, token);
     if (histRes.status === 200 && histRes.data && Array.isArray(histRes.data.orders)) {
-        const matchTime = ctx.timestamp - 60_000; // accept anything from 1min before our attempt
-        const match = histRes.data.orders.find(o =>
-            o
-            && (o.status === 'active' || o.status === 'pending_deposit' || o.vaultState === 'pending_deposit')
-            && o.inputMint === ctx.inputMint
-            && String(o.inputAmount) === String(ctx.inputAmount)
-            && (!o.createdAt || new Date(o.createdAt).getTime() >= matchTime)
+        const orders = histRes.data.orders.filter(Boolean);
+
+        const isLive = (o) =>
+            !_RECOVERY_TERMINAL_FAIL.has(o.status)
+            && (_RECOVERY_LIVE_STATUSES.has(o.status) || o.vaultState === 'pending_deposit');
+
+        // PRIMARY: depositRequestId correlation. Unique per attempt, so it can
+        // never alias a pre-existing same-amount order. Accept whichever field
+        // name Jupiter exposes (depositRequestId / requestId).
+        let match = orders.find(o =>
+            isLive(o)
+            && (o.depositRequestId === ctx.depositRequestId || o.requestId === ctx.depositRequestId)
         );
+
+        // FALLBACK (only if no row carried a deposit-request id at all): the
+        // mint + amount + tight-time-window heuristic. Bounded on BOTH sides
+        // around the attempt so a stale identical order from minutes earlier
+        // can't false-match. ctx.timestamp is recorded at deposit/craft (just
+        // before the create POST), so our order's createdAt is ≈ctx.timestamp
+        // and never earlier; allow a small clock skew either way.
+        const anyRowHasReqId = orders.some(o => o.depositRequestId != null || o.requestId != null);
+        if (!match && !anyRowHasReqId) {
+            const lo = ctx.timestamp - 15_000;   // 15s skew tolerance before the attempt
+            const hi = ctx.timestamp + 180_000;  // 3min ceiling after the attempt
+            match = orders.find(o => {
+                if (!isLive(o)) return false;
+                if (o.inputMint !== ctx.inputMint) return false;
+                if (String(o.inputAmount) !== String(ctx.inputAmount)) return false;
+                if (!o.createdAt) return false; // require a timestamp to bound the heuristic
+                const created = new Date(o.createdAt).getTime();
+                return Number.isFinite(created) && created >= lo && created <= hi;
+            });
+        }
+
         if (match && match.id) {
             log(`[trigger-v2] recovery: matched order id=${match.id} in history`, 'INFO');
             return {
@@ -831,30 +869,12 @@ async function listOrders({ pubkey, token, status, page, limit }) {
     return { ok: true, orders };
 }
 
-// ── Update order (PATCH) ────────────────────────────────────────────────────
-
-/**
- * Update an existing V2 price order's triggerPriceUsd or slippageBps.
- * V1 had no equivalent; exposed here for completeness but not wired into
- * a tool handler in PR B (no V1 tool to migrate). Future BAT can add a
- * `jupiter_trigger_update` tool against this helper.
- */
-async function updateOrder({ orderId, token, pubkey, triggerPriceUsd, slippageBps }) {
-    if (!orderId) return { ok: false, error: 'invalid_input', reason: 'orderId required' };
-    if (!token) return { ok: false, error: 'auth_required', reason: 'no JWT supplied — call authenticate() first' };
-    const body = { orderType: 'single' };
-    if (triggerPriceUsd != null) body.triggerPriceUsd = triggerPriceUsd;
-    if (slippageBps != null) body.slippageBps = slippageBps;
-    const res = await _patch(`/trigger/v2/orders/price/${encodeURIComponent(orderId)}`, body, token);
-    if (res.status === 401) {
-        invalidateJwt(pubkey);
-        return { ok: false, error: 'auth_expired', reason: 'JWT rejected by update' };
-    }
-    if (res.status !== 200) {
-        return { ok: false, error: 'update_failed', reason: `HTTP ${res.status}` };
-    }
-    return { ok: true, id: (res.data && res.data.id) || orderId };
-}
+// NOTE: a PATCH /orders/price/{orderId} "update order" primitive (and its
+// _patch HTTP helper) were considered but deliberately NOT shipped in PR B —
+// there is no V1 tool to migrate and no handler would call it, so it would be
+// dead, untested, funds-adjacent code. Add both in a dedicated follow-up BAT
+// alongside a `jupiter_trigger_update` tool + tests when the product needs
+// edit-in-place.
 
 // ── Test-only ───────────────────────────────────────────────────────────────
 
@@ -869,7 +889,6 @@ module.exports = {
     invalidateJwt,
     ensureVault,
     listOrders,
-    updateOrder,
     validateOrderArgs,
     // Low-level (caller drives signing between primitives so reservation
     // lifecycles can wrap the deposit/cancel sign step).
@@ -880,6 +899,8 @@ module.exports = {
     // Exported for tests + cross-module use of the guards.
     _validateChallengePayload,
     _validateAuthTransaction,
+    _readCompactU16,
+    _base58Encode,
     _resetCachesForTests,
     _redactPubkey,
     // Constants useful to callers/tests.

@@ -486,6 +486,186 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(reauth.token, 'jwt-fresh');
     });
 
+    // ── Blind-sign guard: byte-accurate parser tests (BAT-697 review pass) ──
+    //
+    // The fixtures above use literal base58 strings whose decode is padding-
+    // sensitive. This block instead drives the parser with REAL 32-byte keys
+    // whose base58 form is produced by the adapter's own _base58Encode, so the
+    // fee-payer comparison round-trips exactly. This is what lets us test the
+    // ACCEPTANCE path (a guard that rejected everything would pass the older
+    // rejection-only tests).
+    console.log('\nblind-sign parser (byte-accurate):');
+
+    const _B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    function b58decodeStrict(s) {
+        let n = 0n;
+        for (const c of s) {
+            const i = _B58.indexOf(c);
+            if (i < 0) throw new Error('bad b58 char: ' + c);
+            n = n * 58n + BigInt(i);
+        }
+        const out = [];
+        while (n > 0n) { out.push(Number(n & 0xffn)); n >>= 8n; }
+        for (const c of s) { if (c !== '1') break; out.push(0); }
+        return Buffer.from(out.reverse());
+    }
+    function cu16(n) {
+        const out = []; let v = n;
+        do { let b = v & 0x7f; v >>= 7; if (v > 0) b |= 0x80; out.push(b); } while (v > 0);
+        return Buffer.from(out);
+    }
+    function key32(seed) {
+        const b = Buffer.alloc(32);
+        for (let i = 0; i < 32; i++) b[i] = (seed + i * 7 + 1) & 0xff;
+        return b;
+    }
+    // accounts: array of 32-byte Buffers (idx 0 = fee payer). instrProgramIdx:
+    // account index each instruction targets. versioned: prefix v0 (0x80) byte.
+    function buildTxBytes({ accounts, instrProgramIdx, versioned = false, dataLen = 4 }) {
+        const parts = [];
+        if (versioned) parts.push(Buffer.from([0x80]));
+        parts.push(Buffer.from([1, 0, 0]));            // header
+        parts.push(cu16(accounts.length));             // account count (compact-u16)
+        for (const a of accounts) parts.push(a);
+        parts.push(Buffer.alloc(32));                  // recent blockhash
+        parts.push(cu16(1));                           // 1 instruction
+        parts.push(Buffer.from([instrProgramIdx]));    // program id index (idx < 128 → 1 byte)
+        parts.push(cu16(0));                           // 0 accounts in instruction
+        parts.push(cu16(dataLen));                     // data length
+        parts.push(Buffer.alloc(dataLen, 0x61));       // data bytes
+        const message = Buffer.concat(parts);
+        return Buffer.concat([Buffer.from([1]), Buffer.alloc(64), message]).toString('base64');
+    }
+
+    const MEMO_BYTES = b58decodeStrict(triggerV2.MEMO_PROGRAM_V2);
+    const SYS_BYTES = Buffer.alloc(32); // SystemProgram = all-zero pubkey
+    const PAYER_BUF = key32(7);
+    const PAYER_B58 = triggerV2._base58Encode(PAYER_BUF);
+    const OTHER_B58 = triggerV2._base58Encode(key32(200));
+
+    await check('base58 round-trip: _base58Encode(decode(MEMO)) === MEMO', async () => {
+        assert.strictEqual(MEMO_BYTES.length, 32, 'memo program must decode to 32 bytes');
+        assert.strictEqual(triggerV2._base58Encode(MEMO_BYTES), triggerV2.MEMO_PROGRAM_V2);
+    });
+
+    await check('ACCEPTS a real Memo-only tx whose fee payer matches', async () => {
+        const tx = buildTxBytes({ accounts: [PAYER_BUF, MEMO_BYTES], instrProgramIdx: 1 });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, true, `expected accept, got: ${JSON.stringify(r)}`);
+    });
+
+    await check('REJECTS Memo-only tx when fee payer does not match expected pubkey', async () => {
+        const tx = buildTxBytes({ accounts: [PAYER_BUF, MEMO_BYTES], instrProgramIdx: 1 });
+        const r = triggerV2._validateAuthTransaction(tx, OTHER_B58);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.ok(/fee payer/i.test(r.reason), `expected fee-payer reason, got: ${r.reason}`);
+    });
+
+    await check('REJECTS tx referencing SystemProgram (Transfer) — Memo-only guard', async () => {
+        const tx = buildTxBytes({ accounts: [PAYER_BUF, SYS_BYTES], instrProgramIdx: 1 });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+    });
+
+    await check('ACCEPTS a v0 versioned (0x80-prefixed) Memo-only tx', async () => {
+        const tx = buildTxBytes({ accounts: [PAYER_BUF, MEMO_BYTES], instrProgramIdx: 1, versioned: true });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, true, `expected v0 accept, got: ${JSON.stringify(r)}`);
+    });
+
+    // Multi-byte compact-u16: account counts ≥128 encode to 2 bytes. Direct
+    // unit test of the reader (the funds-safety parser depends on it).
+    await check('_readCompactU16 single-byte values', async () => {
+        assert.deepStrictEqual(triggerV2._readCompactU16(Buffer.from([0x00]), 0), { value: 0, offset: 1 });
+        assert.deepStrictEqual(triggerV2._readCompactU16(Buffer.from([0x7f]), 0), { value: 127, offset: 1 });
+    });
+    await check('_readCompactU16 multi-byte values (128, 300, 16383)', async () => {
+        // 128 = 0x80,0x01 ; 300 = 0xAC,0x02 ; 16383 = 0xFF,0x7F
+        assert.deepStrictEqual(triggerV2._readCompactU16(Buffer.from([0x80, 0x01]), 0), { value: 128, offset: 2 });
+        assert.deepStrictEqual(triggerV2._readCompactU16(Buffer.from([0xAC, 0x02]), 0), { value: 300, offset: 2 });
+        assert.deepStrictEqual(triggerV2._readCompactU16(Buffer.from([0xFF, 0x7F]), 0), { value: 16383, offset: 2 });
+    });
+    await check('_readCompactU16 honors offset + rejects truncated continuation', async () => {
+        // value 300 starting at offset 2 in a longer buffer
+        assert.deepStrictEqual(triggerV2._readCompactU16(Buffer.from([0xFF, 0xFF, 0xAC, 0x02]), 2), { value: 300, offset: 4 });
+        // continuation bit set but buffer ends → malformed → null
+        assert.strictEqual(triggerV2._readCompactU16(Buffer.from([0x80]), 0), null);
+    });
+    await check('parser handles a tx with a multi-byte account count (130 accounts)', async () => {
+        // 130 accounts: payer + memo + 128 filler. instruction targets memo (idx 1).
+        const accounts = [PAYER_BUF, MEMO_BYTES];
+        for (let i = 0; i < 128; i++) accounts.push(key32(50 + i));
+        const tx = buildTxBytes({ accounts, instrProgramIdx: 1 });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, true, `expected accept with 130 accounts, got: ${JSON.stringify(r)}`);
+    });
+
+    // ── recovery: terminal-fail orders must NOT be reported as recovered ────
+    console.log('\nrecovery hardening (BAT-697 review pass):');
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', depositRequestId: 'dr-fail' } });
+    _enqueue({ status: 500, data: { error: 'oops' } });
+    // History returns a FAILED order that still carries vaultState:pending_deposit
+    // AND matches mint+amount — the pre-fix OR-logic would have matched it.
+    _enqueue({ status: 200, data: { orders: [
+        { id: 'dead-order', status: 'failed', vaultState: 'pending_deposit',
+          inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+          createdAt: new Date().toISOString() },
+    ] } });
+    await check('failed order with vaultState:pending_deposit is NOT recovered', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+        });
+        const origSetTimeout = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout(fn, 0);
+        try {
+            const submit = await triggerV2.submitCreateOrder({
+                token: 'jwt', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+                order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                    outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                    triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+            });
+            assert.strictEqual(submit.ok, false, 'a dead order must not be reported as success');
+            assert.strictEqual(submit.error, 'create_ambiguous_no_recovery');
+        } finally { global.setTimeout = origSetTimeout; }
+    });
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', depositRequestId: 'dr-primary' } });
+    _enqueue({ status: 500, data: { error: 'oops' } });
+    // History exposes depositRequestId — primary correlation must match it
+    // even though a SECOND same-amount active order also exists (no false alias).
+    _enqueue({ status: 200, data: { orders: [
+        { id: 'unrelated-same-amount', status: 'active',
+          inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000', createdAt: new Date().toISOString() },
+        { id: 'our-order', status: 'active', depositRequestId: 'dr-primary',
+          inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000', createdAt: new Date().toISOString() },
+    ] } });
+    await check('recovery prefers depositRequestId correlation over amount heuristic', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+        });
+        const origSetTimeout = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout(fn, 0);
+        try {
+            const submit = await triggerV2.submitCreateOrder({
+                token: 'jwt', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+                order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                    outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                    triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+            });
+            assert.strictEqual(submit.ok, true);
+            assert.strictEqual(submit.id, 'our-order', 'must match by depositRequestId, not the unrelated same-amount order');
+            assert.strictEqual(submit.recovered, true);
+        } finally { global.setTimeout = origSetTimeout; }
+    });
+
     // ── Summary ─────────────────────────────────────────────────────────────
     if (failures > 0) {
         console.error(`\nFAILED: ${failures} test(s) failed`);

@@ -205,10 +205,18 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
     }
 
     // 4d. Commit on success — anchor the spend in the daily ledger.
+    // Coerce the signature to a non-empty string or null: a broadcast callback
+    // that returns a non-string `signature` (object/number from a future code
+    // path) must never reach /burner/commit as a malformed value. Trigger V2's
+    // ambiguous-recovery path legitimately commits with signature:null.
+    const commitSignature =
+        (typeof broadcastResult.signature === 'string' && broadcastResult.signature.length > 0)
+            ? broadcastResult.signature
+            : null;
     try {
         await androidBridgeCall('/burner/commit', {
             reservationId,
-            signature: broadcastResult.signature || null,
+            signature: commitSignature,
         }, 5000);
     } catch (e) {
         // Commit failure is logged but doesn't unwind a successful broadcast.
