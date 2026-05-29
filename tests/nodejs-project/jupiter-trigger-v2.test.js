@@ -332,14 +332,18 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(httpCalls.length, callsBefore);
     });
 
+    // BAT-697 live-API finding: /vault/register does NOT exist; an unregistered
+    // wallet GET returns 404 "Vault not found". ensureVault must fail loudly
+    // (vault_registration_unsupported) rather than POST a 404 route.
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { registered: false } });
-    _enqueue({ status: 200, data: { vaultAddress: 'NewVaUlT22222' } });
-    await check('GET unregistered → POST register → returns vault', async () => {
+    _enqueue({ status: 404, data: { error: 'Vault not found' } });
+    await check('GET unregistered (404) → vault_registration_unsupported (no register POST)', async () => {
+        const callsBefore = httpCalls.length;
         const r = await triggerV2.ensureVault(FIXTURE_PUBKEY, 'jwt');
-        assert.strictEqual(r.ok, true);
-        assert.strictEqual(r.vaultAddress, 'NewVaUlT22222');
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'vault_registration_unsupported');
+        assert.strictEqual(httpCalls.length, callsBefore + 1, 'must NOT make a second (register) call');
     });
 
     // ── depositCraft + submitCreateOrder happy path ─────────────────────────
@@ -562,10 +566,45 @@ function _buildTransferTx(payerB58) {
         assert.ok(/fee payer/i.test(r.reason), `expected fee-payer reason, got: ${r.reason}`);
     });
 
-    await check('REJECTS tx referencing SystemProgram (Transfer) — Memo-only guard', async () => {
+    await check('REJECTS tx referencing SystemProgram (Transfer) — value-moving guard', async () => {
         const tx = buildTxBytes({ accounts: [PAYER_BUF, SYS_BYTES], instrProgramIdx: 1 });
         const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
         assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+    });
+
+    // Multi-instruction builder for the Memo+ComputeBudget case — Jupiter's
+    // REAL challenge (verified live 2026-05-29) bundles a ComputeBudget instr
+    // alongside the Memo. A Memo-only guard would reject the real challenge.
+    const COMPUTE_BUDGET_BYTES = b58decodeStrict('ComputeBudget111111111111111111111111111111');
+    function buildMultiInstrTx({ accounts, instrIdxs, versioned = false }) {
+        const parts = [];
+        if (versioned) parts.push(Buffer.from([0x80]));
+        parts.push(Buffer.from([1, 0, 0]));
+        parts.push(cu16(accounts.length));
+        for (const a of accounts) parts.push(a);
+        parts.push(Buffer.alloc(32)); // blockhash
+        parts.push(cu16(instrIdxs.length));
+        for (const idx of instrIdxs) {
+            parts.push(Buffer.from([idx])); // program id index
+            parts.push(cu16(0));            // 0 accounts
+            parts.push(cu16(2));            // data len
+            parts.push(Buffer.from([0x01, 0x02]));
+        }
+        const message = Buffer.concat(parts);
+        return Buffer.concat([Buffer.from([1]), Buffer.alloc(64), message]).toString('base64');
+    }
+
+    await check('ACCEPTS Memo + ComputeBudget (Jupiter real-challenge shape)', async () => {
+        const tx = buildMultiInstrTx({ accounts: [PAYER_BUF, MEMO_BYTES, COMPUTE_BUDGET_BYTES], instrIdxs: [2, 1] });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, true, `expected accept, got: ${JSON.stringify(r)}`);
+    });
+
+    await check('REJECTS Memo + SystemProgram even when a Memo instr is present', async () => {
+        const tx = buildMultiInstrTx({ accounts: [PAYER_BUF, MEMO_BYTES, SYS_BYTES], instrIdxs: [1, 2] });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, false, 'a value-moving instr alongside a Memo must still be rejected');
         assert.strictEqual(r.error, 'auth_tx_invalid');
     });
 

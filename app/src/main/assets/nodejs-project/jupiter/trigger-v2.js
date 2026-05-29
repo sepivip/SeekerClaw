@@ -152,14 +152,32 @@ function _validateChallengePayload(payload, expectedPubkey) {
  * Constraints checked:
  *   1. Buffer decodes to a plausible Solana tx (signatures + message).
  *   2. Fee payer (first account) equals expectedPubkey.
- *   3. EVERY instruction's program id is the Memo program. No other
- *      programs (no SystemProgram::Transfer, no Token program, no swap,
- *      no closeAccount — nothing that can move value or state).
+ *   3. EVERY instruction's program id is in the auth allowlist — Memo
+ *      (v1/v2) or ComputeBudget. No other programs (no SystemProgram::
+ *      Transfer, no Token program, no swap, no closeAccount — nothing that
+ *      can move value or state). ComputeBudget is allowed because Jupiter's
+ *      real challenge bundles it and it cannot move value; see the constant
+ *      block below for the full rationale + residual fee-grief note.
  *
  * Returns { ok: true } or { ok: false, error, reason }.
  */
 const MEMO_PROGRAM_V2 = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 const MEMO_PROGRAM_V1 = 'Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo';
+// ComputeBudget — sets CU limit / priority fee. Moves NO value (cannot
+// transfer SOL or tokens to any party; only affects the fee the payer pays
+// to validators). Jupiter's REAL auth challenge (verified against the live
+// API on 2026-05-29) bundles a ComputeBudget instruction alongside the Memo,
+// so a Memo-only guard rejects the legitimate challenge. Whitelisting it is
+// safe: the value-moving programs we actually defend against (SystemProgram
+// Transfer, SPL-Token transfer/approve/closeAccount, swap/DEX programs) are
+// still rejected by the allowlist below.
+// RESIDUAL (low): a malicious challenge could set an absurd SetComputeUnitPrice
+// to grief the payer on priority fees. Bounded by CU-limit × price and the
+// wallet's SOL; a future hardening could decode + cap the priority fee. Out of
+// scope for PR B (the counterparty is Jupiter over TLS).
+const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+// Programs an auth challenge may reference. Everything else → reject.
+const _AUTH_ALLOWED_PROGRAMS = new Set([MEMO_PROGRAM_V1, MEMO_PROGRAM_V2, COMPUTE_BUDGET_PROGRAM]);
 
 function _validateAuthTransaction(txBase64, expectedPubkey) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
@@ -249,11 +267,11 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} program index ${programIdx} out of range` };
         }
         const programId = accountKeys[programIdx];
-        if (programId !== MEMO_PROGRAM_V2 && programId !== MEMO_PROGRAM_V1) {
+        if (!_AUTH_ALLOWED_PROGRAMS.has(programId)) {
             return {
                 ok: false,
                 error: 'auth_tx_invalid',
-                reason: `instruction ${i} references non-Memo program ${programId} — auth tx must be Memo-only`,
+                reason: `instruction ${i} references disallowed program ${programId} — auth tx may only use Memo or ComputeBudget`,
             };
         }
         // Skip accounts compact-u16 + bytes
@@ -489,30 +507,41 @@ function _redactPubkey(pubkey) {
 // ── Vault registration (lazy per Codex round-2 #4) ──────────────────────────
 
 /**
- * Ensure the wallet has a Jupiter/Privy vault. GETs vault address; if not
- * registered, POSTs /vault/register. Cached in-memory per pubkey for the
- * Node lifetime — vault registration is one-shot per wallet.
+ * Ensure the wallet has a Jupiter/Privy vault.
+ *
+ * BAT-697 CONTRACT-REWRITE PENDING (live-API probe 2026-05-29):
+ * The original two-step "GET /vault → POST /vault/register" design is WRONG.
+ * Confirmed against the live API with the test wallet:
+ *   • GET /trigger/v2/vault?walletPubkey=… is a REAL route — for an
+ *     unregistered wallet it returns 404 {"error":"Vault not found"}.
+ *   • POST /trigger/v2/vault/register does NOT exist (generic 404) — and
+ *     neither do /vault, /vault/create, /vault/craft, /register.
+ *   • deposit/craft hard-requires a registered vault first (403
+ *     {"error":"No vault registered for this user"}).
+ * So a vault IS a prerequisite, but its registration mechanism is still
+ * unknown (likely a Privy-managed or on-chain init flow not in the paths we
+ * probed). This function therefore CANNOT yet establish a vault. It reports a
+ * clear `vault_registration_unsupported` state so the create flow fails
+ * loudly instead of POSTing a 404. Resolve the real mechanism from Jupiter V2
+ * docs/openapi, then implement. Tracked on PR #388.
  */
 async function ensureVault(pubkey, token) {
     const cached = _vaultCache.get(pubkey);
     if (cached && cached.registered) return { ok: true, vaultAddress: cached.vaultAddress };
 
     const getRes = await _get(`/trigger/v2/vault?walletPubkey=${encodeURIComponent(pubkey)}`, token);
-    if (getRes.status === 200 && getRes.data && getRes.data.registered === true && getRes.data.vaultAddress) {
+    if (getRes.status === 200 && getRes.data && getRes.data.vaultAddress) {
         _vaultCache.set(pubkey, { vaultAddress: getRes.data.vaultAddress, registered: true });
         return { ok: true, vaultAddress: getRes.data.vaultAddress };
     }
 
-    // Not registered (or vault endpoint returns 404 for unregistered) — POST register.
-    const regRes = await _post('/trigger/v2/vault/register', { walletPubkey: pubkey }, token);
-    if (regRes.status !== 200 && regRes.status !== 201) {
-        return { ok: false, error: 'vault_register_failed', reason: `HTTP ${regRes.status}` };
-    }
-    if (!regRes.data || !regRes.data.vaultAddress) {
-        return { ok: false, error: 'vault_register_failed', reason: 'no vaultAddress in response' };
-    }
-    _vaultCache.set(pubkey, { vaultAddress: regRes.data.vaultAddress, registered: true });
-    return { ok: true, vaultAddress: regRes.data.vaultAddress };
+    // Vault not found and no known registration endpoint. Fail loudly rather
+    // than POST a route that returns 404 (the old behavior).
+    return {
+        ok: false,
+        error: 'vault_registration_unsupported',
+        reason: 'No vault for this wallet and the V2 vault-registration mechanism is not yet implemented (the /vault/register route does not exist). Needs Jupiter V2 docs — see PR #388.',
+    };
 }
 
 // ── V2 semantic validation (contract v2 §6) ─────────────────────────────────
@@ -593,6 +622,17 @@ function validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippa
  * recoveryContext is opaque to the caller — it carries the metadata
  * needed to find the order in /orders/history if the create POST is lost
  * after deposit signing. Caller must NOT persist or log it.
+ *
+ * BAT-697 CONTRACT-REWRITE PENDING (live-API probe 2026-05-29): the request
+ * body below uses the WRONG field names. The live deposit/craft validation
+ * proved the real contract is:
+ *   { userAddress, inputMint, outputMint (REQUIRED), amount (numeric string,
+ *     NOT inputAmount), orderType:'price' (REQUIRED), orderSubType:'single' }
+ * i.e. `walletPubkey`→`userAddress`, `inputAmount`→`amount`, and `outputMint`
+ * must be threaded in (depositCraft currently has no outputMint param). With
+ * the corrected body, craft returns 403 until the wallet has a vault (see
+ * ensureVault). Do the rewrite once the vault flow is confirmed so the whole
+ * deposit→create path lands in one coherent, testable change.
  */
 async function depositCraft({ pubkey, token, inputMint, inputAmount }) {
     if (!token) return { ok: false, error: 'auth_required', reason: 'no JWT supplied — call authenticate() first' };
@@ -649,14 +689,19 @@ async function submitCreateOrder({ token, recoveryContext, depositSignedTx, orde
         return { ok: false, error: 'invalid_input', reason: 'depositSignedTx required' };
     }
 
-    // BAT-697 LIVE-SMOKE MUST-VERIFY: the orderType/orderSubType pair on the
-    // create POST is unconfirmed against the live API. deposit/craft uses
-    // { orderType:'price', orderSubType:'single' }; we mirror that family here
-    // for internal consistency rather than the bare orderType:'single' the
-    // first draft sent. Commit-3 live smoke MUST confirm the exact wire shape
-    // Jupiter expects (it may want only orderType, only orderSubType, or
-    // neither since the path already says /orders/price). Adjust here once
-    // verified — this is the single most likely create-rejection cause.
+    // BAT-697 CONTRACT-REWRITE PENDING (live-API probe 2026-05-29):
+    // This create body is NOT yet reconciled with the real Jupiter V2 API and
+    // is known-incomplete. The deposit/craft probe proved Jupiter uses a
+    // DIFFERENT field convention than this adapter was first drafted with:
+    //   • userAddress   (NOT walletPubkey / userPubkey)
+    //   • amount        (NOT inputAmount)
+    //   • outputMint    REQUIRED
+    //   • orderType:'price' REQUIRED ('single' alone → 400 "Invalid input")
+    // /orders/price itself could NOT be reached in the probe (it requires a
+    // registered vault, and the vault-registration mechanism is still unknown —
+    // /trigger/v2/vault/register returns 404, i.e. that route does not exist).
+    // Do the coherent body rewrite once the vault flow + the /orders/price
+    // schema are confirmed from Jupiter V2 docs/openapi. See PR #388 thread.
     const createBody = {
         orderType: 'price',
         orderSubType: 'single',
