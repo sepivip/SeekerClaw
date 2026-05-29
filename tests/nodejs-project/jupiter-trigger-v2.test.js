@@ -316,15 +316,15 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(httpCalls.length, 1, 'only the message-challenge HTTP call, no tx fallback');
     });
 
-    // ── ensureVault ─────────────────────────────────────────────────────────
+    // ── ensureVault (contract: GET /vault → vaultPubkey; GET /vault/register) ─
     console.log('\nensureVault:');
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { registered: true, vaultAddress: 'VaULTaddR111' } });
-    await check('GET vault returns registered + caches', async () => {
+    _enqueue({ status: 200, data: { userPubkey: FIXTURE_PUBKEY, vaultPubkey: 'VauLTpk111', privyVaultId: 'pv1' } });
+    await check('GET /vault returns vaultPubkey + caches', async () => {
         const r = await triggerV2.ensureVault(FIXTURE_PUBKEY, 'jwt');
         assert.strictEqual(r.ok, true);
-        assert.strictEqual(r.vaultAddress, 'VaULTaddR111');
+        assert.strictEqual(r.vaultPubkey, 'VauLTpk111');
         // Second call must hit cache, not HTTP.
         const callsBefore = httpCalls.length;
         const r2 = await triggerV2.ensureVault(FIXTURE_PUBKEY, 'jwt');
@@ -332,30 +332,31 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(httpCalls.length, callsBefore);
     });
 
-    // BAT-697 live-API finding: /vault/register does NOT exist; an unregistered
-    // wallet GET returns 404 "Vault not found". ensureVault must fail loudly
-    // (vault_registration_unsupported) rather than POST a 404 route.
+    // No vault yet → GET /vault 404, then idempotent GET /vault/register creates it.
     triggerV2._resetCachesForTests();
     _resetHttp();
     _enqueue({ status: 404, data: { error: 'Vault not found' } });
-    await check('GET unregistered (404) → vault_registration_unsupported (no register POST)', async () => {
+    _enqueue({ status: 200, data: { userPubkey: FIXTURE_PUBKEY, vaultPubkey: 'VauLTpk222', privyVaultId: 'pv2' } });
+    await check('GET /vault 404 → GET /vault/register (idempotent) → vaultPubkey', async () => {
         const callsBefore = httpCalls.length;
         const r = await triggerV2.ensureVault(FIXTURE_PUBKEY, 'jwt');
-        assert.strictEqual(r.ok, false);
-        assert.strictEqual(r.error, 'vault_registration_unsupported');
-        assert.strictEqual(httpCalls.length, callsBefore + 1, 'must NOT make a second (register) call');
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.vaultPubkey, 'VauLTpk222');
+        assert.strictEqual(httpCalls.length, callsBefore + 2, 'GET /vault then GET /vault/register');
+        // Both calls must be GET (no POST register).
+        assert.ok(httpCalls.slice(-2).every(c => c.options.method === 'GET'), 'vault calls must be GET');
     });
 
     // ── depositCraft + submitCreateOrder happy path ─────────────────────────
     console.log('\ndepositCraft + submitCreateOrder:');
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', depositRequestId: 'dr-001' } });
+    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', requestId: 'dr-001' } });
     _enqueue({ status: 200, data: { id: 'order-001', txSignature: 'sig-001' } });
     await check('happy path: craft → submit → order id', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt',
-            inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
         });
         assert.strictEqual(craft.ok, true);
         assert.strictEqual(craft.depositRequestId, 'dr-001');
@@ -376,7 +377,7 @@ function _buildTransferTx(payerB58) {
     // ── submitCreateOrder: ambiguous + history-recovery ─────────────────────
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', depositRequestId: 'dr-002' } });
+    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', requestId: 'dr-002' } });
     _enqueue({ status: 500, data: { error: 'jupiter_internal' } });        // ambiguous create
     _enqueue({                                                                 // recovery /orders/history
         status: 200,
@@ -389,7 +390,7 @@ function _buildTransferTx(payerB58) {
     await check('ambiguous (500) + history match → success with recovered flag', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt',
-            inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
         });
         // Use a stub setTimeout shim to skip the 5s recovery wait in tests
         const origSetTimeout = global.setTimeout;
@@ -416,13 +417,13 @@ function _buildTransferTx(payerB58) {
     // ── submitCreateOrder: ambiguous + history miss → no-recovery ───────────
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', depositRequestId: 'dr-003' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-003' } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     _enqueue({ status: 200, data: { orders: [] } });
     await check('ambiguous (500) + empty history → create_ambiguous_no_recovery', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt',
-            inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
         });
         const origSetTimeout = global.setTimeout;
         global.setTimeout = (fn) => origSetTimeout(fn, 0);
@@ -645,7 +646,7 @@ function _buildTransferTx(payerB58) {
     console.log('\nrecovery hardening (BAT-697 review pass):');
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', depositRequestId: 'dr-fail' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-fail' } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     // History returns a FAILED order that still carries vaultState:pending_deposit
     // AND matches mint+amount — the pre-fix OR-logic would have matched it.
@@ -657,7 +658,7 @@ function _buildTransferTx(payerB58) {
     await check('failed order with vaultState:pending_deposit is NOT recovered', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt',
-            inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
         });
         const origSetTimeout = global.setTimeout;
         global.setTimeout = (fn) => origSetTimeout(fn, 0);
@@ -675,7 +676,7 @@ function _buildTransferTx(payerB58) {
 
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', depositRequestId: 'dr-primary' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-primary' } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     // History exposes depositRequestId — primary correlation must match it
     // even though a SECOND same-amount active order also exists (no false alias).
@@ -688,7 +689,7 @@ function _buildTransferTx(payerB58) {
     await check('recovery prefers depositRequestId correlation over amount heuristic', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt',
-            inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
         });
         const origSetTimeout = global.setTimeout;
         global.setTimeout = (fn) => origSetTimeout(fn, 0);

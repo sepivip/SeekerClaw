@@ -507,41 +507,43 @@ function _redactPubkey(pubkey) {
 // ── Vault registration (lazy per Codex round-2 #4) ──────────────────────────
 
 /**
- * Ensure the wallet has a Jupiter/Privy vault.
+ * Ensure the wallet has a Jupiter/Privy vault, returning its vaultPubkey.
  *
- * BAT-697 CONTRACT-REWRITE PENDING (live-API probe 2026-05-29):
- * The original two-step "GET /vault → POST /vault/register" design is WRONG.
- * Confirmed against the live API with the test wallet:
- *   • GET /trigger/v2/vault?walletPubkey=… is a REAL route — for an
- *     unregistered wallet it returns 404 {"error":"Vault not found"}.
- *   • POST /trigger/v2/vault/register does NOT exist (generic 404) — and
- *     neither do /vault, /vault/create, /vault/craft, /register.
- *   • deposit/craft hard-requires a registered vault first (403
- *     {"error":"No vault registered for this user"}).
- * So a vault IS a prerequisite, but its registration mechanism is still
- * unknown (likely a Privy-managed or on-chain init flow not in the paths we
- * probed). This function therefore CANNOT yet establish a vault. It reports a
- * clear `vault_registration_unsupported` state so the create flow fails
- * loudly instead of POSTing a 404. Resolve the real mechanism from Jupiter V2
- * docs/openapi, then implement. Tracked on PR #388.
+ * Contract (Jupiter V2 openapi, verified live 2026-05-29):
+ *   • GET /trigger/v2/vault          → 200 {userPubkey, vaultPubkey, privyVaultId, privyUserId?}
+ *                                       (JWT identifies the wallet; 404 when no vault yet)
+ *   • GET /trigger/v2/vault/register → 200/201 {userPubkey, vaultPubkey, privyVaultId}
+ *                                       IDEMPOTENT — registration is a GET; the Privy
+ *                                       custodial vault is created server-side (no funds,
+ *                                       no on-chain action). Subsequent calls return the
+ *                                       existing vault.
+ * (Both are GET + JWT-only — there is NO POST register endpoint; the first
+ * draft's POST /vault/register 404'd in the live probe.)
+ *
+ * Cached in-memory per pubkey for the Node lifetime — vault is one-shot.
  */
 async function ensureVault(pubkey, token) {
     const cached = _vaultCache.get(pubkey);
-    if (cached && cached.registered) return { ok: true, vaultAddress: cached.vaultAddress };
+    if (cached && cached.vaultPubkey) return { ok: true, vaultPubkey: cached.vaultPubkey };
 
-    const getRes = await _get(`/trigger/v2/vault?walletPubkey=${encodeURIComponent(pubkey)}`, token);
-    if (getRes.status === 200 && getRes.data && getRes.data.vaultAddress) {
-        _vaultCache.set(pubkey, { vaultAddress: getRes.data.vaultAddress, registered: true });
-        return { ok: true, vaultAddress: getRes.data.vaultAddress };
+    // Try the existing vault first; register (idempotent GET) if absent.
+    let res = await _get('/trigger/v2/vault', token);
+    if (res.status === 401) {
+        invalidateJwt(pubkey);
+        return { ok: false, error: 'auth_expired', reason: 'JWT rejected by /vault' };
     }
-
-    // Vault not found and no known registration endpoint. Fail loudly rather
-    // than POST a route that returns 404 (the old behavior).
-    return {
-        ok: false,
-        error: 'vault_registration_unsupported',
-        reason: 'No vault for this wallet and the V2 vault-registration mechanism is not yet implemented (the /vault/register route does not exist). Needs Jupiter V2 docs — see PR #388.',
-    };
+    if (!(res.status === 200 && res.data && res.data.vaultPubkey)) {
+        res = await _get('/trigger/v2/vault/register', token);
+        if (res.status === 401) {
+            invalidateJwt(pubkey);
+            return { ok: false, error: 'auth_expired', reason: 'JWT rejected by /vault/register' };
+        }
+    }
+    if (res.status >= 200 && res.status < 300 && res.data && res.data.vaultPubkey) {
+        _vaultCache.set(pubkey, { vaultPubkey: res.data.vaultPubkey });
+        return { ok: true, vaultPubkey: res.data.vaultPubkey };
+    }
+    return { ok: false, error: 'vault_unavailable', reason: `vault GET/register failed (HTTP ${res.status})` };
 }
 
 // ── V2 semantic validation (contract v2 §6) ─────────────────────────────────
@@ -623,25 +625,26 @@ function validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippa
  * needed to find the order in /orders/history if the create POST is lost
  * after deposit signing. Caller must NOT persist or log it.
  *
- * BAT-697 CONTRACT-REWRITE PENDING (live-API probe 2026-05-29): the request
- * body below uses the WRONG field names. The live deposit/craft validation
- * proved the real contract is:
- *   { userAddress, inputMint, outputMint (REQUIRED), amount (numeric string,
- *     NOT inputAmount), orderType:'price' (REQUIRED), orderSubType:'single' }
- * i.e. `walletPubkey`→`userAddress`, `inputAmount`→`amount`, and `outputMint`
- * must be threaded in (depositCraft currently has no outputMint param). With
- * the corrected body, craft returns 403 until the wallet has a vault (see
- * ensureVault). Do the rewrite once the vault flow is confirmed so the whole
- * deposit→create path lands in one coherent, testable change.
+ * Contract (Jupiter V2 openapi, verified live 2026-05-29):
+ *   POST /trigger/v2/deposit/craft
+ *   body: { inputMint, outputMint, userAddress, amount (smallest-unit string),
+ *           orderType:'price', orderSubType:'single' }
+ *   resp: { transaction (base64 unsigned), requestId, receiverAddress, mint,
+ *           amount, tokenDecimals, ... }
+ * Note the cross-endpoint naming quirk: craft uses `userAddress`/`amount`,
+ * while /orders/price (submitCreateOrder) uses `userPubkey`/`inputAmount`.
+ * The craft response's `requestId` becomes /orders/price's `depositRequestId`.
  */
-async function depositCraft({ pubkey, token, inputMint, inputAmount }) {
+async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount }) {
     if (!token) return { ok: false, error: 'auth_required', reason: 'no JWT supplied — call authenticate() first' };
+    if (!outputMint) return { ok: false, error: 'invalid_input', reason: 'outputMint required for deposit/craft' };
     const craftRes = await _post('/trigger/v2/deposit/craft', {
-        walletPubkey: pubkey,
+        inputMint,
+        outputMint,
+        userAddress: pubkey,
+        amount: inputAmount,
         orderType: 'price',
         orderSubType: 'single',
-        inputMint,
-        inputAmount,
     }, token);
     if (craftRes.status === 401) {
         invalidateJwt(pubkey);
@@ -650,12 +653,12 @@ async function depositCraft({ pubkey, token, inputMint, inputAmount }) {
     if (craftRes.status !== 200) {
         return { ok: false, error: 'deposit_craft_failed', reason: `HTTP ${craftRes.status}` };
     }
-    if (!craftRes.data || typeof craftRes.data.transaction !== 'string' || !craftRes.data.depositRequestId) {
-        return { ok: false, error: 'deposit_craft_failed', reason: 'response missing transaction or depositRequestId' };
+    if (!craftRes.data || typeof craftRes.data.transaction !== 'string' || !craftRes.data.requestId) {
+        return { ok: false, error: 'deposit_craft_failed', reason: 'response missing transaction or requestId' };
     }
     const recoveryContext = {
         walletPubkey: pubkey,
-        depositRequestId: craftRes.data.depositRequestId,
+        depositRequestId: craftRes.data.requestId,
         inputMint,
         inputAmount,
         timestamp: Date.now(),
@@ -664,7 +667,7 @@ async function depositCraft({ pubkey, token, inputMint, inputAmount }) {
     return {
         ok: true,
         transaction: craftRes.data.transaction,
-        depositRequestId: craftRes.data.depositRequestId,
+        depositRequestId: craftRes.data.requestId,
         recoveryContext,
     };
 }
@@ -689,22 +692,17 @@ async function submitCreateOrder({ token, recoveryContext, depositSignedTx, orde
         return { ok: false, error: 'invalid_input', reason: 'depositSignedTx required' };
     }
 
-    // BAT-697 CONTRACT-REWRITE PENDING (live-API probe 2026-05-29):
-    // This create body is NOT yet reconciled with the real Jupiter V2 API and
-    // is known-incomplete. The deposit/craft probe proved Jupiter uses a
-    // DIFFERENT field convention than this adapter was first drafted with:
-    //   • userAddress   (NOT walletPubkey / userPubkey)
-    //   • amount        (NOT inputAmount)
-    //   • outputMint    REQUIRED
-    //   • orderType:'price' REQUIRED ('single' alone → 400 "Invalid input")
-    // /orders/price itself could NOT be reached in the probe (it requires a
-    // registered vault, and the vault-registration mechanism is still unknown —
-    // /trigger/v2/vault/register returns 404, i.e. that route does not exist).
-    // Do the coherent body rewrite once the vault flow + the /orders/price
-    // schema are confirmed from Jupiter V2 docs/openapi. See PR #388 thread.
+    // Contract (Jupiter V2 openapi, verified live 2026-05-29):
+    //   POST /trigger/v2/orders/price
+    //   { orderType:'single', depositRequestId, depositSignedTx, userPubkey,
+    //     inputMint, inputAmount, outputMint, triggerMint, triggerCondition,
+    //     triggerPriceUsd, slippageBps?, expiresAt }
+    // For a single price order, orderType IS 'single' (the sub-type value) —
+    // distinct from deposit/craft which uses orderType:'price'+orderSubType.
+    // expiresAt is MILLISECONDS (not seconds). userPubkey/inputAmount here
+    // (vs userAddress/amount on craft).
     const createBody = {
-        orderType: 'price',
-        orderSubType: 'single',
+        orderType: 'single',
         depositRequestId: recoveryContext.depositRequestId,
         depositSignedTx,
         userPubkey: recoveryContext.walletPubkey,
@@ -712,9 +710,9 @@ async function submitCreateOrder({ token, recoveryContext, depositSignedTx, orde
         inputAmount: order.inputAmount,
         outputMint: order.outputMint,
         triggerMint: order.triggerMint || order.outputMint,
-        expiresAt: Math.floor(order.expiresAtMs / 1000),
         triggerCondition: order.triggerCondition || 'below',
         triggerPriceUsd: order.triggerPriceUsd,
+        expiresAt: order.expiresAtMs,
     };
     if (order.slippageBps != null) createBody.slippageBps = order.slippageBps;
 

@@ -491,18 +491,19 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         }
         const token = authResult.token;
 
-        // 10. Ensure vault (lazy — only on first create per wallet).
+        // 10. Ensure vault (lazy — registered via idempotent GET on first use).
         const vaultResult = await triggerV2.ensureVault(walletAddress, token);
         if (!vaultResult.ok) {
             return { error: vaultResult.error, reason: vaultResult.reason };
         }
-        const vaultAddress = vaultResult.vaultAddress;
+        const vaultAddress = vaultResult.vaultPubkey;
 
-        // 11. Craft deposit.
+        // 11. Craft deposit (outputMint is required by /deposit/craft).
         const craftResult = await triggerV2.depositCraft({
             pubkey: walletAddress,
             token,
             inputMint: inputToken.address,
+            outputMint: outputToken.address,
             inputAmount: String(inputAmountAtomic),
         });
         if (!craftResult.ok) {
