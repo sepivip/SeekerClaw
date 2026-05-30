@@ -494,6 +494,35 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         const { routeFor: _routeForTriggerV2 } = require('../caps/preflight');
         const routingHint = await _routeForTriggerV2('jupiter_trigger_create', input);
 
+        // PR #388 R9: over-cap fail-fast. routeFor returns
+        // {routingDecision:'burner', underCap:false} when the principal would
+        // breach a cap. Pre-fix, the V2 handler continued through burner
+        // pubkey lookup, Jupiter auth (server-side session), vault register
+        // (server-side vault row), AND deposit/craft (server-side deposit
+        // request id) before routeAndSign finally surfaced burner_over_cap.
+        // All of those side effects were wasted server state for an order
+        // that would never sign. Handle it here:
+        //   - With `input._allowMainFallback === true`: flip routing to
+        //     'main' BEFORE step 4 so the rest of the flow proceeds against
+        //     the MWA wallet (mirrors V1 routing semantics).
+        //   - Otherwise: refuse immediately with the same shape dispatch.js
+        //     would return, but before any Jupiter or burner-bridge state
+        //     is touched.
+        if (routingHint.routingDecision === 'burner' && routingHint.underCap === false) {
+            if (input._allowMainFallback === true) {
+                routingHint.routingDecision = 'main';
+                log(`[Jupiter Trigger V2] over-cap (${routingHint.reason || 'unknown'}) — _allowMainFallback set, flipping route to main BEFORE side effects`, 'INFO');
+            } else {
+                return {
+                    error: 'burner_over_cap',
+                    reason:
+                        `Burner over cap (${routingHint.reason || 'unknown'}). ` +
+                        'Raise the cap with wallet_set_caps, or retry with _allowMainFallback: true to use the main wallet (popup required).',
+                    capName: routingHint.capName,
+                };
+            }
+        }
+
         // 4. Resolve wallet address — burner pubkey if routing=burner, MWA pubkey otherwise.
         // If burner routing was chosen but the burner pubkey is unavailable
         // (bridge unreachable, not configured, etc.), we MUST also flip the
