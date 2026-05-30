@@ -262,7 +262,11 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
     // actual challenge payload in a Memo. A ComputeBudget-only tx is in the
     // program allowlist but contains no challenge text to commit to, so
     // signing it would be signing nothing meaningful (PR #388 R2 finding).
+    // PR #388 R7: also track whether ANY Memo instruction carries non-empty
+    // data — an empty Memo (data length 0) commits to no payload, defeating
+    // the purpose of the blind-sign guard the same way a missing Memo does.
     let memoCount = 0;
+    let memoWithDataCount = 0;
     for (let i = 0; i < instrCount.value; i++) {
         if (messageOffset + 1 > txBuf.length) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} truncated at program id index` };
@@ -279,7 +283,8 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
                 reason: `instruction ${i} references disallowed program ${programId} — auth tx may only use Memo or ComputeBudget`,
             };
         }
-        if (programId === MEMO_PROGRAM_V1 || programId === MEMO_PROGRAM_V2) memoCount += 1;
+        const isMemo = programId === MEMO_PROGRAM_V1 || programId === MEMO_PROGRAM_V2;
+        if (isMemo) memoCount += 1;
         // Skip accounts compact-u16 + bytes
         const acctIdx = _readCompactU16(txBuf, messageOffset);
         if (!acctIdx) {
@@ -291,6 +296,7 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
         if (!dataLen) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} malformed data length` };
         }
+        if (isMemo && dataLen.value > 0) memoWithDataCount += 1;
         messageOffset = dataLen.offset + dataLen.value;
         if (messageOffset > txBuf.length) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} data truncated` };
@@ -302,6 +308,13 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
             ok: false,
             error: 'auth_tx_invalid',
             reason: 'auth tx must contain at least one Memo (v1 or v2) instruction — a ComputeBudget-only tx carries no challenge payload to commit to',
+        };
+    }
+    if (memoWithDataCount === 0) {
+        return {
+            ok: false,
+            error: 'auth_tx_invalid',
+            reason: 'auth tx contains Memo instruction(s) but all are empty (zero-byte data) — Memo must carry the challenge payload bytes for the blind-sign guard to be meaningful',
         };
     }
 

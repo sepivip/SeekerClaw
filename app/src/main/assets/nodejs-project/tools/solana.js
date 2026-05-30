@@ -160,20 +160,31 @@ const tools = [
             slippageBps: { type: 'number', description: 'Slippage tolerance in basis points (1-10000). Optional; defaults to 100 (1%).' },
             triggerMint: { type: 'string', description: 'Mint address of the asset whose USD price the trigger watches. Auto-inferred when exactly one side of the pair is a stablecoin (SOL↔USDC → SOL is watched). REQUIRED for non-stable↔non-stable pairs (SOL↔JUP) and both-stable pairs (USDC↔USDT).' },
         };
+        const v2Schema = {
+            type: 'object',
+            properties: { ...baseProperties, ...v2Properties },
+            required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPriceUsd'],
+            // PR #388 R7: V2 handler hard-rejects with `expires_at_required`
+            // if NEITHER `expiresAt` nor `expiryTime` is provided. Encode
+            // that disjunction in the schema (anyOf) so the model/gate
+            // rejects the missing-expiry case at validation time rather than
+            // letting it reach the user-confirmation card and dying later.
+            anyOf: [
+                { required: ['expiresAt'] },
+                { required: ['expiryTime'] },
+            ],
+        };
+        const v1Schema = {
+            type: 'object',
+            properties: { ...baseProperties, ...v1Properties },
+            required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice'],
+        };
         return {
             name: 'jupiter_trigger_create',
             description: v2Enabled
                 ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
                 : 'Create a trigger (limit) order on Jupiter (V1 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the output/input price ratio reaches `triggerPrice`. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
-            input_schema: {
-                type: 'object',
-                properties: v2Enabled
-                    ? { ...baseProperties, ...v2Properties }
-                    : { ...baseProperties, ...v1Properties },
-                required: v2Enabled
-                    ? ['inputToken', 'outputToken', 'inputAmount', 'triggerPriceUsd']
-                    : ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice'],
-            },
+            input_schema: v2Enabled ? v2Schema : v1Schema,
         };
     })(),
     {

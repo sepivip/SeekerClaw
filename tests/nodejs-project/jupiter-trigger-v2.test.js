@@ -621,6 +621,40 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(r.error, 'auth_tx_invalid');
     });
 
+    // PR #388 R7 finding: a tx with a Memo instruction whose data length is
+    // 0 commits to NO challenge payload — the blind-sign guard is moot.
+    // Memo must carry actual bytes. Build a tx with the same structure as the
+    // happy-path multi-instr but force the memo's data length to zero.
+    function buildEmptyMemoTx({ accounts, instrIdxs }) {
+        const parts = [];
+        parts.push(Buffer.from([1, 0, 0]));
+        parts.push(cu16(accounts.length));
+        for (const a of accounts) parts.push(a);
+        parts.push(Buffer.alloc(32)); // blockhash
+        parts.push(cu16(instrIdxs.length));
+        for (const idx of instrIdxs) {
+            parts.push(Buffer.from([idx]));
+            parts.push(cu16(0)); // 0 accounts
+            parts.push(cu16(0)); // ZERO data — the regression
+        }
+        const message = Buffer.concat(parts);
+        return Buffer.concat([Buffer.from([1]), Buffer.alloc(64), message]).toString('base64');
+    }
+    await check('R7 REJECTS empty-Memo tx (Memo present but zero-byte data)', async () => {
+        const tx = buildEmptyMemoTx({ accounts: [PAYER_BUF, MEMO_BYTES], instrIdxs: [1] });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, false, 'a Memo with zero-byte data must NOT pass the blind-sign guard');
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.ok(/empty|zero-byte/i.test(r.reason || ''),
+            `expected empty/zero-byte reason, got: ${r.reason}`);
+    });
+    await check('R7 REJECTS empty-Memo + ComputeBudget combo (still no payload to commit)', async () => {
+        const tx = buildEmptyMemoTx({ accounts: [PAYER_BUF, MEMO_BYTES, COMPUTE_BUDGET_BYTES], instrIdxs: [2, 1] });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, false, 'empty-Memo cannot be salvaged by a sibling ComputeBudget instruction');
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+    });
+
     await check('REJECTS Memo + SystemProgram even when a Memo instr is present', async () => {
         const tx = buildMultiInstrTx({ accounts: [PAYER_BUF, MEMO_BYTES, SYS_BYTES], instrIdxs: [1, 2] });
         const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
