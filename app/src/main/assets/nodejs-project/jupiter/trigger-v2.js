@@ -190,22 +190,48 @@ const _AUTH_ALLOWED_PROGRAMS = new Set([MEMO_PROGRAM_V1, MEMO_PROGRAM_V2, COMPUT
 //   - Max CU limit: 200_000 (memo + budget ix fit comfortably under this;
 //     Solana default per-tx limit is 200K)
 //   - Max CU price: 10_000 micro_lamports/CU (combined with the 200K CU
-//     ceiling → worst-case fee ≈ 2_000_000 lamports = 0.002 SOL,
-//     trivial vs the unbounded pre-fix exposure where an attacker could
-//     have set u64::MAX micro_lamports/CU and drained the burner)
+//     ceiling → priority fee worst case = 200_000 * 10_000 / 1_000_000
+//     = 2_000 lamports ≈ 0.000002 SOL — trivial vs the unbounded pre-fix
+//     exposure where an attacker could have set u64::MAX micro_lamports/CU
+//     and drained the burner)
+//   - Max additional_fee (deprecated tag 0x00): 5_000 lamports ≈ 0.000005
+//     SOL — same trivial ceiling, accommodates any real-world priority bump
 const _AUTH_MAX_CU_LIMIT = 200_000;
 const _AUTH_MAX_CU_PRICE_MICROLAMPORTS = 10_000n; // BigInt — instr field is u64
+const _AUTH_MAX_ADDITIONAL_FEE_LAMPORTS = 5_000;
 
 // Decode + validate a single ComputeBudget instruction's data bytes.
-// Returns { ok: true } or { ok: false, reason }. Unknown tags (heap frame,
-// loaded-accounts-data-size, deprecated RequestUnits) don't drain SOL on
-// their own, so accept silently — only the two fee-affecting variants are
-// capped.
+// Returns { ok: true } or { ok: false, reason }.
+//
+// Fee-affecting tags (capped):
+//   0x00 RequestUnitsDeprecated (u32 units, u32 additional_fee LAMPORTS)
+//   0x02 SetComputeUnitLimit    (u32 units)
+//   0x03 SetComputeUnitPrice    (u64 micro_lamports/CU)
+// Non-fee-affecting tags (accepted silently):
+//   0x01 RequestHeapFrame                (u32 bytes — only changes heap, no fee)
+//   0x04 SetLoadedAccountsDataSizeLimit  (u32 bytes — limit, no direct fee)
+//
+// PR #388 R11: tag 0x00's `additional_fee` field was previously treated as
+// "unknown safe" and accepted unconditionally — that left a fee-drain path
+// the same magnitude as the unbounded SetComputeUnitPrice path. Now decoded
+// and capped.
 function _validateComputeBudgetInstr(data) {
     if (data.length === 0) return { ok: true };
     const tag = data[0];
+    // 0x00 = RequestUnitsDeprecated (u32 LE units, u32 LE additional_fee LAMPORTS)
+    if (tag === 0x00) {
+        if (data.length < 9) return { ok: false, reason: 'ComputeBudget RequestUnitsDeprecated data truncated' };
+        const units = data.readUInt32LE(1);
+        const additionalFee = data.readUInt32LE(5);
+        if (units > _AUTH_MAX_CU_LIMIT) {
+            return { ok: false, reason: `ComputeBudget RequestUnitsDeprecated units=${units} exceeds auth-tx cap ${_AUTH_MAX_CU_LIMIT}` };
+        }
+        if (additionalFee > _AUTH_MAX_ADDITIONAL_FEE_LAMPORTS) {
+            return { ok: false, reason: `ComputeBudget RequestUnitsDeprecated additional_fee=${additionalFee} lamports exceeds auth-tx cap ${_AUTH_MAX_ADDITIONAL_FEE_LAMPORTS}` };
+        }
+    }
     // 0x02 = SetComputeUnitLimit (u32 LE units)
-    if (tag === 0x02) {
+    else if (tag === 0x02) {
         if (data.length < 5) return { ok: false, reason: 'ComputeBudget SetComputeUnitLimit data truncated' };
         const limit = data.readUInt32LE(1);
         if (limit > _AUTH_MAX_CU_LIMIT) {
@@ -222,6 +248,9 @@ function _validateComputeBudgetInstr(data) {
             return { ok: false, reason: `ComputeBudget SetComputeUnitPrice=${price.toString()} exceeds auth-tx cap ${_AUTH_MAX_CU_PRICE_MICROLAMPORTS.toString()} micro_lamports/CU` };
         }
     }
+    // 0x01 RequestHeapFrame, 0x04 SetLoadedAccountsDataSizeLimit → no direct
+    // SOL drain (heap frame doesn't add fee; loaded-accounts cap just limits
+    // what can be loaded). CU spent on those is bounded by 0x02 above.
     return { ok: true };
 }
 
@@ -1140,4 +1169,5 @@ module.exports = {
     MEMO_PROGRAM_V2,
     _AUTH_MAX_CU_LIMIT,
     _AUTH_MAX_CU_PRICE_MICROLAMPORTS,
+    _AUTH_MAX_ADDITIONAL_FEE_LAMPORTS,
 };

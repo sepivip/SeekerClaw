@@ -705,13 +705,57 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(r.ok, false);
         assert.ok(/truncated/i.test(r.reason || ''));
     });
-    await check('R10 _validateComputeBudgetInstr accepts unknown tags (heap frame, deprecated RequestUnits)', async () => {
-        // 0x00 RequestUnits, 0x01 RequestHeapFrame, 0x04 SetLoadedAccountsDataSizeLimit
-        // None drain SOL → accept silently.
-        for (const tag of [0x00, 0x01, 0x04]) {
+    await check('R10 _validateComputeBudgetInstr accepts non-fee-affecting tags (HeapFrame, LoadedAccountsDataSizeLimit)', async () => {
+        // 0x01 RequestHeapFrame, 0x04 SetLoadedAccountsDataSizeLimit
+        // Neither drains SOL → accept silently.
+        for (const tag of [0x01, 0x04]) {
             const r = triggerV2._validateComputeBudgetInstr(Buffer.from([tag, 0, 0, 0, 0]));
             assert.strictEqual(r.ok, true, `tag 0x0${tag} (no fee impact) should be accepted`);
         }
+    });
+
+    // PR #388 R11 finding: tag 0x00 (RequestUnitsDeprecated) carries a
+    // u32 `additional_fee` lamport field. Pre-R11 it was accepted as
+    // "unknown safe" — that left a SOL-drain path the same magnitude as
+    // the unbounded SetComputeUnitPrice path. Now decoded + capped.
+    await check('R11 _validateComputeBudgetInstr accepts RequestUnitsDeprecated with zero additional_fee', async () => {
+        // tag(1) + units(4) + additional_fee(4) = 9 bytes
+        const data = Buffer.alloc(9);
+        data[0] = 0x00;
+        data.writeUInt32LE(150_000, 1);  // units, under cap
+        data.writeUInt32LE(0, 5);        // additional_fee = 0
+        assert.strictEqual(triggerV2._validateComputeBudgetInstr(data).ok, true);
+    });
+    await check('R11 _validateComputeBudgetInstr accepts RequestUnitsDeprecated with additional_fee at cap', async () => {
+        const data = Buffer.alloc(9);
+        data[0] = 0x00;
+        data.writeUInt32LE(triggerV2._AUTH_MAX_CU_LIMIT, 1);
+        data.writeUInt32LE(triggerV2._AUTH_MAX_ADDITIONAL_FEE_LAMPORTS, 5);
+        assert.strictEqual(triggerV2._validateComputeBudgetInstr(data).ok, true);
+    });
+    await check('R11 _validateComputeBudgetInstr REJECTS RequestUnitsDeprecated with additional_fee above cap (the attack value)', async () => {
+        const data = Buffer.alloc(9);
+        data[0] = 0x00;
+        data.writeUInt32LE(150_000, 1);
+        data.writeUInt32LE(0xFFFFFFFF, 5); // u32::MAX lamports ≈ 4.29 SOL drain pre-fix
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, false, 'u32::MAX additional_fee was the deprecated fee-drain vector');
+        assert.ok(/additional_fee/i.test(r.reason || ''));
+    });
+    await check('R11 _validateComputeBudgetInstr REJECTS RequestUnitsDeprecated with units above cap', async () => {
+        const data = Buffer.alloc(9);
+        data[0] = 0x00;
+        data.writeUInt32LE(triggerV2._AUTH_MAX_CU_LIMIT + 1, 1);
+        data.writeUInt32LE(0, 5);
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, false);
+        assert.ok(/units/i.test(r.reason || ''));
+    });
+    await check('R11 _validateComputeBudgetInstr REJECTS truncated RequestUnitsDeprecated (5 bytes instead of 9)', async () => {
+        const data = Buffer.from([0x00, 0, 0, 0, 0]); // tag + units only, missing additional_fee
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, false);
+        assert.ok(/truncated/i.test(r.reason || ''));
     });
 
     // Integration: ComputeBudget cap fires from within _validateAuthTransaction.
