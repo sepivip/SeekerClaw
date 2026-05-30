@@ -368,6 +368,31 @@ function _inferTriggerCondition(inputMint, outputMint, explicit) {
     return null;
 }
 
+/**
+ * Resolve which mint Jupiter should watch the USD price of (the
+ * `triggerMint` body field). The non-stable side of the pair — that's
+ * the asset whose USD price actually moves around the trigger value:
+ *   - Buying a non-stable with a stable (USDC → SOL, "below $80"):
+ *     trigger reads SOL's price → triggerMint = outputMint.
+ *   - Selling a non-stable for a stable (SOL → USDC, "above $90"):
+ *     trigger reads SOL's price → triggerMint = inputMint.
+ *   - Non-stable ↔ non-stable (rare, e.g. SOL ↔ JUP): no clean
+ *     inference; caller must pass explicit `input.triggerMint`. We
+ *     default to outputMint so the caller's explicit override is the
+ *     only correct path (the default will not fire usefully).
+ *
+ * The pre-fix shipped `triggerMint = outputMint` unconditionally, which
+ * for a sell-into-stable (e.g. SOL → USDC) made Jupiter watch USDC at
+ * ~$1 — the documented "SOL ≥ $90" limit-sell would never trigger
+ * (PR #388 R2 finding).
+ */
+function _inferTriggerMint(inputMint, outputMint, explicit) {
+    if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+    if (_STABLE_MINTS.has(inputMint) && !_STABLE_MINTS.has(outputMint)) return outputMint;
+    if (_STABLE_MINTS.has(outputMint) && !_STABLE_MINTS.has(inputMint)) return inputMint;
+    return outputMint; // both-stable or both-non-stable: degenerate; caller should override.
+}
+
 async function _jupiterTriggerCreateV2(input, _chatId) {
     if (!config.jupiterApiKey) {
         return {
@@ -532,11 +557,16 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         }
 
         // 13. routeAndSign for the deposit signing + orders/price POST.
+        // PR #388 R2: derive triggerMint from the non-stable side of the
+        // pair (the asset whose USD price the trigger watches). Pre-fix
+        // unconditionally used outputMint, which broke sell-into-stable
+        // orders (SOL → USDC "above $90" would watch USDC's ~$1 price).
+        const triggerMint = _inferTriggerMint(inputToken.address, outputToken.address, input.triggerMint);
         const orderArgs = {
             inputMint: inputToken.address,
             inputAmount: String(inputAmountAtomic),
             outputMint: outputToken.address,
-            triggerMint: outputToken.address,
+            triggerMint,
             triggerPriceUsd,
             triggerCondition,
             slippageBps,

@@ -405,22 +405,51 @@ async function recordJupiterOwnership(orderId, creatorWalletRole, flowName = 'ju
  * Callers MUST call the broadcast/HTTP step themselves and not bake
  * cap-state semantics around it — this helper is signing-only.
  */
+// PR #388 R2: zero-cap reserve must work for any user whose burner has at
+// least one cap configured, not just users with a SOL cap. A user with
+// USDC-only caps (capPerTxSol: '0', capPerTxUsdc: set) routes USDC spends
+// through the burner; pre-fix this helper always reserved against the SOL
+// cap and would fail `burner_not_configured` for those users — blocking
+// V2 USDC orders before any deposit signing. We try SOL first (the common
+// case), then fall back to USDC on the specific `burner_not_configured`
+// error (and ONLY that error — other failures bubble up unchanged so we
+// don't mask transient issues).
+const _ZERO_CAP_CANDIDATES = ['burner.pertx.sol', 'burner.pertx.usdc'];
+async function _zeroCapReserveAny() {
+    let lastErr = null;
+    for (const name of _ZERO_CAP_CANDIDATES) {
+        const res = await androidBridgeCall('/burner/reserve', {
+            name,
+            atomicAmount: '0',
+            ttlMs: 60000,
+        }, 5000);
+        if (res && !res.error && res.reservationId) {
+            return { ok: true, reservationId: res.reservationId, capName: name };
+        }
+        lastErr = res;
+        // Only fall through to the next candidate when the burner reports
+        // "not configured" against THIS cap (which means the asset cap
+        // for this name is unset, not that the burner itself is missing).
+        // Bridge unreachable / TTL / other errors short-circuit so we
+        // don't paper over a real failure with a second redundant call.
+        if (!res || res.error !== 'burner_not_configured') break;
+    }
+    return {
+        ok: false,
+        error: (lastErr && lastErr.error) || 'reserve_failed',
+        reason: (lastErr && lastErr.reason)
+            || `zero-cap reservation failed against all candidate caps (${_ZERO_CAP_CANDIDATES.join(', ')})`,
+    };
+}
+
 async function signZeroCapTxViaBurner({ unsignedTxBase64, flowName = 'zero-cap-sign' }) {
     const burner = getWallet('burner');
     if (!burner) {
         return { ok: false, error: 'no_burner_wallet', reason: 'getWallet("burner") returned null' };
     }
-    const reserveRes = await androidBridgeCall('/burner/reserve', {
-        name: 'burner.pertx.sol',
-        atomicAmount: '0',
-        ttlMs: 60000,
-    }, 5000);
-    if (!reserveRes || reserveRes.error || !reserveRes.reservationId) {
-        return {
-            ok: false,
-            error: reserveRes && reserveRes.error ? reserveRes.error : 'reserve_failed',
-            reason: reserveRes && reserveRes.reason ? reserveRes.reason : 'zero-cap reservation failed',
-        };
+    const reserveRes = await _zeroCapReserveAny();
+    if (!reserveRes.ok) {
+        return { ok: false, error: reserveRes.error, reason: reserveRes.reason };
     }
     const reservationId = reserveRes.reservationId;
 
