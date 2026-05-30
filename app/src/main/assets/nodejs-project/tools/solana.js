@@ -645,10 +645,21 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
         if (submitWarning) warnings.push(submitWarning);
 
-        // PR #388 R2: keep V1's `signature` field as an alias of `txSignature`
-        // so consumers (tool-result prompts, downstream parsers) that parse
-        // the V1 shape don't break when the flag is flipped.
+        // PR #388 R2: V1 alias for `signature` (V1 returned `signature`, V2
+        // canonical is `txSignature`). PR #388 R3: also surface V1's
+        // `triggerPrice` and `expiryTime` field names so consumers that
+        // parse the V1 shape don't see undefined when the flag flips.
+        //
+        // SEMANTIC NOTE on `triggerPrice`: V1's `triggerPrice` was a token
+        // ratio (e.g. 90 meaning "1 SOL = 90 USDC"). V2's `triggerPriceUsd`
+        // is a USD price. We alias `triggerPrice` to the USD value (not the
+        // ratio) because that's what the underlying order actually uses now —
+        // a consumer that interprets it as a ratio is already broken
+        // semantically by the V1→V2 cutover; preserving the field name at
+        // least keeps the field present so the consumer's parse doesn't blow
+        // up. Consumers SHOULD migrate to `triggerPriceUsd`.
         const _sig = orderResult.txSignature || dispatchResult.signature || null;
+        const _expiresAtSec = Math.floor(expiresAtMs / 1000);
         return {
             success: true,
             orderId,
@@ -659,9 +670,11 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             outputToken: `${outputToken.symbol} (${outputToken.address})`,
             inputAmount: input.inputAmount,
             triggerPriceUsd,
+            triggerPrice: triggerPriceUsd, // V1 alias (semantic shifted ratio→USD; see comment above)
             triggerCondition,
             slippageBps,
-            expiresAt: Math.floor(expiresAtMs / 1000),
+            expiresAt: _expiresAtSec,
+            expiryTime: _expiresAtSec, // V1 alias (both Unix seconds)
             wallet: dispatchResult.wallet,
             vaultAddress,
             recovered: orderResult.recovered === true || undefined,
@@ -716,28 +729,40 @@ async function _jupiterTriggerListV2(input, _chatId) {
             // rawState, initialInputAmount, remainingInputAmount, fillPercent.
             // The first-draft status/vaultState/inputAmount fields don't exist
             // on the API — mapping them would return three `undefined`s per row.
+            // PR #388 R2 added inputToken/outputToken aliases. R3: also add
+            // V1's `inputAmount`, `triggerPrice`, `status`, `expiryTime`
+            // aliases so consumers that parse the V1 list shape don't see
+            // undefined when the flag flips. SEMANTIC NOTES:
+            //   - `inputAmount` ← initialInputAmount (same atomic-string semantic).
+            //   - `triggerPrice` ← triggerPriceUsd (V1 was a token ratio,
+            //     V2 is USD — see same comment on the create response above;
+            //     consumers SHOULD migrate to `triggerPriceUsd`).
+            //   - `status` ← orderState (same lowercase state vocabulary:
+            //     active/cancelled/expired/etc).
+            //   - `expiryTime` ← expiresAt converted ms→sec (V1 unit was
+            //     Unix seconds; V2 `expiresAt` is milliseconds).
             orders: listResult.orders.map(order => ({
                 orderId: order.id || order.orderId,
                 orderType: order.orderType,
                 inputMint: order.inputMint,
                 outputMint: order.outputMint,
-                // PR #388 R2: V1 listed orders under `inputToken`/`outputToken`
-                // aliases of the mint addresses. Kept here so consumers parsing
-                // the V1 shape don't see undefined when the flag is flipped.
-                // (V1 sometimes resolved these to symbols; we leave them as
-                // mints because the V2 API doesn't surface symbol metadata on
-                // history rows. Consumers needing symbols can resolveToken().)
                 inputToken: order.inputMint,
                 outputToken: order.outputMint,
                 initialInputAmount: order.initialInputAmount,
                 remainingInputAmount: order.remainingInputAmount,
+                inputAmount: order.initialInputAmount, // V1 alias
                 triggerPriceUsd: order.triggerPriceUsd,
+                triggerPrice: order.triggerPriceUsd, // V1 alias (semantic shifted ratio→USD)
                 triggerCondition: order.triggerCondition,
                 slippageBps: order.slippageBps,
                 orderState: order.orderState,
                 rawState: order.rawState,
+                status: order.orderState, // V1 alias
                 fillPercent: order.fillPercent,
                 expiresAt: order.expiresAt,
+                expiryTime: (typeof order.expiresAt === 'number' && order.expiresAt > 1e12)
+                    ? Math.floor(order.expiresAt / 1000)
+                    : order.expiresAt, // V1 alias in Unix SECONDS (V2 expiresAt is ms)
                 createdAt: order.createdAt,
             })),
         };

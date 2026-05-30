@@ -547,24 +547,47 @@ async function ensureVault(pubkey, token) {
     const cached = _vaultCache.get(pubkey);
     if (cached && cached.vaultPubkey) return { ok: true, vaultPubkey: cached.vaultPubkey };
 
-    // Try the existing vault first; register (idempotent GET) if absent.
-    let res = await _get('/trigger/v2/vault', token);
-    if (res.status === 401) {
+    // 1) Try the existing vault.
+    const getRes = await _get('/trigger/v2/vault', token);
+    if (getRes.status === 401) {
         invalidateJwt(pubkey);
         return { ok: false, error: 'auth_expired', reason: 'JWT rejected by /vault' };
     }
-    if (!(res.status === 200 && res.data && res.data.vaultPubkey)) {
-        res = await _get('/trigger/v2/vault/register', token);
-        if (res.status === 401) {
-            invalidateJwt(pubkey);
-            return { ok: false, error: 'auth_expired', reason: 'JWT rejected by /vault/register' };
-        }
+    if (getRes.status === 200 && getRes.data && getRes.data.vaultPubkey) {
+        _vaultCache.set(pubkey, { vaultPubkey: getRes.data.vaultPubkey });
+        return { ok: true, vaultPubkey: getRes.data.vaultPubkey };
     }
-    if (res.status >= 200 && res.status < 300 && res.data && res.data.vaultPubkey) {
-        _vaultCache.set(pubkey, { vaultPubkey: res.data.vaultPubkey });
-        return { ok: true, vaultPubkey: res.data.vaultPubkey };
+
+    // 2) PR #388 R3: only register on the DOCUMENTED "no vault yet" signal
+    // (HTTP 404). Any other non-2xx — 429, 5xx, malformed JSON, etc. — must
+    // surface the original failure unchanged. Pre-fix, any non-success fell
+    // through to /vault/register, which (a) hid transient errors behind a
+    // confusing register attempt, and (b) on a 429 could trigger a second
+    // rate-limited call instead of letting the caller back off.
+    if (getRes.status !== 404) {
+        return {
+            ok: false,
+            error: 'vault_unavailable',
+            reason: `GET /vault returned HTTP ${getRes.status} (expected 200 with vaultPubkey, or 404 "Vault not found"). Not registering — failing closed.`,
+        };
     }
-    return { ok: false, error: 'vault_unavailable', reason: `vault GET/register failed (HTTP ${res.status})` };
+
+    // 3) 404 confirmed → register (idempotent GET). Privy creates the vault
+    // server-side; no on-chain action, no funds.
+    const regRes = await _get('/trigger/v2/vault/register', token);
+    if (regRes.status === 401) {
+        invalidateJwt(pubkey);
+        return { ok: false, error: 'auth_expired', reason: 'JWT rejected by /vault/register' };
+    }
+    if (regRes.status >= 200 && regRes.status < 300 && regRes.data && regRes.data.vaultPubkey) {
+        _vaultCache.set(pubkey, { vaultPubkey: regRes.data.vaultPubkey });
+        return { ok: true, vaultPubkey: regRes.data.vaultPubkey };
+    }
+    return {
+        ok: false,
+        error: 'vault_unavailable',
+        reason: `GET /vault/register returned HTTP ${regRes.status} without a vaultPubkey`,
+    };
 }
 
 // ── V2 semantic validation (contract v2 §6) ─────────────────────────────────
