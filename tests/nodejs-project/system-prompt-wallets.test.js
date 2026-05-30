@@ -212,6 +212,22 @@ check('burner configured: prompt lists both Burner and Main with caps + network'
     // paid-call failure path stays explicitly wired to that section.
     assert.ok(stable.includes('DIAGNOSTICS.md → "paysh-catalog"'),
         'must reference DIAGNOSTICS.md → "paysh-catalog" specifically as the door for post-paid-call-failure self-troubleshooting');
+
+    // BAT-936 Wallet Key Policy — security-critical refusal block. Pinned in
+    // ALL THREE wallet-state paths (configured/unconfigured/null) because the
+    // block fires UNCONDITIONALLY (ai.js:664-677 comment: "fires regardless
+    // of burner config state"). Dropping any of these phrases silently
+    // re-opens the "talk the agent into generating a key" attack surface.
+    assert.ok(stable.includes('## Wallet Key Policy'),
+        'must include "## Wallet Key Policy" section header (BAT-936)');
+    assert.ok(stable.includes('You NEVER produce wallet key material'),
+        'must include the unconditional refusal sentence (BAT-936)');
+    assert.ok(stable.includes('Settings → Burner Wallet'),
+        'must redirect to Settings → Burner Wallet (BAT-936)');
+    assert.ok(stable.includes('there is no in-app "rotate" or "generate" path'),
+        'must explicitly state the app has no rotate/generate path (BAT-936)');
+    assert.ok(stable.includes('No exceptions'),
+        'must include the "No exceptions" push-back response (BAT-936)');
 });
 
 // ── Burner UNCONFIGURED → single-wallet section + Settings hint ─────────────
@@ -230,6 +246,17 @@ check('burner not configured: prompt shows single wallet + Settings hint', () =>
     assert.ok(stable.includes('mainnet'), 'must mention mainnet');
     // Anti-claim rule: must not assert burner exists when unconfigured.
     assert.ok(!stable.includes('You have two wallets'), 'must NOT claim two wallets when burner unconfigured');
+
+    // BAT-936 Wallet Key Policy must ALSO fire here (unconfigured users are
+    // the highest-risk audience — they're the ones likely to ask "generate
+    // me a wallet"). This is the load-bearing assertion for the "fires
+    // regardless of burner config state" invariant.
+    assert.ok(stable.includes('## Wallet Key Policy'),
+        'Wallet Key Policy MUST fire when burner is unconfigured (BAT-936)');
+    assert.ok(stable.includes('You NEVER produce wallet key material'),
+        'unconfigured path: refusal sentence must be present (BAT-936)');
+    assert.ok(stable.includes('Settings → Burner Wallet'),
+        'unconfigured path: must redirect to Settings → Burner Wallet (BAT-936)');
 });
 
 // ── Snapshot null (first call before refresh) → unconfigured copy ───────────
@@ -242,6 +269,10 @@ check('burner snapshot null (first call): prompt falls back to single-wallet cop
     assert.ok(stable.includes('## Wallets'));
     assert.ok(stable.includes('You have one wallet'),
         'null snapshot must produce single-wallet copy (matches v1.0 baseline before first refresh lands)');
+
+    // BAT-936: Policy fires before any wallet snapshot is even read.
+    assert.ok(stable.includes('## Wallet Key Policy'),
+        'Wallet Key Policy MUST fire even before the wallet snapshot resolves (BAT-936)');
 });
 
 // ── BAT-582 R6: bridge failure must NOT overwrite cached snapshot ───────────

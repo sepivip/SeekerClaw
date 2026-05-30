@@ -1,6 +1,6 @@
 ---
 name: burner-wallet
-description: "Operate the burner wallet — a small, app-managed Solana wallet that signs autonomously within caps. Use when: user asks about the burner, autonomous payments, x402, raising/lowering caps, funding the burner, or wiping/rotating it. Don't use when: user wants a regular MWA-popup transfer (just call solana_send / solana_swap and let routing decide)."
+description: "Operate the burner wallet — a small, app-managed Solana wallet that signs autonomously within caps. Use when: user asks about the burner, autonomous payments, x402, raising/lowering caps, funding the burner, or wiping/swapping the key (paste-only — the app never generates keys). Don't use when: user wants a regular MWA-popup transfer (just call solana_send / solana_swap and let routing decide)."
 version: "1.1.0"
 metadata:
   openclaw:
