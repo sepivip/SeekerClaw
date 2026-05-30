@@ -762,12 +762,14 @@ async function submitCreateOrder({ token, recoveryContext, depositSignedTx, orde
  *
  * NEVER auto-retries the create POST — non-idempotent + funds-moving.
  */
-// States that mean the order is live (deposit landed / order working). An
-// order in any OTHER state — including a terminal failure that still carries
-// vaultState:'pending_deposit' — must NOT be reported as a recovered success,
-// or we'd commit the burner cap for a dead order and tell the user it worked.
-const _RECOVERY_LIVE_STATUSES = new Set(['active', 'pending_deposit', 'open']);
-const _RECOVERY_TERMINAL_FAIL = new Set(['failed', 'cancelled', 'canceled', 'expired', 'rejected', 'closed']);
+// Terminal states for /orders/history rows — orders in any of these are DEAD
+// and MUST NOT be reported as a recovered success. Verified live 2026-05-30:
+// history rows use `orderState` (NOT `status`); a cancelled order surfaces
+// as `orderState:"cancelled"`. The deny-list shape is safer than an allow-list
+// of live states because Jupiter may add new in-flight states we'd miss.
+const _RECOVERY_TERMINAL_STATES = new Set([
+    'cancelled', 'canceled', 'expired', 'filled', 'failed', 'rejected', 'closed',
+]);
 
 async function _recoverFromAmbiguousCreate(ctx, token) {
     log(`[trigger-v2] recovery: waiting 5s before /orders/history query for depositRequestId=${ctx.depositRequestId}`, 'INFO');
@@ -777,47 +779,47 @@ async function _recoverFromAmbiguousCreate(ctx, token) {
     if (histRes.status === 200 && histRes.data && Array.isArray(histRes.data.orders)) {
         const orders = histRes.data.orders.filter(Boolean);
 
-        const isLive = (o) =>
-            !_RECOVERY_TERMINAL_FAIL.has(o.status)
-            && (_RECOVERY_LIVE_STATUSES.has(o.status) || o.vaultState === 'pending_deposit');
-
-        // PRIMARY: depositRequestId correlation. Unique per attempt, so it can
-        // never alias a pre-existing same-amount order. Accept whichever field
-        // name Jupiter exposes (depositRequestId / requestId).
-        let match = orders.find(o =>
-            isLive(o)
-            && (o.depositRequestId === ctx.depositRequestId || o.requestId === ctx.depositRequestId)
-        );
-
-        // FALLBACK (only if no row carried a deposit-request id at all): the
-        // mint + amount + tight-time-window heuristic. Bounded on BOTH sides
-        // around the attempt so a stale identical order from minutes earlier
-        // can't false-match. ctx.timestamp is recorded at deposit/craft (just
-        // before the create POST), so our order's createdAt is ≈ctx.timestamp
-        // and never earlier; allow a small clock skew either way.
-        const anyRowHasReqId = orders.some(o => o.depositRequestId != null || o.requestId != null);
-        if (!match && !anyRowHasReqId) {
-            const lo = ctx.timestamp - 15_000;   // 15s skew tolerance before the attempt
-            const hi = ctx.timestamp + 180_000;  // 3min ceiling after the attempt
-            match = orders.find(o => {
-                if (!isLive(o)) return false;
-                if (o.inputMint !== ctx.inputMint) return false;
-                if (String(o.inputAmount) !== String(ctx.inputAmount)) return false;
-                if (!o.createdAt) return false; // require a timestamp to bound the heuristic
-                const created = new Date(o.createdAt).getTime();
-                return Number.isFinite(created) && created >= lo && created <= hi;
-            });
-        }
+        // Real-API field-name correction (verified live 2026-05-30 via
+        // tests/jupiter-ultra/v2-contract-probe.js --verify-onchain):
+        //   row keys: id, orderState, rawState, initialInputAmount,
+        //             remainingInputAmount, inputMint, outputMint, createdAt,
+        //             events, ...  — NO depositRequestId / requestId on rows.
+        // Implication: correlation MUST be heuristic (mint + initial amount +
+        // tight time window around the attempt). The depositRequestId-primary
+        // correlation the first draft used is IMPOSSIBLE — that field does
+        // not exist on the history surface. The tight bounded window keeps
+        // false-match risk small even without a unique correlator.
+        //
+        // initialInputAmount = deposit at creation; remainingInputAmount shrinks
+        // as the order fills. We match on initial to find OUR create attempt.
+        const lo = ctx.timestamp - 15_000;   // 15s skew tolerance before the attempt
+        const hi = ctx.timestamp + 180_000;  // 3min ceiling after the attempt
+        const isLive = (o) => !_RECOVERY_TERMINAL_STATES.has(o.orderState);
+        const match = orders.find((o) => {
+            if (!isLive(o)) return false;
+            if (o.inputMint !== ctx.inputMint) return false;
+            if (String(o.initialInputAmount) !== String(ctx.inputAmount)) return false;
+            if (!o.createdAt) return false;
+            const created = new Date(o.createdAt).getTime();
+            return Number.isFinite(created) && created >= lo && created <= hi;
+        });
 
         if (match && match.id) {
-            log(`[trigger-v2] recovery: matched order id=${match.id} in history`, 'INFO');
+            // events[] carries per-event txSignatures; surface the deposit
+            // signature if present so the caller can stamp the broadcast.
+            let depositSig = null;
+            if (Array.isArray(match.events)) {
+                const dep = match.events.find((e) => e && e.type === 'deposit' && e.txSignature);
+                if (dep) depositSig = dep.txSignature;
+            }
+            log(`[trigger-v2] recovery: matched order id=${match.id} in history (orderState=${match.orderState})`, 'INFO');
             return {
                 ok: true,
                 id: match.id,
-                txSignature: match.txSignature || null,
+                txSignature: depositSig,
                 depositRequestId: ctx.depositRequestId,
                 recovered: true,
-                recoveryNote: 'Order found in /orders/history after lost create response.',
+                recoveryNote: 'Order matched in /orders/history (mint + initialInputAmount + tight time window) after lost create response.',
             };
         }
     }

@@ -382,9 +382,11 @@ function _buildTransferTx(payerB58) {
     _enqueue({                                                                 // recovery /orders/history
         status: 200,
         data: { orders: [
-            { id: 'order-recovered-002', status: 'pending_deposit',
-              inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
-              createdAt: new Date().toISOString() },
+            { id: 'order-recovered-002', orderState: 'pending_deposit',
+              inputMint: FIXTURE_INPUT_MINT, initialInputAmount: '1000000',
+              remainingInputAmount: '1000000',
+              createdAt: new Date().toISOString(),
+              events: [{ type: 'deposit', txSignature: 'deposit-sig-recovered', state: 'success' }] },
         ] },
     });
     await check('ambiguous (500) + history match → success with recovered flag', async () => {
@@ -642,20 +644,23 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(r.ok, true, `expected accept with 130 accounts, got: ${JSON.stringify(r)}`);
     });
 
-    // ── recovery: terminal-fail orders must NOT be reported as recovered ────
-    console.log('\nrecovery hardening (BAT-697 review pass):');
+    // ── recovery hardening (real-API row shape, verified live 2026-05-30) ──
+    // History rows use orderState/initialInputAmount/events[]; NO status,
+    // vaultState, inputAmount, or depositRequestId fields on the row.
+    console.log('\nrecovery hardening (real-API row shape):');
+
+    // (a) Terminal-state orders MUST NOT be reported as recovered.
     triggerV2._resetCachesForTests();
     _resetHttp();
     _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-fail' } });
     _enqueue({ status: 500, data: { error: 'oops' } });
-    // History returns a FAILED order that still carries vaultState:pending_deposit
-    // AND matches mint+amount — the pre-fix OR-logic would have matched it.
     _enqueue({ status: 200, data: { orders: [
-        { id: 'dead-order', status: 'failed', vaultState: 'pending_deposit',
-          inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+        { id: 'dead-order', orderState: 'cancelled', rawState: 'cancelled',
+          inputMint: FIXTURE_INPUT_MINT,
+          initialInputAmount: '1000000', remainingInputAmount: '1000000',
           createdAt: new Date().toISOString() },
     ] } });
-    await check('failed order with vaultState:pending_deposit is NOT recovered', async () => {
+    await check('terminal orderState (cancelled) is NOT recovered', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt',
             inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
@@ -674,19 +679,20 @@ function _buildTransferTx(payerB58) {
         } finally { global.setTimeout = origSetTimeout; }
     });
 
+    // (b) Active order matches on real fields (orderState/initialInputAmount/events);
+    // recovered result surfaces the deposit-event txSignature.
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-primary' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-active' } });
     _enqueue({ status: 500, data: { error: 'oops' } });
-    // History exposes depositRequestId — primary correlation must match it
-    // even though a SECOND same-amount active order also exists (no false alias).
     _enqueue({ status: 200, data: { orders: [
-        { id: 'unrelated-same-amount', status: 'active',
-          inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000', createdAt: new Date().toISOString() },
-        { id: 'our-order', status: 'active', depositRequestId: 'dr-primary',
-          inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000', createdAt: new Date().toISOString() },
+        { id: 'our-order', orderState: 'active', rawState: 'active',
+          inputMint: FIXTURE_INPUT_MINT,
+          initialInputAmount: '1000000', remainingInputAmount: '1000000',
+          createdAt: new Date().toISOString(),
+          events: [{ type: 'deposit', txSignature: 'real-deposit-sig', state: 'success' }] },
     ] } });
-    await check('recovery prefers depositRequestId correlation over amount heuristic', async () => {
+    await check('active order matched on real row shape + deposit txSig surfaced', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt',
             inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
@@ -701,8 +707,41 @@ function _buildTransferTx(payerB58) {
                     triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
             });
             assert.strictEqual(submit.ok, true);
-            assert.strictEqual(submit.id, 'our-order', 'must match by depositRequestId, not the unrelated same-amount order');
+            assert.strictEqual(submit.id, 'our-order');
             assert.strictEqual(submit.recovered, true);
+            assert.strictEqual(submit.txSignature, 'real-deposit-sig', 'should surface deposit txSignature from events[]');
+        } finally { global.setTimeout = origSetTimeout; }
+    });
+
+    // (c) Stale identical order (outside the time window) is NOT matched.
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-stale' } });
+    _enqueue({ status: 500, data: { error: 'oops' } });
+    // An order from 10 minutes ago with identical mint+amount must not be falsely
+    // matched as "ours" — the tight time window is the only safeguard now.
+    _enqueue({ status: 200, data: { orders: [
+        { id: 'stale-other-order', orderState: 'active', rawState: 'active',
+          inputMint: FIXTURE_INPUT_MINT,
+          initialInputAmount: '1000000', remainingInputAmount: '1000000',
+          createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() },
+    ] } });
+    await check('stale same-amount order outside time window is NOT matched', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        const origSetTimeout = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout(fn, 0);
+        try {
+            const submit = await triggerV2.submitCreateOrder({
+                token: 'jwt', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+                order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                    outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                    triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+            });
+            assert.strictEqual(submit.ok, false, 'old unrelated order must not be falsely matched');
+            assert.strictEqual(submit.error, 'create_ambiguous_no_recovery');
         } finally { global.setTimeout = origSetTimeout; }
     });
 
