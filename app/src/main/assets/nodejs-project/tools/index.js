@@ -1,7 +1,7 @@
 // tools/index.js — Tool registry + executeTool() dispatcher (BAT-470)
 // Merges all domain modules, builds handler dispatch map, routes tool calls.
 
-const { log, CHANNEL } = require('../config');
+const { log, CHANNEL, config: _runtimeConfig } = require('../config');
 const channel = require('../channel');
 // BAT-582 R1: BigInt-safe decimal math for monetary values (e.g. DCA total
 // deposit display). Avoids JS Number coercion on user-supplied strings.
@@ -313,7 +313,16 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
                 // rendered `Trigger price: undefined` for V2 main-wallet
                 // creates — the user would be asked to approve a card that
                 // didn't describe the price they were authorizing.
-                const priceLine = input.triggerPriceUsd != null
+                //
+                // PR #388 R10: branch on the ACTIVE flag (config.useTriggerV2),
+                // NOT on which field happens to be present. Tool inputs are
+                // not runtime-stripped to the schema — a flag-off V1 call
+                // could include a stray `triggerPriceUsd` and pre-fix would
+                // display the USD card while the handler created a V1 ratio
+                // order. The card MUST match the transaction semantics that
+                // will actually be authorized.
+                const useV2 = _runtimeConfig && _runtimeConfig.useTriggerV2 === true;
+                const priceLine = useV2
                     ? `Trigger price: $${esc(input.triggerPriceUsd)} USD`
                     : `Trigger price: ${esc(input.triggerPrice)} (${esc(input.outputToken)} per ${esc(input.inputToken)})`;
                 details = `📊 **Create Trigger Order**\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  ${priceLine}`;

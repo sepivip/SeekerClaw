@@ -171,13 +171,59 @@ const MEMO_PROGRAM_V1 = 'Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo';
 // safe: the value-moving programs we actually defend against (SystemProgram
 // Transfer, SPL-Token transfer/approve/closeAccount, swap/DEX programs) are
 // still rejected by the allowlist below.
-// RESIDUAL (low): a malicious challenge could set an absurd SetComputeUnitPrice
-// to grief the payer on priority fees. Bounded by CU-limit × price and the
-// wallet's SOL; a future hardening could decode + cap the priority fee. Out of
-// scope for PR B (the counterparty is Jupiter over TLS).
+// PR #388 R10: previously this comment noted a RESIDUAL fee-grief risk —
+// "a malicious challenge could set an absurd SetComputeUnitPrice to grief
+// the payer on priority fees". That risk is now closed: ComputeBudget
+// instructions are decoded and capped (see _validateComputeBudgetInstr
+// below). The burner path silently zero-cap-signs auth challenges, so a
+// SOL-draining priority fee in an unbounded auth tx WAS a real attack
+// surface even with TLS to Jupiter (compromised endpoint, MITM, etc.).
 const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
 // Programs an auth challenge may reference. Everything else → reject.
 const _AUTH_ALLOWED_PROGRAMS = new Set([MEMO_PROGRAM_V1, MEMO_PROGRAM_V2, COMPUTE_BUDGET_PROGRAM]);
+
+// PR #388 R10: ComputeBudget caps for auth challenges. Auth txs only need
+// to commit to a Memo payload + maybe set a modest CU price — they should
+// never need anything close to mainnet ceilings. Tight caps mean a
+// compromised or MITM'd Jupiter endpoint can't sneak a high-fee draining
+// tx past the blind-sign guard.
+//   - Max CU limit: 200_000 (memo + budget ix fit comfortably under this;
+//     Solana default per-tx limit is 200K)
+//   - Max CU price: 10_000 micro_lamports/CU (combined with the 200K CU
+//     ceiling → worst-case fee ≈ 2_000_000 lamports = 0.002 SOL,
+//     trivial vs the unbounded pre-fix exposure where an attacker could
+//     have set u64::MAX micro_lamports/CU and drained the burner)
+const _AUTH_MAX_CU_LIMIT = 200_000;
+const _AUTH_MAX_CU_PRICE_MICROLAMPORTS = 10_000n; // BigInt — instr field is u64
+
+// Decode + validate a single ComputeBudget instruction's data bytes.
+// Returns { ok: true } or { ok: false, reason }. Unknown tags (heap frame,
+// loaded-accounts-data-size, deprecated RequestUnits) don't drain SOL on
+// their own, so accept silently — only the two fee-affecting variants are
+// capped.
+function _validateComputeBudgetInstr(data) {
+    if (data.length === 0) return { ok: true };
+    const tag = data[0];
+    // 0x02 = SetComputeUnitLimit (u32 LE units)
+    if (tag === 0x02) {
+        if (data.length < 5) return { ok: false, reason: 'ComputeBudget SetComputeUnitLimit data truncated' };
+        const limit = data.readUInt32LE(1);
+        if (limit > _AUTH_MAX_CU_LIMIT) {
+            return { ok: false, reason: `ComputeBudget SetComputeUnitLimit=${limit} exceeds auth-tx cap ${_AUTH_MAX_CU_LIMIT}` };
+        }
+    }
+    // 0x03 = SetComputeUnitPrice (u64 LE micro_lamports/CU)
+    else if (tag === 0x03) {
+        if (data.length < 9) return { ok: false, reason: 'ComputeBudget SetComputeUnitPrice data truncated' };
+        const priceLo = BigInt(data.readUInt32LE(1));
+        const priceHi = BigInt(data.readUInt32LE(5));
+        const price = (priceHi << 32n) | priceLo;
+        if (price > _AUTH_MAX_CU_PRICE_MICROLAMPORTS) {
+            return { ok: false, reason: `ComputeBudget SetComputeUnitPrice=${price.toString()} exceeds auth-tx cap ${_AUTH_MAX_CU_PRICE_MICROLAMPORTS.toString()} micro_lamports/CU` };
+        }
+    }
+    return { ok: true };
+}
 
 function _validateAuthTransaction(txBase64, expectedPubkey) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
@@ -284,6 +330,7 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
             };
         }
         const isMemo = programId === MEMO_PROGRAM_V1 || programId === MEMO_PROGRAM_V2;
+        const isComputeBudget = programId === COMPUTE_BUDGET_PROGRAM;
         if (isMemo) memoCount += 1;
         // Skip accounts compact-u16 + bytes
         const acctIdx = _readCompactU16(txBuf, messageOffset);
@@ -291,16 +338,30 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} malformed accounts count` };
         }
         messageOffset = acctIdx.offset + acctIdx.value;
-        // Skip data compact-u16 + bytes
+        // Read data compact-u16 + bytes
         const dataLen = _readCompactU16(txBuf, messageOffset);
         if (!dataLen) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} malformed data length` };
         }
         if (isMemo && dataLen.value > 0) memoWithDataCount += 1;
-        messageOffset = dataLen.offset + dataLen.value;
-        if (messageOffset > txBuf.length) {
+        const dataStart = dataLen.offset;
+        const dataEnd = dataStart + dataLen.value;
+        if (dataEnd > txBuf.length) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} data truncated` };
         }
+        // PR #388 R10: decode + cap ComputeBudget payloads. Without this,
+        // a hostile or compromised challenge endpoint could set absurd
+        // CU price / CU limit values and drain the fee payer's SOL when
+        // the signed auth tx is later broadcast — the blind-sign guard
+        // would have happily approved the empty value-transfer surface
+        // but missed the fee-grief vector.
+        if (isComputeBudget) {
+            const cbCheck = _validateComputeBudgetInstr(txBuf.slice(dataStart, dataEnd));
+            if (!cbCheck.ok) {
+                return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} ${cbCheck.reason}` };
+            }
+        }
+        messageOffset = dataEnd;
     }
 
     if (memoCount === 0) {
@@ -1067,6 +1128,7 @@ module.exports = {
     // Exported for tests + cross-module use of the guards.
     _validateChallengePayload,
     _validateAuthTransaction,
+    _validateComputeBudgetInstr,
     _readCompactU16,
     _base58Encode,
     _resetCachesForTests,
@@ -1076,4 +1138,6 @@ module.exports = {
     DEFAULT_SLIPPAGE_BPS,
     MEMO_PROGRAM_V1,
     MEMO_PROGRAM_V2,
+    _AUTH_MAX_CU_LIMIT,
+    _AUTH_MAX_CU_PRICE_MICROLAMPORTS,
 };

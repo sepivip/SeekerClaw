@@ -655,6 +655,117 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(r.error, 'auth_tx_invalid');
     });
 
+    // ── PR #388 R10: ComputeBudget priority-fee cap ─────────────────────────
+    // Reviewer concern: pre-fix, ComputeBudget instructions were whitelisted
+    // without decoding their data. A hostile/compromised challenge endpoint
+    // could include a SetComputeUnitPrice with u64::MAX micro_lamports/CU and
+    // drain the fee payer's SOL when the signed auth tx is broadcast. The
+    // burner path zero-cap-signs auth challenges silently, so this was a
+    // real fee-drain vector even with TLS to Jupiter. Post-fix: ComputeBudget
+    // data is decoded and SetComputeUnitLimit / SetComputeUnitPrice are
+    // capped before the auth tx is accepted.
+    await check('R10 _validateComputeBudgetInstr accepts empty data (no-op ix)', async () => {
+        const r = triggerV2._validateComputeBudgetInstr(Buffer.alloc(0));
+        assert.strictEqual(r.ok, true);
+    });
+    await check('R10 _validateComputeBudgetInstr accepts SetComputeUnitLimit at cap', async () => {
+        const data = Buffer.alloc(5);
+        data[0] = 0x02;
+        data.writeUInt32LE(triggerV2._AUTH_MAX_CU_LIMIT, 1);
+        assert.strictEqual(triggerV2._validateComputeBudgetInstr(data).ok, true);
+    });
+    await check('R10 _validateComputeBudgetInstr REJECTS SetComputeUnitLimit above cap', async () => {
+        const data = Buffer.alloc(5);
+        data[0] = 0x02;
+        data.writeUInt32LE(triggerV2._AUTH_MAX_CU_LIMIT + 1, 1);
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, false);
+        assert.ok(/SetComputeUnitLimit/i.test(r.reason || ''));
+    });
+    await check('R10 _validateComputeBudgetInstr accepts SetComputeUnitPrice at cap', async () => {
+        const data = Buffer.alloc(9);
+        data[0] = 0x03;
+        const cap = triggerV2._AUTH_MAX_CU_PRICE_MICROLAMPORTS;
+        data.writeUInt32LE(Number(cap & 0xFFFFFFFFn), 1);
+        data.writeUInt32LE(Number((cap >> 32n) & 0xFFFFFFFFn), 5);
+        assert.strictEqual(triggerV2._validateComputeBudgetInstr(data).ok, true);
+    });
+    await check('R10 _validateComputeBudgetInstr REJECTS SetComputeUnitPrice at u64::MAX (the attack value)', async () => {
+        const data = Buffer.alloc(9);
+        data[0] = 0x03;
+        data.writeUInt32LE(0xFFFFFFFF, 1);
+        data.writeUInt32LE(0xFFFFFFFF, 5);
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, false, 'u64::MAX micro_lamports/CU was the unbounded fee-drain vector pre-fix');
+        assert.ok(/SetComputeUnitPrice/i.test(r.reason || ''));
+    });
+    await check('R10 _validateComputeBudgetInstr REJECTS truncated SetComputeUnitPrice (8 bytes instead of 9)', async () => {
+        const data = Buffer.from([0x03, 0, 0, 0, 0, 0, 0, 0]); // tag + 7 bytes, need 8
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, false);
+        assert.ok(/truncated/i.test(r.reason || ''));
+    });
+    await check('R10 _validateComputeBudgetInstr accepts unknown tags (heap frame, deprecated RequestUnits)', async () => {
+        // 0x00 RequestUnits, 0x01 RequestHeapFrame, 0x04 SetLoadedAccountsDataSizeLimit
+        // None drain SOL → accept silently.
+        for (const tag of [0x00, 0x01, 0x04]) {
+            const r = triggerV2._validateComputeBudgetInstr(Buffer.from([tag, 0, 0, 0, 0]));
+            assert.strictEqual(r.ok, true, `tag 0x0${tag} (no fee impact) should be accepted`);
+        }
+    });
+
+    // Integration: ComputeBudget cap fires from within _validateAuthTransaction.
+    function buildTxWithComputeBudget({ cbTag, cbValue }) {
+        // Build a tx with Memo (non-empty) + ComputeBudget (custom payload).
+        const accounts = [PAYER_BUF, MEMO_BYTES, COMPUTE_BUDGET_BYTES];
+        const memoData = Buffer.from('challenge-payload');
+        const cbData = (() => {
+            if (cbTag === 0x03) {
+                const buf = Buffer.alloc(9);
+                buf[0] = 0x03;
+                buf.writeUInt32LE(Number(cbValue & 0xFFFFFFFFn), 1);
+                buf.writeUInt32LE(Number((cbValue >> 32n) & 0xFFFFFFFFn), 5);
+                return buf;
+            }
+            // 0x02 SetComputeUnitLimit (u32)
+            const buf = Buffer.alloc(5);
+            buf[0] = 0x02;
+            buf.writeUInt32LE(Number(cbValue), 1);
+            return buf;
+        })();
+        const parts = [];
+        parts.push(Buffer.from([1, 0, 0]));
+        parts.push(cu16(accounts.length));
+        for (const a of accounts) parts.push(a);
+        parts.push(Buffer.alloc(32)); // blockhash
+        parts.push(cu16(2));          // 2 instructions
+        // Instruction 0: memo (program idx 1)
+        parts.push(Buffer.from([1]));
+        parts.push(cu16(0));
+        parts.push(cu16(memoData.length));
+        parts.push(memoData);
+        // Instruction 1: compute budget (program idx 2)
+        parts.push(Buffer.from([2]));
+        parts.push(cu16(0));
+        parts.push(cu16(cbData.length));
+        parts.push(cbData);
+        const message = Buffer.concat(parts);
+        return Buffer.concat([Buffer.from([1]), Buffer.alloc(64), message]).toString('base64');
+    }
+    await check('R10 integration: Memo + ComputeBudget at u64::MAX CU price is REJECTED', async () => {
+        const tx = buildTxWithComputeBudget({ cbTag: 0x03, cbValue: (1n << 64n) - 1n });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, false, 'fee-drain attack via SetComputeUnitPrice=MAX must be blocked');
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.ok(/SetComputeUnitPrice|ComputeBudget/i.test(r.reason || ''),
+            `expected ComputeBudget-related reason, got: ${r.reason}`);
+    });
+    await check('R10 integration: Memo + reasonable ComputeBudget (CU price 5_000) is ACCEPTED', async () => {
+        const tx = buildTxWithComputeBudget({ cbTag: 0x03, cbValue: 5_000n });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, true, `expected accept under cap, got: ${JSON.stringify(r)}`);
+    });
+
     await check('REJECTS Memo + SystemProgram even when a Memo instr is present', async () => {
         const tx = buildMultiInstrTx({ accounts: [PAYER_BUF, MEMO_BYTES, SYS_BYTES], instrIdxs: [1, 2] });
         const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
