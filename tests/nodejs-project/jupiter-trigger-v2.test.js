@@ -863,7 +863,12 @@ function _buildTransferTx(payerB58) {
     _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-recover-401' } });
     _enqueue({ status: 500, data: { error: 'jupiter_internal' } });
     _enqueue({ status: 401, data: { error: 'expired' } });
-    await check('401 from /orders/history during recovery → invalidateJwt + auth_expired', async () => {
+    // PR #388 R4: recovery 401 must route through `create_ambiguous_no_recovery`
+    // (NOT `auth_expired`) so the upstream broadcast callback commits the
+    // burner cap conservatively — the deposit may have landed and we just
+    // lost our only way to confirm it. The JWT cache is still invalidated
+    // so the next call re-auths cleanly.
+    await check('401 from /orders/history during recovery → invalidateJwt + ambiguous-no-recovery', async () => {
         const craft = await triggerV2.depositCraft({
             pubkey: FIXTURE_PUBKEY, token: 'jwt-recover-401',
             inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
@@ -878,7 +883,8 @@ function _buildTransferTx(payerB58) {
                     triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
             });
             assert.strictEqual(submit.ok, false);
-            assert.strictEqual(submit.error, 'auth_expired');
+            assert.strictEqual(submit.error, 'create_ambiguous_no_recovery',
+                'recovery 401 must commit-conservatively via ambiguous bucket (PR #388 R4)');
             // Confirm the JWT cache was invalidated — next auth should NOT hit cache.
             _enqueue({ status: 200, data: { type: 'transaction', transaction: _buildAuthTx(FIXTURE_PUBKEY) } });
             _enqueue({ status: 200, data: { token: 'jwt-fresh-after-recover' } });
@@ -888,6 +894,39 @@ function _buildTransferTx(payerB58) {
             assert.strictEqual(reauth.ok, true);
             assert.notStrictEqual(reauth.cached, true, 'recovery 401 must have invalidated the cache');
             assert.strictEqual(reauth.token, 'jwt-fresh-after-recover');
+        } finally { global.setTimeout = origSetTimeout; }
+    });
+
+    // PR #388 R4: a transport throw during /orders/history must also route
+    // through the ambiguous bucket (the deposit may have landed and we lost
+    // our ability to confirm). Pre-fix, the throw propagated out and
+    // routeAndSign treated it as broadcast failure → released the burner
+    // reservation → under-counted spend if the deposit actually landed.
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-throw' } });
+    _enqueue({ status: 500, data: { error: 'jupiter_internal' } });
+    // Next dequeue intentionally throws (simulate transport error).
+    httpQueue.push(() => { throw new Error('ECONNRESET during /orders/history'); });
+    await check('transport throw during /orders/history → ambiguous-no-recovery (PR #388 R4)', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        const origSetTimeout = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout(fn, 0);
+        try {
+            const submit = await triggerV2.submitCreateOrder({
+                token: 'jwt', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+                order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                    outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                    triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+            });
+            assert.strictEqual(submit.ok, false);
+            assert.strictEqual(submit.error, 'create_ambiguous_no_recovery',
+                'transport throw must commit-conservatively via ambiguous bucket (PR #388 R4)');
+            assert.ok(submit.reason && /threw/i.test(submit.reason),
+                `reason should mention the throw — got: ${submit.reason}`);
         } finally { global.setTimeout = origSetTimeout; }
     });
 

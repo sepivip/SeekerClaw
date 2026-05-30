@@ -835,19 +835,33 @@ async function _recoverFromAmbiguousCreate(ctx, token) {
     log(`[trigger-v2] recovery: waiting 5s before /orders/history query for depositRequestId=${ctx.depositRequestId}`, 'INFO');
     await new Promise(r => setTimeout(r, 5000));
 
-    const histRes = await _get(`/trigger/v2/orders/history?walletPubkey=${encodeURIComponent(ctx.walletPubkey)}&limit=20`, token);
-    // Auth expired DURING recovery — invalidate the cached JWT so the caller's
-    // retry path forces a re-auth, instead of silently falling through to
-    // "no recovery" and leaving a stale token live for hours.
+    // PR #388 R4: recovery is the LAST chance to surface "the deposit may
+    // have landed" — every failure mode here MUST stay in the ambiguous
+    // bucket so the upstream broadcast callback commits the burner cap
+    // conservatively (over-count is safer than under-count). Pre-fix:
+    //   - A transport throw bubbled up to routeAndSign, which treated it
+    //     as broadcast failure and RELEASED the reservation.
+    //   - The 401 branch returned `auth_expired`, which the broadcast
+    //     callback returned as `{error: ...}` → also release.
+    // Both cases freed the cap while funds may have been sitting in the
+    // Privy vault. We now wrap the history call in try/catch and route
+    // ALL failure modes (transport throw, 401, 5xx, malformed JSON)
+    // through the same `create_ambiguous_no_recovery` exit so the cap
+    // commits and the user gets a manual-recovery advisory.
+    let histRes;
+    try {
+        histRes = await _get(`/trigger/v2/orders/history?walletPubkey=${encodeURIComponent(ctx.walletPubkey)}&limit=20`, token);
+    } catch (e) {
+        log(`[trigger-v2] recovery: /orders/history threw: ${e.message} — ambiguous bucket`, 'WARN');
+        return _ambiguousNoRecovery(ctx, `history lookup threw during recovery (${e.message})`);
+    }
     if (histRes.status === 401) {
+        // Still invalidate the cached JWT so a follow-up call re-auths
+        // cleanly, but route this through the ambiguous bucket rather than
+        // auth_expired — the deposit may have landed and we lost our only
+        // way to confirm it.
         invalidateJwt(ctx.walletPubkey);
-        return {
-            ok: false,
-            error: 'auth_expired',
-            reason: 'JWT rejected by /orders/history during recovery — re-auth and retry. Check Jupiter UI for ' +
-                    `depositRequestId=${ctx.depositRequestId} to confirm whether the deposit landed.`,
-            recovery: ctx,
-        };
+        return _ambiguousNoRecovery(ctx, 'JWT rejected by /orders/history during recovery (cached JWT invalidated; re-auth and retry the original create from scratch if you want to verify)');
     }
     if (histRes.status === 200 && histRes.data && Array.isArray(histRes.data.orders)) {
         const orders = histRes.data.orders.filter(Boolean);
@@ -901,11 +915,22 @@ async function _recoverFromAmbiguousCreate(ctx, token) {
         }
     }
 
+    return _ambiguousNoRecovery(ctx, 'history query returned no matching order');
+}
+
+// PR #388 R4: single exit shape for "deposit was signed + sent but we
+// couldn't confirm the order id." All recovery failure modes (transport
+// throw, 401, 5xx, malformed response, history-miss) MUST route through
+// here so the upstream broadcast callback in _jupiterTriggerCreateV2 sees
+// `create_ambiguous_no_recovery` and commits the burner cap conservatively.
+// Releasing the cap on any of these failure modes would risk under-counting
+// spend if the deposit actually landed in the Privy vault.
+function _ambiguousNoRecovery(ctx, detail) {
     return {
         ok: false,
         error: 'create_ambiguous_no_recovery',
         reason:
-            'Create POST response was lost AND /orders/history showed no matching order. ' +
+            `Create POST response was lost AND recovery could not confirm the order (${detail}). ` +
             `Deposit may still be in flight or stuck. Check Jupiter UI for depositRequestId=${ctx.depositRequestId}. ` +
             'Funds will appear in the Jupiter vault if the deposit landed; cancel or use Jupiter UI to recover.',
         recovery: ctx,

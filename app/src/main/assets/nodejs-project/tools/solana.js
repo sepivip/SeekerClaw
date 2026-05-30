@@ -496,12 +496,40 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             return { error: 'price_lookup_failed', reason: e.message };
         }
 
-        // 7. Resolve V2-specific args (with V1-compat fallbacks).
-        const triggerPriceUsd = Number(input.triggerPriceUsd ?? input.triggerPrice);
+        // 7. Resolve V2-specific args. PR #388 R4 hardened the contract:
+        // V2 REQUIRES explicit triggerPriceUsd and explicit expiry. No silent
+        // fallbacks — they were causing two real failure modes:
+        //   (a) Falling back to the V1 `triggerPrice` field silently reused a
+        //       ratio value (V1 semantic) as if it were a USD price (V2
+        //       semantic). For most pairs the order would fire at the wrong
+        //       price; for a stablecoin-to-asset buy where the ratio
+        //       coincidentally lands near $X, the user would never notice.
+        //   (b) Defaulting expiresAt to "30 days from now" silently locked
+        //       funds into a much longer order than the caller intended.
+        // Both fail loudly now; consumers MUST migrate to V2 field names.
+        if (input.triggerPriceUsd == null) {
+            return {
+                error: 'trigger_price_usd_required',
+                reason: 'V2 requires explicit `triggerPriceUsd` (USD price; e.g. 80.5). The V1 `triggerPrice` field was a token ratio with a different meaning and is not accepted by the V2 path — see PR #388.',
+            };
+        }
+        const triggerPriceUsd = Number(input.triggerPriceUsd);
         const slippageBps = input.slippageBps != null ? Number(input.slippageBps) : triggerV2.DEFAULT_SLIPPAGE_BPS;
-        const expiresAtMs = input.expiresAt != null
-            ? Number(input.expiresAt) * (Number(input.expiresAt) < 10_000_000_000 ? 1000 : 1) // accept s or ms
-            : (input.expiryTime != null ? Number(input.expiryTime) * 1000 : Date.now() + 30 * 24 * 60 * 60 * 1000);
+        // expiresAt MUST be provided (in seconds OR ms — heuristic still
+        // accepts either unit) OR expiryTime (legacy V1 alias, Unix seconds).
+        // No silent default — fail loud if neither is set.
+        let expiresAtMs;
+        if (input.expiresAt != null) {
+            const n = Number(input.expiresAt);
+            expiresAtMs = n * (n < 10_000_000_000 ? 1000 : 1);
+        } else if (input.expiryTime != null) {
+            expiresAtMs = Number(input.expiryTime) * 1000; // legacy V1 alias (seconds)
+        } else {
+            return {
+                error: 'expires_at_required',
+                reason: 'V2 requires explicit `expiresAt` (Unix seconds OR ms) or legacy `expiryTime` (Unix seconds). No silent default — pass an explicit expiration timestamp. See PR #388.',
+            };
+        }
         const triggerCondition = _inferTriggerCondition(inputToken.address, outputToken.address, input.triggerCondition);
         if (!triggerCondition) {
             return {
