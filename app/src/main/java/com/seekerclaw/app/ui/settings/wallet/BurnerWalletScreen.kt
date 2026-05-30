@@ -64,14 +64,20 @@ private const val BURNER_ID = "burner"
 
 /**
  * BurnerWalletScreen — Settings UI for the autonomous Burner Wallet
- * (BAT-582 Phase 3). One screen, three modes:
+ * (BAT-582 Phase 3, paste-only hardened in BAT-936). One screen, two
+ * modes:
  *
  *   1. **Empty** — no burner configured. Hero warning + masked paste field
  *      + Test/Save flow. Once Save lands, transitions to Configured mode.
  *   2. **Configured** — burner exists. Status card + caps editor +
- *      danger zone (wipe/rotate). Transitions to Empty after wipe.
- *   3. **Rotating** — wipe completed but a new key hasn't been pasted
- *      yet. Identical to Empty but with a "rotating" status hint.
+ *      danger zone (wipe only — the app does NOT generate or rotate
+ *      keys; to swap a key the user wipes, then pastes a new one).
+ *      Transitions back to Empty after wipe.
+ *
+ * The earlier "Rotating" mode and in-UI rotate action were removed in
+ * BAT-936 — SeekerClaw is paste-only and the agent must never produce
+ * key material. See `assets/nodejs-project/ai.js` "## Wallet Key Policy"
+ * for the agent-side enforcement.
  *
  * **Security contract:**
  *   - `FLAG_SECURE` is set on the host Activity's window for the
