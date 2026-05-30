@@ -307,9 +307,18 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
             case 'solana_swap':
                 details = `🔄 **Swap Tokens**\n  Sell: ${esc(input.amount)} ${esc(input.inputToken)}\n  Buy: ${esc(input.outputToken)}`;
                 break;
-            case 'jupiter_trigger_create':
-                details = `📊 **Create Trigger Order**\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  Trigger price: ${esc(input.triggerPrice)}`;
+            case 'jupiter_trigger_create': {
+                // PR #388 R6: V2 callers pass `triggerPriceUsd` (USD) instead
+                // of the V1 `triggerPrice` (token ratio). Pre-fix this line
+                // rendered `Trigger price: undefined` for V2 main-wallet
+                // creates — the user would be asked to approve a card that
+                // didn't describe the price they were authorizing.
+                const priceLine = input.triggerPriceUsd != null
+                    ? `Trigger price: $${esc(input.triggerPriceUsd)} USD`
+                    : `Trigger price: ${esc(input.triggerPrice)} (${esc(input.outputToken)} per ${esc(input.inputToken)})`;
+                details = `📊 **Create Trigger Order**\n  Sell: ${esc(input.inputAmount)} ${esc(input.inputToken)}\n  For: ${esc(input.outputToken)}\n  ${priceLine}`;
                 break;
+            }
             case 'jupiter_dca_create': {
                 // BAT-582 R1: total deposit was previously computed via
                 // `input.amountPerCycle * (input.totalCycles || 30)` — JS

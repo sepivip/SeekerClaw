@@ -132,28 +132,50 @@ const tools = [
             required: ['inputToken', 'outputToken', 'amount']
         }
     },
-    {
-        name: 'jupiter_trigger_create',
-        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Dual mode (BAT-697)**: when `config.useTriggerV2` is FALSE (default), pass V1 fields — `triggerPrice` (token ratio, e.g. 90 = "1 SOL = 90 USDC") + optional `expiryTime`. When TRUE, pass V2 fields — `triggerPriceUsd` (USD, e.g. 80.50) + required `expiresAt`. The two field families are semantically different and NOT interchangeable.',
-        input_schema: {
-            type: 'object',
-            properties: {
-                inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
-                outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
-                inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
-                // V1 fields (active when useTriggerV2 is false — the shipping default).
-                triggerPrice: { type: 'number', description: '[V1 mode only] Price as outputToken-per-inputToken ratio (e.g., 90 = "1 SOL = 90 USDC"). Required in V1 mode. NOT accepted in V2 mode (different semantic — V2 uses USD).' },
-                expiryTime: { type: 'number', description: '[V1 mode] Order expiration as Unix seconds. Optional in V1 (defaults to 30 days from now). Accepted in V2 mode as a legacy alias for `expiresAt` — V2 has NO default, one of expiryTime/expiresAt is required.' },
-                // V2 fields (active when useTriggerV2 is true — flag-gated, not yet default).
-                triggerPriceUsd: { type: 'number', description: '[V2 mode only] USD price where the trigger fires (e.g., 80.50 for $80.50). Required in V2 mode. NOT accepted in V1 mode.' },
-                expiresAt: { type: 'number', description: '[V2 mode] Order expiration as Unix seconds OR milliseconds (auto-detected). Required in V2 mode if expiryTime not provided. NO 30-day default in V2 — must be explicit.' },
-                triggerCondition: { type: 'string', enum: ['above', 'below'], description: '[V2 mode] When to fire: "above" (price rises to trigger value) or "below" (price drops to trigger value). Auto-inferred from token pair when one side is a stablecoin; required for non-stable pairs.' },
-                slippageBps: { type: 'number', description: '[V2 mode] Slippage tolerance in basis points (1-10000). Optional; defaults to 100 (1%).' },
-                triggerMint: { type: 'string', description: '[V2 mode] Mint address of the asset whose USD price the trigger watches. Auto-inferred when exactly one side of the pair is a stablecoin (SOL↔USDC → SOL is watched). REQUIRED for non-stable↔non-stable pairs (SOL↔JUP) and both-stable pairs (USDC↔USDT) — otherwise the order returns trigger_mint_required.' }
+    // PR #388 R6: the jupiter_trigger_create schema is flag-aware. V1 (default
+    // when config.useTriggerV2 is false) requires `triggerPrice`; V2 (when the
+    // flag is true) requires `triggerPriceUsd`. Pre-fix the schema relaxed
+    // `required` to allow BOTH callers, but that meant the model/gate would
+    // accept a V1 call missing triggerPrice and only fail at runtime with
+    // "Invalid trigger price". Build the schema once at module load against
+    // the active flag so the schema validator rejects bad calls upstream of
+    // the handler. Flag changes require a process restart (already true for
+    // most flag-gated paths here).
+    (() => {
+        const v2Enabled = config.useTriggerV2 === true;
+        const baseProperties = {
+            inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
+            outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
+            inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
+        };
+        const v1Properties = {
+            triggerPrice: { type: 'number', description: 'Price as outputToken-per-inputToken ratio (e.g., 90 = "1 SOL = 90 USDC"). REQUIRED.' },
+            expiryTime: { type: 'number', description: 'Order expiration as Unix seconds. Optional; defaults to 30 days from now.' },
+        };
+        const v2Properties = {
+            triggerPriceUsd: { type: 'number', description: 'USD price where the trigger fires (e.g., 80.50 for $80.50). REQUIRED.' },
+            expiresAt: { type: 'number', description: 'Order expiration as Unix seconds OR milliseconds (auto-detected). REQUIRED (no silent default in V2).' },
+            expiryTime: { type: 'number', description: 'Legacy alias for `expiresAt` (Unix seconds). Accepted if `expiresAt` not provided. One of the two IS required.' },
+            triggerCondition: { type: 'string', enum: ['above', 'below'], description: 'When to fire: "above" (price rises to trigger) or "below" (price drops to trigger). Auto-inferred when one side of the pair is a stablecoin; required for non-stable pairs.' },
+            slippageBps: { type: 'number', description: 'Slippage tolerance in basis points (1-10000). Optional; defaults to 100 (1%).' },
+            triggerMint: { type: 'string', description: 'Mint address of the asset whose USD price the trigger watches. Auto-inferred when exactly one side of the pair is a stablecoin (SOL↔USDC → SOL is watched). REQUIRED for non-stable↔non-stable pairs (SOL↔JUP) and both-stable pairs (USDC↔USDT).' },
+        };
+        return {
+            name: 'jupiter_trigger_create',
+            description: v2Enabled
+                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
+                : 'Create a trigger (limit) order on Jupiter (V1 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the output/input price ratio reaches `triggerPrice`. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
+            input_schema: {
+                type: 'object',
+                properties: v2Enabled
+                    ? { ...baseProperties, ...v2Properties }
+                    : { ...baseProperties, ...v1Properties },
+                required: v2Enabled
+                    ? ['inputToken', 'outputToken', 'inputAmount', 'triggerPriceUsd']
+                    : ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice'],
             },
-            required: ['inputToken', 'outputToken', 'inputAmount']
-        }
-    },
+        };
+    })(),
     {
         name: 'jupiter_trigger_list',
         description: 'List your active or historical limit/stop orders on Jupiter. Shows order status, prices, amounts, and expiration. Requires Jupiter API key.',
@@ -548,6 +570,20 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                 reason: 'Could not infer triggerCondition from token pair. Pass triggerCondition: "above" or "below" explicitly.',
             };
         }
+        // PR #388 R6: resolve triggerMint and fail closed for ambiguous pairs
+        // BEFORE any Jupiter side effects (auth / vault register / deposit
+        // craft). Pre-fix this check ran after depositCraft, so an ambiguous
+        // pair without explicit triggerMint could leave a server-side vault
+        // + a wasted /deposit/craft request before returning the error.
+        const triggerMint = _inferTriggerMint(inputToken.address, outputToken.address, input.triggerMint);
+        if (!triggerMint) {
+            return {
+                error: 'trigger_mint_required',
+                reason: 'For non-stable↔non-stable pairs (e.g. SOL↔JUP) and both-stable pairs (e.g. USDC↔USDT), the trigger asset cannot be inferred safely — Jupiter would watch the wrong asset\'s USD price. Pass `triggerMint` explicitly to disambiguate.',
+                inputMint: inputToken.address,
+                outputMint: outputToken.address,
+            };
+        }
 
         // 8. Semantic validation (pure — fail fast before any network work).
         const validation = triggerV2.validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippageBps });
@@ -596,24 +632,9 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         }
 
         // 13. routeAndSign for the deposit signing + orders/price POST.
-        // PR #388 R2: derive triggerMint from the non-stable side of the
-        // pair (the asset whose USD price the trigger watches). Pre-fix
-        // unconditionally used outputMint, which broke sell-into-stable
-        // orders (SOL → USDC "above $90" would watch USDC's ~$1 price).
-        // PR #388 R5: for non-stable↔non-stable or both-stable pairs,
-        // _inferTriggerMint returns null — caller MUST pass triggerMint
-        // explicitly. Fail closed BEFORE building the deposit so we don't
-        // sign a tx for an order that would never fire (or fire on the
-        // wrong asset).
-        const triggerMint = _inferTriggerMint(inputToken.address, outputToken.address, input.triggerMint);
-        if (!triggerMint) {
-            return {
-                error: 'trigger_mint_required',
-                reason: 'For non-stable↔non-stable pairs (e.g. SOL↔JUP) and both-stable pairs (e.g. USDC↔USDT), the trigger asset cannot be inferred safely — Jupiter would watch the wrong asset\'s USD price. Pass `triggerMint` explicitly to disambiguate.',
-                inputMint: inputToken.address,
-                outputMint: outputToken.address,
-            };
-        }
+        // triggerMint was resolved + validated in step 7 (above) BEFORE any
+        // Jupiter side effects. See PR #388 R2 (sell-into-stable bug) and
+        // R5/R6 (ambiguous-pair fail-closed + early-fail ordering).
         const orderArgs = {
             inputMint: inputToken.address,
             inputAmount: String(inputAmountAtomic),
