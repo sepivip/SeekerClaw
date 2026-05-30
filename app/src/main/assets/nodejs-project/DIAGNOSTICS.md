@@ -85,7 +85,7 @@ grep -i "429\|rate.limit\|Retry-After" node_debug.log | tail -10
 
 ---
 
-## LLM API (Claude / OpenAI / OpenRouter / Custom)
+## LLM API (Claude / OpenAI / OpenRouter / Custom / Usepod)
 
 ### Transport Timeout (Stream Drops)
 **Symptoms:** Responses cut off mid-stream, `[Trace]` entries in logs showing high latency, user sees partial or no response.
@@ -143,6 +143,42 @@ grep -i "custom provider\|ECONNREFUSED\|UNABLE_TO_VERIFY\|Unexpected token" node
 2. Check auth: API key and/or custom headers must match what the gateway expects
 3. Guide the user to Settings > AI Provider > Custom to review URL, key, headers, format, and model ID
 4. For SSL issues: suggest the user switch to an endpoint with a valid certificate, or use HTTP (if local/trusted)
+
+### Usepod — Token Not Funded / Invalid / Price Ceiling
+**Symptoms:** All API calls fail immediately on the Usepod provider. Common error variants:
+- "Fund your Usepod token at https://usepod.ai/dashboard." (HTTP 402)
+- "No Usepod provider available under your current price ceiling. …" (HTTP 402, `error.type === "no_provider_at_price"`)
+- "Invalid Usepod token format. Re-check the UUID in Settings → AI Provider → Usepod." (HTTP 401, `error.message: "unauthorized: invalid token format"`)
+- "Usepod token is unfunded or unknown. Fund or re-check the token at https://usepod.ai/dashboard." (HTTP 401, `error.message: "unauthorized: token not found or not activated"` — empirically Usepod combines unfunded and unknown-token into one 401 message)
+- "Invalid Usepod token. Re-check Settings → AI Provider → Usepod → Token." (HTTP 401, other message)
+
+**Setup model — Settings-first (BAT-971 / Codex v2.2):**
+Usepod is the only provider where Telegram `/provider usepod` cannot do first-time setup. The user MUST first configure both:
+- `usepodToken` — UUID from the Usepod dashboard (`https://usepod.ai/dashboard`); stored masked / encrypted in Android Keystore.
+- `usepodModel` — the freeform model id their token has access to (Usepod publishes no fixed list — read it off the dashboard).
+
+…in Settings → AI Provider → Usepod. Only AFTER both are saved does `/provider usepod` switch successfully. The handler refuses with: "Set a Usepod model in Settings → AI Provider → Usepod first." This is intentional: `/model <id>` validates against the **current** provider (e.g. Claude), so it cannot set a freeform Usepod model before the switch.
+
+**Funding (external — SeekerClaw does NOT custody):**
+Per-request billing is USDC on Solana mainnet. The user funds the token by sending USDC to the deposit address (shown on the dashboard) with the `deposit_code` in the tx memo. SeekerClaw does NOT auto-fund or custody — funding is fully external in this version. If users ask the agent to "fund my Usepod token", explain that this v1 doesn't have that capability and point them at the dashboard.
+
+**Check:**
+```
+grep -i "Usepod\|usepod.ai\|X-Balance-Remaining" node_debug.log | tail -20
+read agent_settings.json   # confirm usepodToken non-blank (UUID) and usepodModel non-blank
+```
+
+**Diagnosis & fix:**
+- **402 (unfunded):** Token registered but balance is zero. User needs to send USDC to the deposit address. After USDC lands, requests start working — no app restart needed (the token activates server-side).
+- **402 `no_provider_at_price`:** A request-level price ceiling was set (likely via a future `X-Pod-Max-Price-Input`/`-Output` header — not user-configurable in v1) and no marketplace provider met it. v1 does NOT expose price-ceiling UI, so this error should be rare; if it appears, suggest the user check the dashboard.
+- **401 "invalid token format":** Caller-side UUID validator should have caught this before the request fired. If it didn't, the user pasted whitespace / a full URL / a non-UUID — re-paste a clean UUID into Settings → AI Provider → Usepod → Token.
+- **401 "not found or not activated":** Unfunded (most common) OR truly invalid token. Point user at the dashboard to confirm the token exists + check balance.
+- **`X-Balance-Remaining` header:** Public docs say Usepod returns this on inference responses (microunits). The adapter parses and logs once per session ("[Usepod] X-Balance-Remaining observed: N microunits"). If you see "$0.0000 USDC", the token is empty and next request will 402.
+
+**Secrets / token redaction:**
+`usepodToken` is a secret. Two redaction passes cover it: literal-value redaction (security.js's `_dynamicPatterns` branch produces `[REDACTED:usepodToken]`) AND a URL-path-form regex that replaces `/proxy/<uuid>/...` with `/proxy/[REDACTED]/<...>` in any log/error/stack-trace string. The sentinel-token regression test (`tests/nodejs-project/usepod-token-redaction.test.js`) asserts zero raw UUID across all captures. `usepodModel` is NOT a secret — model IDs are public marketplace strings.
+
+---
 
 ### OpenAI Codex OAuth — Token Refresh Failure
 **Symptoms:** Agent stops responding on OpenAI OAuth. Log shows `[OpenAI] OAuth refresh failed` or `OAuth token refresh failed`. Subsequent API calls return 401.

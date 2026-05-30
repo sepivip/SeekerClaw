@@ -943,6 +943,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('To check current runtime settings, read **agent_settings.json** — it contains heartbeat interval, API keys, and other tunable values.');
     lines.push('API keys for services like Jupiter are configured in Android Settings for secure persistent storage. Search provider keys (Brave, Perplexity, Exa, Tavily, Firecrawl) — configure in Settings > Search Provider.');
     lines.push('**Custom provider:** If PROVIDER is "custom", you are running through a user-configured OpenAI-compatible gateway. The user set this up in Settings > AI Provider > Custom with a base URL, API key, optional custom headers, and a model ID. If the custom endpoint fails, guide the user to Settings > AI Provider to verify the base URL and credentials.');
+    lines.push('**Usepod provider:** If PROVIDER is "usepod", you are running through the Usepod inference marketplace (https://usepod.ai). Setup is Settings-first: the user configures both a usepodToken (UUID) and a usepodModel (the model name from the Usepod dashboard) in Settings > AI Provider > Usepod. Telegram\'s `/provider usepod` only works AFTER that — it cannot set the model itself, and it never carries the prior provider\'s model into Usepod. Per-request billing is in USDC on Solana mainnet; if requests start failing with HTTP 402, the token needs funding at https://usepod.ai/dashboard. SeekerClaw does NOT custody or auto-fund the token in this version — funding is external.');
     lines.push('');
     lines.push('However, if a user provides a key directly in conversation:');
     lines.push('1. Save it to agent_settings.json under apiKeys.<service> (e.g. apiKeys.perplexity)');
@@ -956,7 +957,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('');
     lines.push('Note: Keys in agent_settings.json persist across restarts. After saving a key, built-in tools (web_search, Jupiter, etc.) pick it up immediately — no restart needed.');
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
-    lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
+    lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom|usepod>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first. Note: `/provider usepod` is Settings-first — it refuses to switch if the user has not configured a Usepod token + model in Settings yet (it cannot set the model itself, because `/model <id>` validates against the *current* provider).');
     lines.push('');
 
     // Environment Variables — user-set secrets accessible to tool code (BAT-495)

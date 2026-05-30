@@ -61,6 +61,14 @@ data class AppConfig(
     val customBaseUrl: String = "",
     val customHeaders: String = "",
     val customFormat: String = "chat_completions",
+    // BAT-971: Usepod (inference marketplace) credentials. usepodToken is a UUID
+    // secret (stored encrypted, redacted in logs). usepodModel is a freeform model
+    // id (plaintext — model ids are public marketplace strings). Settings-first
+    // setup: both must be non-blank before /provider usepod can switch in
+    // (Codex v2.2). Survives provider switches; on switch-back into usepod, the
+    // mirror in updateConfigField restores config.model from this field.
+    val usepodToken: String = "",
+    val usepodModel: String = "",
     val channel: String = "telegram",
     val discordBotToken: String = "",
     val discordOwnerId: String = "",
@@ -231,6 +239,9 @@ object ConfigManager {
     private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
     private const val KEY_CUSTOM_HEADERS_ENC = "custom_headers_enc"
     private const val KEY_CUSTOM_FORMAT = "custom_format"
+    // BAT-971
+    private const val KEY_USEPOD_TOKEN_ENC = "usepod_token_enc"
+    private const val KEY_USEPOD_MODEL = "usepod_model"
     private const val KEY_CHANNEL = "channel"
     private const val KEY_DISCORD_BOT_TOKEN_ENC = "discord_bot_token_enc"
     private const val KEY_DISCORD_OWNER_ID = "discord_owner_id"
@@ -530,6 +541,15 @@ object ConfigManager {
             editor.remove(KEY_CUSTOM_HEADERS_ENC)
         }
         editor.putString(KEY_CUSTOM_FORMAT, config.customFormat)
+
+        // BAT-971: Usepod token (encrypted, secret) + model (plaintext, public id)
+        if (config.usepodToken.isNotBlank()) {
+            val encUsepod = KeystoreHelper.encrypt(config.usepodToken)
+            editor.putString(KEY_USEPOD_TOKEN_ENC, Base64.encodeToString(encUsepod, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_USEPOD_TOKEN_ENC)
+        }
+        editor.putString(KEY_USEPOD_MODEL, config.usepodModel)
 
         editor.putString(KEY_CHANNEL, config.channel)
         if (config.discordBotToken.isNotBlank()) {
@@ -1082,6 +1102,17 @@ object ConfigManager {
             ""
         }
 
+        // BAT-971: Usepod token (secret — Keystore encrypted). The model is plaintext
+        // and read straight from prefs below in the AppConfig instantiation.
+        val usepodToken = try {
+            val enc = p.getString(KEY_USEPOD_TOKEN_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt Usepod token", e)
+            LogCollector.append("[Config] Failed to decrypt Usepod token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         val discordBotToken = try {
             val enc = p.getString(KEY_DISCORD_BOT_TOKEN_ENC, null)
             if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
@@ -1183,6 +1214,8 @@ object ConfigManager {
             customBaseUrl = p.getString(KEY_CUSTOM_BASE_URL, "") ?: "",
             customHeaders = customHeaders,
             customFormat = p.getString(KEY_CUSTOM_FORMAT, "chat_completions") ?: "chat_completions",
+            usepodToken = usepodToken,
+            usepodModel = p.getString(KEY_USEPOD_MODEL, "") ?: "",
             channel = p.getString(KEY_CHANNEL, "telegram") ?: "telegram",
             discordBotToken = discordBotToken,
             discordOwnerId = loadOwnerIdFromFile(context, "discord"),
@@ -1586,6 +1619,20 @@ object ConfigManager {
             "customBaseUrl" -> config.copy(customBaseUrl = value)
             "customHeaders" -> config.copy(customHeaders = value)
             "customFormat" -> config.copy(customFormat = value)
+            "usepodToken" -> config.copy(usepodToken = value)
+            "usepodModel" -> {
+                // BAT-971 / Codex v2.2 mirror: when the active provider IS usepod,
+                // also write the same value to config.model so the running agent
+                // picks it up on the next AI turn (config.model is what `MODEL` in
+                // Node-side config.js resolves from). When provider != usepod, just
+                // update usepodModel — the field survives provider switches and is
+                // restored on switch-back via ProviderConfigScreen.switchProvider.
+                if (config.provider == "usepod") {
+                    config.copy(usepodModel = value, model = value)
+                } else {
+                    config.copy(usepodModel = value)
+                }
+            }
             "channel" -> config.copy(channel = value)
             "discordBotToken" -> config.copy(discordBotToken = value)
             "discordOwnerId" -> {
@@ -1746,6 +1793,12 @@ object ConfigManager {
             if (config.customBaseUrl.isNotBlank()) put("customBaseUrl", config.customBaseUrl)
             if (config.customHeaders.isNotBlank()) put("customHeaders", config.customHeaders)
             if (config.customFormat.isNotBlank()) put("customFormat", config.customFormat)
+            // BAT-971: Usepod credentials. Token is secret (still written here because
+            // Node's config.js reads it from the workspace JSON; security.js's redaction
+            // pipeline guards every log/error site downstream — usepod_token never reaches
+            // a log line in plaintext). Model is plaintext (public marketplace id).
+            if (config.usepodToken.isNotBlank()) put("usepodToken", config.usepodToken)
+            if (config.usepodModel.isNotBlank()) put("usepodModel", config.usepodModel)
             put("channel", config.channel)
             if (config.discordBotToken.isNotBlank()) put("discordBotToken", config.discordBotToken)
             if (config.discordOwnerId.isNotBlank()) put("discordOwnerId", config.discordOwnerId)
@@ -1848,10 +1901,17 @@ object ConfigManager {
             }
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
+            // BAT-971: Usepod requires BOTH token AND model. usepodModel is the
+            // gate that proves the model was intentionally configured for Usepod
+            // (Codex v2.2 — config.model alone would falsely pass with the prior
+            // provider's model). The model_missing branch below catches the
+            // model-blank edge separately so the error message is precise.
+            "usepod" -> config.usepodToken.isNotBlank() && config.usepodModel.isNotBlank()
             else -> config.activeCredential.isNotBlank()
         }
         if (!hasCredential) return "missing_credential"
         if (config.provider == "custom" && config.model.isBlank()) return "missing_model"
+        if (config.provider == "usepod" && config.usepodModel.isBlank()) return "missing_model"
         return null
     }
 
@@ -1861,6 +1921,7 @@ object ConfigManager {
             "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
             "openaiSet=${config.openaiApiKey.isNotBlank()} openrouterSet=${config.openrouterApiKey.isNotBlank()} " +
             "customSet=${config.customApiKey.isNotBlank()} " +
+            "usepodSet=${config.usepodToken.isNotBlank() && config.usepodModel.isNotBlank()} " +
             "activeSet=${config.activeCredential.isNotBlank()} model=${config.model} " +
             "channel=${config.channel} discordSet=${config.discordBotToken.isNotBlank()}"
     }

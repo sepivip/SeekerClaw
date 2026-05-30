@@ -312,12 +312,24 @@ const CUSTOM_KEY = normalizeSecret(config.customApiKey || '');
 const CUSTOM_BASE_URL = (typeof config.customBaseUrl === 'string' ? config.customBaseUrl : '').trim();
 const CUSTOM_HEADERS_RAW = (typeof config.customHeaders === 'string' ? config.customHeaders : '').trim();
 const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFormat : 'chat_completions').trim().toLowerCase();
+// BAT-971: Usepod token (UUID, in URL path) + dedicated Usepod model field
+// (per Codex v2.2 — separate from generic config.model to prove the model was
+// intentionally configured FOR USEPOD, not silently carried from Claude/OpenAI).
+const USEPOD_TOKEN = normalizeSecret(config.usepodToken || '');
+const USEPOD_MODEL = (typeof config.usepodModel === 'string' ? config.usepodModel : '').trim();
+// UUID validator (used at startup AND per-request in providers/usepod.js to
+// guard URL construction — rejects path-injection characters and non-UUID input)
+const USEPOD_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidUsepodToken(token) {
+    return typeof token === 'string' && USEPOD_UUID_RE.test(token.trim());
+}
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
+    : PROVIDER === 'usepod' ? USEPOD_MODEL
     : 'claude-opus-4-7';
 // BAT-513: model resolves from runtime_state.json first, then
 // config.json, then the per-provider safe default. The agent_settings.json
@@ -510,6 +522,7 @@ const MCP_SERVERS = (config.mcpServers || [])
 const _activeKey = PROVIDER === 'openai' ? (OPENAI_AUTH_TYPE === 'oauth' ? OPENAI_OAUTH_TOKEN : OPENAI_KEY)
     : PROVIDER === 'openrouter' ? OPENROUTER_KEY
     : PROVIDER === 'custom' ? CUSTOM_KEY
+    : PROVIDER === 'usepod' ? USEPOD_TOKEN
     : ANTHROPIC_KEY;
 if (CHANNEL === 'telegram' && !BOT_TOKEN) {
     log('ERROR: Missing required config (botToken) for Telegram channel', 'ERROR');
@@ -523,6 +536,7 @@ if (!_activeKey) {
     const keyName = PROVIDER === 'openai' ? 'openaiApiKey or openaiOAuthToken'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
         : PROVIDER === 'custom' ? 'customApiKey'
+        : PROVIDER === 'usepod' ? 'usepodToken'
         : AUTH_TYPE === 'setup_token' ? 'setupToken'
         : 'anthropicApiKey';
     log(`ERROR: Missing required config (${keyName}) for provider "${PROVIDER}"`, 'ERROR');
@@ -536,6 +550,21 @@ if (PROVIDER === 'custom' && !CUSTOM_BASE_URL) {
 
 if (PROVIDER === 'custom' && !MODEL) {
     log('ERROR: Missing required config (model) for provider "custom"', 'ERROR');
+    process.exit(1);
+}
+
+// BAT-971: Usepod validation gate. Token MUST be a valid UUID (path-segment
+// safety — rejects /, ?, #, .., whitespace, full URLs). Model MUST be non-blank
+// (per v2.2 — gate-side enforcement of the Settings-first invariant; the
+// model-catalog.hasCredentialsFor branch enforces this at /provider switch
+// time too, this is the boot-time backstop).
+if (PROVIDER === 'usepod' && !isValidUsepodToken(USEPOD_TOKEN)) {
+    log('ERROR: usepodToken is not a valid UUID — refusing to construct API URLs', 'ERROR');
+    process.exit(1);
+}
+
+if (PROVIDER === 'usepod' && !USEPOD_MODEL) {
+    log('ERROR: Missing required config (usepodModel) for provider "usepod"', 'ERROR');
     process.exit(1);
 }
 
@@ -833,6 +862,9 @@ module.exports = {
     CUSTOM_HEADERS,
     CUSTOM_FORMAT,
     CUSTOM_ENDPOINT,
+    USEPOD_TOKEN,
+    USEPOD_MODEL,
+    isValidUsepodToken,
     OPENROUTER_FALLBACK_MODEL,
     OPENROUTER_MODEL_CONTEXT,
     OPENROUTER_FALLBACK_CONTEXT,

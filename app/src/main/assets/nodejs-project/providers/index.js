@@ -35,5 +35,6 @@ register(require('./claude'));
 register(require('./openai'));
 register(require('./openrouter'));
 register(require('./custom'));
+register(require('./usepod'));
 
 module.exports = { getAdapter, listProviders, register };

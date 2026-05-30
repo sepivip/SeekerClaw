@@ -683,7 +683,17 @@ async function handleProviderCommand(chatId, args, messageId = null) {
         return `❌ ${cred.reason}`;
     }
 
-    const newModel = modelCatalog.defaultModelForProvider(newProvider, newAuthType);
+    // BAT-971: For Usepod, the new model comes from the dedicated
+    // `usepodModel` config field — NOT the registry's blank default, and
+    // CRUCIALLY never carried from the prior provider's model. The
+    // `hasCredentialsFor('usepod')` gate above guarantees `usepodModel` is
+    // non-blank, so this is always usable. The downstream
+    // `runtimeStateModelToWrite = newModel || state.model` would otherwise
+    // silently inherit `claude-opus-*` / `gpt-*` from the current provider,
+    // violating Codex v2.2 fix #4 ("Do NOT silently carry an old model").
+    const newModel = newProvider === 'usepod'
+        ? (typeof runtimeConfig.usepodModel === 'string' ? runtimeConfig.usepodModel.trim() : '')
+        : modelCatalog.defaultModelForProvider(newProvider, newAuthType);
 
     // Write `model` only when the new provider has a concrete default
     // (claude/openai/openrouter). For freeform providers (custom) where
