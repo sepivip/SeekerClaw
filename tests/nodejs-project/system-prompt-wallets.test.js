@@ -270,9 +270,25 @@ check('burner snapshot null (first call): prompt falls back to single-wallet cop
     assert.ok(stable.includes('You have one wallet'),
         'null snapshot must produce single-wallet copy (matches v1.0 baseline before first refresh lands)');
 
-    // BAT-936: Policy fires before any wallet snapshot is even read.
+    // BAT-936: Policy fires before any wallet snapshot is even read. The
+    // null-snapshot path is the most defensive — if the security guard
+    // works here, it works everywhere. Pin the full phrase set (not just
+    // the header) so the surrounding comment in the configured-path test
+    // (which claims all 3 paths cover the same phrases) stays accurate.
     assert.ok(stable.includes('## Wallet Key Policy'),
         'Wallet Key Policy MUST fire even before the wallet snapshot resolves (BAT-936)');
+    assert.ok(stable.includes('You NEVER produce wallet key material'),
+        'null-snapshot path: refusal sentence must be present (BAT-936)');
+    assert.ok(stable.includes('Settings → Burner Wallet'),
+        'null-snapshot path: must redirect to Settings → Burner Wallet (BAT-936)');
+    assert.ok(stable.includes('there is no in-app "rotate" or "generate" path'),
+        'null-snapshot path: must explicitly state the app has no rotate/generate path (BAT-936)');
+    assert.ok(stable.includes('No exceptions'),
+        'null-snapshot path: must include the "No exceptions" push-back response (BAT-936)');
+    // PR #387 R2 fix — hardware wallets must NOT be suggested as a key source
+    // (they don't expose private keys by design).
+    assert.ok(!/\*\*a hardware wallet\*\*|hardware wallet export/.test(stable),
+        'must NOT suggest hardware wallets as a key-export source (PR #387 R2 fix)');
 });
 
 // ── BAT-582 R6: bridge failure must NOT overwrite cached snapshot ───────────

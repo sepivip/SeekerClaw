@@ -72,7 +72,7 @@ Recommend small amounts — the burner is **disposable**. Don't suggest funding 
 
 ## Wipe (and swapping keys)
 
-**SeekerClaw does not generate keys.** Every burner key was pasted by the user from an external source — Phantom export, Solflare export, hardware wallet export, or `solana-keygen new`. There is no in-app "rotate" or "generate" path.
+**SeekerClaw does not generate keys.** Every burner key was pasted by the user from an external source that can produce an importable private key — Phantom export, Solflare export, or `solana-keygen new`. (Hardware wallets like Ledger / Trezor deliberately do NOT expose private keys for export, so they are not a usable source for the burner.) There is no in-app "rotate" or "generate" path.
 
 - **Wipe**: deletes the burner private key. After wipe, the burner is unconfigured; tools fall back to MWA. The wipe dialog shows the burner address explicitly so the user can drain it first if they forgot.
 - **Swapping to a different burner key**: wipe the current one, then paste a fresh key (sourced from one of the externally-generated options above) in the setup form that re-appears. Old key is unrecoverable — recommend draining the old burner BEFORE wiping.
