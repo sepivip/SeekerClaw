@@ -148,7 +148,8 @@ const tools = [
                 triggerPriceUsd: { type: 'number', description: '[V2 mode only] USD price where the trigger fires (e.g., 80.50 for $80.50). Required in V2 mode. NOT accepted in V1 mode.' },
                 expiresAt: { type: 'number', description: '[V2 mode] Order expiration as Unix seconds OR milliseconds (auto-detected). Required in V2 mode if expiryTime not provided. NO 30-day default in V2 — must be explicit.' },
                 triggerCondition: { type: 'string', enum: ['above', 'below'], description: '[V2 mode] When to fire: "above" (price rises to trigger value) or "below" (price drops to trigger value). Auto-inferred from token pair when one side is a stablecoin; required for non-stable pairs.' },
-                slippageBps: { type: 'number', description: '[V2 mode] Slippage tolerance in basis points (1-10000). Optional; defaults to 100 (1%).' }
+                slippageBps: { type: 'number', description: '[V2 mode] Slippage tolerance in basis points (1-10000). Optional; defaults to 100 (1%).' },
+                triggerMint: { type: 'string', description: '[V2 mode] Mint address of the asset whose USD price the trigger watches. Auto-inferred when exactly one side of the pair is a stablecoin (SOL↔USDC → SOL is watched). REQUIRED for non-stable↔non-stable pairs (SOL↔JUP) and both-stable pairs (USDC↔USDT) — otherwise the order returns trigger_mint_required.' }
             },
             required: ['inputToken', 'outputToken', 'inputAmount']
         }
@@ -382,21 +383,25 @@ function _inferTriggerCondition(inputMint, outputMint, explicit) {
  *     trigger reads SOL's price → triggerMint = outputMint.
  *   - Selling a non-stable for a stable (SOL → USDC, "above $90"):
  *     trigger reads SOL's price → triggerMint = inputMint.
- *   - Non-stable ↔ non-stable (rare, e.g. SOL ↔ JUP): no clean
- *     inference; caller must pass explicit `input.triggerMint`. We
- *     default to outputMint so the caller's explicit override is the
- *     only correct path (the default will not fire usefully).
+ *   - Non-stable ↔ non-stable (rare, e.g. SOL ↔ JUP) OR both-stable
+ *     (USDC ↔ USDT): NO inference is safe — Jupiter would watch the
+ *     wrong asset's USD price and either fire on the wrong side or
+ *     never fire. Caller must pass explicit `input.triggerMint`.
+ *     Returns null to signal "ambiguous" so the handler can fail
+ *     closed with a clear `triggerMint_required` error instead of
+ *     silently routing to outputMint (PR #388 R5 finding).
  *
  * The pre-fix shipped `triggerMint = outputMint` unconditionally, which
  * for a sell-into-stable (e.g. SOL → USDC) made Jupiter watch USDC at
  * ~$1 — the documented "SOL ≥ $90" limit-sell would never trigger
- * (PR #388 R2 finding).
+ * (PR #388 R2 finding). R5 hardens the degenerate-pair path the same
+ * way: never let the wrong asset slip through silently.
  */
 function _inferTriggerMint(inputMint, outputMint, explicit) {
     if (typeof explicit === 'string' && explicit.length > 0) return explicit;
     if (_STABLE_MINTS.has(inputMint) && !_STABLE_MINTS.has(outputMint)) return outputMint;
     if (_STABLE_MINTS.has(outputMint) && !_STABLE_MINTS.has(inputMint)) return inputMint;
-    return outputMint; // both-stable or both-non-stable: degenerate; caller should override.
+    return null; // both-stable or both-non-stable: degenerate. Caller MUST pass explicit triggerMint.
 }
 
 async function _jupiterTriggerCreateV2(input, _chatId) {
@@ -595,7 +600,20 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         // pair (the asset whose USD price the trigger watches). Pre-fix
         // unconditionally used outputMint, which broke sell-into-stable
         // orders (SOL → USDC "above $90" would watch USDC's ~$1 price).
+        // PR #388 R5: for non-stable↔non-stable or both-stable pairs,
+        // _inferTriggerMint returns null — caller MUST pass triggerMint
+        // explicitly. Fail closed BEFORE building the deposit so we don't
+        // sign a tx for an order that would never fire (or fire on the
+        // wrong asset).
         const triggerMint = _inferTriggerMint(inputToken.address, outputToken.address, input.triggerMint);
+        if (!triggerMint) {
+            return {
+                error: 'trigger_mint_required',
+                reason: 'For non-stable↔non-stable pairs (e.g. SOL↔JUP) and both-stable pairs (e.g. USDC↔USDT), the trigger asset cannot be inferred safely — Jupiter would watch the wrong asset\'s USD price. Pass `triggerMint` explicitly to disambiguate.',
+                inputMint: inputToken.address,
+                outputMint: outputToken.address,
+            };
+        }
         const orderArgs = {
             inputMint: inputToken.address,
             inputAmount: String(inputAmountAtomic),
@@ -2835,4 +2853,4 @@ const handlers = {
     },
 };
 
-module.exports = { tools, handlers, _setNumberToDecimalString };
+module.exports = { tools, handlers, _setNumberToDecimalString, _inferTriggerMint };

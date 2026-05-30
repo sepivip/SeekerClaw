@@ -930,6 +930,46 @@ function _buildTransferTx(payerB58) {
         } finally { global.setTimeout = origSetTimeout; }
     });
 
+    // ── PR #388 R5: _inferTriggerMint fail-closed behavior ──────────────────
+    // Reviewer concern (R5): for non-stable↔non-stable pairs (SOL↔JUP) and
+    // both-stable pairs (USDC↔USDT) there is no safe inference for which
+    // asset's USD price the trigger should watch. Pre-fix silently defaulted
+    // to outputMint, which can make the order fire on the wrong asset OR
+    // never fire at all. Post-fix: returns null → handler returns
+    // trigger_mint_required → tx never gets signed.
+    const solanaTools = require('../../app/src/main/assets/nodejs-project/tools/solana.js');
+    const _inferTriggerMint = solanaTools._inferTriggerMint;
+    const SOL = 'So11111111111111111111111111111111111111112';
+    const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const USDT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+    const JUP = 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN';
+
+    await check('R5 _inferTriggerMint: stable→non-stable (USDC→SOL) returns SOL (outputMint)', async () => {
+        assert.strictEqual(_inferTriggerMint(USDC, SOL), SOL);
+    });
+    await check('R5 _inferTriggerMint: non-stable→stable (SOL→USDC) returns SOL (inputMint)', async () => {
+        assert.strictEqual(_inferTriggerMint(SOL, USDC), SOL);
+    });
+    await check('R5 _inferTriggerMint: non-stable↔non-stable (SOL↔JUP) returns null (caller must override)', async () => {
+        assert.strictEqual(_inferTriggerMint(SOL, JUP), null,
+            'must fail closed — Jupiter would otherwise watch the wrong asset\'s USD price');
+        assert.strictEqual(_inferTriggerMint(JUP, SOL), null);
+    });
+    await check('R5 _inferTriggerMint: both-stable (USDC↔USDT) returns null (caller must override)', async () => {
+        assert.strictEqual(_inferTriggerMint(USDC, USDT), null);
+        assert.strictEqual(_inferTriggerMint(USDT, USDC), null);
+    });
+    await check('R5 _inferTriggerMint: explicit override always wins, even for ambiguous pairs', async () => {
+        assert.strictEqual(_inferTriggerMint(SOL, JUP, JUP), JUP,
+            'explicit caller-supplied triggerMint must short-circuit the inference');
+        assert.strictEqual(_inferTriggerMint(USDC, USDT, USDC), USDC);
+    });
+    await check('R5 _inferTriggerMint: explicit empty-string/non-string is ignored, fall through to inference', async () => {
+        assert.strictEqual(_inferTriggerMint(SOL, USDC, ''), SOL, 'empty string is not a valid override');
+        assert.strictEqual(_inferTriggerMint(SOL, USDC, null), SOL);
+        assert.strictEqual(_inferTriggerMint(SOL, USDC, undefined), SOL);
+    });
+
     // ── Summary ─────────────────────────────────────────────────────────────
     if (failures > 0) {
         console.error(`\nFAILED: ${failures} test(s) failed`);
