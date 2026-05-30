@@ -708,7 +708,12 @@ async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount 
         inputAmount,
         timestamp: Date.now(),
     };
-    log(`[trigger-v2] deposit/craft wallet=${_redactPubkey(pubkey)} input=${inputMint} amount=${inputAmount} depositRequestId=${recoveryContext.depositRequestId}`, 'INFO');
+    // PR #388 R5: depositRequestId is the ambiguous-create correlation token
+    // — keeping it OUT of persistent logs limits how an attacker who reads
+    // node_debug.log could correlate a wallet's deposit attempts. The token
+    // is still surfaced in the returned recoveryContext + the user-facing
+    // ambiguous-recovery advisory, which is where consumers actually need it.
+    log(`[trigger-v2] deposit/craft wallet=${_redactPubkey(pubkey)} input=${inputMint} amount=${inputAmount}`, 'INFO');
     return {
         ok: true,
         transaction: craftRes.data.transaction,
@@ -832,7 +837,10 @@ const _RECOVERY_TERMINAL_STATES = new Set([
 ]);
 
 async function _recoverFromAmbiguousCreate(ctx, token) {
-    log(`[trigger-v2] recovery: waiting 5s before /orders/history query for depositRequestId=${ctx.depositRequestId}`, 'INFO');
+    // PR #388 R5: don't persist the depositRequestId correlation token to
+    // node_debug.log (see depositCraft logging note above). The token is
+    // still in `ctx` and the returned recoveryNote/reason for callers.
+    log(`[trigger-v2] recovery: waiting 5s before /orders/history query for wallet=${_redactPubkey(ctx.walletPubkey)}`, 'INFO');
     await new Promise(r => setTimeout(r, 5000));
 
     // PR #388 R4: recovery is the LAST chance to surface "the deposit may

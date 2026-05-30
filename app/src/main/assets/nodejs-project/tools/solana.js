@@ -134,17 +134,23 @@ const tools = [
     },
     {
         name: 'jupiter_trigger_create',
-        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
+        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Dual mode (BAT-697)**: when `config.useTriggerV2` is FALSE (default), pass V1 fields — `triggerPrice` (token ratio, e.g. 90 = "1 SOL = 90 USDC") + optional `expiryTime`. When TRUE, pass V2 fields — `triggerPriceUsd` (USD, e.g. 80.50) + required `expiresAt`. The two field families are semantically different and NOT interchangeable.',
         input_schema: {
             type: 'object',
             properties: {
                 inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
                 outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
                 inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
-                triggerPrice: { type: 'number', description: 'Price at which order triggers (outputToken per inputToken, e.g., 90 means 1 SOL = 90 USDC)' },
-                expiryTime: { type: 'number', description: 'Order expiration timestamp (Unix seconds). Optional, defaults to 30 days from now.' }
+                // V1 fields (active when useTriggerV2 is false — the shipping default).
+                triggerPrice: { type: 'number', description: '[V1 mode only] Price as outputToken-per-inputToken ratio (e.g., 90 = "1 SOL = 90 USDC"). Required in V1 mode. NOT accepted in V2 mode (different semantic — V2 uses USD).' },
+                expiryTime: { type: 'number', description: '[V1 mode] Order expiration as Unix seconds. Optional in V1 (defaults to 30 days from now). Accepted in V2 mode as a legacy alias for `expiresAt` — V2 has NO default, one of expiryTime/expiresAt is required.' },
+                // V2 fields (active when useTriggerV2 is true — flag-gated, not yet default).
+                triggerPriceUsd: { type: 'number', description: '[V2 mode only] USD price where the trigger fires (e.g., 80.50 for $80.50). Required in V2 mode. NOT accepted in V1 mode.' },
+                expiresAt: { type: 'number', description: '[V2 mode] Order expiration as Unix seconds OR milliseconds (auto-detected). Required in V2 mode if expiryTime not provided. NO 30-day default in V2 — must be explicit.' },
+                triggerCondition: { type: 'string', enum: ['above', 'below'], description: '[V2 mode] When to fire: "above" (price rises to trigger value) or "below" (price drops to trigger value). Auto-inferred from token pair when one side is a stablecoin; required for non-stable pairs.' },
+                slippageBps: { type: 'number', description: '[V2 mode] Slippage tolerance in basis points (1-10000). Optional; defaults to 100 (1%).' }
             },
-            required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice']
+            required: ['inputToken', 'outputToken', 'inputAmount']
         }
     },
     {
