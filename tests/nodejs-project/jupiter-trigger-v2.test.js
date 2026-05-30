@@ -383,8 +383,8 @@ function _buildTransferTx(payerB58) {
         status: 200,
         data: { orders: [
             { id: 'order-recovered-002', orderState: 'pending_deposit',
-              inputMint: FIXTURE_INPUT_MINT, initialInputAmount: '1000000',
-              remainingInputAmount: '1000000',
+              inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT,
+              initialInputAmount: '1000000', remainingInputAmount: '1000000',
               createdAt: new Date().toISOString(),
               events: [{ type: 'deposit', txSignature: 'deposit-sig-recovered', state: 'success' }] },
         ] },
@@ -604,6 +604,23 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(r.ok, true, `expected accept, got: ${JSON.stringify(r)}`);
     });
 
+    // PR #388 R2 finding: ComputeBudget-only txs were in the program
+    // allowlist but contain no challenge payload to commit to. Signing one
+    // would be signing nothing meaningful. Must require ≥1 Memo instruction.
+    await check('REJECTS ComputeBudget-only tx (no Memo — no challenge payload)', async () => {
+        const tx = buildMultiInstrTx({ accounts: [PAYER_BUF, COMPUTE_BUDGET_BYTES], instrIdxs: [1] });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, false, 'a ComputeBudget-only tx must NOT pass the blind-sign guard');
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.ok(/Memo/i.test(r.reason || ''), `expected Memo-related reason, got: ${r.reason}`);
+    });
+    await check('REJECTS multi-ComputeBudget-only tx (two ComputeBudgets, still no Memo)', async () => {
+        const tx = buildMultiInstrTx({ accounts: [PAYER_BUF, COMPUTE_BUDGET_BYTES], instrIdxs: [1, 1] });
+        const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+    });
+
     await check('REJECTS Memo + SystemProgram even when a Memo instr is present', async () => {
         const tx = buildMultiInstrTx({ accounts: [PAYER_BUF, MEMO_BYTES, SYS_BYTES], instrIdxs: [1, 2] });
         const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
@@ -693,7 +710,7 @@ function _buildTransferTx(payerB58) {
     _enqueue({ status: 500, data: { error: 'oops' } });
     _enqueue({ status: 200, data: { orders: [
         { id: 'our-order', orderState: 'active', rawState: 'active',
-          inputMint: FIXTURE_INPUT_MINT,
+          inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT,
           initialInputAmount: '1000000', remainingInputAmount: '1000000',
           createdAt: new Date().toISOString(),
           events: [{ type: 'deposit', txSignature: 'real-deposit-sig', state: 'success' }] },
@@ -728,7 +745,7 @@ function _buildTransferTx(payerB58) {
     // matched as "ours" — the tight time window is the only safeguard now.
     _enqueue({ status: 200, data: { orders: [
         { id: 'stale-other-order', orderState: 'active', rawState: 'active',
-          inputMint: FIXTURE_INPUT_MINT,
+          inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT,
           initialInputAmount: '1000000', remainingInputAmount: '1000000',
           createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() },
     ] } });
@@ -747,6 +764,40 @@ function _buildTransferTx(payerB58) {
                     triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
             });
             assert.strictEqual(submit.ok, false, 'old unrelated order must not be falsely matched');
+            assert.strictEqual(submit.error, 'create_ambiguous_no_recovery');
+        } finally { global.setTimeout = origSetTimeout; }
+    });
+
+    // (d) PR #388 R2: a live order with the SAME inputMint + initialInputAmount
+    // but DIFFERENT outputMint must NOT false-match. Pre-fix, the heuristic
+    // only checked input mint + amount, so a wallet running two limit orders
+    // on the same input token could see recovery pick the wrong order id.
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-discrim' } });
+    _enqueue({ status: 500, data: { error: 'oops' } });
+    const OTHER_OUTPUT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'; // USDT
+    _enqueue({ status: 200, data: { orders: [
+        { id: 'other-output-order', orderState: 'active', rawState: 'active',
+          inputMint: FIXTURE_INPUT_MINT, outputMint: OTHER_OUTPUT_MINT,
+          initialInputAmount: '1000000', remainingInputAmount: '1000000',
+          createdAt: new Date().toISOString() },
+    ] } });
+    await check('different-outputMint same-amount order is NOT matched (PR #388 R2)', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        const origSetTimeout = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout(fn, 0);
+        try {
+            const submit = await triggerV2.submitCreateOrder({
+                token: 'jwt', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+                order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                    outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                    triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+            });
+            assert.strictEqual(submit.ok, false, 'order with different outputMint must NOT be matched as ours');
             assert.strictEqual(submit.error, 'create_ambiguous_no_recovery');
         } finally { global.setTimeout = origSetTimeout; }
     });

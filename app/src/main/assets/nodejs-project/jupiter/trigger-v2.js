@@ -255,9 +255,14 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
     }
     messageOffset = instrCount.offset;
     if (instrCount.value === 0) {
-        return { ok: false, error: 'auth_tx_invalid', reason: 'auth tx must contain at least one Memo instruction' };
+        return { ok: false, error: 'auth_tx_invalid', reason: 'auth tx must contain at least one instruction' };
     }
 
+    // Count Memo instructions as we walk — auth challenges MUST carry the
+    // actual challenge payload in a Memo. A ComputeBudget-only tx is in the
+    // program allowlist but contains no challenge text to commit to, so
+    // signing it would be signing nothing meaningful (PR #388 R2 finding).
+    let memoCount = 0;
     for (let i = 0; i < instrCount.value; i++) {
         if (messageOffset + 1 > txBuf.length) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} truncated at program id index` };
@@ -274,6 +279,7 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
                 reason: `instruction ${i} references disallowed program ${programId} — auth tx may only use Memo or ComputeBudget`,
             };
         }
+        if (programId === MEMO_PROGRAM_V1 || programId === MEMO_PROGRAM_V2) memoCount += 1;
         // Skip accounts compact-u16 + bytes
         const acctIdx = _readCompactU16(txBuf, messageOffset);
         if (!acctIdx) {
@@ -289,6 +295,14 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
         if (messageOffset > txBuf.length) {
             return { ok: false, error: 'auth_tx_invalid', reason: `instruction ${i} data truncated` };
         }
+    }
+
+    if (memoCount === 0) {
+        return {
+            ok: false,
+            error: 'auth_tx_invalid',
+            reason: 'auth tx must contain at least one Memo (v1 or v2) instruction — a ComputeBudget-only tx carries no challenge payload to commit to',
+        };
     }
 
     return { ok: true };
@@ -667,6 +681,7 @@ async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount 
         walletPubkey: pubkey,
         depositRequestId: craftRes.data.requestId,
         inputMint,
+        outputMint, // PR #388 R2: needed for the recovery heuristic to discriminate two same-mint+amount orders.
         inputAmount,
         timestamp: Date.now(),
     };
@@ -833,6 +848,10 @@ async function _recoverFromAmbiguousCreate(ctx, token) {
         const match = orders.find((o) => {
             if (!isLive(o)) return false;
             if (o.inputMint !== ctx.inputMint) return false;
+            // PR #388 R2: discriminate two same-mint+amount orders by also
+            // requiring outputMint to match. A wallet running multiple limit
+            // orders on the same input token could otherwise false-match.
+            if (ctx.outputMint && o.outputMint !== ctx.outputMint) return false;
             if (String(o.initialInputAmount) !== String(ctx.inputAmount)) return false;
             if (!o.createdAt) return false;
             const created = new Date(o.createdAt).getTime();
@@ -854,7 +873,7 @@ async function _recoverFromAmbiguousCreate(ctx, token) {
                 txSignature: depositSig,
                 depositRequestId: ctx.depositRequestId,
                 recovered: true,
-                recoveryNote: 'Order matched in /orders/history (mint + initialInputAmount + tight time window) after lost create response.',
+                recoveryNote: 'Order matched in /orders/history (inputMint + outputMint + initialInputAmount + tight time window) after lost create response.',
             };
         }
     }

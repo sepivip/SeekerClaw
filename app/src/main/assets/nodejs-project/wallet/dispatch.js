@@ -87,16 +87,32 @@ const { log } = require('../config');
  * here as belt-and-suspenders — if routing says under-cap=false at this
  * point, something raced or the gate was bypassed; we return an error.
  */
-async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName }) {
+async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null }) {
     // 1. Decide routing.
     let route;
-    try {
-        route = await routeFor(toolName, toolArgs || {});
-    } catch (e) {
-        log(`[${flowName}] routeFor failed: ${e.message}`, 'WARN');
-        // Defensive: degrade to main path so the user sees an MWA popup
-        // rather than a silent failure.
-        route = { routingDecision: 'main', underCap: true, principalAtomic: null, capName: null };
+    if (forceRouting && (forceRouting.routingDecision === 'burner' || forceRouting.routingDecision === 'main')) {
+        // Caller already decided routing (e.g. handler observed a runtime
+        // constraint routeFor can't see, like "burner is in cap-allowing
+        // state per /burner/status, but the burner pubkey itself isn't
+        // reachable so we MUST fall back to main"). routeFor would otherwise
+        // re-compute routing from `toolArgs` alone and possibly return a
+        // burner decision the caller knew it had to override, producing a
+        // signer/fee-payer mismatch (PR #388 R2 finding).
+        route = {
+            routingDecision: forceRouting.routingDecision,
+            underCap: forceRouting.underCap !== undefined ? forceRouting.underCap : true,
+            principalAtomic: forceRouting.principalAtomic !== undefined ? forceRouting.principalAtomic : null,
+            capName: forceRouting.capName !== undefined ? forceRouting.capName : null,
+        };
+    } else {
+        try {
+            route = await routeFor(toolName, toolArgs || {});
+        } catch (e) {
+            log(`[${flowName}] routeFor failed: ${e.message}`, 'WARN');
+            // Defensive: degrade to main path so the user sees an MWA popup
+            // rather than a silent failure.
+            route = { routingDecision: 'main', underCap: true, principalAtomic: null, capName: null };
+        }
     }
 
     // 2. Burner over-cap defensive — gate should have blocked, but if we

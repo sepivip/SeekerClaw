@@ -543,12 +543,17 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             expiresAtMs,
         };
         let submitWarning = null;
+        // PR #388 R2: if our local burner-fallback fired above (we couldn't
+        // reach burner pubkey so flipped routingHint to 'main'), pass that
+        // override into routeAndSign so it does NOT re-route to burner and
+        // try to sign with a burner the deposit tx isn't paying from.
         const dispatchResult = await routeAndSign({
             toolName: 'jupiter_trigger_create',
             toolArgs: input,
             unsignedTxBase64: unsignedDepositTx,
             broadcastVia: 'jupiter',
             flowName: 'jupiter_trigger_create_v2',
+            forceRouting: routingHint,
             broadcast: async (txOrUnsigned, _signer, ctx) => {
                 let signedDeposit;
                 if (ctx && ctx.signed) {
@@ -610,10 +615,15 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
         if (submitWarning) warnings.push(submitWarning);
 
+        // PR #388 R2: keep V1's `signature` field as an alias of `txSignature`
+        // so consumers (tool-result prompts, downstream parsers) that parse
+        // the V1 shape don't break when the flag is flipped.
+        const _sig = orderResult.txSignature || dispatchResult.signature || null;
         return {
             success: true,
             orderId,
-            txSignature: orderResult.txSignature || dispatchResult.signature || null,
+            txSignature: _sig,
+            signature: _sig,
             depositRequestId,
             inputToken: `${inputToken.symbol} (${inputToken.address})`,
             outputToken: `${outputToken.symbol} (${outputToken.address})`,
@@ -681,6 +691,14 @@ async function _jupiterTriggerListV2(input, _chatId) {
                 orderType: order.orderType,
                 inputMint: order.inputMint,
                 outputMint: order.outputMint,
+                // PR #388 R2: V1 listed orders under `inputToken`/`outputToken`
+                // aliases of the mint addresses. Kept here so consumers parsing
+                // the V1 shape don't see undefined when the flag is flipped.
+                // (V1 sometimes resolved these to symbols; we leave them as
+                // mints because the V2 API doesn't surface symbol metadata on
+                // history rows. Consumers needing symbols can resolveToken().)
+                inputToken: order.inputMint,
+                outputToken: order.outputMint,
                 initialInputAmount: order.initialInputAmount,
                 remainingInputAmount: order.remainingInputAmount,
                 triggerPriceUsd: order.triggerPriceUsd,
@@ -800,6 +818,9 @@ async function _jupiterTriggerCancelV2(input, _chatId) {
             success: true,
             orderId: confirmRes.id,
             txSignature: confirmRes.txSignature,
+            // PR #388 R2: V1's `signature` alias kept so downstream parsers
+            // don't break when the flag flips.
+            signature: confirmRes.txSignature,
             status: 'cancelled',
             wallet: signWallet,
             creatorRole,
