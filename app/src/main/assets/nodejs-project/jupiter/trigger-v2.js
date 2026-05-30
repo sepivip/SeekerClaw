@@ -295,15 +295,22 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
 }
 
 // Compact-u16 reader. Returns { value, offset } or null if malformed.
+// Strict 2-byte cap (max value 16383). Solana spec technically allows a
+// 3-byte short_vec (up to 0xFFFF, with byte 3 contributing only 2 bits),
+// but auth-challenge txs in our context never need more than a 2-byte count
+// (Memo + ComputeBudget — small instruction/account counts). The stricter
+// cap also avoids the byte-3 u16-overflow ambiguity that the earlier reader
+// allowed (byte 3 high bits left unmasked silently producing values > 65535).
+// The gate is at the TOP of the loop so a 3rd byte is never read.
 function _readCompactU16(buf, offset) {
     if (offset >= buf.length) return null;
     let v = 0, shift = 0, i = offset;
     while (i < buf.length) {
+        if (shift > 7) return null;
         const b = buf[i]; i += 1;
         v |= (b & 0x7f) << shift;
         if ((b & 0x80) === 0) return { value: v, offset: i };
         shift += 7;
-        if (shift > 14) return null;
     }
     return null;
 }
@@ -729,21 +736,36 @@ async function submitCreateOrder({ token, recoveryContext, depositSignedTx, orde
         return { ok: false, error: 'auth_expired', reason: 'JWT rejected by orders/price', recovery: recoveryContext };
     }
 
-    if (createRes.status >= 500 || !createRes.data || (createRes.status === 200 && !createRes.data.id)) {
-        log(`[trigger-v2] ambiguous create response (status=${createRes.status}, hasId=${!!(createRes.data && createRes.data.id)}) — entering recovery`, 'WARN');
+    // Ambiguous: 5xx OR no body at all. Deposit may or may not have landed —
+    // recover via /orders/history.
+    if (createRes.status >= 500 || !createRes.data) {
+        log(`[trigger-v2] ambiguous create response (status=${createRes.status}, hasData=${!!createRes.data}) — entering recovery`, 'WARN');
         return await _recoverFromAmbiguousCreate(recoveryContext, token);
     }
 
-    if (createRes.status !== 200) {
-        return { ok: false, error: 'create_failed', reason: `HTTP ${createRes.status}` };
+    // Accept ANY 2xx with id as success. The original `status === 200` gate
+    // dropped a 201/202 + id into the create_failed branch — silent
+    // funds-on-chain-but-error-to-user inconsistency. Jupiter is consistent
+    // with 200 today, but defending against legitimate alternate 2xx codes
+    // is the safe shape.
+    if (createRes.status >= 200 && createRes.status < 300) {
+        if (createRes.data.id) {
+            return {
+                ok: true,
+                id: createRes.data.id,
+                txSignature: createRes.data.txSignature || null,
+                depositRequestId: recoveryContext.depositRequestId,
+            };
+        }
+        // 2xx but no id — ambiguous (Jupiter accepted-but-pending?). Recover.
+        log(`[trigger-v2] 2xx without id (status=${createRes.status}) — entering recovery`, 'WARN');
+        return await _recoverFromAmbiguousCreate(recoveryContext, token);
     }
 
-    return {
-        ok: true,
-        id: createRes.data.id,
-        txSignature: createRes.data.txSignature || null,
-        depositRequestId: recoveryContext.depositRequestId,
-    };
+    // Non-2xx, non-5xx (3xx redirect, 4xx hard error) — fail outright. The
+    // deposit signature went to Jupiter but the server rejected the order
+    // params or auth — there's nothing useful to recover.
+    return { ok: false, error: 'create_failed', reason: `HTTP ${createRes.status}` };
 }
 
 /**
@@ -776,6 +798,19 @@ async function _recoverFromAmbiguousCreate(ctx, token) {
     await new Promise(r => setTimeout(r, 5000));
 
     const histRes = await _get(`/trigger/v2/orders/history?walletPubkey=${encodeURIComponent(ctx.walletPubkey)}&limit=20`, token);
+    // Auth expired DURING recovery — invalidate the cached JWT so the caller's
+    // retry path forces a re-auth, instead of silently falling through to
+    // "no recovery" and leaving a stale token live for hours.
+    if (histRes.status === 401) {
+        invalidateJwt(ctx.walletPubkey);
+        return {
+            ok: false,
+            error: 'auth_expired',
+            reason: 'JWT rejected by /orders/history during recovery — re-auth and retry. Check Jupiter UI for ' +
+                    `depositRequestId=${ctx.depositRequestId} to confirm whether the deposit landed.`,
+            recovery: ctx,
+        };
+    }
     if (histRes.status === 200 && histRes.data && Array.isArray(histRes.data.orders)) {
         const orders = histRes.data.orders.filter(Boolean);
 

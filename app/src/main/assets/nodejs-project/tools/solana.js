@@ -426,6 +426,11 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         const routingHint = await _routeForTriggerV2('jupiter_trigger_create', input);
 
         // 4. Resolve wallet address — burner pubkey if routing=burner, MWA pubkey otherwise.
+        // If burner routing was chosen but the burner pubkey is unavailable
+        // (bridge unreachable, not configured, etc.), we MUST also flip the
+        // routing decision to 'main' before proceeding. Otherwise routeAndSign
+        // would re-evaluate routing as 'burner' and attempt to sign a tx
+        // whose fee payer is the MWA wallet — cap state and signer mismatch.
         let walletAddress;
         if (routingHint.routingDecision === 'burner') {
             try {
@@ -434,6 +439,10 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                     walletAddress = burnerStatus.pubkey;
                 }
             } catch (_) { /* fall through */ }
+            if (!walletAddress) {
+                log('[Jupiter Trigger V2] burner routing chosen but pubkey unavailable — falling back to main wallet', 'WARN');
+                routingHint.routingDecision = 'main';
+            }
         }
         if (!walletAddress) {
             try { walletAddress = getConnectedWalletAddress(); }
@@ -663,17 +672,23 @@ async function _jupiterTriggerListV2(input, _chatId) {
             count: listResult.orders.length,
             wallet: walletAddress,
             note: 'V2 list shows main-wallet orders only. Burner-routed orders need separate auth (follow-up).',
+            // Field names verified live 2026-05-30: real rows use orderState,
+            // rawState, initialInputAmount, remainingInputAmount, fillPercent.
+            // The first-draft status/vaultState/inputAmount fields don't exist
+            // on the API — mapping them would return three `undefined`s per row.
             orders: listResult.orders.map(order => ({
                 orderId: order.id || order.orderId,
                 orderType: order.orderType,
                 inputMint: order.inputMint,
                 outputMint: order.outputMint,
-                inputAmount: order.inputAmount,
+                initialInputAmount: order.initialInputAmount,
+                remainingInputAmount: order.remainingInputAmount,
                 triggerPriceUsd: order.triggerPriceUsd,
                 triggerCondition: order.triggerCondition,
                 slippageBps: order.slippageBps,
-                status: order.status,
-                vaultState: order.vaultState,
+                orderState: order.orderState,
+                rawState: order.rawState,
+                fillPercent: order.fillPercent,
                 expiresAt: order.expiresAt,
                 createdAt: order.createdAt,
             })),
@@ -765,8 +780,8 @@ async function _jupiterTriggerCancelV2(input, _chatId) {
             try { await ensureWalletAuthorized(); }
             catch (e) { return { error: 'wallet_not_authorized', reason: e.message }; }
             const signRes = await androidBridgeCall('/solana/sign-only', { transaction: step1.transaction }, 120000);
-            if (signRes.error) return { error: signRes.error };
-            if (!signRes.signedTransaction) return { error: 'No signed transaction returned from wallet' };
+            if (signRes.error) return { error: signRes.error, reason: signRes.reason };
+            if (!signRes.signedTransaction) return { error: 'sign_failed', reason: 'No signed transaction returned from wallet' };
             signedCancelB64 = signRes.signedTransaction;
             signWallet = 'main';
         }

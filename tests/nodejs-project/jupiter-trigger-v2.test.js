@@ -635,6 +635,12 @@ function _buildTransferTx(payerB58) {
         // continuation bit set but buffer ends → malformed → null
         assert.strictEqual(triggerV2._readCompactU16(Buffer.from([0x80]), 0), null);
     });
+    await check('_readCompactU16 rejects 3-byte sequence (strict 2-byte cap)', async () => {
+        // Pre-fix: this returned 32767 (silent u16 overflow risk).
+        // Post-fix: gate-at-top of loop refuses to read a 3rd byte.
+        assert.strictEqual(triggerV2._readCompactU16(Buffer.from([0xFF, 0xFF, 0x01]), 0), null);
+        assert.strictEqual(triggerV2._readCompactU16(Buffer.from([0x80, 0x80, 0x00]), 0), null);
+    });
     await check('parser handles a tx with a multi-byte account count (130 accounts)', async () => {
         // 130 accounts: payer + memo + 128 filler. instruction targets memo (idx 1).
         const accounts = [PAYER_BUF, MEMO_BYTES];
@@ -742,6 +748,95 @@ function _buildTransferTx(payerB58) {
             });
             assert.strictEqual(submit.ok, false, 'old unrelated order must not be falsely matched');
             assert.strictEqual(submit.error, 'create_ambiguous_no_recovery');
+        } finally { global.setTimeout = origSetTimeout; }
+    });
+
+    // ── submitCreateOrder: 2xx-with-id acceptance + 2xx-without-id recovery ─
+    // Pre-fix the success gate demanded status===200 exactly; a 201/202 with
+    // a valid order id silently fell into create_failed even though the order
+    // was live on-chain — funds/cap inconsistency.
+    console.log('\nsubmitCreateOrder 2xx handling (BAT-697 double-check):');
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-201' } });
+    _enqueue({ status: 201, data: { id: 'order-201', txSignature: 'sig-201' } });
+    await check('HTTP 201 with id is accepted as success', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        const submit = await triggerV2.submitCreateOrder({
+            token: 'jwt', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+            order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+        });
+        assert.strictEqual(submit.ok, true, 'a 201 + id must be a success, not a hidden failure');
+        assert.strictEqual(submit.id, 'order-201');
+    });
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-202' } });
+    _enqueue({ status: 202, data: { /* no id */ } });
+    _enqueue({ status: 200, data: { orders: [] } });
+    await check('HTTP 202 without id triggers recovery (ambiguous)', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        const origSetTimeout = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout(fn, 0);
+        try {
+            const submit = await triggerV2.submitCreateOrder({
+                token: 'jwt', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+                order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                    outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                    triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+            });
+            assert.strictEqual(submit.ok, false);
+            assert.strictEqual(submit.error, 'create_ambiguous_no_recovery');
+        } finally { global.setTimeout = origSetTimeout; }
+    });
+
+    // ── Recovery: 401 from /orders/history invalidates JWT ──────────────────
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    // Prime the JWT cache by running authenticate.
+    _enqueue({ status: 200, data: { type: 'transaction', transaction: _buildAuthTx(FIXTURE_PUBKEY) } });
+    _enqueue({ status: 200, data: { token: 'jwt-recover-401' } });
+    await triggerV2.authenticate(FIXTURE_PUBKEY, {
+        signTransaction: async () => 'X', signMessage: null,
+    });
+    // Now drive an ambiguous create → recovery path that 401's.
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-recover-401' } });
+    _enqueue({ status: 500, data: { error: 'jupiter_internal' } });
+    _enqueue({ status: 401, data: { error: 'expired' } });
+    await check('401 from /orders/history during recovery → invalidateJwt + auth_expired', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt-recover-401',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        const origSetTimeout = global.setTimeout;
+        global.setTimeout = (fn) => origSetTimeout(fn, 0);
+        try {
+            const submit = await triggerV2.submitCreateOrder({
+                token: 'jwt-recover-401', recoveryContext: craft.recoveryContext, depositSignedTx: 'SIGNED',
+                order: { inputMint: FIXTURE_INPUT_MINT, inputAmount: '1000000',
+                    outputMint: FIXTURE_OUTPUT_MINT, triggerPriceUsd: 50,
+                    triggerCondition: 'below', expiresAtMs: Date.now() + 86400_000 },
+            });
+            assert.strictEqual(submit.ok, false);
+            assert.strictEqual(submit.error, 'auth_expired');
+            // Confirm the JWT cache was invalidated — next auth should NOT hit cache.
+            _enqueue({ status: 200, data: { type: 'transaction', transaction: _buildAuthTx(FIXTURE_PUBKEY) } });
+            _enqueue({ status: 200, data: { token: 'jwt-fresh-after-recover' } });
+            const reauth = await triggerV2.authenticate(FIXTURE_PUBKEY, {
+                signTransaction: async () => 'X', signMessage: null,
+            });
+            assert.strictEqual(reauth.ok, true);
+            assert.notStrictEqual(reauth.cached, true, 'recovery 401 must have invalidated the cache');
+            assert.strictEqual(reauth.token, 'jwt-fresh-after-recover');
         } finally { global.setTimeout = origSetTimeout; }
     });
 
