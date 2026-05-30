@@ -595,6 +595,21 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                 outputMint: outputToken.address,
             };
         }
+        // PR #388 R8: validate the resolved triggerMint as a real Solana
+        // base58 address (32-byte Ed25519 pubkey). The auto-inferred path
+        // uses inputMint/outputMint which were already validated by upstream
+        // token resolution, so this only fires when the caller supplied an
+        // EXPLICIT `input.triggerMint` override — pre-fix a whitespace-only
+        // or otherwise malformed non-empty string passed the null-check and
+        // would only fail later at Jupiter's create endpoint (after auth +
+        // vault register + signed deposit). Fail closed here BEFORE any side
+        // effects.
+        if (!isValidSolanaAddress(triggerMint)) {
+            return {
+                error: 'trigger_mint_invalid',
+                reason: 'Explicit `triggerMint` is not a valid Solana base58 address (must base58-decode to 32 bytes). Pass a real mint pubkey.',
+            };
+        }
 
         // 8. Semantic validation (pure — fail fast before any network work).
         const validation = triggerV2.validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippageBps });
