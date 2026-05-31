@@ -219,8 +219,14 @@ function _walkMarkdownFiles(rootDir, maxDepth = 4) {
  *   (memory.md + daily notes + notebook), matching existing behavior.
  */
 function searchMemory(query, topK = 5, options = {}) {
-    if (!query) return [];
-    topK = Math.max(1, topK || 5);
+    // Defensive: tool input_schemas are not runtime-enforced, so memory_search
+    // / notebook_search can pass non-string query or non-numeric topK. Coerce
+    // at the source so all callers benefit (no need for each caller to repeat).
+    const q = String(query == null ? '' : query).trim();
+    if (!q) return [];
+    query = q;
+    const tk = Math.floor(Number(topK));
+    topK = (Number.isFinite(tk) && tk > 0) ? tk : 5;
 
     // BAT-991: validate source filter. Whitelist to "memory" or "notebook"
     // ("daily" is intentionally not exposed via this filter yet — notebook

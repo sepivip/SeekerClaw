@@ -137,7 +137,10 @@ function parseFrontmatter(content) {
         if (!line.trim() || /^\s*#/.test(line)) continue;
         const m = line.match(/^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/);
         if (!m) continue;
-        const key = m[1];
+        // Frontmatter keys are case-insensitive — Title / TITLE both fold
+        // into title. Without this, a user-edited page would have
+        // duplicate fields when serialized back out.
+        const key = m[1].toLowerCase();
         const rawVal = m[2];
         if (key === 'tags' || key === 'related') {
             fm[key] = _parseArray(rawVal);
@@ -177,8 +180,12 @@ function _slugify(s) {
  */
 function resolvePagePath({ category, name, path: rawPath }) {
     if (rawPath) {
-        // Normalize: strip leading slash, require notebook/ prefix, force .md
-        let rel = String(rawPath).trim().replace(/^\/+/, '');
+        // Normalize: strip leading slash, lowercase the prefix and extension
+        // check so inputs like "Notebook/people/Mom.MD" don't get rejected
+        // by case-sensitive comparisons or end up as "Mom.MD.md". The agent's
+        // notebook layout is always lowercase (slugify enforces it on
+        // category+name path), so collapsing case here matches reality.
+        let rel = String(rawPath).trim().replace(/^\/+/, '').toLowerCase();
         if (!rel.startsWith('notebook/')) {
             return { error: 'path must start with "notebook/"' };
         }
@@ -208,9 +215,15 @@ function resolvePagePath({ category, name, path: rawPath }) {
 // against real traffic.
 
 function logRoute({ tool, userMessage, considered, pageExisted, pageRel }) {
+    // user_message is user-controlled text; if a credential ever lands in it
+    // (paste accident, prompt-injection echo) it must not survive into
+    // node_debug.log in plaintext. redactSecrets has access to the same
+    // pattern set memory_save / daily_note rely on for the same reason.
     const truncMsg = userMessage
-        ? String(userMessage).replace(/\s+/g, ' ').slice(0, 200)
+        ? redactSecrets(String(userMessage)).replace(/\s+/g, ' ').slice(0, 200)
         : '(no user message in context)';
+    // `considered` is an agent-decided list of tool names (memory_save /
+    // daily_note / etc.) — not user input, no redaction needed.
     const consideredStr = Array.isArray(considered) && considered.length
         ? considered.join(',') : 'none';
     log(
@@ -337,7 +350,12 @@ const handlers = {
             // silently lose metadata.
             const fm = Object.assign(
                 {
-                    title: name,
+                    // Prefer the user-facing capitalization in input.name
+                    // over the slugified (lowercased) derived `name`. The
+                    // existing-frontmatter path won't reach this default
+                    // because Object.assign overrides; this matters only
+                    // when an existing page lacks frontmatter entirely.
+                    title: input.name || name,
                     category,
                     created: today,
                     tags: [],
@@ -345,12 +363,19 @@ const handlers = {
                 frontmatter || {}
             );
             fm.updated = today;
+            // Redact tag + related items before persisting — they end up on
+            // disk and in the SQL index. Names like "Mom" are fine; a
+            // pasted API key or seed phrase would survive without this.
             if (Array.isArray(input.tags) && input.tags.length) {
                 const have = new Set((fm.tags || []).map(String));
-                for (const t of input.tags) if (t && !have.has(String(t))) {
-                    fm.tags = fm.tags || [];
-                    fm.tags.push(t);
-                    have.add(String(t));
+                for (const t of input.tags) {
+                    if (!t) continue;
+                    const cleaned = redactSecrets(String(t));
+                    if (!have.has(cleaned)) {
+                        fm.tags = fm.tags || [];
+                        fm.tags.push(cleaned);
+                        have.add(cleaned);
+                    }
                 }
             } else if (!Array.isArray(fm.tags)) {
                 fm.tags = [];
@@ -358,9 +383,13 @@ const handlers = {
             if (Array.isArray(input.related) && input.related.length) {
                 fm.related = fm.related || [];
                 const have = new Set(fm.related.map(String));
-                for (const r of input.related) if (r && !have.has(String(r))) {
-                    fm.related.push(r);
-                    have.add(String(r));
+                for (const r of input.related) {
+                    if (!r) continue;
+                    const cleaned = redactSecrets(String(r));
+                    if (!have.has(cleaned)) {
+                        fm.related.push(cleaned);
+                        have.add(cleaned);
+                    }
                 }
             }
 
@@ -370,15 +399,20 @@ const handlers = {
             const appended = `${cleanBody}\n\n## Update — ${today}\n\n${content}\n`;
             merged = `${serializeFrontmatter(fm)}\n\n${appended}`;
         } else {
+            // Same redaction discipline as the merge branch: tag + related
+            // items go through redactSecrets() before they hit disk + index.
+            const cleanTags = Array.isArray(input.tags)
+                ? input.tags.filter(Boolean).map(t => redactSecrets(String(t)))
+                : [];
             const fm = {
                 title: input.name,
                 category,
                 created: today,
                 updated: today,
-                tags: Array.isArray(input.tags) ? input.tags : [],
+                tags: cleanTags,
             };
             if (Array.isArray(input.related) && input.related.length) {
-                fm.related = input.related;
+                fm.related = input.related.filter(Boolean).map(r => redactSecrets(String(r)));
             }
             // Title heading is conventional but cheap; agent may delete it.
             merged = `${serializeFrontmatter(fm)}\n\n# ${input.name}\n\n${content}\n`;
@@ -414,7 +448,10 @@ const handlers = {
 
     async notebook_read(input, chatId) {
         if (!input.path) return { error: 'path is required' };
-        const rel = String(input.path).trim().replace(/^\/+/, '');
+        // Lowercase the input — agent's notebook layout is always lowercase
+        // (slugify enforces it). Case-insensitive prefix check + case-folded
+        // path keep this consistent with resolvePagePath.
+        const rel = String(input.path).trim().replace(/^\/+/, '').toLowerCase();
         if (!rel.startsWith('notebook/')) {
             return { error: 'path must start with "notebook/"' };
         }
@@ -434,12 +471,14 @@ const handlers = {
     },
 
     async notebook_search(input, chatId) {
-        // Defensive: searchMemory() calls query.toLowerCase(). Tool input_schemas
-        // are not runtime-enforced, so coerce + trim here keeps the handler
-        // robust if a caller passes a non-string or whitespace-only query.
+        // Defensive: searchMemory() also coerces query + topK at its entry
+        // (so memory_search benefits from the same protection), but doing
+        // the local trim+empty-reject here gives the caller a clearer error
+        // than an empty result set.
         const q = String(input?.query == null ? '' : input.query).trim();
         if (!q) return { error: 'query is required' };
-        const maxResults = input.max_results || 10;
+        const mr = Math.floor(Number(input?.max_results));
+        const maxResults = (Number.isFinite(mr) && mr > 0) ? mr : 10;
         const results = searchMemory(q, maxResults, { source: 'notebook' });
         return {
             query: q,
@@ -451,7 +490,9 @@ const handlers = {
 
     async notebook_delete(input, chatId) {
         if (!input.path) return { error: 'path is required' };
-        const rel = String(input.path).trim().replace(/^\/+/, '');
+        // Match resolvePagePath / notebook_read: lowercase early so the
+        // prefix check + safePath both see a normalized path.
+        const rel = String(input.path).trim().replace(/^\/+/, '').toLowerCase();
         if (!rel.startsWith('notebook/')) {
             return { error: 'path must start with "notebook/"' };
         }
@@ -483,8 +524,10 @@ const handlers = {
         // Audit trail: append a single-line record to today's daily note so
         // the user (and the agent on next recall) has a durable history of
         // what got removed and why. Best-effort — failure to write the
-        // daily-note line does not undo the file/db delete.
-        const reason = String(input.reason || '').slice(0, 200);
+        // daily-note line does not undo the file/db delete. Reason is
+        // user-controlled text → redactSecrets() before persisting to
+        // disk OR writing to debug log (same discipline as logRoute).
+        const reason = redactSecrets(String(input.reason || '')).slice(0, 200);
         try {
             const auditLine = `- [notebook-delete] Removed \`${rel}\``
                 + (reason ? ` — reason: ${reason}` : '');
