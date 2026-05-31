@@ -319,6 +319,33 @@ function saveDatabase({ force = false, scheduleRetry = true } = {}) {
 // MEMORY INDEXING (BAT-26)
 // ============================================================================
 
+// BAT-991: notebook directory — recursively walked alongside MEMORY.md +
+// memory/ when indexing chunks. Bounded depth defends against pathological
+// nesting (an agent creating `notebook/a/b/c/d/...`); 4 levels is plenty
+// for the spec's `notebook/<category>/<entity>.md` shape with future
+// sub-categorization headroom.
+const NOTEBOOK_DIR = path.join(workDir, 'notebook');
+function _collectNotebookFilesRecursive(rootDir, maxDepth = 4) {
+    const out = [];
+    if (!fs.existsSync(rootDir)) return out;
+    const stack = [{ dir: rootDir, depth: 0 }];
+    while (stack.length) {
+        const { dir, depth } = stack.pop();
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+        catch (_) { continue; }
+        for (const ent of entries) {
+            const full = path.join(dir, ent.name);
+            if (ent.isDirectory()) {
+                if (depth < maxDepth) stack.push({ dir: full, depth: depth + 1 });
+            } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
+                out.push(full);
+            }
+        }
+    }
+    return out;
+}
+
 // Index memory files into chunks table for search
 function indexMemoryFiles() {
     if (!db) return;
@@ -341,12 +368,22 @@ function indexMemoryFiles() {
             filesToIndex.push({ path: MEMORY_PATH, source: 'memory' });
         }
 
-        // Collect daily memory files
+        // Collect daily memory files. They are tagged source="memory" — they
+        // are part of the memory bucket per BAT-991 v1.1 spec (only "memory"
+        // | "notebook" are valid source enum values; daily is not separate).
         if (fs.existsSync(MEMORY_DIR)) {
             const dailyFiles = fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'));
             for (const f of dailyFiles) {
-                filesToIndex.push({ path: path.join(MEMORY_DIR, f), source: 'daily' });
+                filesToIndex.push({ path: path.join(MEMORY_DIR, f), source: 'memory' });
             }
+        }
+
+        // BAT-991: collect notebook pages recursively. Each chunk is stored
+        // with source="notebook" so notebook_search can filter on it via a
+        // parameterized `source = ?` SQL binding, and so unified
+        // memory_search results can be distinguished by bucket.
+        for (const full of _collectNotebookFilesRecursive(NOTEBOOK_DIR)) {
+            filesToIndex.push({ path: full, source: 'notebook' });
         }
 
         let indexed = 0;

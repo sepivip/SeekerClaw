@@ -178,9 +178,62 @@ const STOP_WORDS = new Set(['the','a','an','is','are','was','were','be','been','
     'that','this','it','i','me','my','we','our','you','your','he','she','they','them',
     'and','or','but','not','no','if','so','what','when','where','how','who','which']);
 
-function searchMemory(query, topK = 5) {
-    if (!query) return [];
-    topK = Math.max(1, topK || 5);
+// BAT-991: notebook directory lives next to memory/. Importing the constant
+// here avoids a circular load with tools/notebook.js (which itself requires
+// `./memory`); we just re-derive the path from workDir.
+const NOTEBOOK_DIR = path.join(workDir, 'notebook');
+
+// BAT-991: recursive walk for the fallback file scan so workspace/notebook/*
+// (which is N levels deep — notebook/<category>/<entity>.md) gets covered
+// when SQL.js is unavailable. Bounded by maxDepth to defend against an
+// agent or user accidentally nesting categories ten deep.
+function _walkMarkdownFiles(rootDir, maxDepth = 4) {
+    const out = [];
+    if (!fs.existsSync(rootDir)) return out;
+    const stack = [{ dir: rootDir, depth: 0 }];
+    while (stack.length) {
+        const { dir, depth } = stack.pop();
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+        catch (_) { continue; }
+        for (const ent of entries) {
+            const full = path.join(dir, ent.name);
+            if (ent.isDirectory()) {
+                if (depth < maxDepth) stack.push({ dir: full, depth: depth + 1 });
+            } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
+                out.push(full);
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * Search indexed memory + notebook chunks.
+ *
+ * @param {string} query
+ * @param {number} [topK=5]
+ * @param {object} [options]
+ * @param {"memory"|"notebook"} [options.source] Filter to a single source
+ *   (parameterized SQL binding). Undefined = unified across all sources
+ *   (memory.md + daily notes + notebook), matching existing behavior.
+ */
+function searchMemory(query, topK = 5, options = {}) {
+    // Defensive: tool input_schemas are not runtime-enforced, so memory_search
+    // / notebook_search can pass non-string query or non-numeric topK. Coerce
+    // at the source so all callers benefit (no need for each caller to repeat).
+    const q = String(query == null ? '' : query).trim();
+    if (!q) return [];
+    query = q;
+    const tk = Math.floor(Number(topK));
+    topK = (Number.isFinite(tk) && tk > 0) ? tk : 5;
+
+    // BAT-991: validate source filter. Whitelist to "memory" or "notebook"
+    // ("daily" is intentionally not exposed via this filter yet — notebook
+    // is the new addition; daily-only search would be a separate BAT).
+    // Anything else falls through to undefined = unified search.
+    const rawSource = options && typeof options.source === 'string' ? options.source.trim() : '';
+    const sourceFilter = (rawSource === 'memory' || rawSource === 'notebook') ? rawSource : null;
 
     // Tokenize query into keywords
     const keywords = query.toLowerCase().split(/\s+/)
@@ -191,11 +244,20 @@ function searchMemory(query, topK = 5) {
     const db = _getDb();
     if (db && keywords.length > 0) {
         try {
-            // Build WHERE clause with AND logic, escape SQL LIKE wildcards
+            // Build WHERE clause with AND logic, escape SQL LIKE wildcards.
+            // BAT-991: SELECT `source` so the search contract can surface
+            // which bucket a chunk came from; also accept a parameterized
+            // `source = ?` filter (NEVER string-concatenated) so notebook_
+            // search can constrain to source="notebook" without exposing
+            // a SQL injection seam.
             const escapeLike = (s) => s.replace(/%/g, '\\%').replace(/_/g, '\\_');
             const conditions = keywords.map(() => `LOWER(text) LIKE ? ESCAPE '\\'`);
             const params = keywords.map(k => `%${escapeLike(k)}%`);
-            const sql = `SELECT path, start_line, end_line, text, updated_at
+            if (sourceFilter) {
+                conditions.push('source = ?');
+                params.push(sourceFilter);
+            }
+            const sql = `SELECT path, start_line, end_line, text, updated_at, source
                          FROM chunks
                          WHERE ${conditions.join(' AND ')}
                          ORDER BY updated_at DESC
@@ -205,7 +267,7 @@ function searchMemory(query, topK = 5) {
             const rows = db.exec(sql, params);
             if (rows.length > 0 && rows[0].values.length > 0) {
                 const results = rows[0].values.map(row => {
-                    const [filePath, startLine, endLine, text, updatedAt] = row;
+                    const [filePath, startLine, endLine, text, updatedAt, source] = row;
                     // Term frequency score
                     const textLower = text.toLowerCase();
                     let tfScore = 0;
@@ -229,6 +291,7 @@ function searchMemory(query, topK = 5) {
                         endLine,
                         text: text.slice(0, 500),
                         score: Math.round(score * 100) / 100,
+                        source: source || 'memory',
                     };
                 });
 
@@ -241,28 +304,55 @@ function searchMemory(query, topK = 5) {
         }
     }
 
-    // Fallback: basic file-based search
+    // Fallback: basic file-based search.
+    // BAT-991: extended to include workspace/notebook/**/*.md so notebook
+    // pages remain searchable when SQL.js is unavailable or empty.
     const results = [];
     const searchLower = query.toLowerCase();
 
-    if (fs.existsSync(MEMORY_PATH)) {
-        const lines = fs.readFileSync(MEMORY_PATH, 'utf8').split('\n');
-        lines.forEach((line, idx) => {
-            if (line.toLowerCase().includes(searchLower)) {
-                results.push({ file: 'MEMORY.md', startLine: idx + 1, endLine: idx + 1,
-                    text: line.trim().slice(0, 500), score: 1 });
+    // MEMORY.md (memory bucket)
+    if (!sourceFilter || sourceFilter === 'memory') {
+        if (fs.existsSync(MEMORY_PATH)) {
+            const lines = fs.readFileSync(MEMORY_PATH, 'utf8').split('\n');
+            lines.forEach((line, idx) => {
+                if (line.toLowerCase().includes(searchLower)) {
+                    results.push({ file: 'MEMORY.md', startLine: idx + 1, endLine: idx + 1,
+                        text: line.trim().slice(0, 500), score: 1, source: 'memory' });
+                }
+            });
+        }
+
+        // Daily memory files are tagged source="memory" — they are part of
+        // the memory bucket. Per BAT-991 v1.1 spec, the source enum is only
+        // {"memory" | "notebook"}; there is no separate "daily" value, so
+        // daily notes match alongside MEMORY.md under the memory filter.
+        if (fs.existsSync(MEMORY_DIR)) {
+            for (const f of fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))) {
+                if (results.length >= topK) break;
+                const lines = fs.readFileSync(path.join(MEMORY_DIR, f), 'utf8').split('\n');
+                lines.forEach((line, idx) => {
+                    if (results.length < topK && line.toLowerCase().includes(searchLower)) {
+                        results.push({ file: `memory/${f}`, startLine: idx + 1, endLine: idx + 1,
+                            text: line.trim().slice(0, 500), score: 0.5, source: 'memory' });
+                    }
+                });
             }
-        });
+        }
     }
 
-    if (fs.existsSync(MEMORY_DIR)) {
-        for (const f of fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))) {
+    // Notebook pages (notebook bucket)
+    if (!sourceFilter || sourceFilter === 'notebook') {
+        const notebookFiles = _walkMarkdownFiles(NOTEBOOK_DIR);
+        for (const full of notebookFiles) {
             if (results.length >= topK) break;
-            const lines = fs.readFileSync(path.join(MEMORY_DIR, f), 'utf8').split('\n');
+            let lines;
+            try { lines = fs.readFileSync(full, 'utf8').split('\n'); }
+            catch (_) { continue; }
+            const relPath = path.relative(workDir, full).replace(/\\/g, '/');
             lines.forEach((line, idx) => {
                 if (results.length < topK && line.toLowerCase().includes(searchLower)) {
-                    results.push({ file: `memory/${f}`, startLine: idx + 1, endLine: idx + 1,
-                        text: line.trim().slice(0, 500), score: 0.5 });
+                    results.push({ file: relPath, startLine: idx + 1, endLine: idx + 1,
+                        text: line.trim().slice(0, 500), score: 0.6, source: 'notebook' });
                 }
             });
         }

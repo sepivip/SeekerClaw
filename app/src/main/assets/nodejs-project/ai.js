@@ -876,11 +876,50 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     // Memory Recall section - OpenClaw style with search-before-read pattern
     lines.push('## Memory Recall');
     lines.push('Before answering anything about prior work, decisions, dates, people, preferences, or todos:');
-    lines.push('1. Use memory_search to find relevant information first (faster, more targeted).');
-    lines.push('2. Only use memory_read on specific files if search results are insufficient.');
+    lines.push('1. Use memory_search to find relevant information first (faster, more targeted). It returns unified results across MEMORY.md, daily notes, AND notebook pages (see Notebook Knowledge Layer below) — each result includes a `source` field so you can tell which bucket the chunk came from.');
+    lines.push('2. Only use memory_read on specific files if search results are insufficient. For notebook pages specifically, use notebook_read.');
     lines.push('3. Keep memory entries concise and well-organized when writing.');
-    lines.push('4. **NEVER write API keys, passwords, seed phrases, private keys, or auth tokens to memory files.** Save keys ONLY to agent_settings.json under apiKeys.');
+    lines.push('4. **NEVER write API keys, passwords, seed phrases, private keys, or auth tokens to memory or notebook files.** Save keys ONLY to agent_settings.json under apiKeys.');
     lines.push('If low confidence after searching, tell the user you checked but found nothing relevant.');
+    lines.push('');
+
+    // BAT-991: Notebook Knowledge Layer — routing rubric for the 3 save
+    // tools (memory_save, daily_note, notebook_save). This is load-bearing
+    // — the agent reads it BEFORE picking a save tool. The rubric is one
+    // sharp question + a worked-examples table + three defensive defaults.
+    lines.push('## Notebook Knowledge Layer');
+    lines.push('Your workspace has a `notebook/` directory — your record of NAMED ENTITIES in the user\'s world (people, projects, tokens, places, topics, tools). Pages live at `notebook/<category>/<entity>.md` as plain markdown + YAML frontmatter and are indexed into the search DB with source="notebook". Seed categories: people, projects, crypto, places, topics, tools. You may create new top-level categories if an entity does not fit, but prefer the seed list — do not fragment (e.g. don\'t create `family/` if `people/` already exists for similar entities).');
+    lines.push('');
+    lines.push('**v1 explicit-only rule.** Call `notebook_save` ONLY when the user clearly asks to remember or save something ("remember that…", "save this…", "note that X is Y", "add to notebook…"). Do NOT auto-create notebook pages from passing references during conversation. A 30-turn chat where the user mentions multiple entities without asking to save should leave the notebook empty.');
+    lines.push('');
+    lines.push('### Routing — ask one question first');
+    lines.push('**Is this fact about a specific named entity in the user\'s world?**');
+    lines.push('');
+    lines.push('If yes → notebook. If no → either MEMORY.md (about the user themselves) or daily note (about an event tied to today).');
+    lines.push('');
+    lines.push('A "named entity" passes the **single-noun-title test**: you can name the page in one or two words without needing a date or a sentence. *Mom, SeekerClaw, Solana, Tbilisi* — pass. *User-mentioned-coffee-once, Tuesday-conversation* — fail; do not create a page.');
+    lines.push('');
+    lines.push('### Worked examples');
+    lines.push('');
+    lines.push('| User says | Destination | Why |');
+    lines.push('| -- | -- | -- |');
+    lines.push('| *Mom\'s birthday is March 15* | `notebook/people/mom.md` | Named entity, durable fact |');
+    lines.push('| *I hate notifications waking me up* | `MEMORY.md` | About the user\'s own preference |');
+    lines.push('| *Shipped BAT-990 today* | daily note **+** `notebook/projects/seekerclaw.md` | Event AND entity update — write both |');
+    lines.push('| *Mom called me today* | daily note only | Event with no new durable fact about Mom |');
+    lines.push('| *Solana\'s TPS is around 65k* | `notebook/crypto/solana.md` | Named entity, durable fact |');
+    lines.push('| *I love coffee* | `MEMORY.md` | User preference, not a notebook entity |');
+    lines.push('| *Remember Tbilisi has good khinkali* | `notebook/places/tbilisi.md` | Explicit user ask + named entity |');
+    lines.push('| *I\'m in a bad mood* | nothing | Transient state — do not save anywhere |');
+    lines.push('');
+    lines.push('The *"shipped BAT-990 today"* row is important: rich facts get **dual-routed**. Event shape → daily note. Entity update → notebook. Same fact, two destinations, no contradiction.');
+    lines.push('');
+    lines.push('### Three defensive defaults');
+    lines.push('1. **Conservative default — when uncertain, don\'t save.** If you cannot name the notebook page in 1–2 words, don\'t create it. If the fact reads better as *what happened today* than *what is X*, skip the notebook.');
+    lines.push('2. **Search before create.** Before `notebook_save` on a new page, run `notebook_search` or `memory_search` first. If a page exists, read → merge → save instead (the tool handles the merge — it preserves existing frontmatter and appends new content).');
+    lines.push('3. **MEMORY.md is for the user; notebook is for everything else they care about.** Subject is the user themselves → `memory_save`. Subject is anything external with a name → `notebook_save`. Pronoun test.');
+    lines.push('');
+    lines.push('**Obsidian compatibility (free win).** The `notebook/` folder is a regular Obsidian vault — plain markdown + YAML frontmatter + folder hierarchy. The user can open it in Obsidian directly to browse, edit, or back up their notebook. This is a defensible answer to "what happens to my data if SeekerClaw shuts down."');
     lines.push('');
 
     // Platform info — auto-generated by the Android app on every startup
