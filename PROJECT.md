@@ -2,13 +2,17 @@
 
 > **Living document.** Update after every shipped feature. Read before any feature work.
 
+## Recognition
+
+🏆 **Winner — Solana Mobile Hackathon · April 2026.** Recognized for running a full AI agent on-device on the Solana Seeker. [Announcement](https://x.com/RadiantsDAO/status/2049549148395798847)
+
 ## One-Liner
 
-SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent you control through Telegram.
+SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent that can pay for paid APIs autonomously in USDC.
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings). The agent has 60 tools + MCP dynamic, 35 skills (20 bundled + 13 workspace + 2 user-created), ranked memory search, cron scheduling, Android device control, Solana wallet integration, and web intelligence — all running locally on the phone, 24/7. Supports both Telegram and Discord channels.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **63 tools across 13 modules + MCP dynamic**, **37 skills (22 bundled incl. burner-wallet + paysh-catalog + 13 workspace + 2 user-created)**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
 
 ## What It Is
 
@@ -61,6 +65,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Skill routing** — Routing blocks prevent conflicting skills from firing together; reply tag first-token rule for reliable `[[reply_to_current]]` detection
 - **Skill requirements gating** — Skills with `requires.bins` or `requires.env` in YAML frontmatter are checked at runtime; unmet requirements are reported and skill is skipped
 - **Env Vars** (v1.9.1, 2026-04-17) — user-managed env var store in Settings. Feeds `process.env` on Node side. Skill `requires.env` gates now work out of the box. New `env_list` tool exposes key names only to the agent (never values). Skills screen shows red-dot for missing envs with one-tap add flow. Raw editor for round-trip bulk edit with added/modified/removed/invalid diff preview.
+- **Autonomous Payments (x402)** (v2.0.0, BAT-664) — `agent_pay` tool lets the agent autonomously fetch x402-protected HTTP endpoints and settle USDC micropayments on Solana mainnet, within burner-wallet caps. Supports x402 v1 + v2 end-to-end including POST settlement (GET silent under cap, POST always confirmed). 44 catalogued endpoints across 10 services via the OPT-IN `paysh-catalog` skill. x402 v2 settlement verified end-to-end on Tripadvisor, CoinGecko (via Stablecrypto Market Data), and Textbelt SMS POST. SSRF defense, DNS-rebinding protection, 18-error-code DIAGNOSTICS playbook.
+- **Burner Wallet (user-imported)** (v2.0.0, BAT-582) — separate, app-stored wallet for autonomous spending. User imports a Solana Ed25519 keypair once (paste from Phantom / Solflare / hardware wallet / `solana-keygen`). **SeekerClaw does not generate keys.** Encrypted under Android Keystore (AES-256-GCM); signing happens inside the Kotlin vault, never crosses the Node bridge as raw bytes. Per-tx + daily caps in SOL and USDC enforced atomically. Three new tools: `agent_pay`, `wallet_status`, `wallet_set_caps`. Opt-out: Settings → Burner Wallet → Wipe Keys reverts to single-wallet mode.
 
 ### Memory System
 - **SOUL.md** — Agent personality (user-editable)
@@ -109,7 +115,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Wallet holdings** — Full portfolio view with USD values via Jupiter
 
 ### Burner Wallet — Autonomous Solana Signing + x402 Payments (BAT-582, 3 tools)
-- **App-managed Solana keypair** — private key encrypted in Android KeyVault (BouncyCastle Ed25519, KeystoreHelper-backed AES-256-GCM, Base64 boundary). **Key never crosses the bridge into Node** — Android signs, Node calls bridge endpoints.
+- **User-imported, app-stored Solana keypair** — user pastes a private key once (base58 or JSON byte array) from Phantom / Solflare / hardware wallet / `solana-keygen`. **SeekerClaw does not generate keys.** Encrypted at rest in Android KeyVault (BouncyCastle Ed25519, KeystoreHelper-backed AES-256-GCM, Base64 boundary). **Key never crosses the bridge into Node** — Android signs, Node calls bridge endpoints.
 - **Per-tx + daily caps** for SOL and USDC (atomic units, BigInteger throughout, UTC midnight rollover). Defaults: 0.05 / 0.5 SOL, 5 / 50 USDC.
 - **Reserve / commit / release** state machine with stale-reservation sweep (60s TTL, 30s sweep). Mutex-guarded. Android is the SOLE writer of cap state.
 - **Wallet routing** in `caps/preflight.js` decides burner vs main on every spending tool. Under-cap burner → silent (`policy: "none"`); main wallet → MWA popup (`policy: "confirm"`); over-cap with no fallback → blocked. `solana_send`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create`, `jupiter_trigger_cancel`, `jupiter_dca_cancel` all participate.
@@ -303,6 +309,10 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-05-31 | Docs (BAT-990): README + PROJECT.md v2 sync — rewrite intro to lead with v2 thesis (autonomous USDC payments + hackathon win), add Autonomous Payments section, new x402 features row, rename to Solana Wallets, expand Live Settings, fix Extended Thinking model list, add Graceful Stop row, bundled-skills note, burner-wallet safety bullet, Custom provider in Quick Start. Tool count reconciled to 63 across 13 modules; bundled skills 22. Burner wording paste/import-only per BAT-936. | direct |
+| 2026-05-30 | Docs: add Solana Mobile Hackathon Winner badge + Award section in README; add Compose / Node.js / MCP badges | direct |
+| 2026-05-29 | Chore (tests): Jupiter Trigger V2 contract-probe + refund dev tools (BAT-697) — dev-only, not bundled in app | direct |
+| 2026-04 | 🏆 **Solana Mobile Hackathon — Winner.** Recognized for running a full AI agent on-device on the Solana Seeker | — |
 | 2026-05-19 | **Release: v2.0.0** — Burner wallet (BAT-582), `agent_pay` x402 client (BAT-664), paysh-catalog OPT-IN (BAT-704) with 44 endpoints across 10 services, v2 schema (BAT-761), Tier 1 catalog expansion (BAT-705/706/766/768/769), doc body-shape fixes from openapi (#382/#383), SAB-AUDIT-v27 with 3 new DIAGNOSTICS entries for the paysh-catalog failure classes + the release-prep wave (#384). Promoted from `v2.0.0-rc1` (2026-05-18) after device-test smoke pass. | #364, #366–#371, #377–#384 |
 | 2026-05-18 | Docs: SAB-AUDIT-v27 — paysh-catalog DIAGNOSTICS gap (doc-vs-gateway divergence, OPT-IN regression, cost discrepancy) + multi-call composition transparency hint in Wallets door + memory_save/daily_note secrets-warning. | #384 |
 | 2026-05-18 | Fix: rentcast query params from openapi (#383). Cross-service audit follow-up to #382 — fixes invented `city`/`state`/`bedrooms` on `/markets`, invented `id` query on `/properties`, invented `priceMin`/`priceMax` on `/listings/*`. | #383 |
