@@ -28,8 +28,8 @@ const {
     redactSecrets, safePath,
 } = require('../security');
 
-const { searchMemory } = require('../memory');
-const { getDb, indexMemoryFiles } = require('../database');
+const { searchMemory, appendDailyMemory } = require('../memory');
+const { getDb, indexMemoryFiles, markDbDirty } = require('../database');
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -434,10 +434,15 @@ const handlers = {
     },
 
     async notebook_search(input, chatId) {
+        // Defensive: searchMemory() calls query.toLowerCase(). Tool input_schemas
+        // are not runtime-enforced, so coerce + trim here keeps the handler
+        // robust if a caller passes a non-string or whitespace-only query.
+        const q = String(input?.query == null ? '' : input.query).trim();
+        if (!q) return { error: 'query is required' };
         const maxResults = input.max_results || 10;
-        const results = searchMemory(input.query, maxResults, { source: 'notebook' });
+        const results = searchMemory(q, maxResults, { source: 'notebook' });
         return {
-            query: input.query,
+            query: q,
             source: 'notebook',
             count: results.length,
             results,
@@ -464,17 +469,30 @@ const handlers = {
         // rather than waiting for the next indexMemoryFiles pass to notice
         // the missing file. (indexMemoryFiles itself does not currently
         // garbage-collect rows for deleted files; this is the cheapest
-        // safety net.)
+        // safety net.) The markDbDirty() call arms the debounced autosave
+        // (BAT-523) so the DELETE persists across restart — without it,
+        // deleted pages could reappear in search after a relaunch.
         const db = getDb();
         if (db) {
             try {
                 db.run(`DELETE FROM chunks WHERE path = ?`, [abs]);
                 db.run(`DELETE FROM files  WHERE path = ?`, [abs]);
+                markDbDirty();
             } catch (_) { /* non-fatal */ }
         }
+        // Audit trail: append a single-line record to today's daily note so
+        // the user (and the agent on next recall) has a durable history of
+        // what got removed and why. Best-effort — failure to write the
+        // daily-note line does not undo the file/db delete.
+        const reason = String(input.reason || '').slice(0, 200);
+        try {
+            const auditLine = `- [notebook-delete] Removed \`${rel}\``
+                + (reason ? ` — reason: ${reason}` : '');
+            appendDailyMemory(auditLine);
+        } catch (_) { /* non-fatal — audit log is best-effort */ }
         log(
             `[notebook-route] tool=notebook_delete page=${rel} ` +
-            `reason="${String(input.reason || '').slice(0, 200)}"`,
+            `reason="${reason}"`,
             'DEBUG'
         );
         return { success: true, path: rel, message: `Deleted notebook page ${rel}` };

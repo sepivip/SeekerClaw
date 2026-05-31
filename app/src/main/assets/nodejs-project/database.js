@@ -368,11 +368,13 @@ function indexMemoryFiles() {
             filesToIndex.push({ path: MEMORY_PATH, source: 'memory' });
         }
 
-        // Collect daily memory files
+        // Collect daily memory files. They are tagged source="memory" — they
+        // are part of the memory bucket per BAT-991 v1.1 spec (only "memory"
+        // | "notebook" are valid source enum values; daily is not separate).
         if (fs.existsSync(MEMORY_DIR)) {
             const dailyFiles = fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'));
             for (const f of dailyFiles) {
-                filesToIndex.push({ path: path.join(MEMORY_DIR, f), source: 'daily' });
+                filesToIndex.push({ path: path.join(MEMORY_DIR, f), source: 'memory' });
             }
         }
 

@@ -316,9 +316,10 @@ function searchMemory(query, topK = 5, options = {}) {
             });
         }
 
-        // Daily memory files (daily bucket — surfaced under unified search
-        // and under source="memory" since the fallback has no separate
-        // "daily" enum; full bucket separation lives in the SQL path).
+        // Daily memory files are tagged source="memory" — they are part of
+        // the memory bucket. Per BAT-991 v1.1 spec, the source enum is only
+        // {"memory" | "notebook"}; there is no separate "daily" value, so
+        // daily notes match alongside MEMORY.md under the memory filter.
         if (fs.existsSync(MEMORY_DIR)) {
             for (const f of fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'))) {
                 if (results.length >= topK) break;
@@ -326,7 +327,7 @@ function searchMemory(query, topK = 5, options = {}) {
                 lines.forEach((line, idx) => {
                     if (results.length < topK && line.toLowerCase().includes(searchLower)) {
                         results.push({ file: `memory/${f}`, startLine: idx + 1, endLine: idx + 1,
-                            text: line.trim().slice(0, 500), score: 0.5, source: 'daily' });
+                            text: line.trim().slice(0, 500), score: 0.5, source: 'memory' });
                     }
                 });
             }
