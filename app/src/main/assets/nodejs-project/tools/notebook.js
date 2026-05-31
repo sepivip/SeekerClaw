@@ -35,6 +35,37 @@ const { getDb, indexMemoryFiles, markDbDirty } = require('../database');
 
 const NOTEBOOK_DIR = path.join(workDir, 'notebook');
 const DEFAULT_CATEGORY = 'topics';
+
+// Path-safety: safePath() guards the workspace boundary but not the
+// notebook subdirectory. A path like "notebook/../agent_settings.json"
+// resolves to "workspace/agent_settings.json" — still inside the
+// workspace, so safePath() lets it through, but it escapes the
+// notebook scope and could read/delete secrets. Every handler that
+// resolves a user-supplied path must call _isUnderNotebookDir() on
+// the result before reading, writing, or unlinking.
+const _CANON_NOTEBOOK_DIR = path.resolve(NOTEBOOK_DIR);
+function _isUnderNotebookDir(absPath) {
+    if (!absPath) return false;
+    const canonical = path.resolve(absPath);
+    return canonical === _CANON_NOTEBOOK_DIR
+        || canonical.startsWith(_CANON_NOTEBOOK_DIR + path.sep);
+}
+
+// Convert an absolute on-disk path to the "notebook/..." relative form
+// the agent uses with notebook_read / notebook_save / notebook_delete.
+// SQL.js indexes pages by absolute path, but the tool chain expects the
+// relative form — without this normalization, notebook_search →
+// notebook_read would fail because the relative-path prefix check
+// rejects an absolute path. Returns null if abs is not under the
+// notebook dir (defensive — callers can choose to drop the row).
+function _absToNotebookRel(absPath) {
+    if (!_isUnderNotebookDir(absPath)) return null;
+    const canonical = path.resolve(absPath);
+    const tail = canonical === _CANON_NOTEBOOK_DIR
+        ? ''
+        : canonical.slice(_CANON_NOTEBOOK_DIR.length + 1);
+    return 'notebook/' + tail.split(path.sep).join('/');
+}
 // Seed categories — the agent MAY create new ones, but should prefer these
 // to avoid category fragmentation (`family/` vs `people/` for similar
 // entities). The list is in the rubric in ai.js too.
@@ -46,9 +77,11 @@ const SEED_CATEGORIES = ['people', 'projects', 'crypto', 'places', 'topics', 'to
 // nested objects, no anchors, no folded scalars. Avoids adding a dep
 // (js-yaml) for what is essentially a key:value sandwich between `---`
 // markers. If a page contains frontmatter we did not write (e.g. user
-// edited it in Obsidian and added fields), we round-trip unknown keys
-// verbatim — they're treated as opaque string values and preserved
-// during merge so user-added metadata isn't silently dropped.
+// edited it in Obsidian and added fields), unknown keys are preserved
+// during merge so user-added metadata isn't silently dropped — but
+// note that key NAMES are case-folded to lowercase during parse
+// (so "Title" round-trips as "title") and array / scalar values are
+// re-serialized through our formatters rather than echoed byte-for-byte.
 
 function _quoteIfNeeded(s) {
     if (s == null) return '';
@@ -192,6 +225,12 @@ function resolvePagePath({ category, name, path: rawPath }) {
         if (!rel.endsWith('.md')) rel = rel + '.md';
         const abs = safePath(rel);
         if (!abs) return { error: 'Access denied: path outside workspace' };
+        // Defense against ".." traversal: a path like "notebook/../X.md"
+        // passes the prefix check + safePath (still inside workspace) but
+        // escapes the notebook scope. Reject it.
+        if (!_isUnderNotebookDir(abs)) {
+            return { error: 'path must resolve inside the notebook directory' };
+        }
         // Derive category + name for log + frontmatter defaults
         const parts = rel.split('/').filter(Boolean);
         const derivedCategory = parts.length >= 3 ? parts[1] : DEFAULT_CATEGORY;
@@ -457,6 +496,10 @@ const handlers = {
         }
         const abs = safePath(rel);
         if (!abs) return { error: 'Access denied: path outside workspace' };
+        // Defense against ".." traversal — see _isUnderNotebookDir docstring.
+        if (!_isUnderNotebookDir(abs)) {
+            return { error: 'path must resolve inside the notebook directory' };
+        }
         if (!fs.existsSync(abs)) {
             return { error: `Notebook page not found: ${rel}` };
         }
@@ -479,7 +522,17 @@ const handlers = {
         if (!q) return { error: 'query is required' };
         const mr = Math.floor(Number(input?.max_results));
         const maxResults = (Number.isFinite(mr) && mr > 0) ? mr : 10;
-        const results = searchMemory(q, maxResults, { source: 'notebook' });
+        const raw = searchMemory(q, maxResults, { source: 'notebook' });
+        // Normalize result `file` fields back to "notebook/..." relative form
+        // so the agent can chain notebook_search → notebook_read/save without
+        // the prefix check rejecting an absolute path. The SQL.js index
+        // stores absolute paths; the fallback scan already emits
+        // "notebook/category/entity.md" via _walkMarkdownFiles + a slice
+        // off NOTEBOOK_DIR, so it's a no-op for those rows.
+        const results = raw.map((r) => {
+            const rel = _absToNotebookRel(r.file) || r.file;
+            return { ...r, file: rel };
+        });
         return {
             query: q,
             source: 'notebook',
@@ -498,6 +551,12 @@ const handlers = {
         }
         const abs = safePath(rel);
         if (!abs) return { error: 'Access denied: path outside workspace' };
+        // Defense against ".." traversal — see _isUnderNotebookDir docstring.
+        // Without this, the agent could ask to delete arbitrary workspace
+        // files like agent_settings.json.
+        if (!_isUnderNotebookDir(abs)) {
+            return { error: 'path must resolve inside the notebook directory' };
+        }
         if (!fs.existsSync(abs)) {
             return { error: `Notebook page not found: ${rel}` };
         }
