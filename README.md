@@ -89,7 +89,7 @@ With a funded burner, the agent uses three new tools — `agent_pay`, `wallet_st
 - Perplexity (2), WolframAlpha (2), Reducto (2)
 - 2Captcha, Textbelt SMS, Purch (1 each)
 
-The catalog was built from a 72-service / 824-endpoint audit of the [pay.sh](https://pay.sh) ecosystem (BAT-706); 63 known-but-not-usable services are documented in `unsupported.json` with structured failure reasons. The catalog stays dormant unless you explicitly ask to pay ("pay", "x402", "paysh").
+The catalog was built from a 72-service / 824-endpoint audit of the [pay.sh](https://pay.sh) ecosystem (BAT-706); 63 known-but-not-usable service entries are documented in `unsupported.json` with structured failure reasons. The catalog stays dormant unless you explicitly ask to pay ("pay", "x402", "paysh").
 
 **Burner key security:** Imported Ed25519 seed stored under `filesDir/burner_keys/<id>`, encrypted with a Keystore-derived AES-256-GCM key. Signing happens inside the Kotlin vault — the Node.js process sends a transaction blob and gets back a signature; it never holds the raw key. Loopback bridge requires a per-boot auth token. `android:allowBackup=false` keeps burner keys out of cloud backups. `agent_pay` resolves DNS before any HTTP request and refuses private-range IPs.
 
