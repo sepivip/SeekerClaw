@@ -241,7 +241,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 │   - Dashboard                  - Node.js Runtime   │
 │   - Setup                        - OpenClaw Gateway │
 │   - Logs                         - AI Agent         │
-│   - Settings                     - 72 Tools         │
+│   - Settings                     - 63 Tools         │
 │                                  - SQL.js DB        │
 │  Boot Receiver ──> Auto-start                      │
 │  Watchdog ──> 30s health check                     │

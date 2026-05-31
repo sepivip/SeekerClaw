@@ -31,7 +31,7 @@
 
 SeekerClaw — winner of the **Solana Mobile Hackathon (April 2026)** — embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram or Discord — ask questions, control your phone, trade crypto, schedule tasks, **and now pay for paid APIs autonomously in USDC**.
 
-v2 introduces a **burner wallet + x402 payment client**: a small, app-stored wallet you import once that lets your agent transact within per-tx and daily caps you set — without leaving your main wallet exposed. The agent can call 44 catalogued paid endpoints across 10 services (market data, real estate, travel, research, captcha, SMS, more) entirely on its own initiative, while your Phantom / MWA wallet remains user-controlled for swaps and transfers.
+v2 introduces a **burner wallet + x402 payment client**: a small, app-stored wallet you import once that lets your agent transact within per-tx and daily caps you set — without leaving your main wallet exposed. The agent can call 44 catalogued paid endpoints across 10 services (market data, real estate, travel, research, captcha, SMS, more) once you opt in to a paid lookup, while your Phantom / MWA wallet remains user-controlled for swaps and transfers.
 
 **63 built-in tools** (plus MCP remote tools), **22 bundled skills + 35+ partner skills**, two-wallet Solana, multi-provider AI (Claude + OpenAI + OpenRouter + any OpenAI-compatible gateway), extended thinking preserved across tool calls, graceful Stop — all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
 
@@ -78,7 +78,7 @@ v2 makes SeekerClaw the first on-device agent that can actually transact on the 
 - **Main wallet (you sign):** Phantom or any MWA wallet. Used for swaps, transfers, DCA, limit orders. Every action goes through a wallet popup.
 - **Burner wallet (agent signs, within caps):** A Solana Ed25519 keypair *you import once* (from Phantom, Solflare, a hardware wallet, or `solana-keygen`) — encrypted at rest under Android Keystore (AES-256-GCM). **SeekerClaw does not generate keys.** Used only for x402 micropayments to paid APIs. You set per-tx and daily caps in USDC and SOL; the agent cannot exceed them.
 
-With a funded burner, the agent uses three new tools — `agent_pay`, `wallet_status`, `wallet_set_caps` — to fetch x402-protected endpoints and pay automatically. GET requests under cap settle silently; POST requests always ask for confirmation. SSRF defense, DNS-rebinding protection, and an 18-error-code DIAGNOSTICS playbook are built in.
+With a funded burner, the agent uses three new tools — `agent_pay`, `wallet_status`, `wallet_set_caps` — to fetch x402-protected endpoints and settle payments. GET requests under cap settle silently; POST requests always ask for confirmation. SSRF defense, DNS-rebinding protection, and an 18-error-code DIAGNOSTICS playbook are built in.
 
 **x402 v2 is live end-to-end.** `agent_pay` completes the full 402 → build USDC transfer → settle → retrieve response loop for v2 services including Tripadvisor, CoinGecko (via Stablecrypto Market Data), and Textbelt SMS POST. No "detect/build only" caveats — POST settlement works.
 
@@ -174,7 +174,7 @@ Open the app → pick your AI provider (Claude, OpenAI, or OpenRouter) → enter
 
 ## Partner Skills
 
-SeekerClaw also ships 22 bundled skills out of the box (calculator, weather, news, research, summarize, translate, reminders, todo, github, crypto-prices, and more) plus the v2 additions `burner-wallet` and `paysh-catalog`. See the [full partner skills catalog](https://seekerclaw.xyz/partner-skills) for all 35+ third-party options.
+SeekerClaw also ships 22 bundled skills out of the box — including the v2 additions `burner-wallet` and `paysh-catalog`, plus calculator, weather, news, research, summarize, translate, reminders, todo, github, crypto-prices, and more. See the [full partner skills catalog](https://seekerclaw.xyz/partner-skills) for all 35+ third-party options available from the marketplace.
 
 Install via Telegram: send your agent the install link and it handles the rest.
 
