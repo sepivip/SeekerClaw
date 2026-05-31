@@ -141,6 +141,7 @@ const SKIP_REASONS = {
     'tools/env.js': 'requires config.js (USER_ENV_KEYS)',
     'tools/file.js': 'requires main.js globals',
     'tools/memory.js': 'requires memory.js state',
+    'tools/notebook.js': 'requires memory.js + database.js (BAT-991 notebook knowledge layer)',
     'tools/session.js': 'requires ai.js',
     'tools/skill.js': 'requires skills.js state',
     'tools/solana.js': 'requires solana.js',

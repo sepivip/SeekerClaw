@@ -11,6 +11,10 @@ const { _decimalToAtomic } = require('../caps/preflight');
 
 const webMod      = require('./web');
 const memoryMod   = require('./memory');
+// BAT-991: notebook knowledge layer — 4 tools (notebook_save, notebook_read,
+// notebook_search, notebook_delete). Additive over memory_* tools; routing
+// rubric in ai.js buildSystemBlocks `## Notebook Knowledge Layer`.
+const notebookMod = require('./notebook');
 const fileMod     = require('./file');
 const skillMod    = require('./skill');
 const cronMod     = require('./cron');
@@ -30,6 +34,7 @@ const agentPayMod = require('./agent_pay');
 const TOOLS = [
     ...webMod.tools,
     ...memoryMod.tools,
+    ...notebookMod.tools,
     ...fileMod.tools,
     ...skillMod.tools,
     ...cronMod.tools,
@@ -48,6 +53,7 @@ const TOOLS = [
 const handlerMap = Object.assign({},
     webMod.handlers,
     memoryMod.handlers,
+    notebookMod.handlers,
     fileMod.handlers,
     skillMod.handlers,
     cronMod.handlers,
