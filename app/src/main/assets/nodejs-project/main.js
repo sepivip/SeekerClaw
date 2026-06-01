@@ -1,6 +1,34 @@
 // SeekerClaw AI Agent
 // Phase 2: Full Claude AI agent with tools, memory, and personality
 
+// BAT-992: Force IPv4-first DNS resolution. MUST run before any other code
+// that might trigger DNS (config.js, requires below, etc.).
+//
+// Why: Node 17+ changed dns.lookup() default `verbatim` from false to true
+// (RFC 6724 compliant — returns OS-resolver order, which typically prefers
+// AAAA). On networks where IPv6 is "half-on" (router advertises IPv6 prefix
+// but upstream IPv6 route is broken — common on consumer routers worldwide,
+// hotel/café WiFi, regional ISPs in the Caucasus / LATAM / SE Asia), the
+// TCP SYN to an AAAA address goes nowhere. The kernel doesn't fail-fast
+// because the IPv6 stack is partially up, so the request hangs for the
+// full local timeout (60s).
+//
+// Node's classic http/https module (which telegram.js, http.js, providers/*
+// all use) has NO Happy Eyeballs (RFC 8305) fallback to save us. curl works
+// on the same network because curl has Happy Eyeballs and falls back to
+// IPv4 after ~7s. Node does not — once it picks AAAA, it commits.
+//
+// Symptoms on broken-IPv6 networks: 60s Telegram getUpdates timeouts in a
+// clockwork pattern, "Status reaction failed: ETIMEDOUT" on Telegram-IPv6
+// addresses, stuck 👀 reaction emojis, AI API transport timeouts. Live
+// debugged on a Solana Seeker on a real WiFi network 2026-06-01.
+//
+// Override via SEEKERCLAW_DNS_RESULT_ORDER env var if you want pure RFC
+// behavior (set to 'verbatim' or 'ipv6first'). For 99.9% of users 'ipv4first'
+// is correct; if your IPv6 actually works, you lose nothing meaningful.
+const _dnsResultOrder = process.env.SEEKERCLAW_DNS_RESULT_ORDER || 'ipv4first';
+require('dns').setDefaultResultOrder(_dnsResultOrder);
+
 const fs = require('fs');
 
 // ============================================================================
