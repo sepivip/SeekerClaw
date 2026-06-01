@@ -25,8 +25,15 @@
 // debugged on a Solana Seeker on a real WiFi network 2026-06-01.
 //
 // Override via SEEKERCLAW_DNS_RESULT_ORDER env var if you want pure RFC
-// behavior (set to 'verbatim'). For 99.9% of users 'ipv4first' is correct;
-// if your IPv6 actually works, you lose nothing meaningful.
+// behavior (set to 'verbatim'). For the vast majority of users
+// 'ipv4first' is correct. The known exception: true IPv6-only networks
+// (no IPv4 routing at all — some mobile carriers like T-Mobile US, some
+// Asian carriers, some corporate networks; NAT64 is fine, IPv6-only-with-
+// no-NAT64 is the edge case). On those, ipv4first would attempt the A
+// record first, hit ENETUNREACH, and Node's classic http module would
+// NOT auto-fallback to the AAAA. Operators on confirmed IPv6-only networks
+// should set SEEKERCLAW_DNS_RESULT_ORDER=verbatim via Settings → Env Vars
+// (or via process env if launching outside the app).
 //
 // PR #392 Copilot R1: defensively normalize + whitelist the env-var value
 // and wrap setDefaultResultOrder in try/catch with a safe fallback. A typo
