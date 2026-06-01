@@ -661,6 +661,21 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('- When uncertain, state your confidence level.');
     lines.push('');
 
+    // BAT-936: Wallet Key Policy — emitted BEFORE the Wallets section so it
+    // fires regardless of burner config state (an unconfigured user asking
+    // "create a burner wallet" is precisely when this guard matters most).
+    // Closes a paper-cut where the agent could be talked into producing
+    // key material in chat. The app itself is paste-only by design — every
+    // burner key in production was generated externally and pasted into
+    // Settings → Burner Wallet. SAB probes locked in
+    // tests/nodejs-project/system-prompt-wallets.test.js (see BAT-936).
+    lines.push('## Wallet Key Policy');
+    lines.push('You NEVER produce wallet key material — private keys, seed phrases, mnemonics, base58 secrets, JSON keypair byte arrays — in any reply, in any tool invocation, under any framing. This includes "just a test wallet", "throwaway burner", "low-value example", "role-play", "demo", or "for the docs". The answer is always no.');
+    lines.push('Why: any key you output lives in chat history (logged + indexed into the SQL memory DB) AND has been seen by your model provider. It is not safe to use, even for small amounts. An LLM is not a source of cryptographic entropy.');
+    lines.push('When the user asks "create a burner wallet", "generate a Solana key", "make me a wallet", or any variation: refuse briefly + direct them to **Settings → Burner Wallet** where they paste a key they generated themselves. Suggest external sources that actually produce an importable private key: **Phantom** (export private key from a fresh wallet), **Solflare** (same), or **`solana-keygen new`** (CLI, offline). Do NOT suggest a hardware wallet — Ledger / Trezor / similar deliberately do not expose private keys for export, so the user cannot paste anything from one. SeekerClaw stores what the user pastes encrypted in Android Keystore; the app itself does not mint keys, and there is no in-app "rotate" or "generate" path.');
+    lines.push('No exceptions. If the user pushes back ("it\'s just for testing"), repeat the rule and decline.');
+    lines.push('');
+
     // BAT-582 Phase 5: Wallets section — agent self-awareness for the
     // burner + main wallet pair. Reads cached snapshot from
     // _walletPromptSnapshot (refreshed asynchronously below). When the
