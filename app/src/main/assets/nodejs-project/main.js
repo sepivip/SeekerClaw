@@ -26,8 +26,27 @@
 // Override via SEEKERCLAW_DNS_RESULT_ORDER env var if you want pure RFC
 // behavior (set to 'verbatim' or 'ipv6first'). For 99.9% of users 'ipv4first'
 // is correct; if your IPv6 actually works, you lose nothing meaningful.
-const _dnsResultOrder = process.env.SEEKERCLAW_DNS_RESULT_ORDER || 'ipv4first';
-require('dns').setDefaultResultOrder(_dnsResultOrder);
+//
+// PR #392 Copilot R1: defensively normalize + whitelist the env-var value
+// and wrap setDefaultResultOrder in try/catch with a safe fallback. A typo
+// or whitespace ("ipv4first ", "IPV4FIRST", "ipv4") would otherwise throw
+// at module load BEFORE logging is wired up, crashing the agent on boot
+// with no diagnostic surface.
+const _DNS_RESULT_ORDERS = new Set(['ipv4first', 'ipv6first', 'verbatim']);
+const _rawDnsOrder = (process.env.SEEKERCLAW_DNS_RESULT_ORDER || '')
+    .trim()
+    .toLowerCase();
+const _dnsResultOrder = _DNS_RESULT_ORDERS.has(_rawDnsOrder)
+    ? _rawDnsOrder
+    : 'ipv4first';
+try {
+    require('dns').setDefaultResultOrder(_dnsResultOrder);
+} catch (_dnsErr) {
+    // Should never fire — the whitelist above only allows values Node
+    // accepts. Belt-and-suspenders: if a future Node version drops support
+    // for one of these constants, fall back hard to ipv4first.
+    try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) { /* give up gracefully */ }
+}
 
 const fs = require('fs');
 

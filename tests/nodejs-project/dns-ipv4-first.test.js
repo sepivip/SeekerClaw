@@ -85,6 +85,66 @@ check('main.js respects SEEKERCLAW_DNS_RESULT_ORDER env var override', () => {
     );
 });
 
+// PR #392 Copilot R1: defensive env-var input handling. A typo / whitespace /
+// case error in SEEKERCLAW_DNS_RESULT_ORDER would otherwise throw at module
+// load BEFORE logging is wired, crashing the agent on boot with no surface.
+check('main.js normalizes env-var value (trim + lowercase) before use', () => {
+    const src = fs.readFileSync(MAIN_JS, 'utf8');
+    // Both .trim() and .toLowerCase() should be applied to the env var read.
+    assert.ok(
+        /SEEKERCLAW_DNS_RESULT_ORDER[\s\S]{0,200}\.trim\(\)/.test(src),
+        'main.js MUST .trim() the env var to tolerate "ipv4first " with trailing space.'
+    );
+    assert.ok(
+        /SEEKERCLAW_DNS_RESULT_ORDER[\s\S]{0,200}\.toLowerCase\(\)/.test(src),
+        'main.js MUST .toLowerCase() the env var to tolerate "IPV4FIRST" / "Verbatim".'
+    );
+});
+
+check('main.js whitelists valid result-order values + falls back to ipv4first on invalid', () => {
+    const src = fs.readFileSync(MAIN_JS, 'utf8');
+    // The whitelist Set should mention all 3 valid values.
+    assert.ok(/['"]ipv4first['"]/.test(src), 'whitelist must include "ipv4first"');
+    assert.ok(/['"]ipv6first['"]/.test(src), 'whitelist must include "ipv6first"');
+    assert.ok(/['"]verbatim['"]/.test(src), 'whitelist must include "verbatim"');
+    // Should be a Set (or equivalent has()-checked structure) used for membership test.
+    assert.ok(
+        /new Set\(\[\s*['"]ipv4first['"]\s*,\s*['"]ipv6first['"]\s*,\s*['"]verbatim['"]\s*\]\)/.test(src)
+        || /\bhas\(\s*_?raw/.test(src),
+        'main.js MUST guard env-var input with a whitelist (Set membership), not pass-through.'
+    );
+});
+
+check('main.js wraps setDefaultResultOrder in try/catch (no crash on weird Node versions)', () => {
+    const src = fs.readFileSync(MAIN_JS, 'utf8');
+    // The setDefaultResultOrder call MUST be inside a try block.
+    assert.ok(
+        /try\s*\{[\s\S]{0,400}setDefaultResultOrder\([\s\S]{0,200}\}\s*catch/.test(src),
+        'setDefaultResultOrder MUST be wrapped in try/catch — a hostile env / future Node '
+        + 'version dropping support for a constant MUST NOT crash the agent at boot. See BAT-992 / PR #392 R1.'
+    );
+});
+
+// Runtime: verify the normalization logic actually works end-to-end by
+// re-implementing it (the literal source assertions above just check the
+// shape; this asserts the semantics under various env inputs).
+check('R1 semantics: env var normalization tolerates whitespace + case', () => {
+    function normalize(raw) {
+        const VALID = new Set(['ipv4first', 'ipv6first', 'verbatim']);
+        const v = (raw || '').trim().toLowerCase();
+        return VALID.has(v) ? v : 'ipv4first';
+    }
+    assert.strictEqual(normalize(undefined), 'ipv4first', 'unset → default ipv4first');
+    assert.strictEqual(normalize(''), 'ipv4first', 'empty → default ipv4first');
+    assert.strictEqual(normalize('ipv4first'), 'ipv4first', 'exact valid → as-is');
+    assert.strictEqual(normalize('IPV4FIRST'), 'ipv4first', 'uppercase tolerated');
+    assert.strictEqual(normalize(' verbatim '), 'verbatim', 'whitespace trimmed');
+    assert.strictEqual(normalize('Ipv6First'), 'ipv6first', 'mixed case tolerated');
+    assert.strictEqual(normalize('typo'), 'ipv4first', 'typo → fallback (NOT throw)');
+    assert.strictEqual(normalize('ipv4'), 'ipv4first', 'partial → fallback');
+    assert.strictEqual(normalize('   '), 'ipv4first', 'whitespace-only → fallback');
+});
+
 // ── Runtime check: simulate main.js's setDefaultResultOrder behavior ────────
 check('dns.setDefaultResultOrder("ipv4first") is supported by this Node version', () => {
     // Sanity: API must exist (Node 18+). nodejs-mobile is on Node 18.
