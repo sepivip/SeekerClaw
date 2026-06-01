@@ -73,6 +73,20 @@ function rebuildRedactPatterns() {
             patterns.push({ rx: new RegExp(_escRx(config[key]), 'g'), replacement: `[REDACTED:${key}]` });
         }
     }
+    // BAT-971: usepodToken is a UUID (not an *ApiKey-suffixed field), so the
+    // loop above won't pick it up. Codex v2.2 fix #1: register it explicitly
+    // via the same _dynamicPatterns mechanism so it produces [REDACTED:usepodToken]
+    // (not [REDACTED_ENV] from registerRedactedSecret). The URL-path-form pass
+    // in redactSecrets covers the case where the token appears spliced into a
+    // /proxy/<uuid>/... path string even if the bare value isn't matched.
+    if (config.usepodToken
+        && typeof config.usepodToken === 'string'
+        && config.usepodToken.length >= 8) {
+        patterns.push({
+            rx: new RegExp(_escRx(config.usepodToken), 'g'),
+            replacement: '[REDACTED:usepodToken]',
+        });
+    }
     // BAT-514: MCP server auth tokens are no longer iterated at
     // startup — tokens aren't in `MCP_SERVERS` post-migration (they
     // live in encrypted per-id files under `filesDir/mcp_tokens/<id>`
@@ -102,6 +116,14 @@ function redactSecrets(msg) {
     // Redact OpenAI API keys (sk-proj-..., sk-...)
     msg = msg.replace(/sk-proj-[a-zA-Z0-9_-]{20,}/g, 'sk-proj-***');
     msg = msg.replace(/sk-[a-zA-Z0-9_-]{20,}/g, 'sk-***');
+    // BAT-971: redact Usepod token in URL-path form (/proxy/<uuid>/...) — covers
+    // error stack traces, log lines, and any other string where the token landed
+    // in a path even when the literal-value redaction missed it (e.g. a partial
+    // concat, a test fixture, or pre-rebuild log lines). Broadened from just
+    // /balance|/v1 to all path tails so /completions, /models, query strings,
+    // and future Usepod paths are all covered. Runs BEFORE the bridge-token
+    // line so the path replacement is intact when later passes scan the string.
+    msg = msg.replace(/\/proxy\/[0-9a-fA-F-]{32,36}\/[A-Za-z0-9_./?&=-]*/g, '/proxy/[REDACTED]/<...>');
     // Redact bridge tokens (UUID format)
     if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(_escRx(BRIDGE_TOKEN), 'g'), '***bridge-token***');
     // Redact Jupiter API key + MCP auth tokens (cached literal patterns)

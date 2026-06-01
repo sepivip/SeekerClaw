@@ -272,6 +272,28 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             else -> "api_key"
         }
 
+        // BAT-971 / Codex v2.2: Settings-first gate for switching INTO Usepod.
+        // Both usepodToken AND usepodModel must be non-blank before we commit to
+        // a provider switch — otherwise the post-restart Node would either fail
+        // its config-load gate (config.js exits with `missing required config
+        // (usepodToken)` / `(usepodModel)`) OR (if we let the model fall through
+        // to savedModel) silently carry the prior provider's model into Usepod,
+        // violating "Do NOT silently carry an old model" (v2.2 fix #4). The
+        // /provider usepod Telegram handler in message-handler.js enforces the
+        // same rule via hasCredentialsFor('usepod'); this is the UI-side mirror.
+        if (newProviderId == "usepod") {
+            val tokenSet = current.usepodToken.isNotBlank()
+            val modelSet = current.usepodModel.isNotBlank()
+            if (!tokenSet || !modelSet) {
+                android.widget.Toast.makeText(
+                    context,
+                    "Set a Usepod model first.",
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+                return
+            }
+        }
+
         // Resolve the effective model for the new provider.
         val modelsForNew = modelsForProvider(newProviderId, effectiveAuthType)
         val savedModel = prefs.getString("lastModel_$newProviderId", null)
@@ -280,9 +302,22 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             val defaultModel = when (newProviderId) {
                 "openrouter" -> OPENROUTER_DEFAULT_MODEL
                 "custom" -> ""
+                // BAT-971: For Usepod, the "default" model is the user's dedicated
+                // `usepodModel` config field — NOT a registry blank, and NEVER the
+                // savedModel (lastModel_usepod SharedPref) which could be stale or
+                // mismatched. The gate above guarantees usepodModel is non-blank here.
+                "usepod" -> current.usepodModel
                 else -> ""
             }
-            savedModel?.takeIf { it.isNotBlank() } ?: defaultModel
+            // BAT-971: Usepod is special — savedModel (the cross-provider lastModel_
+            // SharedPref) is bypassed; the dedicated usepodModel field is the only
+            // source. Other freeform providers (openrouter, custom) keep the
+            // existing savedModel-fallback behavior.
+            if (newProviderId == "usepod") {
+                defaultModel
+            } else {
+                savedModel?.takeIf { it.isNotBlank() } ?: defaultModel
+            }
         } else {
             if (modelsForNew.any { it.id == currentModel }) {
                 // Current model is still valid — keep it.
@@ -546,6 +581,27 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             showDivider = false,
                         )
                     }
+                    "usepod" -> {
+                        // BAT-971: Settings-first Usepod branch. Both Model AND Token
+                        // are required. Saving the model while provider=usepod triggers
+                        // ConfigManager's mirror (writes config.model = usepodModel too),
+                        // so the running agent picks up the saved model on next AI turn.
+                        ConfigField(
+                            label = "Model",
+                            value = config?.usepodModel?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = { editField = "usepodModel"; editLabel = "Model ID"; editValue = config?.usepodModel ?: "" },
+                            info = "Type the model your token has access to (read it off the Usepod dashboard).",
+                            isRequired = true,
+                        )
+                        ConfigField(
+                            label = "Token",
+                            value = maskKey(config?.usepodToken),
+                            onClick = { editField = "usepodToken"; editLabel = "Usepod Token (UUID)"; editValue = config?.usepodToken ?: "" },
+                            info = "Get your token at https://usepod.ai/dashboard. Fund it with USDC on Solana before requests work (until funded, you'll see HTTP 402).",
+                            isRequired = true,
+                            showDivider = false,
+                        )
+                    }
                 }
             }
 
@@ -605,6 +661,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     format = config?.customFormat ?: "chat_completions",
                                     extraHeaders = config?.customHeaders ?: "",
                                 )
+                                "usepod" -> testUsepodConnection(config?.usepodToken ?: "")
                                 else -> {
                                     // Use Anthropic-specific credential derived from authType
                                     val authType = config?.authType ?: "api_key"
@@ -1265,6 +1322,90 @@ private suspend fun testCustomConnection(
         } catch (_: java.net.SocketTimeoutException) { error("Connection timed out")
         } catch (_: java.io.IOException) { error("Network unreachable or timeout")
         } finally { conn.disconnect() }
+    }
+}
+
+// BAT-971: Connection test for the Usepod provider. Hits GET
+// /proxy/<token>/balance and surfaces:
+//   - 200 + is_active=true + balance>0 → Success (the action button shows
+//     "Connection successful!" — matches other providers' convention)
+//   - 200 + is_active=false / usdc_balance=0 → soft Error "Token valid but
+//     unfunded — add USDC at usepod.ai/dashboard" (the token is structurally
+//     valid but won't work for inference until funded; surfacing as Error
+//     lets the user see they need to take an action)
+//   - 401 with "invalid token format" → Error "Invalid token format" (rare;
+//     the UUID gate in this function should catch it client-side first)
+//   - 401 with "not found or not activated" → Error "Token is unfunded or
+//     unknown" (empirically Usepod's balance endpoint returns this 401 for
+//     BOTH unfunded-but-registered AND unknown tokens — combined into one
+//     server-side message; see BAT-971 PR description for the live-probe matrix)
+//   - 401 (other) → Error "Invalid token"
+//   - 4xx other / 5xx → degrade to soft success per Codex v2.2 fix #5: if
+//     the balance endpoint shape diverges from what we expect, don't block
+//     the provider UI; let the first real request surface the issue
+private suspend fun testUsepodConnection(token: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        val trimmed = token.trim()
+        if (trimmed.isBlank()) error("Token is empty")
+        // Client-side UUID validation mirrors Node's isValidUsepodToken. Catches
+        // path-injection chars (/, ?, #, ..) and full URLs before they ever hit
+        // the network. The server's "invalid token format" 401 would catch them
+        // too, but a clean client-side reject is faster + uses no Usepod quota.
+        val uuidRe = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", RegexOption.IGNORE_CASE)
+        if (!uuidRe.matches(trimmed)) {
+            error("Invalid token format — paste the UUID from https://usepod.ai/dashboard")
+        }
+        val url = java.net.URL("https://api.usepod.ai/proxy/$trimmed/balance")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        try {
+            val status = conn.responseCode
+            if (status in 200..299) {
+                val body = try { conn.inputStream?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
+                val isActive = try { org.json.JSONObject(body).optBoolean("is_active", false) } catch (_: Exception) { false }
+                val micro = try { org.json.JSONObject(body).optLong("usdc_balance", 0L) } catch (_: Exception) { 0L }
+                if (isActive && micro > 0L) {
+                    // Funded path — success.
+                    return@runCatching
+                }
+                error("Token valid but unfunded — add USDC at https://usepod.ai/dashboard")
+            }
+            // Read the error body once so we can branch on `error.message`.
+            val errorBody = try { (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
+            val apiMessage = try {
+                org.json.JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""
+            } catch (_: Exception) { "" }
+            when (status) {
+                401, 404 -> {
+                    val msg = when {
+                        apiMessage.contains("invalid token format", ignoreCase = true) ->
+                            "Invalid token format — paste the UUID from https://usepod.ai/dashboard"
+                        apiMessage.contains("not found or not activated", ignoreCase = true) ->
+                            "Token is unfunded or unknown — add USDC at https://usepod.ai/dashboard"
+                        else -> "Invalid token — recheck Settings"
+                    }
+                    error(msg)
+                }
+                429 -> error("Rate limited — try again in a moment")
+                in 500..599 -> {
+                    // Codex v2.2 fix #5 degrade path: server-side outage shouldn't block
+                    // the provider UI. The first real request will surface the real issue.
+                    return@runCatching
+                }
+                else -> {
+                    // Degrade path for unexpected status codes.
+                    return@runCatching
+                }
+            }
+        } catch (_: java.net.SocketTimeoutException) {
+            error("Connection timed out")
+        } catch (_: java.io.IOException) {
+            error("Network unreachable or timeout")
+        } finally {
+            conn.disconnect()
+        }
     }
 }
 

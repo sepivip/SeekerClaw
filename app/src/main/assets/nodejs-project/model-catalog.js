@@ -266,6 +266,19 @@ function hasCredentialsFor(config, providerId, authType) {
                 return { ok: false, reason: 'No Custom provider base URL. Set it in Settings → Provider → Custom.' };
             }
             return { ok: true };
+        case 'usepod':
+            // BAT-971: Settings-first flow (Codex v2.2). The gate must prove
+            // the model was intentionally configured FOR USEPOD — checking
+            // `config.model` would falsely pass when the active provider
+            // is Claude/OpenAI with `claude-opus-*` / `gpt-*` as the model,
+            // silently carrying a non-Usepod model into Usepod on switch.
+            // The dedicated `usepodModel` config field is set only by
+            // ProviderConfigScreen's Usepod branch, so non-blank means
+            // "user intentionally chose this model for Usepod".
+            if (!nonBlank(config.usepodToken) || !nonBlank(config.usepodModel)) {
+                return { ok: false, reason: 'Set a Usepod model in Settings → AI Provider → Usepod first.' };
+            }
+            return { ok: true };
         default:
             return { ok: false, reason: `Unknown provider: ${providerId}` };
     }

@@ -61,6 +61,17 @@
       "freeform": true,
       "defaultModel": "",
       "models": []
+    },
+    {
+      "id": "usepod",
+      "displayName": "Usepod",
+      "authTypes": ["api_key"],
+      "keyHint": "usepod token (UUID)",
+      "consoleUrl": "https://usepod.ai/dashboard",
+      "keysUrl": "https://usepod.ai/dashboard",
+      "freeform": true,
+      "defaultModel": "",
+      "models": []
     }
   ]
 }

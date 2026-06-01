@@ -297,6 +297,10 @@ object RuntimeStateStore {
         "openai" -> authType == "api_key" || authType == "oauth"
         "openrouter" -> authType == "api_key"
         "custom" -> authType == "api_key"
+        // BAT-971: Usepod uses api_key auth (the dummy Authorization header
+        // is irrelevant since the real credential is in the URL path).
+        // Mirrors Node-side runtime-state.js `_VALID_AUTH_TYPES.usepod`.
+        "usepod" -> authType == "api_key"
         else -> false
     }
 
