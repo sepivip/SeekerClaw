@@ -3,12 +3,19 @@
 //
 // What this asserts:
 //   1. main.js calls require('dns').setDefaultResultOrder('ipv4first')
-//      as a top-of-file side effect, BEFORE any other code that might
-//      trigger DNS.
+//      as a top-of-file side effect, BEFORE any code that does outbound
+//      networking.
 //   2. The env var SEEKERCLAW_DNS_RESULT_ORDER overrides the default
-//      to 'verbatim' or 'ipv6first' for users who want the post-Node-17
-//      RFC-compliant behavior.
-//   3. The setDefaultResultOrder call is in main.js text — survives
+//      to 'verbatim' for users who want the post-Node-17 RFC-compliant
+//      behavior. On Node 18 (nodejs-mobile target) those are the only
+//      two values setDefaultResultOrder accepts — 'ipv6first' is a
+//      Node 20+ addition and is intentionally NOT exposed.
+//   3. The env-var override path works for the on-device user-facing
+//      flow too: Settings → Env Vars writes into workspace/config.json
+//      under envVars.*, which main.js reads directly (config.js's
+//      process.env merge runs AFTER main.js's DNS setup, so we can't
+//      rely on it here).
+//   4. The setDefaultResultOrder call is in main.js text — survives
 //      future "clean up unused requires" passes.
 //
 // Why this exists:
