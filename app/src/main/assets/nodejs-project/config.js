@@ -490,6 +490,23 @@ if (config.exaApiKey) config.exaApiKey = normalizeSecret(config.exaApiKey);
 if (config.tavilyApiKey) config.tavilyApiKey = normalizeSecret(config.tavilyApiKey);
 if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.firecrawlApiKey);
 
+// BAT-697 PR B: Jupiter Trigger V2 adapter feature flag. Default false —
+// V1 remains the shipping path until the staged-rollout commits (live smoke
+// → default flip → V1 removal) land in subsequent PRs. Normalize to a real
+// boolean so handlers can branch on `config.useTriggerV2 === true` without
+// truthy-coercing a string "false".
+//
+// PR #388 R7: Kotlin's writeConfigJson() does not yet emit a `useTriggerV2`
+// field (that arrives with PR C's Settings toggle), so the JSON-load path
+// always normalizes to false in the live runtime. To make PR B actually
+// enable-able for the PR C live-smoke phase WITHOUT shipping the UI early,
+// also accept SEEKERCLAW_USE_TRIGGER_V2=true via the env-var bridge (Settings
+// → Env Vars), which is already plumbed Kotlin → Node and merged into
+// process.env at line ~142 above. PR C migrates this to a proper Config
+// field + Settings toggle and can drop the env-var path.
+config.useTriggerV2 = config.useTriggerV2 === true
+    || process.env.SEEKERCLAW_USE_TRIGGER_V2 === 'true';
+
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
 const MCP_SERVERS = (config.mcpServers || [])
     .map((server) => {

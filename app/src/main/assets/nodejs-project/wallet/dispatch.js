@@ -87,16 +87,32 @@ const { log } = require('../config');
  * here as belt-and-suspenders — if routing says under-cap=false at this
  * point, something raced or the gate was bypassed; we return an error.
  */
-async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName }) {
+async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null }) {
     // 1. Decide routing.
     let route;
-    try {
-        route = await routeFor(toolName, toolArgs || {});
-    } catch (e) {
-        log(`[${flowName}] routeFor failed: ${e.message}`, 'WARN');
-        // Defensive: degrade to main path so the user sees an MWA popup
-        // rather than a silent failure.
-        route = { routingDecision: 'main', underCap: true, principalAtomic: null, capName: null };
+    if (forceRouting && (forceRouting.routingDecision === 'burner' || forceRouting.routingDecision === 'main')) {
+        // Caller already decided routing (e.g. handler observed a runtime
+        // constraint routeFor can't see, like "burner is in cap-allowing
+        // state per /burner/status, but the burner pubkey itself isn't
+        // reachable so we MUST fall back to main"). routeFor would otherwise
+        // re-compute routing from `toolArgs` alone and possibly return a
+        // burner decision the caller knew it had to override, producing a
+        // signer/fee-payer mismatch (PR #388 R2 finding).
+        route = {
+            routingDecision: forceRouting.routingDecision,
+            underCap: forceRouting.underCap !== undefined ? forceRouting.underCap : true,
+            principalAtomic: forceRouting.principalAtomic !== undefined ? forceRouting.principalAtomic : null,
+            capName: forceRouting.capName !== undefined ? forceRouting.capName : null,
+        };
+    } else {
+        try {
+            route = await routeFor(toolName, toolArgs || {});
+        } catch (e) {
+            log(`[${flowName}] routeFor failed: ${e.message}`, 'WARN');
+            // Defensive: degrade to main path so the user sees an MWA popup
+            // rather than a silent failure.
+            route = { routingDecision: 'main', underCap: true, principalAtomic: null, capName: null };
+        }
     }
 
     // 2. Burner over-cap defensive — gate should have blocked, but if we
@@ -205,10 +221,18 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
     }
 
     // 4d. Commit on success — anchor the spend in the daily ledger.
+    // Coerce the signature to a non-empty string or null: a broadcast callback
+    // that returns a non-string `signature` (object/number from a future code
+    // path) must never reach /burner/commit as a malformed value. Trigger V2's
+    // ambiguous-recovery path legitimately commits with signature:null.
+    const commitSignature =
+        (typeof broadcastResult.signature === 'string' && broadcastResult.signature.length > 0)
+            ? broadcastResult.signature
+            : null;
     try {
         await androidBridgeCall('/burner/commit', {
             reservationId,
-            signature: broadcastResult.signature || null,
+            signature: commitSignature,
         }, 5000);
     } catch (e) {
         // Commit failure is logged but doesn't unwind a successful broadcast.
@@ -360,8 +384,112 @@ async function recordJupiterOwnership(orderId, creatorWalletRole, flowName = 'ju
     }
 }
 
+/**
+ * BAT-697 PR B — sign a Jupiter Trigger V2 auth-challenge / deposit /
+ * confirm-cancel transaction via the burner WITHOUT consuming cap
+ * principal. Used for transaction-challenge V2 auth flows where the
+ * tx is a Memo-only auth payload (no value movement) and for the
+ * "sign a single tx, no broadcast" subpath shared by V2 cancel
+ * step-2 and ambiguous-create recovery.
+ *
+ * Differs from signCancelViaBurner in three ways:
+ *   - Caller controls broadcast (or skips it entirely — useful for auth
+ *     challenges where the "broadcast" is just POSTing to /auth/verify).
+ *   - No ownership tracking (no order ID exists yet for auth or for
+ *     create-deposit).
+ *   - 0-amount reservation: confirms burner is configured but never
+ *     touches cap state; always released, never committed.
+ *
+ * Returns { ok: true, signedTxBase64 } or { ok: false, error, reason }.
+ *
+ * Callers MUST call the broadcast/HTTP step themselves and not bake
+ * cap-state semantics around it — this helper is signing-only.
+ */
+// PR #388 R2: zero-cap reserve must work for any user whose burner has at
+// least one cap configured, not just users with a SOL cap. A user with
+// USDC-only caps (capPerTxSol: '0', capPerTxUsdc: set) routes USDC spends
+// through the burner; pre-fix this helper always reserved against the SOL
+// cap and would fail `burner_not_configured` for those users — blocking
+// V2 USDC orders before any deposit signing. We try SOL first (the common
+// case), then fall back to USDC on the specific `burner_not_configured`
+// error (and ONLY that error — other failures bubble up unchanged so we
+// don't mask transient issues).
+const _ZERO_CAP_CANDIDATES = ['burner.pertx.sol', 'burner.pertx.usdc'];
+async function _zeroCapReserveAny() {
+    let lastErr = null;
+    for (const name of _ZERO_CAP_CANDIDATES) {
+        const res = await androidBridgeCall('/burner/reserve', {
+            name,
+            atomicAmount: '0',
+            ttlMs: 60000,
+        }, 5000);
+        if (res && !res.error && res.reservationId) {
+            return { ok: true, reservationId: res.reservationId, capName: name };
+        }
+        lastErr = res;
+        // Only fall through to the next candidate when the burner reports
+        // "not configured" against THIS cap (which means the asset cap
+        // for this name is unset, not that the burner itself is missing).
+        // Bridge unreachable / TTL / other errors short-circuit so we
+        // don't paper over a real failure with a second redundant call.
+        if (!res || res.error !== 'burner_not_configured') break;
+    }
+    return {
+        ok: false,
+        error: (lastErr && lastErr.error) || 'reserve_failed',
+        reason: (lastErr && lastErr.reason)
+            || `zero-cap reservation failed against all candidate caps (${_ZERO_CAP_CANDIDATES.join(', ')})`,
+    };
+}
+
+async function signZeroCapTxViaBurner({ unsignedTxBase64, flowName = 'zero-cap-sign' }) {
+    const burner = getWallet('burner');
+    if (!burner) {
+        return { ok: false, error: 'no_burner_wallet', reason: 'getWallet("burner") returned null' };
+    }
+    const reserveRes = await _zeroCapReserveAny();
+    if (!reserveRes.ok) {
+        return { ok: false, error: reserveRes.error, reason: reserveRes.reason };
+    }
+    const reservationId = reserveRes.reservationId;
+
+    let signedTxBase64;
+    try {
+        const signed = await burner.signer().signTransaction(unsignedTxBase64, { reservationId });
+        if (!signed || signed.error) {
+            await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');
+            return {
+                ok: false,
+                error: signed && signed.error ? signed.error : 'sign_failed',
+                reason: signed && signed.reason ? signed.reason : 'signing failed',
+            };
+        }
+        signedTxBase64 = signed.signedTxBase64;
+        if (!signedTxBase64) {
+            await _release(reservationId, 'no_signed_tx');
+            return { ok: false, error: 'sign_failed', reason: 'no signedTxBase64 in response' };
+        }
+    } catch (e) {
+        await _release(reservationId, 'sign_threw');
+        return { ok: false, error: 'sign_failed', reason: e.message };
+    }
+
+    // Always release — zero-cap reservation never accumulates spend.
+    try {
+        await androidBridgeCall('/burner/release', {
+            reservationId,
+            reason: `${flowName}_complete`,
+        }, 5000);
+    } catch (e) {
+        log(`[${flowName}] release after zero-cap sign failed: ${e.message}`, 'WARN');
+    }
+
+    return { ok: true, signedTxBase64 };
+}
+
 module.exports = {
     routeAndSign,
     signCancelViaBurner,
+    signZeroCapTxViaBurner,
     recordJupiterOwnership,
 };
