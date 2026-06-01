@@ -24,15 +24,20 @@
 // debugged on a Solana Seeker on a real WiFi network 2026-06-01.
 //
 // Override via SEEKERCLAW_DNS_RESULT_ORDER env var if you want pure RFC
-// behavior (set to 'verbatim' or 'ipv6first'). For 99.9% of users 'ipv4first'
-// is correct; if your IPv6 actually works, you lose nothing meaningful.
+// behavior (set to 'verbatim'). For 99.9% of users 'ipv4first' is correct;
+// if your IPv6 actually works, you lose nothing meaningful.
 //
 // PR #392 Copilot R1: defensively normalize + whitelist the env-var value
 // and wrap setDefaultResultOrder in try/catch with a safe fallback. A typo
 // or whitespace ("ipv4first ", "IPV4FIRST", "ipv4") would otherwise throw
 // at module load BEFORE logging is wired up, crashing the agent on boot
 // with no diagnostic surface.
-const _DNS_RESULT_ORDERS = new Set(['ipv4first', 'ipv6first', 'verbatim']);
+//
+// PR #392 Copilot R2/CI: nodejs-mobile target is Node 18, which only
+// supports the two values in this whitelist. (Node 20+ added a third
+// option for IPv6-first ordering; we don't expose it because the runtime
+// can't honor it — passing it to setDefaultResultOrder on Node 18 throws.)
+const _DNS_RESULT_ORDERS = new Set(['ipv4first', 'verbatim']);
 const _rawDnsOrder = (process.env.SEEKERCLAW_DNS_RESULT_ORDER || '')
     .trim()
     .toLowerCase();

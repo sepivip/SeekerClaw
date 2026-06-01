@@ -81,7 +81,7 @@ check('main.js respects SEEKERCLAW_DNS_RESULT_ORDER env var override', () => {
     assert.ok(
         /SEEKERCLAW_DNS_RESULT_ORDER/.test(src),
         'main.js MUST honor SEEKERCLAW_DNS_RESULT_ORDER env var so users with working IPv6 '
-        + 'can override to "verbatim" or "ipv6first" if they want RFC behavior. See BAT-992.'
+        + 'can override to "verbatim" if they want RFC behavior. See BAT-992.'
     );
 });
 
@@ -101,15 +101,24 @@ check('main.js normalizes env-var value (trim + lowercase) before use', () => {
     );
 });
 
-check('main.js whitelists valid result-order values + falls back to ipv4first on invalid', () => {
+check('main.js whitelists Node 18-supported result-order values + falls back to ipv4first on invalid', () => {
     const src = fs.readFileSync(MAIN_JS, 'utf8');
-    // The whitelist Set should mention all 3 valid values.
+    // Node 18 (nodejs-mobile target) supports only 'verbatim' and 'ipv4first'.
+    // 'ipv6first' was added in Node 20 — intentionally not in the whitelist
+    // here. When/if nodejs-mobile bumps to Node 20+, this assertion may be
+    // extended to include 'ipv6first'.
     assert.ok(/['"]ipv4first['"]/.test(src), 'whitelist must include "ipv4first"');
-    assert.ok(/['"]ipv6first['"]/.test(src), 'whitelist must include "ipv6first"');
     assert.ok(/['"]verbatim['"]/.test(src), 'whitelist must include "verbatim"');
-    // Should be a Set (or equivalent has()-checked structure) used for membership test.
     assert.ok(
-        /new Set\(\[\s*['"]ipv4first['"]\s*,\s*['"]ipv6first['"]\s*,\s*['"]verbatim['"]\s*\]\)/.test(src)
+        !/['"]ipv6first['"]/.test(src),
+        'whitelist MUST NOT include "ipv6first" on a Node 18 target — Node 18 throws when '
+        + 'setDefaultResultOrder receives it, so exposing it as a valid env-var value is useless '
+        + 'AND triggers the try/catch fallback path unnecessarily. Remove from the whitelist '
+        + 'until nodejs-mobile bumps to Node 20+.'
+    );
+    // Membership-checked structure (Set.has or equivalent) — not a pass-through.
+    assert.ok(
+        /new Set\(\[\s*['"]ipv4first['"]\s*,\s*['"]verbatim['"]\s*\]\)/.test(src)
         || /\bhas\(\s*_?raw/.test(src),
         'main.js MUST guard env-var input with a whitelist (Set membership), not pass-through.'
     );
@@ -130,7 +139,8 @@ check('main.js wraps setDefaultResultOrder in try/catch (no crash on weird Node 
 // shape; this asserts the semantics under various env inputs).
 check('R1 semantics: env var normalization tolerates whitespace + case', () => {
     function normalize(raw) {
-        const VALID = new Set(['ipv4first', 'ipv6first', 'verbatim']);
+        // Mirror main.js whitelist (Node 18: 'ipv4first', 'verbatim').
+        const VALID = new Set(['ipv4first', 'verbatim']);
         const v = (raw || '').trim().toLowerCase();
         return VALID.has(v) ? v : 'ipv4first';
     }
@@ -139,15 +149,19 @@ check('R1 semantics: env var normalization tolerates whitespace + case', () => {
     assert.strictEqual(normalize('ipv4first'), 'ipv4first', 'exact valid → as-is');
     assert.strictEqual(normalize('IPV4FIRST'), 'ipv4first', 'uppercase tolerated');
     assert.strictEqual(normalize(' verbatim '), 'verbatim', 'whitespace trimmed');
-    assert.strictEqual(normalize('Ipv6First'), 'ipv6first', 'mixed case tolerated');
+    assert.strictEqual(normalize('Verbatim'), 'verbatim', 'mixed case tolerated');
+    // ipv6first is NOT in the Node-18 whitelist → falls back to ipv4first,
+    // which is the correct behavior on Node 18 (where ipv6first would
+    // throw if passed to setDefaultResultOrder).
+    assert.strictEqual(normalize('ipv6first'), 'ipv4first', 'ipv6first (Node 20+ only) → fallback on Node 18');
     assert.strictEqual(normalize('typo'), 'ipv4first', 'typo → fallback (NOT throw)');
     assert.strictEqual(normalize('ipv4'), 'ipv4first', 'partial → fallback');
     assert.strictEqual(normalize('   '), 'ipv4first', 'whitespace-only → fallback');
 });
 
 // ── Runtime check: simulate main.js's setDefaultResultOrder behavior ────────
-check('dns.setDefaultResultOrder("ipv4first") is supported by this Node version', () => {
-    // Sanity: API must exist (Node 18+). nodejs-mobile is on Node 18.
+check('dns.setDefaultResultOrder is supported on Node 18 (nodejs-mobile target)', () => {
+    // Sanity: API must exist on Node 18 (nodejs-mobile target).
     assert.strictEqual(typeof dns.setDefaultResultOrder, 'function',
         'dns.setDefaultResultOrder requires Node 18+. nodejs-mobile target.');
     assert.strictEqual(typeof dns.getDefaultResultOrder, 'function',
@@ -155,14 +169,15 @@ check('dns.setDefaultResultOrder("ipv4first") is supported by this Node version'
     // Save + restore around our probe so we don't pollute other tests.
     const original = dns.getDefaultResultOrder();
     try {
+        // Node 18 supports 'verbatim' and 'ipv4first' only. 'ipv6first' was
+        // added in Node 20 — intentionally NOT tested here since the target
+        // runtime is Node 18 LTS (nodejs-mobile).
         dns.setDefaultResultOrder('ipv4first');
         assert.strictEqual(dns.getDefaultResultOrder(), 'ipv4first',
             'setDefaultResultOrder("ipv4first") must take effect immediately.');
-        // Also test the env-var-style overrides we promise to honor.
         dns.setDefaultResultOrder('verbatim');
-        assert.strictEqual(dns.getDefaultResultOrder(), 'verbatim');
-        dns.setDefaultResultOrder('ipv6first');
-        assert.strictEqual(dns.getDefaultResultOrder(), 'ipv6first');
+        assert.strictEqual(dns.getDefaultResultOrder(), 'verbatim',
+            'setDefaultResultOrder("verbatim") must take effect immediately.');
     } finally {
         dns.setDefaultResultOrder(original);
     }
