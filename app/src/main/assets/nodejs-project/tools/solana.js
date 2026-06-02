@@ -665,6 +665,20 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         }
         const vaultAddress = vaultResult.vaultPubkey;
 
+        // 10b. Pre-flight SOL balance — Layer 1 of BAT-995 self-debug.
+        // Avoids opaque "Failed to execute deposit" from Jupiter when the
+        // wallet can't pay rent for the deposit tx's temp USDC account.
+        // See trigger-v2.js checkSolForTrigger() and tests/jupiter-ultra/
+        // live-v2-trigger.js for the wire-level evidence (SystemProgram
+        // CreateAccount Custom(1) = ResultWithNegativeLamports).
+        const solCheck = await triggerV2.checkSolForTrigger(
+            walletAddress,
+            (addr) => solanaRpc('getBalance', [addr]),
+        );
+        if (!solCheck.ok) {
+            return { error: solCheck.error, reason: solCheck.reason };
+        }
+
         // 11. Craft deposit (outputMint is required by /deposit/craft).
         const craftResult = await triggerV2.depositCraft({
             pubkey: walletAddress,
@@ -752,6 +766,25 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                         `Your wallet's burner cap has been committed conservatively — if the deposit ` +
                         `did NOT land on-chain, the cap will regenerate at the next daily window.`;
                     return { signature: null, trigger: submitRes };
+                }
+                // Layer 2 of BAT-995 self-debug: if Jupiter rejected with a
+                // generic create_failed (HTTP 4xx from /orders/price), the
+                // most common cause is on-chain rejection of the deposit tx
+                // — e.g. ATA rent the pre-flight didn't know about, stale
+                // blockhash, or insufficient input-token balance. Locally
+                // simulate the signed deposit and surface the real cause so
+                // the agent can give the user actionable feedback instead of
+                // "Failed to execute deposit" → confabulated guesses.
+                if (submitRes.error === 'create_failed') {
+                    const diag = await triggerV2.diagnoseFailedDeposit(
+                        signedDeposit,
+                        (txB64) => solanaRpc('simulateTransaction', [
+                            txB64,
+                            { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: false, commitment: 'confirmed' },
+                        ]),
+                    );
+                    log(`[Jupiter Trigger V2] create_failed → sim diagnosed: ${diag.error} (${diag.reason})`, 'WARN');
+                    return { error: diag.error, reason: diag.reason };
                 }
                 return { error: submitRes.error, reason: submitRes.reason };
             },

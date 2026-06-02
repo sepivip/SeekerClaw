@@ -789,3 +789,24 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 2. If the live probe confirms the catalog is stale, tell the user "the recorded price ($0.01) is out of date — actual is $0.02. I'll flag this for the maintainer." Don't refuse the call retroactively (it already settled).
 3. Maintainer-side fix: update `catalog.json` `entries[].endpoint.cost_usdc` for the affected entry, bump `paysh-catalog/SKILL.md` version so devices re-seed.
 
+## Jupiter Trigger V2 (BAT-995)
+
+### `jupiter_trigger_create` returns `insufficient_sol_for_rent`
+**Symptoms:** The tool refuses to call Jupiter, or returns this code after a deposit attempt. The `reason` field includes the exact SOL the wallet has vs. the 0.005 SOL minimum.
+**Diagnosis:** A V2 trigger deposit tx includes up to three rent-paying allocations (a temporary deposit token account + user wSOL ATA + vault SOL ATA, each ~0.00204 SOL rent-exempt). Pre-flight (`checkSolForTrigger` in `jupiter/trigger-v2.js`) requires ≥0.005 SOL in the active wallet — the burner if routing chose burner, otherwise the MWA wallet. If the wallet is the burner, the user funds it directly; if the wallet is the MWA, they fund their main wallet.
+**Fix:** Tell the user the exact wallet address from the error reason and ask them to send at least 0.005 SOL there. If pre-flight passes (≥0.005 SOL) but Jupiter still returns the same error post-submission, the wallet needs an additional ATA created — fund with another ~0.002 SOL.
+
+### `jupiter_trigger_create` returns `blockhash_expired`
+**Symptoms:** Returned after the local sim diagnoses a stale blockhash on the signed deposit tx (slow network between Jupiter's deposit/craft and orders/price).
+**Fix:** Retry the order — it'll get a fresh blockhash. Single transient failures are normal; persistent failures indicate RPC/network problems.
+
+### `jupiter_trigger_create` returns `deposit_failed_unknown`
+**Symptoms:** Jupiter rejected the deposit AND local simulation either returned a different error or no error.
+**Diagnosis:** Often a Jupiter backend issue (auth state desync, vault registration race, transient API problem). Sometimes a tx structure change Jupiter rolled out that our adapter hasn't accounted for yet.
+**Fix:** Check `solana_balance` to confirm wallet state. Retry once after a short wait. If it persists, capture the agent log around the failure and treat as a real bug — do NOT speculate causes; surface the failure to the user and ask them to share logs.
+
+### `jupiter_trigger_create` returns `deposit_sim_failed`
+**Symptoms:** Local sim succeeded but found a non-rent on-chain failure (e.g. TokenProgram InsufficientFunds, or a custom program error).
+**Fix:** The `reason` field includes the instruction index and the raw error code. Check the user's input-token balance with `solana_balance`. If sufficient, the error is likely from a recent Jupiter program change — escalate.
+
+

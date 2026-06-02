@@ -804,6 +804,132 @@ function validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippa
  * while /orders/price (submitCreateOrder) uses `userPubkey`/`inputAmount`.
  * The craft response's `requestId` becomes /orders/price's `depositRequestId`.
  */
+// BAT-995 self-debug Layer 1: Pre-flight SOL balance check.
+//
+// A V2 deposit tx Jupiter crafts can include up to THREE rent-paying account
+// allocations (temp USDC source account + wSOL ATA + vault SOL ATA). Each
+// rent-exempt token account is ~0.00204 SOL. If the wallet can't cover the
+// rent, the on-chain CreateAccount instruction fails simulation with
+// ResultWithNegativeLamports and Jupiter returns the opaque "Failed to
+// execute deposit" — which the agent historically confabulated as
+// "additional_signers_required". This pre-flight catches it cleanly.
+//
+// Threshold is 0.005 SOL: covers the temp account + one ATA + tx fees + a
+// small buffer. Users with both ATAs missing may still hit the on-chain
+// rejection — Layer 2 (diagnoseFailedDeposit) catches that.
+const MIN_SOL_FOR_TRIGGER_LAMPORTS = 5_000_000;
+
+/**
+ * Pre-flight: does the wallet have enough SOL for V2 deposit rent + fees?
+ *
+ * @param {string} walletAddress
+ * @param {function} getSolBalance — async (addr) => lamports number, or
+ *                                    { error } / { value: lamports } on RPC
+ *                                    failure (matching solanaRpc shapes).
+ * @returns {Promise<{ok:true, balance:number} | {ok:false, error:string, reason:string, ...}>}
+ */
+async function checkSolForTrigger(walletAddress, getSolBalance) {
+    if (typeof walletAddress !== 'string' || !walletAddress) {
+        return { ok: false, error: 'invalid_input', reason: 'walletAddress required' };
+    }
+    if (typeof getSolBalance !== 'function') {
+        return { ok: false, error: 'invalid_input', reason: 'getSolBalance fn required' };
+    }
+    let raw;
+    try { raw = await getSolBalance(walletAddress); }
+    catch (e) {
+        return { ok: false, error: 'sol_balance_check_failed', reason: `RPC threw: ${e.message}` };
+    }
+    if (raw && typeof raw === 'object' && raw.error) {
+        return { ok: false, error: 'sol_balance_check_failed', reason: `RPC returned: ${raw.error}` };
+    }
+    const lamports = typeof raw === 'number'
+        ? raw
+        : (raw && typeof raw === 'object' && typeof raw.value === 'number') ? raw.value : null;
+    if (typeof lamports !== 'number' || !Number.isFinite(lamports) || lamports < 0) {
+        return { ok: false, error: 'sol_balance_check_failed', reason: 'invalid RPC response shape' };
+    }
+    if (lamports < MIN_SOL_FOR_TRIGGER_LAMPORTS) {
+        const solHave = (lamports / 1e9).toFixed(6);
+        const solNeed = (MIN_SOL_FOR_TRIGGER_LAMPORTS / 1e9).toFixed(3);
+        return {
+            ok: false,
+            error: 'insufficient_sol_for_rent',
+            reason: `Jupiter trigger orders need at least ${solNeed} SOL in the wallet for on-chain rent + fees (temporary deposit account + ATA rent). Current SOL: ${solHave}. Send more SOL to ${walletAddress} before placing the order.`,
+            haveLamports: lamports,
+            needLamports: MIN_SOL_FOR_TRIGGER_LAMPORTS,
+        };
+    }
+    return { ok: true, balance: lamports };
+}
+
+// BAT-995 self-debug Layer 2: Diagnose Jupiter's opaque "Failed to execute
+// deposit" by locally simulating the signed deposit tx against our Solana
+// RPC. Maps the on-chain InstructionError to a structured cause so the
+// agent can tell the user what to fix, instead of blindly retrying or
+// confabulating an error like "additional_signers_required". Pre-flight
+// catches the common case (low SOL); this catches everything else (extra
+// ATAs that pre-flight didn't account for, stale blockhash, weird
+// token-program errors).
+//
+// @param {string} signedTxBase64  - the signed deposit tx we sent to Jupiter
+// @param {function} simulate      - async (txB64) => { value: { err, logs } }
+//                                    or { error }; match solanaRpc('simulateTransaction').
+// @returns {Promise<{error:string, reason:string, rawError?:any}>}
+async function diagnoseFailedDeposit(signedTxBase64, simulate) {
+    if (typeof simulate !== 'function') {
+        return { error: 'deposit_failed_unknown', reason: 'no simulate fn provided to diagnose' };
+    }
+    let simResult;
+    try { simResult = await simulate(signedTxBase64); }
+    catch (e) {
+        return { error: 'deposit_failed_unknown', reason: `Jupiter rejected the deposit and local simulation threw: ${e.message}` };
+    }
+    if (simResult && simResult.error) {
+        return { error: 'deposit_failed_unknown', reason: `Jupiter rejected the deposit and local RPC sim returned: ${simResult.error}` };
+    }
+    const value = simResult && simResult.value;
+    if (!value || !value.err) {
+        return {
+            error: 'deposit_failed_unknown',
+            reason: 'Jupiter rejected the deposit but local simulation shows no on-chain error. Likely a Jupiter backend issue or stale blockhash by submit time.',
+        };
+    }
+    const err = value.err;
+    if (Array.isArray(err.InstructionError) && err.InstructionError.length >= 2) {
+        const ixIndex = err.InstructionError[0];
+        const code = err.InstructionError[1];
+        // Custom(1) on SystemProgram CreateAccount = ResultWithNegativeLamports
+        // (insufficient SOL for the rent transfer). Custom(1) on TokenProgram
+        // = InsufficientFunds (insufficient USDC). Logs disambiguate; absent
+        // explicit disambiguation we surface the rent diagnosis since that's
+        // what pre-flight failed to catch (rent for ATAs we didn't know about).
+        if (code && typeof code === 'object' && code.Custom === 1) {
+            return {
+                error: 'insufficient_sol_for_rent',
+                reason: `On-chain simulation: instruction ${ixIndex} failed with ResultWithNegativeLamports — wallet has insufficient SOL for the deposit tx's rent allocations. V2 trigger orders need at least ${(MIN_SOL_FOR_TRIGGER_LAMPORTS / 1e9).toFixed(3)} SOL beyond the order amount for rent + fees. If this happened after pre-flight passed, the wallet likely needs another ATA created (extra ~0.002 SOL).`,
+                rawError: err,
+            };
+        }
+        return {
+            error: 'deposit_sim_failed',
+            reason: `Local simulation failed at instruction ${ixIndex}: ${typeof code === 'string' ? code : JSON.stringify(code)}. Check wallet token balances and try again.`,
+            rawError: err,
+        };
+    }
+    if (typeof err === 'string') {
+        if (err === 'BlockhashNotFound' || err.includes('Blockhash')) {
+            return {
+                error: 'blockhash_expired',
+                reason: 'Deposit tx blockhash expired before submission. The network was slow between deposit/craft and orders/price. Try again — the order will use a fresh blockhash.',
+                rawError: err,
+            };
+        }
+        return { error: 'deposit_failed_unknown', reason: `On-chain simulation error: ${err}`, rawError: err };
+    }
+    return { error: 'deposit_failed_unknown', reason: `On-chain simulation error: ${JSON.stringify(err)}`, rawError: err };
+}
+
 async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount }) {
     if (!token) return { ok: false, error: 'auth_required', reason: 'no JWT supplied — call authenticate() first' };
     if (!outputMint) return { ok: false, error: 'invalid_input', reason: 'outputMint required for deposit/craft' };
@@ -1170,6 +1296,10 @@ module.exports = {
     ensureVault,
     listOrders,
     validateOrderArgs,
+    // Self-debug primitives (BAT-995 — agent gets actionable errors instead
+    // of Jupiter's opaque "Failed to execute deposit").
+    checkSolForTrigger,
+    diagnoseFailedDeposit,
     // Low-level (caller drives signing between primitives so reservation
     // lifecycles can wrap the deposit/cancel sign step).
     depositCraft,
@@ -1192,4 +1322,5 @@ module.exports = {
     _AUTH_MAX_CU_LIMIT,
     _AUTH_MAX_CU_PRICE_MICROLAMPORTS,
     _AUTH_MAX_ADDITIONAL_FEE_LAMPORTS,
+    MIN_SOL_FOR_TRIGGER_LAMPORTS,
 };
