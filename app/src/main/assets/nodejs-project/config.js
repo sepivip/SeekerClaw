@@ -490,7 +490,7 @@ if (config.exaApiKey) config.exaApiKey = normalizeSecret(config.exaApiKey);
 if (config.tavilyApiKey) config.tavilyApiKey = normalizeSecret(config.tavilyApiKey);
 if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.firecrawlApiKey);
 
-// BAT-697 / BAT-994: Jupiter Trigger V2 is now the DEFAULT.
+// BAT-697 / BAT-995: Jupiter Trigger V2 is now the DEFAULT.
 //
 // History:
 //   - BAT-697 PR B (#388) shipped the V2 adapter behind a flag, default
@@ -512,7 +512,7 @@ if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.fire
 //      to hotfix users to V1 + simultaneously deploy a verifier whitelist
 //      update, the env-var path is the fastest rollback.
 //   2. Removing the toggle entirely + deleting V1 code is its own
-//      follow-up cleanup (BAT-995) — not bundled here to keep this PR
+//      follow-up cleanup (BAT-996) — not bundled here to keep this PR
 //      tightly scoped to the default flip.
 //
 // Normalization: `config.useTriggerV2` is read from workspace/config.json
@@ -520,15 +520,24 @@ if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.fire
 // undefined). Default to true unless explicitly set to false. Env var
 // SEEKERCLAW_USE_TRIGGER_V2 takes precedence (Settings → Env Vars path,
 // already plumbed Kotlin → Node → process.env at line ~142 above).
+//
+// PR #393 Copilot R1: explicit opt-out must honor BOTH the boolean
+// `false` AND the string `"false"`. A hand-edited / imported config.json
+// can contain `"useTriggerV2": "false"` (string), which `!== false`
+// would treat as truthy and flip to V2 — silently overriding the user's
+// explicit opt-out. Normalize string "false" to false BEFORE the
+// !== false test.
 const _envOverride = process.env.SEEKERCLAW_USE_TRIGGER_V2;
 if (_envOverride === 'false') {
     config.useTriggerV2 = false;
 } else if (_envOverride === 'true') {
     config.useTriggerV2 = true;
 } else {
-    // No env override → use config.json value if explicitly false, else
-    // default to true (V2 is the new shipping path).
-    config.useTriggerV2 = config.useTriggerV2 !== false;
+    // No env override → use config.json value if explicitly false (boolean
+    // OR string), else default to true.
+    const _cfgVal = config.useTriggerV2;
+    const _explicitlyFalse = _cfgVal === false || _cfgVal === 'false';
+    config.useTriggerV2 = !_explicitlyFalse;
 }
 
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
