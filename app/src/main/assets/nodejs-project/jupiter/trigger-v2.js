@@ -863,6 +863,39 @@ async function checkSolForTrigger(walletAddress, getSolBalance) {
     return { ok: true, balance: lamports };
 }
 
+// Mainnet program IDs referenced by diagnoseFailedDeposit log-walking.
+// Kept inline (not a shared constants file) because they're only used here.
+const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+
+/**
+ * Find the program that raised the failing top-level instruction by
+ * walking simulateTransaction's `logs` array. Each log line follows the
+ * pattern `Program <addr> invoke [<depth>]` on entry and
+ * `Program <addr> failed: ...` or `... success` on exit. We scan
+ * backwards for the LAST `failed` marker — that's the program at the
+ * site of the on-chain error. Returns the program address string, or
+ * `null` if no `failed` line is present (e.g. logs were truncated or the
+ * simulation didn't reach the failure path).
+ *
+ * @param {string[]} logs
+ * @returns {string|null}
+ */
+function _failingProgramFromLogs(logs) {
+    if (!Array.isArray(logs)) return null;
+    // Match "Program <base58 pubkey> failed: <reason>" — pubkey allows 32-44
+    // base58 chars (the 32-byte address range). Cap at 64 to defend against
+    // pathological lines.
+    const re = /^Program ([1-9A-HJ-NP-Za-km-z]{32,64}) failed[:\s]/;
+    for (let i = logs.length - 1; i >= 0; i--) {
+        const line = logs[i];
+        if (typeof line !== 'string') continue;
+        const m = re.exec(line);
+        if (m) return m[1];
+    }
+    return null;
+}
+
 // BAT-995 self-debug Layer 2: Diagnose Jupiter's opaque "Failed to execute
 // deposit" by locally simulating the signed deposit tx against our Solana
 // RPC. Maps the on-chain InstructionError to a structured cause so the
@@ -899,15 +932,36 @@ async function diagnoseFailedDeposit(signedTxBase64, simulate) {
     if (Array.isArray(err.InstructionError) && err.InstructionError.length >= 2) {
         const ixIndex = err.InstructionError[0];
         const code = err.InstructionError[1];
-        // Custom(1) on SystemProgram CreateAccount = ResultWithNegativeLamports
-        // (insufficient SOL for the rent transfer). Custom(1) on TokenProgram
-        // = InsufficientFunds (insufficient USDC). Logs disambiguate; absent
-        // explicit disambiguation we surface the rent diagnosis since that's
-        // what pre-flight failed to catch (rent for ATAs we didn't know about).
+        // Custom(1) is overloaded — meaning depends on WHICH program raised it:
+        //   • SystemProgram (11111111111111111111111111111111)
+        //       → CreateAccount ResultWithNegativeLamports (insufficient SOL for rent)
+        //   • TokenProgram (TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA)
+        //       → Transfer InsufficientFunds (insufficient input token, e.g. USDC)
+        //   • anything else → unknown — fall back to generic deposit_sim_failed
+        // Misclassifying USDC-shortage as "send more SOL" wastes the user's
+        // time + funds (Copilot review R11). Walk logs to disambiguate.
         if (code && typeof code === 'object' && code.Custom === 1) {
+            const logs = Array.isArray(value.logs) ? value.logs : [];
+            const failingProgram = _failingProgramFromLogs(logs);
+            if (failingProgram === SYSTEM_PROGRAM_ID) {
+                return {
+                    error: 'insufficient_sol_for_rent',
+                    reason: `On-chain simulation: instruction ${ixIndex} (SystemProgram) failed with ResultWithNegativeLamports — wallet has insufficient SOL for the deposit tx's rent allocations. V2 trigger orders need at least ${(MIN_SOL_FOR_TRIGGER_LAMPORTS / 1e9).toFixed(3)} SOL beyond the order amount for rent + fees. If this happened after pre-flight passed, the wallet likely needs another ATA created (extra ~0.002 SOL).`,
+                    rawError: err,
+                };
+            }
+            if (failingProgram === TOKEN_PROGRAM_ID) {
+                return {
+                    error: 'insufficient_token_balance',
+                    reason: `On-chain simulation: instruction ${ixIndex} (TokenProgram) failed with InsufficientFunds — the wallet doesn't have enough of the input token for this order. Use solana_balance to check the wallet's token balances; the user needs to top up the input token (typically USDC).`,
+                    rawError: err,
+                };
+            }
+            // Custom(1) raised by a program we don't have a rule for. Don't
+            // guess — both "send more SOL" and "send more USDC" can be wrong.
             return {
-                error: 'insufficient_sol_for_rent',
-                reason: `On-chain simulation: instruction ${ixIndex} failed with ResultWithNegativeLamports — wallet has insufficient SOL for the deposit tx's rent allocations. V2 trigger orders need at least ${(MIN_SOL_FOR_TRIGGER_LAMPORTS / 1e9).toFixed(3)} SOL beyond the order amount for rent + fees. If this happened after pre-flight passed, the wallet likely needs another ATA created (extra ~0.002 SOL).`,
+                error: 'deposit_sim_failed',
+                reason: `On-chain simulation: instruction ${ixIndex} failed with Custom(1) raised by program ${failingProgram || 'unknown'}. Both SOL and token balances should be checked manually before retrying.`,
                 rawError: err,
             };
         }

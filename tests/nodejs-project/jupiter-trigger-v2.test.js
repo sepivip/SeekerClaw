@@ -1244,13 +1244,75 @@ function _buildTransferTx(payerB58) {
 
     const { diagnoseFailedDeposit } = triggerV2;
 
-    await check('L2 maps InstructionError [N, {Custom:1}] to insufficient_sol_for_rent', async () => {
+    await check('L2 Custom(1) on SystemProgram → insufficient_sol_for_rent (disambiguated by logs)', async () => {
         const r = await diagnoseFailedDeposit('FAKE_TX_B64', async () => ({
-            value: { err: { InstructionError: [4, { Custom: 1 }] }, logs: [] },
+            value: {
+                err: { InstructionError: [4, { Custom: 1 }] },
+                logs: [
+                    'Program 11111111111111111111111111111111 invoke [1]',
+                    'Program 11111111111111111111111111111111 failed: custom program error: 0x1',
+                ],
+            },
         }));
         assert.strictEqual(r.error, 'insufficient_sol_for_rent');
         assert.match(r.reason, /instruction 4/, 'should mention which instruction failed');
+        assert.match(r.reason, /SystemProgram/, 'should name the failing program');
         assert.match(r.reason, /0\.005 SOL/, 'should mention the minimum');
+    });
+
+    await check('L2 Custom(1) on TokenProgram → insufficient_token_balance (NOT misclassified as SOL — Copilot review fix)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [6, { Custom: 1 }] },
+                logs: [
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [1]',
+                    'Program log: Instruction: Transfer',
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1',
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_token_balance',
+            'TokenProgram Custom(1) must NOT be reported as insufficient_sol_for_rent — that would tell the user to send more SOL when they actually need more input token');
+        assert.match(r.reason, /TokenProgram/);
+        assert.match(r.reason, /InsufficientFunds/);
+        assert.match(r.reason, /input token/);
+        assert.match(r.reason, /USDC/, 'should hint at the common case');
+    });
+
+    await check('L2 Custom(1) on unknown program → deposit_sim_failed (do NOT guess SOL-vs-token)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [3, { Custom: 1 }] },
+                logs: [
+                    'Program JupiterUnknown1111111111111111111111111111 invoke [1]',
+                    'Program JupiterUnknown1111111111111111111111111111 failed: custom program error: 0x1',
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed');
+        assert.match(r.reason, /JupiterUnknown1111/);
+        assert.match(r.reason, /both SOL and token balances|SOL and token/i,
+            'should tell the agent NOT to guess which is short');
+    });
+
+    await check('L2 Custom(1) with NO failed log entry → deposit_sim_failed with unknown program', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [2, { Custom: 1 }] },
+                logs: ['Program 11111111111111111111111111111111 invoke [1]'], // no `failed` line
+            },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed',
+            'absent disambiguation we must NOT pick a side');
+        assert.match(r.reason, /unknown/);
+    });
+
+    await check('L2 Custom(1) with empty logs array → deposit_sim_failed (defensive)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: { err: { InstructionError: [4, { Custom: 1 }] }, logs: [] },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed',
+            'no logs = no disambiguation possible; must not assume SOL');
     });
 
     await check('L2 maps non-Custom(1) InstructionError to deposit_sim_failed with index + raw code', async () => {

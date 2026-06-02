@@ -805,8 +805,13 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 **Diagnosis:** Often a Jupiter backend issue (auth state desync, vault registration race, transient API problem). Sometimes a tx structure change Jupiter rolled out that our adapter hasn't accounted for yet.
 **Fix:** Check `solana_balance` to confirm wallet state. Retry once after a short wait. If it persists, capture the agent log around the failure and treat as a real bug — do NOT speculate causes; surface the failure to the user and ask them to share logs.
 
+### `jupiter_trigger_create` returns `insufficient_token_balance`
+**Symptoms:** The reason mentions TokenProgram + InsufficientFunds. Wallet has SOL but not enough of the input token (typically USDC) for the order amount.
+**Diagnosis:** Layer 2 of `diagnoseFailedDeposit` walks `simulateTransaction.value.logs` to find the failing program. When it's `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` (TokenProgram), Custom(1) means InsufficientFunds — NOT a SOL rent issue. This split was added in Copilot review R11 (BAT-995) because the original mapping reported "send more SOL" for USDC shortages.
+**Fix:** Tell the user to top up the input token in the wallet shown in the reason field. Use `solana_balance` to confirm the actual token balance vs. the order amount.
+
 ### `jupiter_trigger_create` returns `deposit_sim_failed`
-**Symptoms:** Local sim succeeded but found a non-rent on-chain failure (e.g. TokenProgram InsufficientFunds, or a custom program error).
-**Fix:** The `reason` field includes the instruction index and the raw error code. Check the user's input-token balance with `solana_balance`. If sufficient, the error is likely from a recent Jupiter program change — escalate.
+**Symptoms:** Local sim succeeded but the failure mode doesn't match the SOL-rent or token-insufficient patterns. Could be a non-Custom(1) error code, or a Custom(1) raised by a program (`programId`) that the disambiguation rule doesn't recognize.
+**Fix:** The `reason` field includes the instruction index AND the failing program address (or "unknown" if logs don't disambiguate). Check BOTH `solana_balance` (SOL + tokens) before retrying. Do NOT guess which is short — both have been wrong in production before. If sufficient on both sides, the error is likely from a recent Jupiter program change — escalate.
 
 
