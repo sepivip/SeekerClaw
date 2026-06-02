@@ -527,16 +527,34 @@ if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.fire
 // would treat as truthy and flip to V2 — silently overriding the user's
 // explicit opt-out. Normalize string "false" to false BEFORE the
 // !== false test.
-const _envOverride = process.env.SEEKERCLAW_USE_TRIGGER_V2;
-if (_envOverride === 'false') {
+//
+// PR #393 Copilot R2: env-var values come from a freeform Settings UI
+// (Settings → Env Vars) where users can plausibly type leading/trailing
+// whitespace or non-canonical casing ("False ", "TRUE", "  true  ").
+// Strict equality silently ignores those inputs, making debugging a
+// rollback attempt painful ("I set the env var, why is it still on V2?").
+// Normalize (trim + lowercase) before comparing — same shape as the
+// BAT-992 dns-result-order env var on this codebase.
+function _normalizeBoolEnv(raw) {
+    if (typeof raw !== 'string') return null;
+    const v = raw.trim().toLowerCase();
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return null;
+}
+const _envOverride = _normalizeBoolEnv(process.env.SEEKERCLAW_USE_TRIGGER_V2);
+if (_envOverride === false) {
     config.useTriggerV2 = false;
-} else if (_envOverride === 'true') {
+} else if (_envOverride === true) {
     config.useTriggerV2 = true;
 } else {
     // No env override → use config.json value if explicitly false (boolean
-    // OR string), else default to true.
+    // OR string, normalized the same way as the env var so " False " etc
+    // are honored). Else default to true.
     const _cfgVal = config.useTriggerV2;
-    const _explicitlyFalse = _cfgVal === false || _cfgVal === 'false';
+    const _explicitlyFalse =
+        _cfgVal === false
+        || (typeof _cfgVal === 'string' && _cfgVal.trim().toLowerCase() === 'false');
     config.useTriggerV2 = !_explicitlyFalse;
 }
 
