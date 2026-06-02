@@ -193,14 +193,17 @@ const _AUTH_ALLOWED_PROGRAMS = new Set([MEMO_PROGRAM_V1, MEMO_PROGRAM_V2, COMPUT
 //     ceiling → priority fee worst case = 200_000 * 2_000_000 / 1_000_000
 //     = 400_000 lamports ≈ 0.0004 SOL per auth tx — still trivial. Pre-cap
 //     threat model: SetComputeUnitPrice is a u64 micro_lamports/CU field,
-//     so the priority fee at u64::MAX is 200_000 * 1.8e19 / 1e6 ≈ 3.7e21
-//     lamports — astronomically larger than any payer's actual balance.
-//     In practice the drain is bounded only by the payer's SOL — a hostile
-//     auth tx would drain whatever the burner has (or fail with
-//     insufficient-funds) on every signed challenge. PR #393 R8 update —
-//     the original comment said "~4.29 SOL per auth tx" which was wrong:
-//     ~4.29 SOL corresponds to u32::MAX in the DEPRECATED additional_fee
-//     path below, not to the u64 SetComputeUnitPrice path.)
+//     so the unbounded priority fee at u64::MAX would be
+//     200_000 * (1.8e19) / 1_000_000 ≈ 3.6e18 lamports ≈ 3.6e9 SOL —
+//     astronomically larger than any payer's actual balance. In practice
+//     the drain is bounded only by the payer's SOL — a hostile auth tx
+//     would drain whatever the burner has (or fail with insufficient-funds)
+//     on every signed challenge. PR #393 R8 update — the original comment
+//     said "~4.29 SOL per auth tx" which was wrong: ~4.29 SOL corresponds
+//     to u32::MAX in the DEPRECATED additional_fee path below, not to the
+//     u64 SetComputeUnitPrice path. R9 follow-up: corrected the magnitude
+//     from 3.7e21 to 3.6e18 lamports (extra 10^3 factor came from mistakenly
+//     applying the lamports→micro_lamports scale twice).)
 //   - Max additional_fee (deprecated tag 0x00): 5_000 lamports ≈ 0.000005
 //     SOL — same trivial ceiling, accommodates any real-world priority bump.
 //     Pre-cap worst case at u32::MAX for this u32-lamports field = ~4.29 SOL
