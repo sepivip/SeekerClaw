@@ -1224,6 +1224,29 @@ function _buildTransferTx(payerB58) {
         assert.match(r.reason, /network/);
     });
 
+    await check('L1 R14: non-Error throws are handled defensively (e?.message ?? String(e))', async () => {
+        // Copilot R14 #3342208795: pre-fix code did `${e.message}` which
+        // either produced "undefined" (Error without .message) OR THREW a
+        // TypeError when e itself was undefined/null/primitive (e.message on
+        // undefined throws). Post-fix uses `e?.message ?? String(e)` so the
+        // function ALWAYS returns a structured error and carries the
+        // thrown-value's string form into the reason.
+        const cases = [
+            { thrown: 'string error', expectInReason: 'string error' },
+            { thrown: undefined, expectInReason: 'undefined' }, // String(undefined) = "undefined" — clean output where pre-fix would TypeError
+            { thrown: null, expectInReason: 'null' },
+            { thrown: 42, expectInReason: '42' },
+            { thrown: { code: 'WEIRD' }, expectInReason: '[object Object]' }, // degraded but stable
+        ];
+        for (const c of cases) {
+            const r = await checkSolForTrigger('Wallet1', async () => { throw c.thrown; });
+            assert.strictEqual(r.error, 'sol_balance_check_failed',
+                `non-Error throw (${String(c.thrown)}) should still produce sol_balance_check_failed (not crash the function)`);
+            assert.ok(r.reason.includes(c.expectInReason),
+                `reason "${r.reason}" should include "${c.expectInReason}"`);
+        }
+    });
+
     await check('L1 rejects malformed RPC response shapes (null, string, NaN, Infinity, negative, wrong-typed value)', async () => {
         for (const garbage of [null, 'wrong', NaN, Infinity, -1, { value: 'not a number' }]) {
             const r = await checkSolForTrigger('Wallet1', async () => garbage);
@@ -1358,6 +1381,23 @@ function _buildTransferTx(payerB58) {
         const r = await diagnoseFailedDeposit('FAKE', async () => { throw new Error('boom'); });
         assert.strictEqual(r.error, 'deposit_failed_unknown');
         assert.match(r.reason, /boom/);
+    });
+
+    await check('L2 R14: non-Error throws from simulate are handled defensively (e?.message ?? String(e))', async () => {
+        // Copilot R14 #3342208868: same defensive issue as L1 R14.
+        const cases = [
+            { thrown: 'rpc died', expectInReason: 'rpc died' },
+            { thrown: undefined, expectInReason: 'undefined' },
+            { thrown: null, expectInReason: 'null' },
+            { thrown: { code: 'WEIRD' }, expectInReason: '[object Object]' },
+        ];
+        for (const c of cases) {
+            const r = await diagnoseFailedDeposit('FAKE', async () => { throw c.thrown; });
+            assert.strictEqual(r.error, 'deposit_failed_unknown',
+                `non-Error throw (${String(c.thrown)}) should still produce deposit_failed_unknown (not crash)`);
+            assert.ok(r.reason.includes(c.expectInReason),
+                `reason "${r.reason}" should include "${c.expectInReason}"`);
+        }
     });
 
     await check('L2 requires simulate fn (defensive)', async () => {

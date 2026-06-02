@@ -842,7 +842,7 @@ async function checkSolForTrigger(walletAddress, getSolBalance) {
     let raw;
     try { raw = await getSolBalance(walletAddress); }
     catch (e) {
-        return { ok: false, error: 'sol_balance_check_failed', reason: `RPC threw: ${e.message}` };
+        return { ok: false, error: 'sol_balance_check_failed', reason: `RPC threw: ${e?.message ?? String(e)}` };
     }
     if (raw && typeof raw === 'object' && raw.error) {
         return { ok: false, error: 'sol_balance_check_failed', reason: `RPC returned: ${raw.error}` };
@@ -935,7 +935,7 @@ async function diagnoseFailedDeposit(signedTxBase64, simulate) {
     let simResult;
     try { simResult = await simulate(signedTxBase64); }
     catch (e) {
-        return { error: 'deposit_failed_unknown', reason: `Jupiter rejected the deposit and local simulation threw: ${e.message}` };
+        return { error: 'deposit_failed_unknown', reason: `Jupiter rejected the deposit and local simulation threw: ${e?.message ?? String(e)}` };
     }
     if (simResult && simResult.error) {
         return { error: 'deposit_failed_unknown', reason: `Jupiter rejected the deposit and local RPC sim returned: ${simResult.error}` };
