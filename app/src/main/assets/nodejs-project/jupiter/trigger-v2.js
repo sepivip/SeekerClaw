@@ -189,15 +189,24 @@ const _AUTH_ALLOWED_PROGRAMS = new Set([MEMO_PROGRAM_V1, MEMO_PROGRAM_V2, COMPUT
 // tx past the blind-sign guard.
 //   - Max CU limit: 200_000 (memo + budget ix fit comfortably under this;
 //     Solana default per-tx limit is 200K)
-//   - Max CU price: 10_000 micro_lamports/CU (combined with the 200K CU
-//     ceiling → priority fee worst case = 200_000 * 10_000 / 1_000_000
-//     = 2_000 lamports ≈ 0.000002 SOL — trivial vs the unbounded pre-fix
-//     exposure where an attacker could have set u64::MAX micro_lamports/CU
-//     and drained the burner)
+//   - Max CU price: 2_000_000 micro_lamports/CU (combined with the 200K CU
+//     ceiling → priority fee worst case = 200_000 * 2_000_000 / 1_000_000
+//     = 400_000 lamports ≈ 0.0004 SOL — still trivial vs the unbounded
+//     pre-fix exposure where an attacker could have set u64::MAX
+//     micro_lamports/CU and drained ~4.29 SOL per auth tx)
 //   - Max additional_fee (deprecated tag 0x00): 5_000 lamports ≈ 0.000005
 //     SOL — same trivial ceiling, accommodates any real-world priority bump
+//
+// PR #393 / BAT-995 device test 2026-06-02: original CU price cap of
+// 10_000 micro_lamports/CU was 100× too tight. Jupiter's real auth
+// challenge txs on mainnet use SetComputeUnitPrice=1_000_000 (legitimate
+// priority fee under mainnet congestion). The blind-sign guard correctly
+// rejected those (working as designed) but the cap was empirically
+// uncalibrated — bumped to 2_000_000 (2× Jupiter's observed value for
+// headroom). The defense against u64::MAX drain attacks is retained;
+// only the conservatism vs Jupiter's legitimate operating range is fixed.
 const _AUTH_MAX_CU_LIMIT = 200_000;
-const _AUTH_MAX_CU_PRICE_MICROLAMPORTS = 10_000n; // BigInt — instr field is u64
+const _AUTH_MAX_CU_PRICE_MICROLAMPORTS = 2_000_000n; // BigInt — instr field is u64
 const _AUTH_MAX_ADDITIONAL_FEE_LAMPORTS = 5_000;
 
 // Decode + validate a single ComputeBudget instruction's data bytes.

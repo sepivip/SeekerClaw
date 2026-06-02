@@ -690,6 +690,22 @@ function _buildTransferTx(payerB58) {
         data.writeUInt32LE(Number((cap >> 32n) & 0xFFFFFFFFn), 5);
         assert.strictEqual(triggerV2._validateComputeBudgetInstr(data).ok, true);
     });
+    // PR #393 / BAT-995 device test 2026-06-02: Jupiter's real auth tx
+    // observed using SetComputeUnitPrice=1_000_000 micro_lamports/CU. The
+    // original PR #388 R10 cap of 10_000 rejected this. Cap was bumped to
+    // 2_000_000 (2× observed). Lock in the "Jupiter's observed real value
+    // is accepted" contract so a future tightening doesn't silently
+    // re-break the device path.
+    await check('R10/R12 accepts Jupiter\'s observed mainnet CU price of 1_000_000 micro_lamports/CU', async () => {
+        const data = Buffer.alloc(9);
+        data[0] = 0x03;
+        // Observed at 2026-06-02 in Beka's Seeker logs:
+        //   "ComputeBudget SetComputeUnitPrice=1000000 exceeds auth-tx cap 10000"
+        data.writeUInt32LE(1_000_000, 1);
+        data.writeUInt32LE(0, 5);
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, true, 'must accept Jupiter\'s observed real mainnet value (1M micro_lamports/CU)');
+    });
     await check('R10 _validateComputeBudgetInstr REJECTS SetComputeUnitPrice at u64::MAX (the attack value)', async () => {
         const data = Buffer.alloc(9);
         data[0] = 0x03;
