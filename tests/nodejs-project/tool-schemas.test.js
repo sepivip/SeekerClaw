@@ -266,12 +266,16 @@ assert.ok(triggerCreateV2, 'jupiter_trigger_create must be present in flag-on lo
 // WRONG — Anthropic API rejects top-level anyOf/oneOf/allOf with HTTP 400.
 // Replaced with the inverse contract: V2 schema MUST NOT have top-level
 // combinators (the handler's runtime check is the actual enforcement).
-assert.ok(!Array.isArray(triggerCreateV2.input_schema.anyOf),
+// PR #393 R5: use hasOwnProperty (matches findSchemaIssues' check) so an
+// explicit `anyOf: undefined` or `anyOf: null` is ALSO rejected. Array.isArray
+// on a non-array would let those slip through, even though the key itself
+// is still present.
+assert.ok(!Object.prototype.hasOwnProperty.call(triggerCreateV2.input_schema, 'anyOf'),
     'V2 schema MUST NOT declare top-level anyOf — Anthropic API rejects. '
     + 'See PR #393 BAT-995. Handler validates expiresAt/expiryTime at runtime.');
-assert.ok(!Array.isArray(triggerCreateV2.input_schema.oneOf),
+assert.ok(!Object.prototype.hasOwnProperty.call(triggerCreateV2.input_schema, 'oneOf'),
     'V2 schema MUST NOT declare top-level oneOf — Anthropic API rejects.');
-assert.ok(!Array.isArray(triggerCreateV2.input_schema.allOf),
+assert.ok(!Object.prototype.hasOwnProperty.call(triggerCreateV2.input_schema, 'allOf'),
     'V2 schema MUST NOT declare top-level allOf — Anthropic API rejects.');
 assert.ok(triggerCreateV2.input_schema.required.includes('triggerPriceUsd'),
     'V2 schema must require triggerPriceUsd (PR #388 R6 contract)');
