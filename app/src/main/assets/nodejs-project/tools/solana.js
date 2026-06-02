@@ -668,9 +668,10 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         // 10b. Pre-flight SOL balance — Layer 1 of BAT-995 self-debug.
         // Avoids opaque "Failed to execute deposit" from Jupiter when the
         // wallet can't pay rent for the deposit tx's temp USDC account.
-        // See trigger-v2.js checkSolForTrigger() and tests/jupiter-ultra/
-        // live-v2-trigger.js for the wire-level evidence (SystemProgram
-        // CreateAccount Custom(1) = ResultWithNegativeLamports).
+        // See trigger-v2.js checkSolForTrigger() for the implementation +
+        // DIAGNOSTICS.md "Jupiter Trigger V2 (BAT-995)" for the wire-level
+        // evidence (SystemProgram CreateAccount Custom(1) =
+        // ResultWithNegativeLamports) and full error-code reference.
         const solCheck = await triggerV2.checkSolForTrigger(
             walletAddress,
             (addr) => solanaRpc('getBalance', [addr]),

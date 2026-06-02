@@ -800,9 +800,9 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 **Symptoms:** Returned after the local sim diagnoses a stale blockhash on the signed deposit tx (slow network between Jupiter's deposit/craft and orders/price).
 **Fix:** Retry the order — it'll get a fresh blockhash. Single transient failures are normal; persistent failures indicate RPC/network problems.
 
-### `jupiter_trigger_create` returns `deposit_failed_unknown`
-**Symptoms:** Jupiter rejected the deposit AND local simulation either returned a different error or no error.
-**Diagnosis:** Often a Jupiter backend issue (auth state desync, vault registration race, transient API problem). Sometimes a tx structure change Jupiter rolled out that our adapter hasn't accounted for yet.
+### `jupiter_trigger_create` returns `create_failed` (with sim context appended to the reason)
+**Symptoms:** Reason starts with `HTTP <status>` and ends with `(local sim could not identify a specific on-chain cause: <sim outcome>)`. This is what the agent sees when Jupiter rejects `/orders/price` with a non-2xx that wasn't caused by an on-chain instruction error our sim can identify — most commonly param validation, auth, vault state, or a transient Jupiter backend issue.
+**Diagnosis:** `diagnoseFailedDeposit` returned its internal `deposit_failed_unknown` sentinel (sim returned no err, threw, or returned an error of its own), so the V2 handler (Copilot R12 contract, BAT-995) preserves the original HTTP cause instead of overriding it. The `deposit_failed_unknown` string is internal — agents will not see it; they see `create_failed` with the composed reason.
 **Fix:** Check `solana_balance` to confirm wallet state. Retry once after a short wait. If it persists, capture the agent log around the failure and treat as a real bug — do NOT speculate causes; surface the failure to the user and ask them to share logs.
 
 ### `jupiter_trigger_create` returns `insufficient_token_balance`
