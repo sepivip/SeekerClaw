@@ -792,7 +792,7 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 ## Jupiter Trigger V2 (BAT-995)
 
 ### `jupiter_trigger_create` returns `insufficient_sol_for_rent`
-**Symptoms:** The tool refuses to call Jupiter, or returns this code after a deposit attempt. The `reason` field includes the exact SOL the wallet has vs. the 0.005 SOL minimum.
+**Symptoms:** The tool refuses to submit the deposit (the V2 flow has already authenticated, registered the vault, and checked Shield by this point — pre-flight specifically blocks `deposit/craft` and `orders/price` before they touch server state), or returns this code after a deposit attempt when Layer 2's on-chain simulation matches. The `reason` field includes the wallet's current SOL balance vs. the 0.005 SOL minimum.
 **Diagnosis:** A V2 trigger deposit tx includes up to three rent-paying allocations (a temporary deposit token account + user wSOL ATA + vault SOL ATA, each ~0.00204 SOL rent-exempt). Pre-flight (`checkSolForTrigger` in `jupiter/trigger-v2.js`) requires ≥0.005 SOL in the active wallet — the burner if routing chose burner, otherwise the MWA wallet. If the wallet is the burner, the user funds it directly; if the wallet is the MWA, they fund their main wallet.
 **Fix:** Tell the user the exact wallet address from the error reason and ask them to send at least 0.005 SOL there. If pre-flight passes (≥0.005 SOL) but Jupiter still returns the same error post-submission, the wallet needs an additional ATA created — fund with another ~0.002 SOL.
 
