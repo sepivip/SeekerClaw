@@ -775,6 +775,13 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                 // simulate the signed deposit and surface the real cause so
                 // the agent can give the user actionable feedback instead of
                 // "Failed to execute deposit" → confabulated guesses.
+                //
+                // Copilot R12 (3341986481): only OVERRIDE the original error
+                // when the sim yields a specific actionable diagnosis. If sim
+                // returns deposit_failed_unknown (e.g. 4xx was actually a
+                // param-validation or auth issue Jupiter caught BEFORE on-chain
+                // submission, OR sim itself failed), preserving the original
+                // HTTP reason is more useful than silently downgrading it.
                 if (submitRes.error === 'create_failed') {
                     const diag = await triggerV2.diagnoseFailedDeposit(
                         signedDeposit,
@@ -783,8 +790,16 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                             { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: false, commitment: 'confirmed' },
                         ]),
                     );
-                    log(`[Jupiter Trigger V2] create_failed → sim diagnosed: ${diag.error} (${diag.reason})`, 'WARN');
-                    return { error: diag.error, reason: diag.reason };
+                    const actionable = diag.error && diag.error !== 'deposit_failed_unknown';
+                    if (actionable) {
+                        log(`[Jupiter Trigger V2] create_failed → sim diagnosed: ${diag.error} (${diag.reason})`, 'WARN');
+                        return { error: diag.error, reason: diag.reason };
+                    }
+                    log(`[Jupiter Trigger V2] create_failed → sim non-actionable (${diag.error}); preserving original HTTP cause: ${submitRes.reason}`, 'WARN');
+                    return {
+                        error: submitRes.error,
+                        reason: `${submitRes.reason} (local sim could not identify a specific on-chain cause: ${diag.reason})`,
+                    };
                 }
                 return { error: submitRes.error, reason: submitRes.reason };
             },

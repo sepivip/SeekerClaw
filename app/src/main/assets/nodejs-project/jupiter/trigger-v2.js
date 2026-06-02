@@ -823,9 +823,13 @@ const MIN_SOL_FOR_TRIGGER_LAMPORTS = 5_000_000;
  * Pre-flight: does the wallet have enough SOL for V2 deposit rent + fees?
  *
  * @param {string} walletAddress
- * @param {function} getSolBalance — async (addr) => lamports number, or
- *                                    { error } / { value: lamports } on RPC
- *                                    failure (matching solanaRpc shapes).
+ * @param {function} getSolBalance — async (addr) => the RPC result for
+ *     getBalance. We accept all three shapes solanaRpc() can produce:
+ *       • a bare lamports `number` (test mocks / convenience wrappers)
+ *       • `{ value: <lamports> }` — Solana JSON-RPC's getBalance SUCCESS shape
+ *         (`{ context, value }`); our solanaRpc() returns the inner result.
+ *       • `{ error: <message> }` — solanaRpc()'s FAILURE shape (HTTP error,
+ *         parse error, timeout, etc.).
  * @returns {Promise<{ok:true, balance:number} | {ok:false, error:string, reason:string, ...}>}
  */
 async function checkSolForTrigger(walletAddress, getSolBalance) {
@@ -904,6 +908,21 @@ function _failingProgramFromLogs(logs) {
 // catches the common case (low SOL); this catches everything else (extra
 // ATAs that pre-flight didn't account for, stale blockhash, weird
 // token-program errors).
+//
+// Error codes returned (CONTRACT — callers depend on the exact string):
+//   • insufficient_sol_for_rent   — actionable: tell user to send SOL.
+//   • insufficient_token_balance  — actionable: tell user to top up input token.
+//   • blockhash_expired           — actionable: retry the order.
+//   • deposit_sim_failed          — actionable: sim found a specific on-chain
+//                                    error but not one of the canonical cases;
+//                                    surface the reason + check balances.
+//   • deposit_failed_unknown      — NOT ACTIONABLE: sim itself failed, returned
+//                                    no error, or threw. The caller (e.g.
+//                                    tools/solana.js create_failed branch)
+//                                    should PRESERVE the original HTTP cause
+//                                    instead of overriding with this sentinel,
+//                                    because the 4xx may have been a Jupiter-
+//                                    side param/auth issue the sim can't see.
 //
 // @param {string} signedTxBase64  - the signed deposit tx we sent to Jupiter
 // @param {function} simulate      - async (txB64) => { value: { err, logs } }

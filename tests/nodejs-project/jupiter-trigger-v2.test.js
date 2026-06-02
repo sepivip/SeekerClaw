@@ -1380,6 +1380,25 @@ function _buildTransferTx(payerB58) {
         assert.deepStrictEqual(r.rawError, rawErr);
     });
 
+    await check('L2 CONTRACT — deposit_failed_unknown is the "non-actionable" sentinel (Copilot R12: callers preserve original error instead of overriding with this)', async () => {
+        // This rule is load-bearing for tools/solana.js create_failed branch:
+        //   if (diag.error !== 'deposit_failed_unknown') { override }
+        //   else { preserve original HTTP cause }
+        // Verify the helper actually emits this exact string in the non-
+        // actionable paths so the caller's check stays accurate.
+        const cases = [
+            { name: 'simulate returns { error }', sim: async () => ({ error: 'RPC down' }) },
+            { name: 'simulate throws', sim: async () => { throw new Error('boom'); } },
+            { name: 'sim returns no err (Jupiter-side issue)', sim: async () => ({ value: { err: null, logs: [] } }) },
+            { name: 'no simulate fn', sim: null },
+        ];
+        for (const c of cases) {
+            const r = await diagnoseFailedDeposit('FAKE', c.sim);
+            assert.strictEqual(r.error, 'deposit_failed_unknown',
+                `${c.name}: must return the sentinel so caller preserves original HTTP cause`);
+        }
+    });
+
     // ── BAT-995 Layer 3: export contract ────────────────────────────────────
     console.log('\n[BAT-995] Layer 3 — export contract');
 
