@@ -164,15 +164,18 @@ const tools = [
             type: 'object',
             properties: { ...baseProperties, ...v2Properties },
             required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPriceUsd'],
-            // PR #388 R7: V2 handler hard-rejects with `expires_at_required`
-            // if NEITHER `expiresAt` nor `expiryTime` is provided. Encode
-            // that disjunction in the schema (anyOf) so the model/gate
-            // rejects the missing-expiry case at validation time rather than
-            // letting it reach the user-confirmation card and dying later.
-            anyOf: [
-                { required: ['expiresAt'] },
-                { required: ['expiryTime'] },
-            ],
+            // PR #388 R7 originally added an `anyOf` here to encode the
+            // "one of expiresAt/expiryTime required" disjunction at the
+            // schema level. PR #393 / BAT-995 device test 2026-06-02 caught
+            // that the Anthropic Messages API REJECTS top-level anyOf /
+            // oneOf / allOf in tool input_schemas — the entire toolset is
+            // returned with HTTP 400 ("inputSchema does not support oneOf,
+            // allOf, or anyOf at the top level"), taking down every agent
+            // turn. The handler's runtime check (returns expires_at_required
+            // if both fields are missing — see PR #388 R4) is the actual
+            // enforcement path; the schema-level disjunction was redundant
+            // model-side validation. Removed. Test rule added to
+            // tool-schemas.test.js to prevent regression.
         };
         const v1Schema = {
             type: 'object',
