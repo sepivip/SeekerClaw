@@ -246,14 +246,24 @@ for (const { name, topLevel, schema } of BUG_SHAPES) {
 if (metaFailures > 0) process.exit(1);
 console.log(`✓ Meta-check: validator flags all ${BUG_SHAPES.length} historical bug shapes`);
 
-// ── PR #388 R9: flag-on schema smoke (Jupiter Trigger V2) ───────────────────
+// ── PR #388 R9 + PR #393 BAT-995: flag-on schema smoke (Jupiter Trigger V2) ─
 // The jupiter_trigger_create schema is constructed flag-aware at module load
 // (see tools/solana.js IIFE around line 145). The default flag-off pass above
-// only validates the V1 schema. Reload tools/index.js with
-// `config.useTriggerV2: true` so the V2 schema (incl. its `anyOf` expiry
-// disjunction) goes through findSchemaIssues. Without this, a flag-on
-// rollout could ship a malformed V2 schema undetected — the whole toolset
-// would be rejected by the Anthropic API on first agent turn.
+// validates the V1 schema (back-compat); this block reloads tools/index.js
+// with `config.useTriggerV2: true` so the V2 schema also goes through
+// findSchemaIssues. Without this, a malformed V2 schema would ship undetected
+// — the whole toolset gets rejected by the Anthropic API on first agent turn
+// and every user's bot goes silent.
+//
+// What this block now verifies (PR #393 R6 update — the original PR #388 R7
+// contract REQUIRED a top-level anyOf for the expiresAt/expiryTime
+// disjunction; PR #393 / BAT-995 device test caught that Anthropic API
+// REJECTS top-level anyOf/oneOf/allOf with HTTP 400, so the contract was
+// inverted):
+//   1. The V2 schema has NO top-level anyOf / oneOf / allOf — Anthropic-safe
+//   2. The V2 schema requires triggerPriceUsd (PR #388 R6)
+//   3. The full flag-on TOOLS set passes findSchemaIssues including the new
+//      top-level-combinator rejection rule
 require.cache[configPath].exports.config = { useTriggerV2: true };
 for (const key of Object.keys(require.cache)) {
     if (key.startsWith(BUNDLE) && key !== configPath) delete require.cache[key];
