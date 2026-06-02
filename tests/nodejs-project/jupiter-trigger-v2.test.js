@@ -1338,6 +1338,74 @@ function _buildTransferTx(payerB58) {
             'no logs = no disambiguation possible; must not assume SOL');
     });
 
+    await check('L2 R16: CPI nested failure (ATokenProgram → SystemProgram) → insufficient_sol_for_rent (must pick INNER, not OUTER)', async () => {
+        // Copilot R16 #3342350380: real Solana CPI traces emit failed lines
+        // INNERMOST FIRST (the actual cause), then each outer caller emits
+        // its own failed line as the error propagates. Picking the LAST
+        // failed line returns ATokenProgram (the outer caller) which isn't
+        // in our disambiguation map → falls to deposit_sim_failed, hiding
+        // the real cause. Forward scan picks the innermost SystemProgram
+        // failure correctly.
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [4, { Custom: 1 }] },
+                logs: [
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [1]',
+                    'Program log: CreateIdempotent',
+                    'Program 11111111111111111111111111111111 invoke [2]',
+                    'Program 11111111111111111111111111111111 failed: custom program error: 0x1', // inner — actual cause
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL consumed 8 of 200000 compute units',
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL failed: custom program error: 0x1', // outer propagation
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_sol_for_rent',
+            'must pick the innermost (first) failure — SystemProgram. Backward scan would have picked ATokenProgram (outer) → deposit_sim_failed.');
+        assert.match(r.reason, /SystemProgram/);
+    });
+
+    await check('L2 R16: CPI nested failure (ATokenProgram → TokenProgram Transfer) → insufficient_token_balance (must pick INNER)', async () => {
+        // Same CPI semantics, different inner program. Common shape: deposit
+        // tx uses ATokenProgram to create an account then SPL Transfer fails
+        // for InsufficientFunds. Must NOT misclassify as ATokenProgram-error.
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [6, { Custom: 1 }] },
+                logs: [
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [1]',
+                    'Program log: Create',
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]',
+                    'Program log: Instruction: Transfer',
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1', // inner — actual cause
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL failed: custom program error: 0x1', // outer
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_token_balance',
+            'must pick the innermost (first) failure — TokenProgram. Backward scan would have picked ATokenProgram (outer) → deposit_sim_failed.');
+        assert.match(r.reason, /TokenProgram/);
+    });
+
+    await check('L2 R16: deep CPI chain (3 levels) — outer wrappers must NOT shadow the inner failure', async () => {
+        // Defensive: 3-level CPI. Innermost SystemProgram failure must be
+        // selected even with two propagating callers above it.
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [3, { Custom: 1 }] },
+                logs: [
+                    'Program OuterWrapper11111111111111111111111111111 invoke [1]',
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [2]',
+                    'Program 11111111111111111111111111111111 invoke [3]',
+                    'Program 11111111111111111111111111111111 failed: custom program error: 0x1',
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL failed: custom program error: 0x1',
+                    'Program OuterWrapper11111111111111111111111111111 failed: custom program error: 0x1',
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_sol_for_rent');
+        assert.match(r.reason, /SystemProgram/);
+    });
+
     await check('L2 maps non-Custom(1) InstructionError to deposit_sim_failed with index + raw code', async () => {
         const r = await diagnoseFailedDeposit('FAKE', async () => ({
             value: { err: { InstructionError: [6, { Custom: 6001 }] }, logs: [] },

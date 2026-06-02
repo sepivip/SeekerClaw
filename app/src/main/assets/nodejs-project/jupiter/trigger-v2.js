@@ -873,17 +873,26 @@ const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
 /**
- * Find the program that raised the failing top-level instruction by
- * walking simulateTransaction's `logs` array. Each log line follows the
+ * Find the program that raised the on-chain error by walking
+ * simulateTransaction's `logs` array. Each log line follows the
  * pattern `Program <addr> invoke [<depth>]` on entry and
- * `Program <addr> failed: ...` or `... success` on exit. We scan
- * backwards for the LAST `failed` marker — that's the program at the
- * site of the on-chain error. Returns the program address string, or
- * `null` if no `failed` line is present (e.g. logs were truncated or the
- * simulation didn't reach the failure path).
+ * `Program <addr> failed: ...` or `... success` on exit.
+ *
+ * Solana CPI semantics (Copilot R16 #3342350380): when an inner program
+ * fails, the inner `Program X failed:` line appears FIRST, then the outer
+ * caller(s) emit their own `Program Y failed:` lines as the error
+ * propagates up the call stack. The INNERMOST callee is the actual cause
+ * of the error — that's what we need for SystemProgram vs TokenProgram
+ * disambiguation. Picking the LAST failed line (the outermost caller)
+ * would be e.g. ATokenProgram in `CreateIdempotent → CreateAccount`, not
+ * the SystemProgram that actually ran out of lamports.
+ *
+ * So: scan FORWARDS, take the FIRST `failed` marker.
  *
  * @param {string[]} logs
- * @returns {string|null}
+ * @returns {string|null} program address of the innermost failing program,
+ *                        or null if no `failed` line is present (logs
+ *                        truncated, sim didn't reach the failure path).
  */
 function _failingProgramFromLogs(logs) {
     if (!Array.isArray(logs)) return null;
@@ -891,7 +900,7 @@ function _failingProgramFromLogs(logs) {
     // base58 chars (the 32-byte address range). Cap at 64 to defend against
     // pathological lines.
     const re = /^Program ([1-9A-HJ-NP-Za-km-z]{32,64}) failed[:\s]/;
-    for (let i = logs.length - 1; i >= 0; i--) {
+    for (let i = 0; i < logs.length; i++) {
         const line = logs[i];
         if (typeof line !== 'string') continue;
         const m = re.exec(line);
