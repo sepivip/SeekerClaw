@@ -533,8 +533,8 @@ if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.fire
 // whitespace or non-canonical casing ("False ", "TRUE", "  true  ").
 // Strict equality silently ignores those inputs, making debugging a
 // rollback attempt painful ("I set the env var, why is it still on V2?").
-// Normalize (trim + lowercase) before comparing — same shape as the
-// BAT-992 dns-result-order env var on this codebase.
+// Normalize (trim + lowercase) before comparing — same approach applied
+// to the workspace/config.json string-value path below for consistency.
 function _normalizeBoolEnv(raw) {
     if (typeof raw !== 'string') return null;
     const v = raw.trim().toLowerCase();
