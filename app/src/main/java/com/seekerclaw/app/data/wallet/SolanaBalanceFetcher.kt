@@ -33,11 +33,29 @@ import java.net.URL
  * fundamentally a transient network condition.
  *
  * Match [AndroidBridge]'s style — `HttpURLConnection`, no OkHttp dep.
+ *
+ * BAT-1000: `rpcUrl` is no longer a constructor-frozen `val`. The fetcher
+ * now reads the URL via [rpcUrlProvider] on each call so toggling the
+ * Helius API Key in Settings takes effect immediately without recreating
+ * the fetcher instance (which `BurnerWalletScreen.remember { ... }` would
+ * have masked). The default provider preserves prior behavior (public
+ * mainnet-beta). Production sites should pass a provider that delegates
+ * to `ConfigManager.getSolanaRpcUrl(context)` so user-configured Helius
+ * keys are picked up live. Per Codex BAT-1000 v1.1 #2.
  */
 class SolanaBalanceFetcher(
-    private val rpcUrl: String = DEFAULT_RPC_URL,
+    private val rpcUrlProvider: () -> String = { DEFAULT_RPC_URL },
     private val timeoutMs: Int = 8_000,
 ) {
+    /**
+     * Backward-compatible secondary constructor accepting a fixed URL string.
+     * Useful for tests with a deterministic URL or any caller that holds
+     * its own resolution. Production should prefer the primary
+     * [rpcUrlProvider]-taking constructor for live hot-reload.
+     */
+    constructor(rpcUrl: String, timeoutMs: Int = 8_000) :
+        this(rpcUrlProvider = { rpcUrl }, timeoutMs = timeoutMs)
+
     data class Balances(
         /** SOL balance in lamports (10^-9 SOL). */
         val solLamports: BigInteger,
@@ -124,7 +142,17 @@ class SolanaBalanceFetcher(
         val body = """{"jsonrpc":"2.0","id":1,"method":${JSONObject.quote(method)},"params":$paramsJson}"""
         var conn: HttpURLConnection? = null
         return try {
-            val url = URL(rpcUrl)
+            // BAT-1000: read RPC URL per call so a Helius API Key edit in
+            // Settings takes effect on the very next fetch — no need to
+            // recreate the fetcher instance (which `remember { ... }` in
+            // BurnerWalletScreen would otherwise prevent).
+            //
+            // URL may contain `?api-key=…` — DO NOT log the URL string.
+            // Inner methods that log RPC failures (lines below) deliberately
+            // reference only `method` and `e.message`, not the URL, to keep
+            // the Helius key out of logcat (Codex BAT-1000 v1.1 #4 security
+            // gate).
+            val url = URL(rpcUrlProvider())
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = timeoutMs

@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.data.caps.CapEnforcer
 import com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault
 import com.seekerclaw.app.data.wallet.KeyImporter
@@ -111,7 +112,14 @@ fun BurnerWalletScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val keyVault = remember { EncryptedPrefsKeyVault(context.applicationContext) }
     val capEnforcer = remember { CapEnforcer.get(context.applicationContext) }
-    val balanceFetcher = remember { SolanaBalanceFetcher() }
+    // BAT-1000: pass a per-call provider that reads from ConfigManager so
+    // toggling the Helius API Key in Settings → Solana Wallet immediately
+    // routes balance fetches through Helius (or back to public RPC if the
+    // key is cleared) without recreating this composable's fetcher.
+    val appContext = context.applicationContext
+    val balanceFetcher = remember {
+        SolanaBalanceFetcher(rpcUrlProvider = { ConfigManager.getSolanaRpcUrl(appContext) })
+    }
 
     // Loaded state (refreshes when caps file changes via CrossProcessStore
     // or after an explicit save).

@@ -14,7 +14,26 @@ const { androidBridgeCall } = require('./bridge');
 // SOLANA RPC
 // ============================================================================
 
-const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
+// BAT-1000: Solana RPC URL is per-call now (was module-scoped const). When the
+// user sets a Helius API Key in Settings (Settings → Solana Wallet → Helius
+// API Key), all Solana RPC reads route through Helius's mainnet endpoint
+// (https://mainnet.helius-rpc.com/?api-key=…). Falls back to the public
+// mainnet-beta RPC when unset — preserves existing behavior. Per-call
+// evaluation mirrors the BAT-515 hot-reload pattern so a Settings UI edit
+// takes effect on the next RPC call without a service restart. Helius is the
+// same key BAT-319 added for NFT holdings (single source of truth).
+const PUBLIC_SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
+
+function getSolanaRpcUrl() {
+    const raw = config.heliusApiKey;
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (trimmed.length > 0) {
+            return `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(trimmed)}`;
+        }
+    }
+    return PUBLIC_SOLANA_RPC_URL;
+}
 
 // Single-shot RPC call (no retry)
 async function solanaRpcOnce(method, params = []) {
@@ -26,11 +45,14 @@ async function solanaRpcOnce(method, params = []) {
             params: params,
         });
 
-        const url = new URL(SOLANA_RPC_URL);
+        // BAT-1000 (Codex #1): preserve the query string. `url.pathname` alone
+        // drops `?api-key=…` and would silently call Helius unauthenticated.
+        // Pin via unit test in tests/nodejs-project/solana-rpc-url.test.js.
+        const url = new URL(getSolanaRpcUrl());
         const options = {
             hostname: url.hostname,
             port: 443,
-            path: url.pathname,
+            path: (url.pathname || '/') + (url.search || ''),
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -954,6 +976,8 @@ async function heliusDasRequest(method, params) {
 
 module.exports = {
     solanaRpc,
+    solanaRpcOnce,    // BAT-1000: exported for tests/nodejs-project/solana-rpc-url.test.js
+    getSolanaRpcUrl,  // BAT-1000: exported for tests + future inspection
     base58Encode,
     buildSolTransferTx,
     refreshJupiterProgramLabels,

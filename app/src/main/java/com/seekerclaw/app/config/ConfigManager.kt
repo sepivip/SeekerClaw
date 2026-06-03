@@ -23,6 +23,7 @@ import com.seekerclaw.app.util.LogLevel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.URLEncoder
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -195,6 +196,14 @@ object ConfigManager {
     private val mainHandler: android.os.Handler by lazy {
         android.os.Handler(android.os.Looper.getMainLooper())
     }
+
+    // BAT-1000: public Solana RPC URL used when no Helius API Key is set.
+    // Kept here (not exported) so callers always go through getSolanaRpcUrl()
+    // — that's where the Helius-or-fallback decision lives. Matches the
+    // Node-side PUBLIC_SOLANA_RPC_URL constant in solana.js (must stay in
+    // sync; a change on one side without the other splits Node + Kotlin
+    // RPC URLs).
+    private const val PUBLIC_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
     private const val PREFS_NAME = "seekerclaw_prefs"
     private const val KEY_API_KEY_ENC = "api_key_enc"
@@ -1458,6 +1467,39 @@ object ConfigManager {
                 list.any { it.id == trimmed }
             }
         }
+    }
+
+    // BAT-1000: derive the Solana RPC URL to use for live wallet reads
+    // (SolanaBalanceFetcher today; future Settings-side RPC consumers later).
+    // Reads the current heliusApiKey from disk via `loadConfig` per call so
+    // a Settings UI edit takes effect immediately without restarting the
+    // service — mirrors the Node-side `getSolanaRpcUrl()` hot-reload pattern
+    // in `solana.js`. Returns the public mainnet-beta RPC when no key is
+    // configured (preserves prior behavior).
+    //
+    // The Helius URL form (`https://mainnet.helius-rpc.com/?api-key=…`) puts
+    // the secret in the query string — callers MUST NOT log the returned
+    // string. UI text + redaction at the log layer (per BAT-1000 Codex #4
+    // security gate) treat any string containing `?api-key=` as sensitive.
+    fun getSolanaRpcUrl(context: Context): String {
+        val cfg = loadConfig(context) ?: return PUBLIC_SOLANA_RPC_URL
+        return buildSolanaRpcUrl(cfg.heliusApiKey)
+    }
+
+    /**
+     * Pure URL-builder for the Solana RPC. Returns the Helius URL if
+     * [heliusApiKey] is non-blank after trimming, otherwise the public
+     * mainnet-beta fallback. Extracted from [getSolanaRpcUrl] so it is
+     * trivially testable without an Android Context.
+     *
+     * @param heliusApiKey may be null, empty, or whitespace-only — all
+     *   treated equivalently (fall back to public RPC).
+     */
+    internal fun buildSolanaRpcUrl(heliusApiKey: String?): String {
+        val key = heliusApiKey?.trim().orEmpty()
+        if (key.isEmpty()) return PUBLIC_SOLANA_RPC_URL
+        return "https://mainnet.helius-rpc.com/?api-key=" +
+            URLEncoder.encode(key, Charsets.UTF_8.name())
     }
 
     fun getAutoStartOnBoot(context: Context): Boolean =
