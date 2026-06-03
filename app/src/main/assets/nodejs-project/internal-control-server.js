@@ -246,12 +246,35 @@ async function _route(req, res) {
     // Status code 403 (not 400) since the request reached the
     // listener cleanly — it's the *origin* of the call that we're
     // rejecting, not a malformed wire.
-    const hostHeader = (req.headers.host || '').toLowerCase();
+    //
+    // Copilot R3 #3349684637: `req.headers.host` and `.origin` are
+    // typed as `string | string[] | undefined` in Node's HTTP types.
+    // Today Node's HTTP parser discards duplicate Host headers (only
+    // the first wins, kept as string) — but Copilot is correct that
+    // a future parser change OR a pathological proxy chain could
+    // surface an array. Calling `.toLowerCase()` on a non-string
+    // would throw → outer try/catch → 500, reintroducing the DoS
+    // surface this gate exists to close. Defensive: explicit
+    // typeof checks, anything non-string rejects 403 cleanly.
+    const rawHost = req.headers.host;
+    if (typeof rawHost !== 'string') {
+        return _json(res, 403, { error: 'host not allowed' });
+    }
+    const hostHeader = rawHost.toLowerCase();
     if (hostHeader !== ALLOWED_HOST) {
         return _json(res, 403, { error: 'host not allowed' });
     }
-    const originHeader = req.headers.origin;
-    if (typeof originHeader === 'string' && originHeader.length > 0) {
+    const rawOrigin = req.headers.origin;
+    if (typeof rawOrigin === 'string') {
+        // Empty string passes (some HTTP libs always set the header);
+        // any non-empty value is browser-initiated → reject.
+        if (rawOrigin.length > 0) {
+            return _json(res, 403, { error: 'origin not allowed' });
+        }
+    } else if (rawOrigin !== undefined) {
+        // Non-string non-undefined Origin (array from duplicate
+        // headers, or anything else exotic) → definitely not a
+        // legitimate Kotlin caller, reject.
         return _json(res, 403, { error: 'origin not allowed' });
     }
 
