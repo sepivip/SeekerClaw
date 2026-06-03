@@ -23,7 +23,6 @@
 
 const assert = require('assert');
 const path = require('path');
-const Module = require('module');
 
 const BUNDLE = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
 
@@ -100,8 +99,11 @@ function _restoreHttps() { https.request = _origRequest; }
 
 _installHttpsCapture();
 
-// solana.js destructures `https.request` at the top via `require('https')` —
-// require it AFTER the capture is installed so it sees the patched module.
+// solana.js stores the `https` module via `const https = require('https')` and
+// calls `https.request(...)` at use-site (not destructured) — so the patched
+// `https.request` is picked up on each call. Require solana.js AFTER the
+// capture is installed for clarity, though the patch would still take effect
+// at call time even if required earlier.
 const solana = require(path.join(BUNDLE, 'solana.js'));
 
 let failures = 0;

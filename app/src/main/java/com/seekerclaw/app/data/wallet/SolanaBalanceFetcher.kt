@@ -185,11 +185,38 @@ class SolanaBalanceFetcher(
             }
             obj
         } catch (e: Exception) {
-            Log.w(TAG, "RPC $method failed: ${e.message}")
+            // BAT-1000 Copilot R2 #3348125032: any exception bubbling up
+            // here can carry the URL in its message — `URL(rpcUrlProvider())`
+            // throws MalformedURLException with the full URL embedded
+            // (which contains `?api-key=…`), and other I/O exceptions
+            // sometimes include the requested URL too. Redact before
+            // logging so a corrupt-prefs / bad-provider scenario does NOT
+            // leak the Helius key into logcat. Pairs with the Node-side
+            // log-grep gate from the Codex #4 security contract.
+            Log.w(TAG, "RPC $method failed: ${redactApiKeyFromMessage(e.message)}")
             null
         } finally {
             conn?.disconnect()
         }
+    }
+
+    /**
+     * Redact any `?api-key=…` (or `&api-key=…`) substring from an exception
+     * message before logging. Catches the MalformedURLException + general
+     * I/O exception leak paths flagged by Copilot R2 #3348125032. Returns
+     * `"<null>"` for null inputs so the log line stays informative.
+     *
+     * Internal (not private) so unit tests in the same module can verify
+     * the redaction directly — that's important because the bug class
+     * (silent key leak in logcat) is exactly the kind that hides if not
+     * tested explicitly.
+     */
+    internal fun redactApiKeyFromMessage(msg: String?): String {
+        if (msg == null) return "<null>"
+        // Greedy until next & or whitespace or end-of-string — matches both
+        // the start-of-query (?api-key=…) and any later position (&api-key=…)
+        // even though the URL builder only uses the leading form.
+        return msg.replace(Regex("""[?&]api-key=[^&\s"']*"""), "[?&]api-key=<REDACTED>")
     }
 
     companion object {

@@ -236,4 +236,61 @@ class SolanaBalanceFetcherRpcUrlTest {
         // But two references to the same construction ARE the same.
         assertSame(one, one)
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // Layer 5 — Copilot R2 #3348125032: api-key redaction in error logs
+    // (security gate — exception messages can carry the URL)
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `redactApiKeyFromMessage strips api-key query in MalformedURLException-style messages`() {
+        // MalformedURLException's getMessage() in Android includes the
+        // attempted URL: e.g. "Unknown protocol: htp" with a wrapped
+        // URL string, OR "no protocol: https://mainnet.helius-rpc.com/?api-key=SECRET".
+        // Either form must be redacted before logging.
+        val fetcher = SolanaBalanceFetcher()
+        val leaked = "no protocol: https://mainnet.helius-rpc.com/?api-key=SUPER-SECRET-KEY-12345"
+        val redacted = fetcher.redactApiKeyFromMessage(leaked)
+        assertTrue(
+            "redacted output must not contain the raw key. Got: $redacted",
+            !redacted.contains("SUPER-SECRET-KEY-12345"),
+        )
+        assertTrue(
+            "redacted output should still mention <REDACTED> as the placeholder so log readers can tell what was scrubbed",
+            redacted.contains("REDACTED"),
+        )
+    }
+
+    @Test
+    fun `redactApiKeyFromMessage strips key in mid-query form (defense)`() {
+        val fetcher = SolanaBalanceFetcher()
+        val leaked = "connect timed out for https://mainnet.helius-rpc.com/path?foo=bar&api-key=ANOTHER-KEY&commitment=confirmed"
+        val redacted = fetcher.redactApiKeyFromMessage(leaked)
+        assertTrue(
+            "mid-query api-key form must also be redacted. Got: $redacted",
+            !redacted.contains("ANOTHER-KEY"),
+        )
+    }
+
+    @Test
+    fun `redactApiKeyFromMessage preserves non-secret content`() {
+        val fetcher = SolanaBalanceFetcher()
+        val msg = "Connection refused to api.mainnet-beta.solana.com:443"
+        val redacted = fetcher.redactApiKeyFromMessage(msg)
+        assertEquals(
+            "messages without api-key should pass through unchanged",
+            msg,
+            redacted,
+        )
+    }
+
+    @Test
+    fun `redactApiKeyFromMessage handles null gracefully`() {
+        val fetcher = SolanaBalanceFetcher()
+        assertEquals(
+            "null message should produce a sentinel, not crash",
+            "<null>",
+            fetcher.redactApiKeyFromMessage(null),
+        )
+    }
 }
