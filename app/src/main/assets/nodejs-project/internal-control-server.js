@@ -189,23 +189,34 @@ function start(options) {
     return _server;
 }
 
-// BAT-1001 PR-B: constant-time token compare with length guard.
-// `crypto.timingSafeEqual` throws on length mismatch — we MUST
-// length-check first, otherwise an attacker can probe the token's
-// length by triggering 500s. Both inputs are strict-type-checked
-// to be strings (no coercion — a non-string header from header
-// folding etc. returns false cleanly instead of throwing). Empty
-// expected → reject (we never short-circuit to "no token = allow").
-// Equal-length non-empty strings reach timingSafeEqual on their
-// UTF-8 buffer representations.
+// BAT-1001 PR-B: constant-time token compare with byte-length guard.
+// `crypto.timingSafeEqual` throws on Buffer-length mismatch — we MUST
+// pre-check, otherwise an attacker can probe the token's length by
+// triggering 500s.
+//
+// Subtlety (Copilot PR #395 R2 finding): the length check is on
+// **byte length**, not String `.length` (which is UTF-16 code units).
+// A non-ASCII input like `Buffer.from('ñ', 'utf8').length === 2`
+// while `'ñ'.length === 1`. If we length-checked on `.length` and
+// then fed Buffers to timingSafeEqual, an attacker sending
+// X-Bridge-Token: '<UTF-8-multibyte string with the same JS .length
+// as the expected token>' would pass the pre-check, hit timingSafeEqual
+// with mismatched Buffer lengths, throw, get a 500 from the outer
+// try/catch — reintroducing the length-probe surface this helper
+// exists to close. Solution: build the Buffers first, then compare
+// buffer.length (== byte length) before timingSafeEqual.
+//
+// Both inputs are strict-type-checked to be strings (no coercion —
+// a non-string header from header folding etc. returns false cleanly
+// instead of throwing). Empty expected → reject (we never short-
+// circuit to "no token = allow").
 function _safeTokenEq(expected, actual) {
     if (typeof expected !== 'string' || typeof actual !== 'string') return false;
     if (expected.length === 0) return false;
-    if (expected.length !== actual.length) return false;
-    return crypto.timingSafeEqual(
-        Buffer.from(expected, 'utf8'),
-        Buffer.from(actual, 'utf8'),
-    );
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    const actualBuf = Buffer.from(actual, 'utf8');
+    if (expectedBuf.length !== actualBuf.length) return false;
+    return crypto.timingSafeEqual(expectedBuf, actualBuf);
 }
 
 async function _route(req, res) {

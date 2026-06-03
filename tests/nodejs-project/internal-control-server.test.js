@@ -421,4 +421,32 @@ test('token compare: same-length-one-char-diff returns 401', async () => {
     assert.strictEqual(r.status, 401);
 });
 
+test('token compare: non-ASCII input with matching .length but different UTF-8 byte length returns 401 cleanly (Copilot R2 #3349626661)', async () => {
+    // The R1-fix used `.length` (UTF-16 code units) for the pre-check
+    // before calling timingSafeEqual on Buffers (UTF-8 bytes). A
+    // non-ASCII attacker can pass the .length check but trigger a
+    // Buffer-length-mismatch throw, yielding 500 — reintroducing
+    // the length-probe DoS surface. R2 fix: build Buffers first,
+    // compare buffer.length. This test locks that contract.
+    //
+    // Pick a string whose JS .length matches BRIDGE_TOKEN.length but
+    // whose UTF-8 byte length is larger. Each 'ñ' is 1 UTF-16 code
+    // unit (.length=1) but 2 UTF-8 bytes. So a string of all 'ñ' at
+    // BRIDGE_TOKEN.length chars has 2× the byte length.
+    const nonAscii = 'ñ'.repeat(BRIDGE_TOKEN.length);
+    assert.strictEqual(nonAscii.length, BRIDGE_TOKEN.length,
+        'pre-condition: JS .length matches');
+    assert.notStrictEqual(Buffer.byteLength(nonAscii, 'utf8'),
+        Buffer.byteLength(BRIDGE_TOKEN, 'utf8'),
+        'pre-condition: UTF-8 byte length differs — this is the attack vector');
+
+    const r = await _post('/healthz', {}, { 'X-Bridge-Token': nonAscii });
+    // MUST be 401 (clean rejection by the byte-length pre-check),
+    // NOT 500 (which would mean timingSafeEqual threw and the outer
+    // try/catch caught the throw — i.e. the byte-length pre-check
+    // is missing or broken).
+    assert.strictEqual(r.status, 401,
+        'non-ASCII token must reject 401 via byte-length pre-check, NOT 500 via timingSafeEqual throw');
+});
+
 run();
