@@ -215,8 +215,13 @@ class SolanaBalanceFetcher(
         if (msg == null) return "<null>"
         // Greedy until next & or whitespace or end-of-string — matches both
         // the start-of-query (?api-key=…) and any later position (&api-key=…)
-        // even though the URL builder only uses the leading form.
-        return msg.replace(Regex("""[?&]api-key=[^&\s"']*"""), "[?&]api-key=<REDACTED>")
+        // even though the URL builder only uses the leading form. Capture
+        // the original delimiter (Copilot R3 #3348177879) so the redacted
+        // message stays readable as a URL fragment — e.g.
+        // "...?foo=bar&api-key=KEY" → "...?foo=bar&api-key=<REDACTED>"
+        // rather than the literal "[?&]" placeholder that breaks query
+        // shape and confuses log readers.
+        return msg.replace(Regex("""([?&])api-key=[^&\s"']*"""), "$1api-key=<REDACTED>")
     }
 
     companion object {

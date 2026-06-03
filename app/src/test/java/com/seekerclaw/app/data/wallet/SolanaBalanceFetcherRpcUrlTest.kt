@@ -259,6 +259,13 @@ class SolanaBalanceFetcherRpcUrlTest {
             "redacted output should still mention <REDACTED> as the placeholder so log readers can tell what was scrubbed",
             redacted.contains("REDACTED"),
         )
+        // Copilot R3 #3348177879: original `?` delimiter must be preserved
+        // so the redacted message still reads as a valid URL fragment.
+        assertEquals(
+            "?-delimiter form should preserve `?` and produce a clean readable URL",
+            "no protocol: https://mainnet.helius-rpc.com/?api-key=<REDACTED>",
+            redacted,
+        )
     }
 
     @Test
@@ -269,6 +276,30 @@ class SolanaBalanceFetcherRpcUrlTest {
         assertTrue(
             "mid-query api-key form must also be redacted. Got: $redacted",
             !redacted.contains("ANOTHER-KEY"),
+        )
+        // Copilot R3 #3348177879: the original `&` delimiter must survive
+        // so the surrounding query string stays well-formed in logs.
+        // Pre-fix the replacement string was the literal "[?&]" character
+        // class, which produced "...?foo=bar[?&]api-key=<REDACTED>..." —
+        // breaking query shape and confusing log readers.
+        assertEquals(
+            "&-delimiter form should preserve `&` between adjacent params",
+            "connect timed out for https://mainnet.helius-rpc.com/path?foo=bar&api-key=<REDACTED>&commitment=confirmed",
+            redacted,
+        )
+    }
+
+    @Test
+    fun `redactApiKeyFromMessage handles BOTH delimiters in one message (multiple URLs)`() {
+        // Defense for the unlikely case an exception message embeds two URLs
+        // (a chained-failure or wrapped-cause scenario): each occurrence is
+        // redacted independently with its OWN delimiter preserved.
+        val fetcher = SolanaBalanceFetcher()
+        val leaked = "fallback from https://a/?api-key=KEY-ONE to https://b/path?x=1&api-key=KEY-TWO"
+        val redacted = fetcher.redactApiKeyFromMessage(leaked)
+        assertEquals(
+            "fallback from https://a/?api-key=<REDACTED> to https://b/path?x=1&api-key=<REDACTED>",
+            redacted,
         )
     }
 
