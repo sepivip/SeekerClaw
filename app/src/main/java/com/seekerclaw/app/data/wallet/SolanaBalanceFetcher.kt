@@ -33,11 +33,29 @@ import java.net.URL
  * fundamentally a transient network condition.
  *
  * Match [AndroidBridge]'s style — `HttpURLConnection`, no OkHttp dep.
+ *
+ * BAT-1000: `rpcUrl` is no longer a constructor-frozen `val`. The fetcher
+ * now reads the URL via [rpcUrlProvider] on each call so toggling the
+ * Helius API Key in Settings takes effect immediately without recreating
+ * the fetcher instance (which `BurnerWalletScreen.remember { ... }` would
+ * have masked). The default provider preserves prior behavior (public
+ * mainnet-beta). Production sites should pass a provider that delegates
+ * to `ConfigManager.getSolanaRpcUrl(context)` so user-configured Helius
+ * keys are picked up live. Per Codex BAT-1000 v1.1 #2.
  */
 class SolanaBalanceFetcher(
-    private val rpcUrl: String = DEFAULT_RPC_URL,
+    private val rpcUrlProvider: () -> String = { DEFAULT_RPC_URL },
     private val timeoutMs: Int = 8_000,
 ) {
+    /**
+     * Backward-compatible secondary constructor accepting a fixed URL string.
+     * Useful for tests with a deterministic URL or any caller that holds
+     * its own resolution. Production should prefer the primary
+     * [rpcUrlProvider]-taking constructor for live hot-reload.
+     */
+    constructor(rpcUrl: String, timeoutMs: Int = 8_000) :
+        this(rpcUrlProvider = { rpcUrl }, timeoutMs = timeoutMs)
+
     data class Balances(
         /** SOL balance in lamports (10^-9 SOL). */
         val solLamports: BigInteger,
@@ -124,7 +142,17 @@ class SolanaBalanceFetcher(
         val body = """{"jsonrpc":"2.0","id":1,"method":${JSONObject.quote(method)},"params":$paramsJson}"""
         var conn: HttpURLConnection? = null
         return try {
-            val url = URL(rpcUrl)
+            // BAT-1000: read RPC URL per call so a Helius API Key edit in
+            // Settings takes effect on the very next fetch — no need to
+            // recreate the fetcher instance (which `remember { ... }` in
+            // BurnerWalletScreen would otherwise prevent).
+            //
+            // URL may contain `?api-key=…` — DO NOT log the URL string.
+            // Inner methods that log RPC failures (lines below) deliberately
+            // reference only `method` and `e.message`, not the URL, to keep
+            // the Helius key out of logcat (Codex BAT-1000 v1.1 #4 security
+            // gate).
+            val url = URL(rpcUrlProvider())
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = timeoutMs
@@ -157,11 +185,43 @@ class SolanaBalanceFetcher(
             }
             obj
         } catch (e: Exception) {
-            Log.w(TAG, "RPC $method failed: ${e.message}")
+            // BAT-1000 Copilot R2 #3348125032: any exception bubbling up
+            // here can carry the URL in its message — `URL(rpcUrlProvider())`
+            // throws MalformedURLException with the full URL embedded
+            // (which contains `?api-key=…`), and other I/O exceptions
+            // sometimes include the requested URL too. Redact before
+            // logging so a corrupt-prefs / bad-provider scenario does NOT
+            // leak the Helius key into logcat. Pairs with the Node-side
+            // log-grep gate from the Codex #4 security contract.
+            Log.w(TAG, "RPC $method failed: ${redactApiKeyFromMessage(e.message)}")
             null
         } finally {
             conn?.disconnect()
         }
+    }
+
+    /**
+     * Redact any `?api-key=…` (or `&api-key=…`) substring from an exception
+     * message before logging. Catches the MalformedURLException + general
+     * I/O exception leak paths flagged by Copilot R2 #3348125032. Returns
+     * `"<null>"` for null inputs so the log line stays informative.
+     *
+     * Internal (not private) so unit tests in the same module can verify
+     * the redaction directly — that's important because the bug class
+     * (silent key leak in logcat) is exactly the kind that hides if not
+     * tested explicitly.
+     */
+    internal fun redactApiKeyFromMessage(msg: String?): String {
+        if (msg == null) return "<null>"
+        // Greedy until next & or whitespace or end-of-string — matches both
+        // the start-of-query (?api-key=…) and any later position (&api-key=…)
+        // even though the URL builder only uses the leading form. Capture
+        // the original delimiter (Copilot R3 #3348177879) so the redacted
+        // message stays readable as a URL fragment — e.g.
+        // "...?foo=bar&api-key=KEY" → "...?foo=bar&api-key=<REDACTED>"
+        // rather than the literal "[?&]" placeholder that breaks query
+        // shape and confuses log readers.
+        return msg.replace(Regex("""([?&])api-key=[^&\s"']*"""), "$1api-key=<REDACTED>")
     }
 
     companion object {

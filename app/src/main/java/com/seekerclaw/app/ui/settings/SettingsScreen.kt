@@ -879,15 +879,20 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.JUPITER_API_KEY,
                 )
 
-                // ── Helius API Key (NFT holdings) ─────────────────────────────
+                // ── Helius API Key (Solana RPC + NFT holdings — BAT-1000) ─────
+                // BAT-1000: re-framed as RPC-first. Key drives both the
+                // general Solana RPC URL (balances, swaps, jupiter, agent_pay,
+                // etc.) AND NFT holdings. "Not set" hint warns about public-
+                // RPC unreliability since that's the actual failure mode
+                // users see (timeouts → empty balance reads).
                 Spacer(modifier = Modifier.height(20.dp))
                 ConfigField(
                     label = "Helius API Key",
                     value = config?.heliusApiKey?.let { key ->
-                        if (key.isBlank()) "Not set — NFT holdings disabled"
-                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
-                        else "*".repeat(key.length)
-                    } ?: "Not set — NFT holdings disabled",
+                        if (key.isBlank()) "Not set — using public Solana RPC (slow, rate-limited). NFT holdings disabled."
+                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)} — Solana RPC + NFT holdings"
+                        else "${"*".repeat(key.length)} — Solana RPC + NFT holdings"
+                    } ?: "Not set — using public Solana RPC (slow, rate-limited). NFT holdings disabled.",
                     onClick = {
                         editField = "heliusApiKey"
                         editLabel = "Helius API Key"

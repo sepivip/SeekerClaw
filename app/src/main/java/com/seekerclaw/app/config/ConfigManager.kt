@@ -23,6 +23,7 @@ import com.seekerclaw.app.util.LogLevel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.URLEncoder
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -195,6 +196,14 @@ object ConfigManager {
     private val mainHandler: android.os.Handler by lazy {
         android.os.Handler(android.os.Looper.getMainLooper())
     }
+
+    // BAT-1000: public Solana RPC URL used when no Helius API Key is set.
+    // Kept here (not exported) so callers always go through getSolanaRpcUrl()
+    // — that's where the Helius-or-fallback decision lives. Matches the
+    // Node-side PUBLIC_SOLANA_RPC_URL constant in solana.js (must stay in
+    // sync; a change on one side without the other splits Node + Kotlin
+    // RPC URLs).
+    private const val PUBLIC_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
     private const val PREFS_NAME = "seekerclaw_prefs"
     private const val KEY_API_KEY_ENC = "api_key_enc"
@@ -1458,6 +1467,87 @@ object ConfigManager {
                 list.any { it.id == trimmed }
             }
         }
+    }
+
+    // BAT-1000: derive the Solana RPC URL to use for live wallet reads
+    // (SolanaBalanceFetcher today; future Settings-side RPC consumers later).
+    // Reads the heliusApiKey on each call via the narrow
+    // `loadHeliusApiKeyOnly()` helper (NOT `loadConfig()` — see Copilot R1
+    // hot-path note on that helper for why). A Settings UI edit takes effect
+    // immediately without restarting the service — mirrors the Node-side
+    // `getSolanaRpcUrl()` hot-reload pattern in `solana.js`. Returns the
+    // public mainnet-beta RPC when no key is configured (preserves prior
+    // behavior).
+    //
+    // The Helius URL form (`https://mainnet.helius-rpc.com/?api-key=…`) puts
+    // the secret in the query string — callers MUST NOT log the returned
+    // string. UI text + redaction at the log layer (per BAT-1000 Codex #4
+    // security gate) treat any string containing `?api-key=` as sensitive.
+    fun getSolanaRpcUrl(context: Context): String {
+        // BAT-1000 Copilot R1 #3348057902: avoid `loadConfig(context)` here.
+        // `loadConfig` decrypts the ENTIRE AppConfig (anthropic, openai,
+        // openrouter, custom, jupiter, brave, perplexity, exa, tavily,
+        // firecrawl, discord, oauth tokens, MCP servers, env vars, etc.)
+        // just to read one field. Since this method is invoked via
+        // `SolanaBalanceFetcher.rpcUrlProvider()` on every JSON-RPC call,
+        // a steady balance-refresh stream would otherwise trigger a full
+        // multi-secret decrypt + AppConfig materialization on every tick.
+        //
+        // Narrow read: only decrypt KEY_HELIUS_API_KEY_ENC. Same trim +
+        // build-or-fallback logic as the full-config path. Falls back to
+        // public RPC if SharedPreferences is unreachable, the key is
+        // absent, or decryption throws — preserves the
+        // never-throw-from-getSolanaRpcUrl contract.
+        return buildSolanaRpcUrl(loadHeliusApiKeyOnly(context))
+    }
+
+    /**
+     * Narrow secret read: decrypts ONLY the Helius API key from
+     * SharedPreferences. Returns an empty string for "not set", "absent",
+     * or "decrypt failure" — caller treats all three as fallback-to-public.
+     *
+     * Kept private so it doesn't become a generic public-secret API; this
+     * is specifically the hot-path read for [getSolanaRpcUrl] which is
+     * called per RPC tick by `SolanaBalanceFetcher.rpcUrlProvider`. If
+     * other hot-path callers appear, expose a similar narrow read for
+     * each — do NOT route them through [loadConfig].
+     */
+    private fun loadHeliusApiKeyOnly(context: Context): String {
+        return try {
+            val p = prefs(context)
+            val enc = p.getString(KEY_HELIUS_API_KEY_ENC, null) ?: return ""
+            KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
+        } catch (e: Exception) {
+            // BAT-1000 Copilot R2 #3348125003: log at most ONCE per process
+            // for decrypt failures. This is a per-RPC hot path; a corrupted
+            // keystore would otherwise spam logcat (one line per balance
+            // refresh tick). The first log captures the failure class for
+            // diagnosis; subsequent calls silently fall back to public RPC.
+            if (heliusDecryptFailureLogged.compareAndSet(false, true)) {
+                Log.w(TAG, "loadHeliusApiKeyOnly decrypt failed (logged once per process): ${e.javaClass.simpleName}")
+            }
+            ""
+        }
+    }
+
+    // BAT-1000 R2 #3348125003: gate the decrypt-failure log to once per
+    // process to avoid logcat spam on the per-RPC hot path.
+    private val heliusDecryptFailureLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Pure URL-builder for the Solana RPC. Returns the Helius URL if
+     * [heliusApiKey] is non-blank after trimming, otherwise the public
+     * mainnet-beta fallback. Extracted from [getSolanaRpcUrl] so it is
+     * trivially testable without an Android Context.
+     *
+     * @param heliusApiKey may be null, empty, or whitespace-only — all
+     *   treated equivalently (fall back to public RPC).
+     */
+    internal fun buildSolanaRpcUrl(heliusApiKey: String?): String {
+        val key = heliusApiKey?.trim().orEmpty()
+        if (key.isEmpty()) return PUBLIC_SOLANA_RPC_URL
+        return "https://mainnet.helius-rpc.com/?api-key=" +
+            URLEncoder.encode(key, Charsets.UTF_8.name())
     }
 
     fun getAutoStartOnBoot(context: Context): Boolean =
