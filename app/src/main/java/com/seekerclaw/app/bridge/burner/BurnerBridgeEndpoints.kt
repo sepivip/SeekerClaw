@@ -2,10 +2,12 @@ package com.seekerclaw.app.bridge.burner
 
 import android.content.Context
 import android.util.Log
+import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.data.caps.CapEnforcer
 import com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault
 import com.seekerclaw.app.data.wallet.KeyVault
 import com.seekerclaw.app.data.wallet.SigningException
+import com.seekerclaw.app.data.wallet.SolanaBalanceFetcher
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import java.math.BigInteger
@@ -44,17 +46,32 @@ class BurnerBridgeEndpoints internal constructor(
     private val keyVault: KeyVault,
     private val capEnforcer: CapEnforcer,
     private val jupiterOwnership: JupiterOwnershipEndpoint,
+    // BAT-1001 PR-B: optional balance fetcher for `/burner/status` live
+    // SOL+USDC reads. Null = balances are omitted from the response
+    // (the v1 BAT-582 R2 behaviour, preserved as a fallback for any
+    // test seam that doesn't wire a fetcher). Tests pass a stub
+    // subclass of SolanaBalanceFetcher whose `fetch` returns canned
+    // values. Production secondary constructor below instantiates the
+    // real fetcher with the Helius-aware URL provider from BAT-1000.
+    private val balanceFetcher: SolanaBalanceFetcher? = null,
 ) {
 
     /**
      * Production constructor — wires up the default
      * EncryptedPrefsKeyVault + singleton CapEnforcer / JupiterOwnership
-     * from the Application Context.
+     * from the Application Context, plus a SolanaBalanceFetcher whose
+     * `rpcUrlProvider` delegates to [ConfigManager.getSolanaRpcUrl] so
+     * a Helius API Key edit in Settings is honored on the very next
+     * `/burner/status` call (no fetcher recreation needed). BAT-1001
+     * PR-B + BAT-1000 v1.1 #2.
      */
     constructor(context: Context) : this(
         keyVault = EncryptedPrefsKeyVault(context.applicationContext),
         capEnforcer = CapEnforcer.get(context),
         jupiterOwnership = JupiterOwnershipEndpoint.get(context),
+        balanceFetcher = SolanaBalanceFetcher(
+            rpcUrlProvider = { ConfigManager.getSolanaRpcUrl(context.applicationContext) },
+        ),
     )
 
     /**
@@ -190,16 +207,44 @@ class BurnerBridgeEndpoints internal constructor(
             val body = LinkedHashMap<String, Any?>()
             body["configured"] = configured
             if (configured) body["pubkey"] = pubkey
-            // BAT-582 R2: balanceSol / balanceUsdc fields are intentionally
-            // OMITTED from this response (instead of stubbed "0") until the
-            // RPC fetch lands. Downstream consumers (tools/wallet.js,
-            // BurnerWalletScreen, ai.js system prompt) treat absence as
-            // "balance unavailable" rather than "balance is zero" — a
-            // configured-but-funded burner that returned "0" was producing
-            // user-facing copy that read like the burner was empty, which
-            // is dangerously misleading. Adding the field back is gated on
-            // an actual RPC fetch (see Limitations note in the PR for the
-            // follow-up scope).
+            // BAT-1001 PR-B: atomic-string-or-omit live balance contract.
+            // Pre-fix (BAT-582 R2) intentionally omitted balanceSol /
+            // balanceUsdc because no RPC fetch was wired — wallet_status
+            // hard-coded "burner balance is temporarily unavailable" for
+            // every chat turn. Now that the fetcher exists (SolanaBalanceFetcher,
+            // already used by the Settings UI), wire it here:
+            //
+            //   - balanceFetcher == null → omit BOTH fields (legacy /
+            //     test-seam path; downstream consumers already handle
+            //     absence as "unavailable" via wallet_status).
+            //   - fetcher.fetch(pubkey) returns null (RPC timeout, parse
+            //     fail, network down) → omit BOTH fields. Atomic. Never
+            //     send "0" or null — sending "0" would silently break the
+            //     "balance unavailable" UI copy (tools/wallet.js:145-153
+            //     distinguishes field-absent from field-present-as-zero).
+            //   - fetcher returns Balances → emit BOTH as atomic-unit
+            //     decimal strings (lamports for SOL, microunits for
+            //     USDC). u64-safe: BigInteger.toString() preserves the
+            //     full unsigned range, never lossy at the wire.
+            //
+            // No try/catch around fetch(): SolanaBalanceFetcher already
+            // converts every failure path (HTTP error, JSON-RPC error,
+            // parse failure, MalformedURLException) to null internally
+            // (see SolanaBalanceFetcher.kt:71-93). A thrown exception
+            // here would be a bug worth surfacing, not silently
+            // swallowing.
+            // `configured` is derived from `pubkey != null`, so checking
+            // both is redundant — the explicit pubkey != null check
+            // below is what gives the smart-cast for the fetch(pubkey)
+            // call. Equivalent to "configured && fetcher wired".
+            if (balanceFetcher != null && pubkey != null) {
+                val balances = balanceFetcher.fetch(pubkey)
+                if (balances != null) {
+                    body["balanceSol"] = balances.solLamports.toString()
+                    body["balanceUsdc"] = balances.usdcMicrounits.toString()
+                }
+                // null → omit both (no else clause).
+            }
             body["capPerTxSol"] = status.capPerTxSol
             body["capPerTxUsdc"] = status.capPerTxUsdc
             body["capDailySol"] = status.capDailySol

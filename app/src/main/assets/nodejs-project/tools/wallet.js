@@ -72,13 +72,14 @@ const tools = [
             'main wallet (MWA-backed; pubkey null until user authorizes). Network is Solana mainnet. ' +
             'Burner shape: { pubkey, balance: { sol, usdc }, balanceAvailable, spentToday: { sol, usdc }, ' +
             'caps: { perTxSol, perTxUsdc, dailySol, dailyUsdc }, remainingDaily: { sol, usdc }, display: {...}, network }. ' +
-            'BALANCE NOTE: `burner.balance.sol` and `burner.balance.usdc` are currently always `null` ' +
-            '(and `display.balanceSol` / `display.balanceUsdc` are the literal string "unavailable") — ' +
-            'the burner balance RPC fetch is a known follow-up, not wired yet. `balanceAvailable: false` ' +
-            'flags this. Caps, today\'s spend, and remainingDaily ARE real (atomic-unit strings; matching ' +
-            'decimals appear under display.*). Main wallet `balance` is fetched live from RPC and IS real. ' +
-            'When asked about the burner balance, say "burner balance is temporarily unavailable" or fetch ' +
-            'the main wallet via solana_balance — never read burner.balance.* and report it as "0". ' +
+            'BALANCE NOTE (BAT-1001): `burner.balance.sol` and `burner.balance.usdc` are now live-fetched ' +
+            'from mainnet RPC by the Android bridge (via the same SolanaBalanceFetcher the Settings UI uses). ' +
+            'Atomic-unit decimal strings when present. When `balanceAvailable: false` (and balance.sol / balance.usdc ' +
+            'are null + display.balanceSol / display.balanceUsdc are "unavailable"), that means the RPC call ' +
+            'transiently failed — NOT that the wallet holds zero. Say "burner balance is temporarily unavailable" ' +
+            'and suggest a retry (or that the user add a Helius API key in Settings for more reliable RPC); ' +
+            'NEVER report `null` as "0". Caps, today\'s spend, and remainingDaily ARE real (atomic-unit strings; ' +
+            'matching decimals appear under display.*). Main wallet `balance` is fetched live from RPC and IS real. ' +
             'Use this before deciding burner-vs-main routing or when the user asks "what wallets do I have." ' +
             'Read-only — no confirmation needed.',
         input_schema: {

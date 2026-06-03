@@ -4,7 +4,13 @@
 
 const path = require('path');
 
-const { BRIDGE_TOKEN, config, log, workDir } = require('./config');
+// BAT-1001 PR-B: per-call getBridgeToken (not the startup-frozen
+// BRIDGE_TOKEN constant) so log redaction tracks Kotlin-side token
+// rotations. Pre-fix, a rotation mid-session left the redactor
+// matching the OLD token forever — any log line containing the NEW
+// token would leak it. Cost is one fs.readFileSync per log line that
+// contains a bridge-token-shaped substring, which is cheap.
+const { getBridgeToken, config, log, workDir } = require('./config');
 
 // ============================================================================
 // SECRET REDACTION
@@ -102,8 +108,10 @@ function redactSecrets(msg) {
     // Redact OpenAI API keys (sk-proj-..., sk-...)
     msg = msg.replace(/sk-proj-[a-zA-Z0-9_-]{20,}/g, 'sk-proj-***');
     msg = msg.replace(/sk-[a-zA-Z0-9_-]{20,}/g, 'sk-***');
-    // Redact bridge tokens (UUID format)
-    if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(_escRx(BRIDGE_TOKEN), 'g'), '***bridge-token***');
+    // Redact bridge tokens (UUID format). BAT-1001: per-call read so a
+    // mid-session rotation doesn't leak the new token in any log line.
+    const bridgeToken = getBridgeToken();
+    if (bridgeToken) msg = msg.replace(new RegExp(_escRx(bridgeToken), 'g'), '***bridge-token***');
     // Redact Jupiter API key + MCP auth tokens (cached literal patterns)
     for (const { rx, replacement } of _dynamicPatterns) {
         msg = msg.replace(rx, replacement);

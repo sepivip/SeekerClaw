@@ -43,7 +43,11 @@ import java.net.URL
  * to `ConfigManager.getSolanaRpcUrl(context)` so user-configured Helius
  * keys are picked up live. Per Codex BAT-1000 v1.1 #2.
  */
-class SolanaBalanceFetcher(
+// BAT-1001 PR-B: `open` so BurnerBridgeEndpointsTest can subclass to
+// stub `fetch` without bringing in Mockito or extracting a separate
+// interface. Production wires the concrete class (no behaviour change);
+// tests pass a stub that returns canned Balances?/null per scenario.
+open class SolanaBalanceFetcher(
     private val rpcUrlProvider: () -> String = { DEFAULT_RPC_URL },
     private val timeoutMs: Int = 8_000,
 ) {
@@ -68,7 +72,7 @@ class SolanaBalanceFetcher(
      * (network failure, RPC error, malformed response) — UI treats null as
      * "balance unavailable".
      */
-    suspend fun fetch(pubkey: String): Balances? = withContext(Dispatchers.IO) {
+    open suspend fun fetch(pubkey: String): Balances? = withContext(Dispatchers.IO) {
         // BAT-582 R21: enforce IO dispatcher INTERNALLY rather than relying
         // on every caller to wrap with withContext(Dispatchers.IO) before
         // invoking. Pre-fix the suspend signature implied "safe to await

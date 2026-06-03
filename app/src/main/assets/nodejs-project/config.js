@@ -411,6 +411,28 @@ function getSearchProvider() {
     return _agentPreferencesModule.DEFAULTS.searchProvider;
 }
 
+// BAT-1001 PR-B: per-call read of the bridge token so a Kotlin-side
+// rotation (SeekerClawService writes a fresh UUID on every service
+// start, see ServiceState.writeBridgeToken at ServiceState.kt:185-201)
+// is picked up on the very next bridge / control-server request
+// without restarting Node. Mirrors the BAT-515 hot-reload shape
+// (getAgentName / getSearchProvider above) but reads a
+// sibling-of-workspace file via path.dirname(workDir) — same
+// precedent as runtime-state.js:113, mcp-servers.js, agent-preferences.js.
+// Kotlin writes the token at `filesDir/bridge_token`, NOT under
+// `workspace/`. Returns the trimmed token, or the cold-start
+// BRIDGE_TOKEN fallback on any read failure (ENOENT, perm denied,
+// blank file). Never throws — callers treat empty as
+// "unauthenticated" and the auth gates surface a clean 401/403.
+function getBridgeToken() {
+    try {
+        const tokenPath = path.join(path.dirname(workDir), 'bridge_token');
+        const raw = fs.readFileSync(tokenPath, 'utf8').trim();
+        if (raw) return raw;
+    } catch (_) { /* fall through to cold-start fallback */ }
+    return BRIDGE_TOKEN;
+}
+
 /**
  * Resolve the currently-active model — the agent_settings.json overlay
  * wins over the startup MODEL const. The `/model` Telegram command and
@@ -863,6 +885,14 @@ module.exports = {
     // edit takes effect on the next AI turn without a service restart.
     getAgentName,
     getSearchProvider,
+    // BAT-1001 PR-B: per-call bridge-token getter replaces the
+    // startup-frozen BRIDGE_TOKEN read in every live request path
+    // (bridge.js, internal-control-server.js wiring in main.js,
+    // security.js redaction). BRIDGE_TOKEN below remains exported as
+    // the cold-start fallback — never depend on it for a live auth
+    // decision; always call getBridgeToken() per request so a
+    // mid-session Kotlin rotation takes effect on the next call.
+    getBridgeToken,
     BRIDGE_TOKEN,
     USER_AGENT,
     MCP_SERVERS,
