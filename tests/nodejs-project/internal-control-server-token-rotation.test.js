@@ -132,28 +132,39 @@ test('getter returning empty string → all POSTs reject 401 (never short-circui
     assert.strictEqual(r.status, 401);
 });
 
-test('getter throwing → request still 401 (server is wrapped in try/catch)', async () => {
-    // If the getter itself throws (e.g. fs.readFileSync threw without
-    // the inner try-catch catching it for some odd reason), the
-    // server's outer try/catch on _route turns it into a 500. We
-    // expect either 500 OR the auth path to absorb it — what we
-    // MUST NOT see is a successful response (status 200).
-    // We assert the server doesn't crash by sending a follow-up
-    // request after restoring the getter.
-    const savedToken = _currentToken;
-    let throwOnce = true;
-    // Override the rotation getter mid-test by re-starting with a
-    // throwing wrapper... actually simpler: we can't easily replace
-    // the getter post-start in this test seam, but the behaviour is
-    // already covered by the "" case above and by the per-process
-    // outer try/catch in _route. Skip the runtime swap and just
-    // assert the explicit empty-string case is solid (above test).
-    // This test exists as a documentation marker for the safety
-    // boundary; pass it trivially since the throw path is
-    // structurally equivalent to the empty path (both reach `expected
-    // = ''` for the comparison).
-    assert.ok(throwOnce, 'safety: throw path equivalent to empty (see above)');
-    void savedToken;
+test('throwing getter → server returns 500 cleanly, listener survives for next request', async () => {
+    // server.start() is idempotent for the listener but always
+    // rebinds _getBridgeToken — that lets us swap in a throwing
+    // getter mid-session without restarting the server. Production
+    // shouldn't ever see this (config.js getBridgeToken catches all
+    // fs errors and returns the cold-fallback), but a getter that
+    // genuinely threw would propagate up through _route's outer
+    // try/catch and surface as 500. We verify both:
+    //   (a) the request returns 500 (not a hang, not a 200, not a
+    //       socket reset),
+    //   (b) the server's listener is still alive for the next call
+    //       after the throw — proving the throw didn't crash the
+    //       handler.
+    server.start({
+        getBridgeToken: () => { throw new Error('simulated disk read failure'); },
+        getDbSummary: () => ({}),
+        requestReconcile: () => {},
+        logFn: () => {}, // suppress the [ControlServer] handler error log
+    });
+    const r1 = await _post('/healthz', {}, { 'X-Bridge-Token': 'anything' });
+    assert.strictEqual(r1.status, 500, 'throwing getter → outer try/catch → 500');
+
+    // Restore the rotation getter for any subsequent test AND prove
+    // the listener survived the throw — a successful POST after
+    // means the server didn't crash mid-handler.
+    server.start({
+        getBridgeToken: () => _currentToken,
+        getDbSummary: () => ({}),
+        requestReconcile: () => {},
+        logFn: () => {},
+    });
+    const r2 = await _post('/healthz', {}, { 'X-Bridge-Token': _currentToken });
+    assert.strictEqual(r2.status, 200, 'listener survived the throw — next request works');
 });
 
 run();

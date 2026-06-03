@@ -192,11 +192,12 @@ function start(options) {
 // BAT-1001 PR-B: constant-time token compare with length guard.
 // `crypto.timingSafeEqual` throws on length mismatch — we MUST
 // length-check first, otherwise an attacker can probe the token's
-// length by triggering 500s. Empty/missing expected → reject
-// (caller short-circuits to false before reaching this). Both
-// inputs are coerced to strings and length-checked before Buffer
-// construction so a non-string header (object/array via header
-// folding) returns false cleanly instead of throwing.
+// length by triggering 500s. Both inputs are strict-type-checked
+// to be strings (no coercion — a non-string header from header
+// folding etc. returns false cleanly instead of throwing). Empty
+// expected → reject (we never short-circuit to "no token = allow").
+// Equal-length non-empty strings reach timingSafeEqual on their
+// UTF-8 buffer representations.
 function _safeTokenEq(expected, actual) {
     if (typeof expected !== 'string' || typeof actual !== 'string') return false;
     if (expected.length === 0) return false;
