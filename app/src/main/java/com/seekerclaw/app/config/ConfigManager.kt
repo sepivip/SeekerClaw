@@ -1482,8 +1482,43 @@ object ConfigManager {
     // string. UI text + redaction at the log layer (per BAT-1000 Codex #4
     // security gate) treat any string containing `?api-key=` as sensitive.
     fun getSolanaRpcUrl(context: Context): String {
-        val cfg = loadConfig(context) ?: return PUBLIC_SOLANA_RPC_URL
-        return buildSolanaRpcUrl(cfg.heliusApiKey)
+        // BAT-1000 Copilot R1 #3348057902: avoid `loadConfig(context)` here.
+        // `loadConfig` decrypts the ENTIRE AppConfig (anthropic, openai,
+        // openrouter, custom, jupiter, brave, perplexity, exa, tavily,
+        // firecrawl, discord, oauth tokens, MCP servers, env vars, etc.)
+        // just to read one field. Since this method is invoked via
+        // `SolanaBalanceFetcher.rpcUrlProvider()` on every JSON-RPC call,
+        // a steady balance-refresh stream would otherwise trigger a full
+        // multi-secret decrypt + AppConfig materialization on every tick.
+        //
+        // Narrow read: only decrypt KEY_HELIUS_API_KEY_ENC. Same trim +
+        // build-or-fallback logic as the full-config path. Falls back to
+        // public RPC if SharedPreferences is unreachable, the key is
+        // absent, or decryption throws — preserves the
+        // never-throw-from-getSolanaRpcUrl contract.
+        return buildSolanaRpcUrl(loadHeliusApiKeyOnly(context))
+    }
+
+    /**
+     * Narrow secret read: decrypts ONLY the Helius API key from
+     * SharedPreferences. Returns an empty string for "not set", "absent",
+     * or "decrypt failure" — caller treats all three as fallback-to-public.
+     *
+     * Kept private so it doesn't become a generic public-secret API; this
+     * is specifically the hot-path read for [getSolanaRpcUrl] which is
+     * called per RPC tick by `SolanaBalanceFetcher.rpcUrlProvider`. If
+     * other hot-path callers appear, expose a similar narrow read for
+     * each — do NOT route them through [loadConfig].
+     */
+    private fun loadHeliusApiKeyOnly(context: Context): String {
+        return try {
+            val p = prefs(context)
+            val enc = p.getString(KEY_HELIUS_API_KEY_ENC, null) ?: return ""
+            KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
+        } catch (e: Exception) {
+            Log.w(TAG, "loadHeliusApiKeyOnly decrypt failed: ${e.javaClass.simpleName}")
+            ""
+        }
     }
 
     /**
