@@ -83,7 +83,17 @@ async function run() {
     for (const { name, fn } of tests) {
         try {
             // Reset rotation state for each test so they don't bleed.
+            // Also re-bind the production-shape getter — the throwing-
+            // getter test swaps it via start() idempotency, and without
+            // this reset any test appended after it would inherit the
+            // throwing getter and see 500 on every call.
             _currentToken = 'token-A-1234567890';
+            server.start({
+                getBridgeToken: () => _currentToken,
+                getDbSummary: () => ({}),
+                requestReconcile: () => {},
+                logFn: () => {},
+            });
             await fn();
             pass++;
             console.log(`PASS  ${name}`);

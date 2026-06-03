@@ -17,12 +17,20 @@ import java.math.BigInteger
  * (port 8765, X-Bridge-Token auth) for burner wallet operations (BAT-582).
  *
  * **Endpoints (all POST, all return JSON):**
- *   - /burner/status          → wallet pubkey + cap state + spend ledger
- *                                (balanceSol/balanceUsdc intentionally OMITTED
- *                                until Node-side RPC fetch lands; UI fetches
- *                                balances directly via SolanaBalanceFetcher,
- *                                wallet_status surfaces "unavailable" for the
- *                                agent until a separate BAT wires this here)
+ *   - /burner/status          → wallet pubkey + cap state + spend ledger +
+ *                                live SOL/USDC balances (BAT-1001 PR-B).
+ *                                balanceSol/balanceUsdc are emitted as
+ *                                atomic-unit decimal strings (lamports /
+ *                                microunits) when the SolanaBalanceFetcher
+ *                                wired by the production constructor
+ *                                succeeds. BOTH fields are OMITTED from
+ *                                the response on fetcher==null or fetch
+ *                                returning null (RPC timeout / parse
+ *                                error). Never sent as "0" or null —
+ *                                downstream tools/wallet.js handler
+ *                                distinguishes field-absent from
+ *                                field-present-as-zero, and "0" would
+ *                                silently lie about unavailability.
  *   - /burner/reserve         → atomic check+reserve a slot, returns reservationId
  *   - /burner/sign-transaction → sign-only (caller broadcasts), needs reservationId
  *   - /burner/sign-and-send   → atomic reserve+sign+broadcast+commit (or release)
@@ -202,7 +210,17 @@ class BurnerBridgeEndpoints internal constructor(
                 Log.w(TAG, "/burner/status getPubkey failed: ${e.message}")
                 null
             }
-            val status = capEnforcer.status()
+            // BAT-1001 PR-B sweep nit: wrap capEnforcer.status() for
+            // parity with getPubkey above. If the caps store file is
+            // corrupt or unreadable, return null + body fields fall
+            // back to "0" — better than 500-ing the entire endpoint
+            // (which kills every chat turn that calls wallet_status).
+            val status = try {
+                capEnforcer.status()
+            } catch (e: Exception) {
+                Log.w(TAG, "/burner/status capEnforcer.status failed: ${e.message}")
+                null
+            }
             val configured = pubkey != null
             val body = LinkedHashMap<String, Any?>()
             body["configured"] = configured
@@ -237,20 +255,36 @@ class BurnerBridgeEndpoints internal constructor(
             // both is redundant — the explicit pubkey != null check
             // below is what gives the smart-cast for the fetch(pubkey)
             // call. Equivalent to "configured && fetcher wired".
+            //
+            // BAT-1001 PR-B sweep nit: SolanaBalanceFetcher.fetch is
+            // documented as "Errors are not exceptions" (returns null
+            // on any failure — line 71-93 of SolanaBalanceFetcher.kt),
+            // but defensive try/catch makes that contract enforced at
+            // this boundary rather than trusted: a future subclass
+            // override OR a regression in the catch-all could
+            // otherwise turn into a 500 here.
             if (balanceFetcher != null && pubkey != null) {
-                val balances = balanceFetcher.fetch(pubkey)
+                val balances = try {
+                    balanceFetcher.fetch(pubkey)
+                } catch (e: Exception) {
+                    Log.w(TAG, "/burner/status balanceFetcher.fetch failed: ${e.message}")
+                    null
+                }
                 if (balances != null) {
                     body["balanceSol"] = balances.solLamports.toString()
                     body["balanceUsdc"] = balances.usdcMicrounits.toString()
                 }
                 // null → omit both (no else clause).
             }
-            body["capPerTxSol"] = status.capPerTxSol
-            body["capPerTxUsdc"] = status.capPerTxUsdc
-            body["capDailySol"] = status.capDailySol
-            body["capDailyUsdc"] = status.capDailyUsdc
-            body["spentTodaySol"] = status.spentTodaySol
-            body["spentTodayUsdc"] = status.spentTodayUsdc
+            // status may be null if capEnforcer.status() threw above.
+            // Fall back to "0" defaults so the endpoint still returns
+            // a valid shape rather than 500-ing for every consumer.
+            body["capPerTxSol"] = status?.capPerTxSol ?: "0"
+            body["capPerTxUsdc"] = status?.capPerTxUsdc ?: "0"
+            body["capDailySol"] = status?.capDailySol ?: "0"
+            body["capDailyUsdc"] = status?.capDailyUsdc ?: "0"
+            body["spentTodaySol"] = status?.spentTodaySol ?: "0"
+            body["spentTodayUsdc"] = status?.spentTodayUsdc ?: "0"
             body["network"] = "mainnet"
             EndpointResult(200, body)
         }

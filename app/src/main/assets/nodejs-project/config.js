@@ -420,15 +420,42 @@ function getSearchProvider() {
 // sibling-of-workspace file via path.dirname(workDir) — same
 // precedent as runtime-state.js:113, mcp-servers.js, agent-preferences.js.
 // Kotlin writes the token at `filesDir/bridge_token`, NOT under
-// `workspace/`. Returns the trimmed token, or the cold-start
-// BRIDGE_TOKEN fallback on any read failure (ENOENT, perm denied,
-// blank file). Never throws — callers treat empty as
-// "unauthenticated" and the auth gates surface a clean 401/403.
+// `workspace/`.
+//
+// Return semantics (sweep w09eqq11s blockers #4 + #5 fix):
+//   - Disk read succeeds AND value passes UUID-shape validation →
+//     return the live token (the happy path).
+//   - Disk read fails (ENOENT, perm denied, IOError) OR value fails
+//     the UUID-shape check (blank, truncated from a mid-write crash,
+//     wrong format) → fall back to BRIDGE_TOKEN (the cold-start
+//     snapshot from config.json). This fallback may be STALE — if
+//     Kotlin rotated and crashed the write, the cold value is the
+//     PRIOR boot's token. In that case the auth gate either accepts
+//     (if AndroidBridge is still on the cold value) or 401s (if
+//     AndroidBridge picked up the new one). bridge.js's 403 retry
+//     re-reads disk and gets one more chance.
+//   - Empty BRIDGE_TOKEN cold value → return '' → auth gates reject
+//     401/403 cleanly.
+//
+// UUID validation guards against the truncated-write case:
+// Kotlin's writeText is NOT atomic, so a mid-write power-loss can
+// leave a partial UUID on disk. Without the shape check, a 1-char
+// file would be accepted as the live token and every request would
+// 401 against AndroidBridge's full UUID — with no path to recovery
+// until the next service restart writes a new full UUID. The shape
+// check makes that case fall through to BRIDGE_TOKEN, which at
+// least matches what AndroidBridge has if it never rotated.
+//
+// Never throws. Worst case returns ''.
 function getBridgeToken() {
     try {
         const tokenPath = path.join(path.dirname(workDir), 'bridge_token');
         const raw = fs.readFileSync(tokenPath, 'utf8').trim();
-        if (raw) return raw;
+        // UUID v4 shape: 36 chars, hex+dash only. ServiceState.kt
+        // writes UUID.randomUUID().toString() which produces exactly
+        // this format. Reject anything else (truncated, corrupt,
+        // wrong file content) by falling through to the cold value.
+        if (raw && raw.length === 36 && /^[0-9a-f-]+$/i.test(raw)) return raw;
     } catch (_) { /* fall through to cold-start fallback */ }
     return BRIDGE_TOKEN;
 }

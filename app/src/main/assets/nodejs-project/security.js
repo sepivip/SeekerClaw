@@ -9,10 +9,10 @@ const path = require('path');
 // rotations. Pre-fix, a rotation mid-session left the redactor
 // matching the OLD token forever — any log line containing the NEW
 // token would leak it. The getter call is gated at the call site
-// (redactSecrets) on `msg.length >= UUID_MIN_LEN` so messages too
-// short to contain a UUID never hit the disk; longer messages pay
-// the fs.readFileSync (a 36-byte file from the OS page cache, so
-// cheap but not free).
+// (redactSecrets) on `msg.length >= _BRIDGE_TOKEN_MIN_LEN` so
+// messages too short to contain a UUID never hit the disk; longer
+// messages pay the fs.readFileSync (a 36-byte file from the OS
+// page cache, so cheap but not free).
 const { getBridgeToken, config, log, workDir } = require('./config');
 
 // Minimum length of a bridge_token (UUID, 36 chars: 32 hex + 4
