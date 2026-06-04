@@ -100,6 +100,7 @@ const LOAD_TARGETS = [
     'wallet/burner-policy.js',
     'wallet/spl-token-layout.js',
     'wallet/public-rpc-shaper.js',
+    'wallet/ata.js',
     'payment/protocol.js',
     'payment/x402.js',
     'payment/index.js',

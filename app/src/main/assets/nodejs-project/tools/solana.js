@@ -724,14 +724,15 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                     mint: inputIsSol ? 'native_sol' : inputToken.address,
                     atomicAmount: String(inputAmountAtomic),
                 },
+                // V2 vault pubkey from /vaults/ensure. expectedOwner is the
+                // Jupiter Limit Order V2 / Trigger V2 on-chain program — cross-
+                // verified against jup-ag/docs/openapi-spec/trigger/v1/trigger.yaml
+                // (programVersion field), jup-ag/platform-list, and Solscan label
+                // 'Jupiter Limit Order V2'. existencePolicy allows create since
+                // vault registration may happen in the same tx on first use.
                 depositVault: {
-                    // V2 vault is Jupiter's per-user PDA; we don't derive it
-                    // here, surface it via burnerOwnedAccounts so simulation
-                    // sees the pre/post-state and the per-shape validator
-                    // accepts allowCreate (V2 vault registration may create
-                    // it lazily).
-                    pubkey: burnerPubkey,
-                    expectedOwner: 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X', // Jupiter Limit Order V2
+                    pubkey: vaultAddress,
+                    expectedOwner: 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X',
                 },
                 burnerOwnedAccounts: [debitAccount].filter(a => a !== burnerPubkey),
             };
@@ -1922,6 +1923,13 @@ const handlers = {
                 const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
                 const ataMod = require('../wallet/ata');
                 const debitAccount = inputIsSol ? walletAddress : ataMod.deriveAtaBase58(walletAddress, inputToken.address);
+                // V1 createOrder response includes the order PDA in `data.order`
+                // when present. expectedOwner is Jupiter Limit Order V1 — cross-
+                // verified against jup-ag/platform-list (jupiterLimitContract),
+                // @jup-ag/limit-order-sdk@0.1.10 (PROGRAM_ID_BY_CLUSTER), and
+                // Solscan label 'Jupiter Limit Order V1'. When data.order is
+                // absent (older Jupiter response shape), fall back to null —
+                // drainer-walk + signerMode + burnerDebit still gate the tx.
                 v1ExpectedDelta = {
                     kind: 'jupiter_trigger_create_deposit',
                     signerMode: 'burner_only',
@@ -1930,10 +1938,10 @@ const handlers = {
                         mint: inputIsSol ? 'native_sol' : inputToken.address,
                         atomicAmount: String(makingAmount),
                     },
-                    depositVault: {
-                        pubkey: walletAddress,
-                        expectedOwner: 'jup6SoC2JQ3FWcz6aKdR6FMWbN4mk2VmC3S7sREqLhw', // Jupiter Limit Order V1
-                    },
+                    depositVault: data.order ? {
+                        pubkey: data.order,
+                        expectedOwner: 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',
+                    } : null,
                     burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
                 };
             } catch (eDelta) {
@@ -2454,6 +2462,14 @@ const handlers = {
                 const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
                 const ataMod = require('../wallet/ata');
                 const debitAccount = inputIsSol ? walletAddress : ataMod.deriveAtaBase58(walletAddress, inputToken.address);
+                // Jupiter Recurring createOrder response does NOT include the
+                // DCA position account pubkey before sign (orderId is only on
+                // execResult after broadcast). Pass depositVault: null per
+                // contract v8.2 — drainer-walk + signerMode burner_only +
+                // burnerDebit cover the safety surface. The DCA program ID
+                // for follow-up vault-discovery is DCA265Vj8a9CEuX1eb1LWRn
+                // DT7uK6q1xMipnNyatn23M (cross-verified via jup-ag/platform-
+                // list, @jup-ag/dca-sdk, jupiter-python-sdk, Solscan label).
                 dcaExpectedDelta = {
                     kind: 'jupiter_dca_create_deposit',
                     signerMode: 'burner_only',
@@ -2462,10 +2478,7 @@ const handlers = {
                         mint: inputIsSol ? 'native_sol' : inputToken.address,
                         atomicAmount: String(inAmountNum),
                     },
-                    depositVault: {
-                        pubkey: walletAddress,
-                        expectedOwner: 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu', // Jupiter DCA
-                    },
+                    depositVault: null,
                     burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
                 };
             } catch (eDelta) {

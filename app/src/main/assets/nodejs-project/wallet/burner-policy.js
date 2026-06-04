@@ -97,7 +97,8 @@ const REJECT_CODES = Object.freeze([
     'expected_delta_required',
     'expected_delta_invalid_kind',
     'expected_delta_invalid_shape',
-    // Simulation (Phase 2c — not enforced in this commit)
+    // Simulation (Phase 2c+ — enforced in production mode; when no simulator
+    // is wired, structural checks still run via { allowStructuralOnly: true })
     'simulation_failed',
     'simulation_returned_error',
     'simulation_metadata_missing',
@@ -438,12 +439,25 @@ function validateExpectedDeltaShape(expectedDelta) {
         }
         case 'jupiter_trigger_create_deposit':
         case 'jupiter_dca_create_deposit': {
+            // Contract v8.2: depositVault is OPTIONAL. When present, it must
+            // carry { pubkey, expectedOwner } and the policy verifies positive
+            // credit on the named vault. When absent (null/undefined), the
+            // vault-credit check is skipped; drainer-walk + signerMode
+            // burner_only + burnerDebit still gate the tx.
+            //
+            // Why optional: at deposit-craft time, V2 has vault from
+            // /vaults/ensure; V1 has it as `data.order` in createOrder
+            // response (when Jupiter chooses to return it); DCA does NOT
+            // return any vault pubkey before sign. Requiring depositVault
+            // would make DCA unshippable under this kind.
             const dErr = requireBurnerDebit(expectedDelta.burnerDebit);
             if (dErr) return reject('expected_delta_invalid_shape', dErr);
             const v = expectedDelta.depositVault;
-            if (!v || typeof v !== 'object') return reject('expected_delta_invalid_shape', 'depositVault required');
-            if (!isNonEmptyBase58(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required');
-            if (!isNonEmptyBase58(v.expectedOwner)) return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner required');
+            if (v !== null && v !== undefined) {
+                if (typeof v !== 'object') return reject('expected_delta_invalid_shape', 'depositVault must be object or null');
+                if (!isNonEmptyBase58(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required when depositVault present');
+                if (!isNonEmptyBase58(v.expectedOwner)) return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner required when depositVault present');
+            }
             return accept();
         }
         case 'solana_send': {
@@ -656,10 +670,12 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
         }
     } else if (kind === 'jupiter_trigger_create_deposit' || kind === 'jupiter_dca_create_deposit') {
         // No burner credit at deposit time; output happens at fill time
-        // in a separate tx the burner doesn't sign. The depositVault is
-        // covered by the drainer-opcode walk + signer-mode check —
-        // we still add a zero-delta check on the vault to confirm it's
-        // not unexpectedly drained.
+        // in a separate tx the burner doesn't sign. When depositVault is
+        // provided (contract v8.2: optional), we verify a positive credit
+        // on the named vault >= burnerDebit.atomicAmount minus a 50 bps
+        // headroom for any internal Jupiter fee/slippage. When absent,
+        // drainer-opcode walk + signerMode burner_only + burnerDebit
+        // negative-delta check cover the safety surface.
         const vault = expectedDelta.depositVault;
         if (vault) {
             checks.push({
