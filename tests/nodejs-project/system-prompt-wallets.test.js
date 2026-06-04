@@ -228,6 +228,58 @@ check('burner configured: prompt lists both Burner and Main with caps + network'
         'must explicitly state the app has no rotate/generate path (BAT-936)');
     assert.ok(stable.includes('No exceptions'),
         'must include the "No exceptions" push-back response (BAT-936)');
+
+    // BAT-1002 PR-C: V2 error-code playbook phrase-lock.
+    // Each code identifier MUST appear verbatim because the agent sees
+    // them as `error: '<code>'` in tool envelopes — a missing code re-
+    // opens the BAT-995 device-test confabulation class. Locked here
+    // so any future prompt edit that drops a code fails the build with
+    // a specific message naming the missing code (vs a generic
+    // substring miss).
+    //
+    // 19 codes total: 15 verified-emitted from v1.1 + 4 input-validation
+    // added in v1.1 + auth_failed restored after 2026-06-04 re-grep
+    // found it at jupiter/trigger-v2.js:522 (msgResult.error || 'auth_failed'
+    // fallback). The 4 BAT-1000 roadmap codes (insufficient_sol_for_rent
+    // etc.) are NOT locked — they have zero emissions today per
+    // Codex OQ-5 Option B; lock them when the V2 handler starts emitting.
+    assert.ok(stable.includes('### Trigger V2 error-code playbook'),
+        'must include "### Trigger V2 error-code playbook" sub-section header (BAT-1002)');
+    const V2_CODES = [
+        'burner_over_cap',
+        'trigger_price_usd_required',
+        'expires_at_required',
+        'trigger_condition_required',
+        'trigger_mint_required',
+        'trigger_mint_invalid',
+        'price_unavailable',
+        'price_lookup_failed',
+        'input_usd_value_invalid',
+        'min_order_size_below_10_usd',
+        'expires_at_too_soon',
+        'slippage_out_of_range',
+        'deposit_craft_failed',
+        'create_failed',
+        'create_ambiguous_no_recovery',
+        'auth_failed',
+        'auth_expired',
+        'vault_unavailable',
+        'wallet_not_authorized',
+        'sign_failed',
+    ];
+    for (const code of V2_CODES) {
+        assert.ok(stable.includes(code),
+            `V2 error-code playbook must mention \`${code}\` verbatim (BAT-1002 phrase-lock)`);
+    }
+    // Catch-all guard — load-bearing defense against unknown future
+    // codes per Codex v1.1 OQ-3.
+    assert.ok(stable.includes('surface the `reason` field VERBATIM'),
+        'must include catch-all guard for unrecognized error codes (BAT-1002 — confabulation defense)');
+    // solana_balance three-state distinguisher guidance.
+    assert.ok(stable.includes('solana_balance') && stable.includes('tokens: null') && stable.includes('tokensError'),
+        'must include solana_balance RPC-fail distinguisher guidance with tokens: null + tokensError (BAT-1002)');
+    assert.ok(stable.includes('SPL token balance temporarily unavailable'),
+        'must teach agent the verbatim "SPL token balance temporarily unavailable" copy instead of "0 tokens" on RPC fail (BAT-1002)');
 });
 
 // ── Burner UNCONFIGURED → single-wallet section + Settings hint ─────────────
