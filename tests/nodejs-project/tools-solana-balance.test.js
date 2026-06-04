@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // tools-solana-balance.test.js — BAT-1002 PR-C.
 //
-// Locks the three-state return contract for the solana_balance handler
-// in tools/solana.js:
+// Locks the four return-shape scenarios of the solana_balance handler
+// in tools/solana.js. (Conceptually three "states" — success / partial-
+// failure / full-failure — but success has two sub-shapes, so the
+// numbered list below has four entries.)
 //
 //   (1) RPC success, populated wallet → { address, sol, tokens: [...], tokenCount: N }
 //   (2) RPC success, empty wallet     → { address, sol, tokens: [],    tokenCount: 0 }
