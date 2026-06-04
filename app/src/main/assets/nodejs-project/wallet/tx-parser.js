@@ -164,8 +164,16 @@ function readCompactU16(buf, offset) {
     let count = 0;
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
-        value |= (byte & 0x7F) << shift;
+        value = (value | ((byte & 0x7F) << shift)) >>> 0;
         if ((byte & 0x80) === 0) {
+            // Compact-u16 max value is 0xFFFF. With 3 bytes the high bits
+            // (shift=14) can carry up to 0x03 leaving values 0..0xFFFF
+            // valid, but a 3-byte varint where byte3's top 6 bits are
+            // non-zero produces 0x10000..0x1FFFFF — overflow (Copilot
+            // PR #398 R7). Fail closed.
+            if (value > 0xFFFF) {
+                throw new TxParseError('compact_u16_overflow', pos, `value ${value} exceeds 0xFFFF max`);
+            }
             return { value, offset: pos };
         }
         shift += 7;
@@ -223,19 +231,16 @@ function readU8(buf, offset) {
  * `Transaction rejected: ...` in verifySwapTransaction()).
  */
 function parseTransaction(txBase64) {
-    if (typeof txBase64 !== 'string' || txBase64.length === 0) {
-        throw new TxParseError('invalid_base64', 0, 'tx must be a non-empty base64 string');
-    }
-    let txBuf;
-    // Strict base64 validation (Copilot PR #398 R6): Buffer.from(str, 'base64')
+    // Strict base64 validation (Copilot PR #398 R6 + R7): Buffer.from(str, 'base64')
     // silently strips invalid chars and decodes partial input. For a security-
     // sensitive parser the input shape must be validated up front.
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
-        throw new TxParseError('invalid_base64', 0, 'empty or non-string input');
+        throw new TxParseError('invalid_base64', 0, 'tx must be a non-empty base64 string');
     }
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
         throw new TxParseError('invalid_base64', 0, 'invalid base64 characters or length');
     }
+    let txBuf;
     try {
         txBuf = Buffer.from(txBase64, 'base64');
     } catch (e) {

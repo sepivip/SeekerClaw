@@ -667,7 +667,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     }
     offset += numSigs.value * 64;
 
-    // Detect v0 vs legacy (v0 prefix = 0x80).
+    // Detect v0 vs legacy (v0 prefix = 0x80). Bounds-check first
+    // (Copilot PR #397 R7 mirrored): a tx truncated immediately after
+    // the signature section makes txBuf[offset] return undefined,
+    // falling into the legacy parsing path with misleading errors.
+    if (offset >= txBuf.length) {
+        return { valid: false, error: 'Message section truncated (no bytes after signatures).', programs };
+    }
     const prefix = txBuf[offset];
     const isV0 = prefix === 0x80;
 
@@ -679,6 +685,9 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
 
         // Legacy message: header (3 bytes) + account keys + blockhash + instructions
+        if (offset + 3 > txBuf.length) {
+            return { valid: false, error: 'Legacy: 3-byte message header truncated.', programs };
+        }
         offset++; // numRequired
         offset++; // numReadonlySigned
         offset++; // numReadonlyUnsigned
@@ -758,6 +767,9 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     offset++;
 
     // Message header: numRequired, numReadonlySigned, numReadonlyUnsigned.
+    if (offset + 3 > txBuf.length) {
+        return { valid: false, error: 'v0: 3-byte message header truncated.', programs };
+    }
     const numRequired = txBuf[offset]; offset++;
     offset++; // numReadonlySigned
     offset++; // numReadonlyUnsigned

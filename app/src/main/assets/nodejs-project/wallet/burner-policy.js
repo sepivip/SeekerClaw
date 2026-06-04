@@ -69,6 +69,13 @@
 const { TxParseError, parseTransaction } = require('./tx-parser');
 const { readAccountInfo, tokenDelta, lamportsDelta } = require('./spl-token-layout');
 
+// Sentinel for SPL accounts whose mint is unknown at expectedDelta build
+// time but whose amount delta MUST equal zero (Copilot PR #398 R7:
+// burner-owned SPL token accounts in zero_value flows). Recognized by
+// validateSimDelta: skips the declared-vs-decoded mint match check and
+// uses tokenDelta for delta computation.
+const SPL_MINT_AGNOSTIC = '__spl_mint_agnostic__';
+
 // ─── Reject codes (locked: REJECT_CODES.length must equal 26) ─────────────
 
 const REJECT_CODES = Object.freeze([
@@ -605,9 +612,12 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
         : { mode: 'exact' };
 
     if (kind === 'zero_value_auth' || kind === 'zero_value_cancel') {
-        // Only check the burner's native SOL. Token deltas on
-        // burnerOwnedAccounts are bounded only by drainer-opcode walk;
-        // zero-value shapes have no expected token movement.
+        // Constrain the burner's native SOL delta (fee-budget tolerance)
+        // AND every declared burner-owned SPL token account to zero delta.
+        // Without the SPL constraint (Copilot PR #398 R7), a zero-value-
+        // labeled tx could quietly move SPL tokens out of a burner-owned
+        // token account — drainer-walk catches authority/approve/close
+        // but a plain Transfer of tokens out would NOT be flagged.
         checks.push({
             address: burnerPubkey,
             mint: 'native_sol',
@@ -616,6 +626,25 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
             existencePolicy: { mustExistBefore: true, allowCreate: false, allowClose: false },
             deltaTolerance: { mode: 'zero_within_headroom', headroom: ZERO_VALUE_SOL_HEADROOM_LAMPORTS },
         });
+        const ownedAccounts = Array.isArray(expectedDelta.burnerOwnedAccounts) ? expectedDelta.burnerOwnedAccounts : [];
+        for (const acct of ownedAccounts) {
+            if (acct === burnerPubkey) continue; // already covered by the SOL check above
+            checks.push({
+                address: acct,
+                mint: SPL_MINT_AGNOSTIC, // see validateSimDelta — skips mint match, checks amount delta only
+                role: 'burner-owned-spl',
+                expectedDeltaAtomic: 0n,
+                // zero_value_cancel allows account close as a documented
+                // exception (see drainer-walk for kind === 'zero_value_cancel');
+                // zero_value_auth does not.
+                existencePolicy: {
+                    mustExistBefore: true,
+                    allowCreate: false,
+                    allowClose: kind === 'zero_value_cancel',
+                },
+                deltaTolerance: { mode: 'exact' },
+            });
+        }
         return checks;
     }
 
@@ -844,14 +873,19 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
             const td = tokenDelta(preAI, postAI);
             primaryDelta = td.delta;
             // Optional sanity: declared mint should match the decoded mint
-            // (when both sides have splToken metadata).
-            if (preAI.exists && preAI.splToken && preAI.splToken.mint !== check.mint) {
-                return reject('simulation_mint_mismatch',
-                    `pre ${check.address} mint ${preAI.splToken.mint} != declared ${check.mint}`);
-            }
-            if (postAI.exists && postAI.splToken && postAI.splToken.mint !== check.mint) {
-                return reject('simulation_mint_mismatch',
-                    `post ${check.address} mint ${postAI.splToken.mint} != declared ${check.mint}`);
+            // (when both sides have splToken metadata). The SPL_MINT_AGNOSTIC
+            // sentinel skips this check (used by zero_value kinds where the
+            // caller only cares that the amount delta is zero regardless of
+            // which mint the burner-owned account holds).
+            if (check.mint !== SPL_MINT_AGNOSTIC) {
+                if (preAI.exists && preAI.splToken && preAI.splToken.mint !== check.mint) {
+                    return reject('simulation_mint_mismatch',
+                        `pre ${check.address} mint ${preAI.splToken.mint} != declared ${check.mint}`);
+                }
+                if (postAI.exists && postAI.splToken && postAI.splToken.mint !== check.mint) {
+                    return reject('simulation_mint_mismatch',
+                        `post ${check.address} mint ${postAI.splToken.mint} != declared ${check.mint}`);
+                }
             }
         }
 

@@ -979,6 +979,42 @@ async function runAsync(name, fn) {
         assert.match(r.reason, /delta does not match exactly|995000|1000000/);
     });
 
+    await runAsync('R7 amendment: zero_value_auth with SPL drain on burner-owned ATA → simulation_delta_mismatch', async () => {
+        // Without the R7 fix, a zero_value_auth tx labeled by the caller as
+        // "no value movement" could quietly transfer SPL tokens out of a
+        // burner-owned ATA — drainer-walk catches SetAuthority/Approve/
+        // CloseAccount but NOT a plain Transfer. With R7, the policy
+        // constrains every declared burnerOwnedAccount to zero delta.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                // Burner SOL unchanged (no fee headroom needed for this test)
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
+                // Burner USDC ATA had 1 USDC, now drained to 0 — should reject
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, false, `expected reject, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+        assert.strictEqual(r.class, 'security');
+    });
+
     await runAsync('v8.3 happy path: V2 trigger deposit — burner debit X + vault credit X → accept', async () => {
         const txB64 = buildTx({
             accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, JUPITER_V2_VAULT],
