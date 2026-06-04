@@ -217,7 +217,8 @@ const WELL_KNOWN_TOKENS = {
 // (1) it DoS'd legitimate swaps when Jupiter routed through programs we
 // hadn't labeled yet, and (2) industry consensus (Phantom/Backpack/Solflare/
 // MWA spec) is blocklist+simulation, not integrator-side allowlist. See
-// verifySwapTransaction() + wallet/burner-policy.js for the new primitives.
+// verifySwapTransaction() for the structural primitive. Tier 2 (PR #398)
+// will add wallet/burner-policy.js for autonomous-burner-signing checks.
 // Initialized with hardcoded fallback, refreshed from Jupiter API on startup.
 const KNOWN_PROGRAM_NAMES = new Map([
     // === System Programs ===
@@ -321,7 +322,8 @@ const KNOWN_PROGRAM_NAMES = new Map([
 // than integrator-side program allowlists — Solana Cookbook + audit firm
 // consensus (workflow `wx2c95307`). Structural fee-payer/signer check stays
 // in verifySwapTransaction(); drainer-opcode blocklist + simulate-vs-quote
-// lives in wallet/burner-policy.js for autonomous burner signing.
+// will live in wallet/burner-policy.js (Tier 2 / PR #398) for autonomous
+// burner signing.
 
 // Fetch latest program labels from Jupiter API on startup, merge into KNOWN_PROGRAM_NAMES.
 // Falls back to the hardcoded list above if the fetch fails.
@@ -609,9 +611,10 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
 //   - No Address Lookup Table rejection (ALT-resolved programs are part of
 //     Jupiter's normal routing for V2 trigger and Ultra flows).
 //
-// Drainer-opcode blocking + simulate-vs-quote enforcement lives in
-// `wallet/burner-policy.js` for autonomous (burner) signing flows. MWA
-// flows still get the final user click-through inside the wallet UI.
+// Drainer-opcode blocking + simulate-vs-quote enforcement will live in
+// `wallet/burner-policy.js` (Tier 2 / PR #398) for autonomous (burner)
+// signing flows. MWA flows still get the final user click-through
+// inside the wallet UI.
 //
 // Options: { skipPayerCheck: true } for Jupiter Ultra (Jupiter pays fees).
 // Returns: { valid: boolean, error?: string, programs: string[] }
@@ -662,7 +665,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     }
     offset += numSigs.value * 64;
 
-    // Detect v0 vs legacy (v0 prefix = 0x80).
+    // Detect v0 vs legacy (v0 prefix = 0x80). Bounds-check first
+    // (Copilot PR #397 R7): a tx truncated immediately after the signature
+    // section makes txBuf[offset] return undefined, which falls into the
+    // legacy parsing path and produces misleading downstream errors.
+    if (offset >= txBuf.length) {
+        return { valid: false, error: 'Message section truncated (no bytes after signatures).', programs };
+    }
     const prefix = txBuf[offset];
     const isV0 = prefix === 0x80;
 
@@ -673,7 +682,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
             return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format', programs };
         }
 
-        // Legacy message: header (3 bytes) + account keys + blockhash + instructions
+        // Legacy message: header (3 bytes) + account keys + blockhash + instructions.
+        // Bounds-check the 3-byte header before skipping it (Copilot PR #397 R7):
+        // without this, a truncated tx pushes offset past txBuf.length and
+        // downstream readCompactU16/account-key reads produce misleading errors.
+        if (offset + 3 > txBuf.length) {
+            return { valid: false, error: 'Legacy: 3-byte message header truncated.', programs };
+        }
         offset++; // numRequired
         offset++; // numReadonlySigned
         offset++; // numReadonlyUnsigned
@@ -765,6 +780,12 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     offset++;
 
     // Message header: numRequired, numReadonlySigned, numReadonlyUnsigned.
+    // Bounds-check the 3-byte header before reading (Copilot PR #397 R7):
+    // on truncated v0 tx, txBuf[offset] returns undefined which silently
+    // sets numRequired=undefined and poisons the signer-check below.
+    if (offset + 3 > txBuf.length) {
+        return { valid: false, error: 'v0: 3-byte message header truncated.', programs };
+    }
     const numRequired = txBuf[offset]; offset++;
     offset++; // numReadonlySigned
     offset++; // numReadonlyUnsigned
@@ -812,8 +833,9 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Walk instructions to collect programs[] labels. ALT-resolved programs
     // (programIdIdx >= numStaticAccounts) are part of Jupiter's normal v0
     // routing and are NOT rejected as program-id mismatches here — strict
-    // ALT program-id resolution lives in wallet/burner-policy.js where we
-    // have access to simulation metadata. BUT we still verify that any ALT
+    // ALT program-id resolution will live in wallet/burner-policy.js
+    // (Tier 2 / PR #398) where we have access to simulation metadata.
+    // BUT we still verify that any ALT
     // index actually CAN be satisfied: the message's ALT section (after the
     // instructions) must contribute enough lookup keys to cover the index.
     // Without this, a structurally malformed tx with no ALTs declared but

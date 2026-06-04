@@ -430,6 +430,70 @@ test('R6: fails closed on v0 ALT numWritable mid-varint truncation', () => {
     assert.strictEqual(r.valid, false);
 });
 
+test('R7: fails closed when tx truncated immediately after signature section', () => {
+    // 1 sig + 64 sig bytes + STOP. No prefix byte.
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /Message section truncated/);
+});
+
+test('R7: fails closed on legacy tx truncated mid-3-byte-header', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([1, 0])); // only 2 of 3 header bytes (no v0 prefix → legacy path)
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /Legacy: 3-byte message header truncated/);
+});
+
+test('R7: fails closed on v0 tx truncated mid-3-byte-header', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80])); // v0 prefix
+    parts.push(Buffer.from([1, 0])); // only 2 of 3 header bytes
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /v0: 3-byte message header truncated/);
+});
+
+test('R7: skipPayerCheck=true accepts v0 tx where payer is a required signer (Ultra)', () => {
+    const txB64 = buildV0Tx({
+        accountKeys: [PAYER, PROGRAM],
+        instructions: [{ programIdIdx: 1, accountIdxs: [0], data: Buffer.from([0xAB]) }],
+    });
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)), { skipPayerCheck: true });
+    assert.strictEqual(r.valid, true, `expected valid, got ${JSON.stringify(r)}`);
+});
+
+test('R7: skipPayerCheck=true rejects v0 tx where expected payer is NOT among required signers', () => {
+    const txB64 = buildV0Tx({
+        accountKeys: [PAYER, PROGRAM],
+        instructions: [{ programIdIdx: 1, accountIdxs: [0], data: Buffer.from([0xAB]) }],
+    });
+    const wrongSigner = base58Encode(pubkeyBytes('NotASignerXXX'));
+    const r = verifySwapTransaction(txB64, wrongSigner, { skipPayerCheck: true });
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /Signer mismatch/);
+});
+
+test('R7: skipPayerCheck=true rejects legacy tx (Ultra requires v0)', () => {
+    const txB64 = buildLegacyTx({
+        accountKeys: [PAYER, PROGRAM],
+        instructions: [{ programIdIdx: 1, accountIdxs: [0], data: Buffer.from([0xAB]) }],
+    });
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)), { skipPayerCheck: true });
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /Expected v0 transaction for Ultra/);
+});
+
 test('fails closed: fee payer mismatch on legacy tx', () => {
     const txB64 = buildLegacyTx({
         accountKeys: [PAYER, PROGRAM],
