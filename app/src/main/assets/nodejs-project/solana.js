@@ -854,9 +854,18 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Buffer-bounds guards (PR #397 R2/R3): malformed tx claiming huge
     // numWritable/numReadonly without index bytes would silently inflate
     // altKeyCount and let out-of-range programIdIdx slip past.
+    // v0 messages REQUIRE the ALT section (Copilot PR #397 R5): even with
+    // zero tables, the numAlts compactU16 byte (`0x00`) must exist. A v0
+    // tx truncated after the last instruction is malformed.
+    if (offset >= txBuf.length) {
+        return { valid: false, error: 'v0: ALT section truncated (numAlts byte missing).', programs };
+    }
     let altKeyCount = 0;
-    if (offset < txBuf.length) {
+    {
         const numAlts = readCompactU16(txBuf, offset);
+        if (!numAlts.terminated || numAlts.overflowed) {
+            return { valid: false, error: 'v0: numAlts varint truncated or overflowed.', programs };
+        }
         offset = numAlts.offset;
         for (let a = 0; a < numAlts.value; a++) {
             if (offset + 32 > txBuf.length) {
@@ -903,13 +912,18 @@ function readCompactU16(buf, offset) {
     let shift = 0;
     let pos = offset;
     let terminated = false;
+    let overflowed = false;
+    // Compact-u16 max = 0xFFFF (3 bytes); cap loop at 3 bytes to prevent
+    // bitwise overflow into negative 32-bit (Copilot PR #397 R5).
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
-        value |= (byte & 0x7F) << shift;
+        value = (value | ((byte & 0x7F) << shift)) >>> 0;
         if ((byte & 0x80) === 0) { terminated = true; break; }
         shift += 7;
+        if (shift > 14) { overflowed = true; break; }
     }
-    return { value, offset: pos, terminated };
+    if (value > 0xFFFF) overflowed = true;
+    return { value, offset: pos, terminated, overflowed };
 }
 
 // Jupiter Ultra API — get order (quote + unsigned tx in one call, gasless)
