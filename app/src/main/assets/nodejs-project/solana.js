@@ -688,6 +688,12 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         const legacyNumInstructions = readCompactU16(txBuf, offset);
         offset = legacyNumInstructions.offset;
         for (let i = 0; i < legacyNumInstructions.value; i++) {
+            // Truncated-buffer guard (Copilot PR #397 R2): txBuf[offset]
+            // beyond end returns undefined, which compares as NaN in any
+            // bounds check and silently slips past. Fail closed instead.
+            if (offset >= txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: truncated tx (offset ${offset} >= length ${txBuf.length}).`, programs };
+            }
             const programIdIdx = txBuf[offset]; offset++;
             if (programIdIdx >= legacyAccountKeys.length) {
                 return { valid: false, error: `Instruction ${i} references invalid account index ${programIdIdx} (only ${legacyAccountKeys.length} accounts).`, programs };
@@ -695,9 +701,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
             labelProgram(legacyAccountKeys[programIdIdx]);
             const numAcctIdx = readCompactU16(txBuf, offset);
             offset = numAcctIdx.offset;
+            if (offset + numAcctIdx.value > txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: account indexes truncated.`, programs };
+            }
             offset += numAcctIdx.value;
             const dataLen = readCompactU16(txBuf, offset);
             offset = dataLen.offset;
+            if (offset + dataLen.value > txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: data bytes truncated.`, programs };
+            }
             offset += dataLen.value;
         }
 
@@ -756,6 +768,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     offset = numInstructions.offset;
     const altProgramIndexes = [];
     for (let i = 0; i < numInstructions.value; i++) {
+        // Truncated-buffer guard (Copilot PR #397 R2): see legacy walk above.
+        if (offset >= txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: truncated tx (offset ${offset} >= length ${txBuf.length}).`, programs };
+        }
         const programIdIdx = txBuf[offset]; offset++;
         if (programIdIdx < accountKeys.length) {
             labelProgram(accountKeys[programIdIdx]);
@@ -766,28 +782,49 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
         const numAcctIdx = readCompactU16(txBuf, offset);
         offset = numAcctIdx.offset;
+        if (offset + numAcctIdx.value > txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: account indexes truncated.`, programs };
+        }
         offset += numAcctIdx.value;
         const dataLen = readCompactU16(txBuf, offset);
         offset = dataLen.offset;
+        if (offset + dataLen.value > txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: data bytes truncated.`, programs };
+        }
         offset += dataLen.value;
     }
 
     // Parse Address Lookup Table section to compute total available keys.
     // Format: compactU16 numAlts, then per ALT:
     //   tableAddress(32) + compactU16 numWritable + writable[] + compactU16 numReadonly + readonly[]
+    //
+    // Buffer-bounds guards (Copilot PR #397 R2): a malformed tx that
+    // claims an arbitrarily large numWritable/numReadonly without actually
+    // carrying those index bytes would silently inflate altKeyCount and
+    // let an out-of-range programIdIdx slip past totalKeys check. Verify
+    // each declared count fits within the remaining buffer before trusting it.
     let altKeyCount = 0;
     if (offset < txBuf.length) {
         const numAlts = readCompactU16(txBuf, offset);
         offset = numAlts.offset;
         for (let a = 0; a < numAlts.value; a++) {
+            if (offset + 32 > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: table address truncated.`, programs };
+            }
             offset += 32; // table address
             const numWritable = readCompactU16(txBuf, offset);
             offset = numWritable.offset;
-            offset += numWritable.value; // writable indexes (u8 each)
+            if (offset + numWritable.value > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: declared ${numWritable.value} writable indexes exceeds remaining buffer (${txBuf.length - offset} bytes).`, programs };
+            }
+            offset += numWritable.value;
             altKeyCount += numWritable.value;
             const numReadonly = readCompactU16(txBuf, offset);
             offset = numReadonly.offset;
-            offset += numReadonly.value; // readonly indexes (u8 each)
+            if (offset + numReadonly.value > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: declared ${numReadonly.value} readonly indexes exceeds remaining buffer (${txBuf.length - offset} bytes).`, programs };
+            }
+            offset += numReadonly.value;
             altKeyCount += numReadonly.value;
         }
     }
