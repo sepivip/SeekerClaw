@@ -669,24 +669,49 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
 
+        // Buffer-bounds guard (Copilot PR #397 R3 same-class fix mirrored here):
+        // a malformed tx claiming a huge numAccounts walks past end-of-buffer
+        // producing bogus base58 keys. Fail closed before the loop.
+        if (offset + numAccounts.value * 32 > txBuf.length) {
+            return { valid: false, error: `Legacy: declared ${numAccounts.value} account keys exceeds remaining buffer.`, programs };
+        }
+
         const legacyAccountKeys = [];
         for (let i = 0; i < numAccounts.value; i++) {
             legacyAccountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
             offset += 32;
         }
 
+        // Reject zero-account tx — see v0 path comment.
+        if (legacyAccountKeys.length === 0) {
+            return { valid: false, error: 'Transaction has no account keys (cannot verify fee payer)', programs };
+        }
         // First account is fee payer.
-        if (legacyAccountKeys.length > 0 && legacyAccountKeys[0] !== expectedPayerBase58) {
+        if (legacyAccountKeys[0] !== expectedPayerBase58) {
             return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${legacyAccountKeys[0]}`, programs };
         }
 
-        // Skip recent blockhash (32 bytes).
+        // Skip recent blockhash (32 bytes). Bounds-check first.
+        if (offset + 32 > txBuf.length) {
+            return { valid: false, error: `Legacy: blockhash truncated.`, programs };
+        }
         offset += 32;
 
         // Walk instructions to collect programs[] labels (no gating).
+        // readCompactU16 returns {value:0, offset} silently past end-of-buffer;
+        // verify the varint actually consumed bytes (PR #397 R3).
+        const legacyInstOffsetBefore = offset;
         const legacyNumInstructions = readCompactU16(txBuf, offset);
+        if (legacyNumInstructions.offset === legacyInstOffsetBefore) {
+            return { valid: false, error: 'Legacy: instruction count truncated.', programs };
+        }
         offset = legacyNumInstructions.offset;
         for (let i = 0; i < legacyNumInstructions.value; i++) {
+            // Truncated-buffer guard (PR #397 R2): txBuf[offset] past end is
+            // undefined, which compares as NaN and slips past any bounds check.
+            if (offset >= txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: truncated tx.`, programs };
+            }
             const programIdIdx = txBuf[offset]; offset++;
             if (programIdIdx >= legacyAccountKeys.length) {
                 return { valid: false, error: `Instruction ${i} references invalid account index ${programIdIdx} (only ${legacyAccountKeys.length} accounts).`, programs };
@@ -694,9 +719,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
             labelProgram(legacyAccountKeys[programIdIdx]);
             const numAcctIdx = readCompactU16(txBuf, offset);
             offset = numAcctIdx.offset;
+            if (offset + numAcctIdx.value > txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: account indexes truncated.`, programs };
+            }
             offset += numAcctIdx.value;
             const dataLen = readCompactU16(txBuf, offset);
             offset = dataLen.offset;
+            if (offset + dataLen.value > txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: data bytes truncated.`, programs };
+            }
             offset += dataLen.value;
         }
 
@@ -714,29 +745,39 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);
     offset = numStaticAccounts.offset;
+    // Buffer-bounds guard (Copilot PR #397 R3): fail closed if declared
+    // count exceeds remaining buffer.
+    if (offset + numStaticAccounts.value * 32 > txBuf.length) {
+        return { valid: false, error: `v0: declared ${numStaticAccounts.value} static account keys exceeds remaining buffer.`, programs };
+    }
     const accountKeys = [];
     for (let i = 0; i < numStaticAccounts.value; i++) {
         accountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
         offset += 32;
     }
 
-    if (accountKeys.length > 0) {
-        if (!skipPayerCheck) {
-            // Default mode: connected wallet is fee payer.
-            if (accountKeys[0] !== expectedPayerBase58) {
-                return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}`, programs };
-            }
-        } else {
-            // Ultra gasless mode: Jupiter pays fees, wallet must still be a required signer.
-            const requiredSignerCount = Math.min(numRequired, accountKeys.length);
-            const requiredSigners = accountKeys.slice(0, requiredSignerCount);
-            if (!requiredSigners.includes(expectedPayerBase58)) {
-                return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers`, programs };
-            }
+    // Reject zero-account tx (PR #397 R3).
+    if (accountKeys.length === 0) {
+        return { valid: false, error: 'Transaction has no account keys (cannot verify fee payer)', programs };
+    }
+    if (!skipPayerCheck) {
+        // Default mode: connected wallet is fee payer.
+        if (accountKeys[0] !== expectedPayerBase58) {
+            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}`, programs };
+        }
+    } else {
+        // Ultra gasless mode: Jupiter pays fees, wallet must still be a required signer.
+        const requiredSignerCount = Math.min(numRequired, accountKeys.length);
+        const requiredSigners = accountKeys.slice(0, requiredSignerCount);
+        if (!requiredSigners.includes(expectedPayerBase58)) {
+            return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers`, programs };
         }
     }
 
-    // Skip recent blockhash (32 bytes).
+    // Skip recent blockhash (32 bytes). Bounds-check first (PR #397 R3).
+    if (offset + 32 > txBuf.length) {
+        return { valid: false, error: `v0: blockhash truncated.`, programs };
+    }
     offset += 32;
 
     // Walk instructions to collect programs[] labels. ALT-resolved programs
@@ -749,42 +790,69 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Without this, a structurally malformed tx with no ALTs declared but
     // `programIdIdx >> accountKeys.length` was silently accepted (Copilot
     // PR #397 finding).
+    // PR #397 R3: verify readCompactU16 actually consumed bytes (silent
+    // {value:0} past end would treat as 0 instructions and pass).
+    const v0InstOffsetBefore = offset;
     const numInstructions = readCompactU16(txBuf, offset);
+    if (numInstructions.offset === v0InstOffsetBefore) {
+        return { valid: false, error: 'v0: instruction count truncated.', programs };
+    }
     offset = numInstructions.offset;
     const altProgramIndexes = [];
     for (let i = 0; i < numInstructions.value; i++) {
+        if (offset >= txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: truncated tx.`, programs };
+        }
         const programIdIdx = txBuf[offset]; offset++;
         if (programIdIdx < accountKeys.length) {
             labelProgram(accountKeys[programIdIdx]);
         } else {
-            // Capture for post-ALT-parse verification below.
             altProgramIndexes.push(programIdIdx);
             programs.push('alt_resolved(unlabeled)');
         }
         const numAcctIdx = readCompactU16(txBuf, offset);
         offset = numAcctIdx.offset;
+        if (offset + numAcctIdx.value > txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: account indexes truncated.`, programs };
+        }
         offset += numAcctIdx.value;
         const dataLen = readCompactU16(txBuf, offset);
         offset = dataLen.offset;
+        if (offset + dataLen.value > txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: data bytes truncated.`, programs };
+        }
         offset += dataLen.value;
     }
 
     // Parse Address Lookup Table section to compute total available keys.
     // Format: compactU16 numAlts, then per ALT:
     //   tableAddress(32) + compactU16 numWritable + writable[] + compactU16 numReadonly + readonly[]
+    //
+    // Buffer-bounds guards (PR #397 R2/R3): malformed tx claiming huge
+    // numWritable/numReadonly without index bytes would silently inflate
+    // altKeyCount and let out-of-range programIdIdx slip past.
     let altKeyCount = 0;
     if (offset < txBuf.length) {
         const numAlts = readCompactU16(txBuf, offset);
         offset = numAlts.offset;
         for (let a = 0; a < numAlts.value; a++) {
+            if (offset + 32 > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: table address truncated.`, programs };
+            }
             offset += 32; // table address
             const numWritable = readCompactU16(txBuf, offset);
             offset = numWritable.offset;
-            offset += numWritable.value; // writable indexes (u8 each)
+            if (offset + numWritable.value > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: writable indexes exceeds remaining buffer.`, programs };
+            }
+            offset += numWritable.value;
             altKeyCount += numWritable.value;
             const numReadonly = readCompactU16(txBuf, offset);
             offset = numReadonly.offset;
-            offset += numReadonly.value; // readonly indexes (u8 each)
+            if (offset + numReadonly.value > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: readonly indexes exceeds remaining buffer.`, programs };
+            }
+            offset += numReadonly.value;
             altKeyCount += numReadonly.value;
         }
     }

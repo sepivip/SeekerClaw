@@ -862,6 +862,15 @@ async function _handle(input /* , chatId */) {
         const facilitatorPubkey = isV2 && paymentMeta.requirement && paymentMeta.requirement.extra
             ? paymentMeta.requirement.extra.feePayer
             : null;
+        // Copilot PR #398 R3: x402 v2 mandates cosigned signerMode AND a
+        // facilitator pubkey for feePayer/cosigner allowlists. If isV2 is
+        // true but Jupiter/facilitator omitted feePayer in the response,
+        // building expectedDelta with cosigned + no allowlists would land
+        // a deterministic burner-policy reject. Fail closed earlier and
+        // route through the R2 catch-handler bypass.
+        if (isV2 && !facilitatorPubkey) {
+            throw new Error('x402 v2 requires facilitator feePayer in requirement.extra; got null');
+        }
         payExpectedDelta = {
             kind: 'agent_pay_x402',
             x402Version: isV2 ? 2 : 1,

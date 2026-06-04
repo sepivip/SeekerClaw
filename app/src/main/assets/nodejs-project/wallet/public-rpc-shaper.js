@@ -87,10 +87,17 @@ function createPublicRpcShaper(opts) {
             };
         }
 
+        // Copilot PR #398 R3: the window cap is on requests-per-window
+        // (distinct caller submissions), NOT total RPC attempts including
+        // retries. Push a single timestamp at the start of the call and
+        // do NOT count retry attempts against the same window — otherwise
+        // a single burner-sign that retries 3 times consumes the budget
+        // for 10s and blocks unrelated subsequent calls.
+        attempts.push(now());
+
         // Try with backoff retries on 429.
         let attempt = 0;
         while (true) {
-            attempts.push(now());
             let result;
             try {
                 result = await fn();
@@ -99,10 +106,10 @@ function createPublicRpcShaper(opts) {
                 if (is429(msg) && attempt < backoffMs.length) {
                     await sleep(backoffMs[attempt]);
                     attempt++;
-                    // Re-check window after sleep — backoff may push us
-                    // past the limit.
+                    // Re-check window after sleep — other concurrent
+                    // callers may have filled the window during our sleep.
                     pruneWindow(now());
-                    if (attempts.length >= maxPerWindow) {
+                    if (attempts.length > maxPerWindow) {
                         return {
                             ok: false,
                             error: 'rate_exhausted',
