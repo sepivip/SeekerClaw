@@ -744,17 +744,24 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
 
     // Walk instructions to collect programs[] labels. ALT-resolved programs
     // (programIdIdx >= numStaticAccounts) are part of Jupiter's normal v0
-    // routing and are NOT rejected here — strict ALT resolution lives in
-    // wallet/burner-policy.js where we have access to simulation metadata.
+    // routing and are NOT rejected as program-id mismatches here — strict
+    // ALT program-id resolution lives in wallet/burner-policy.js where we
+    // have access to simulation metadata. BUT we still verify that any ALT
+    // index actually CAN be satisfied: the message's ALT section (after the
+    // instructions) must contribute enough lookup keys to cover the index.
+    // Without this, a structurally malformed tx with no ALTs declared but
+    // `programIdIdx >> accountKeys.length` was silently accepted (Copilot
+    // PR #397 finding).
     const numInstructions = readCompactU16(txBuf, offset);
     offset = numInstructions.offset;
+    const altProgramIndexes = [];
     for (let i = 0; i < numInstructions.value; i++) {
         const programIdIdx = txBuf[offset]; offset++;
         if (programIdIdx < accountKeys.length) {
             labelProgram(accountKeys[programIdIdx]);
         } else {
-            // Program resolved via Address Lookup Table — record it as
-            // alt-resolved for log forensics without blocking the tx.
+            // Capture for post-ALT-parse verification below.
+            altProgramIndexes.push(programIdIdx);
             programs.push('alt_resolved(unlabeled)');
         }
         const numAcctIdx = readCompactU16(txBuf, offset);
@@ -763,6 +770,37 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         const dataLen = readCompactU16(txBuf, offset);
         offset = dataLen.offset;
         offset += dataLen.value;
+    }
+
+    // Parse Address Lookup Table section to compute total available keys.
+    // Format: compactU16 numAlts, then per ALT:
+    //   tableAddress(32) + compactU16 numWritable + writable[] + compactU16 numReadonly + readonly[]
+    let altKeyCount = 0;
+    if (offset < txBuf.length) {
+        const numAlts = readCompactU16(txBuf, offset);
+        offset = numAlts.offset;
+        for (let a = 0; a < numAlts.value; a++) {
+            offset += 32; // table address
+            const numWritable = readCompactU16(txBuf, offset);
+            offset = numWritable.offset;
+            offset += numWritable.value; // writable indexes (u8 each)
+            altKeyCount += numWritable.value;
+            const numReadonly = readCompactU16(txBuf, offset);
+            offset = numReadonly.offset;
+            offset += numReadonly.value; // readonly indexes (u8 each)
+            altKeyCount += numReadonly.value;
+        }
+    }
+
+    const totalKeys = accountKeys.length + altKeyCount;
+    for (const idx of altProgramIndexes) {
+        if (idx >= totalKeys) {
+            return {
+                valid: false,
+                error: `Instruction program index ${idx} exceeds static+ALT key count (${accountKeys.length} static + ${altKeyCount} ALT = ${totalKeys}).`,
+                programs,
+            };
+        }
     }
 
     return { valid: true, programs };
