@@ -789,3 +789,68 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 2. If the live probe confirms the catalog is stale, tell the user "the recorded price ($0.01) is out of date — actual is $0.02. I'll flag this for the maintainer." Don't refuse the call retroactively (it already settled).
 3. Maintainer-side fix: update `catalog.json` `entries[].endpoint.cost_usdc` for the affected entry, bump `paysh-catalog/SKILL.md` version so devices re-seed.
 
+
+## burner policy (BAT-1013)
+
+The burner policy gate (`wallet/burner-policy.js validateBurnerTx`) runs BEFORE every `/burner/sign-transaction` and `/burner/sign-and-send` bridge call. Rejects are sorted into three classes; the agent's recovery action MUST differ per class.
+
+### Security class — refuse, surface reason verbatim, do NOT suggest MWA bypass
+
+The same security rule applies on the MWA path; recommending MWA as a workaround for a suspicious transaction is unsafe.
+
+| Code | What happened | Agent action |
+|---|---|---|
+| `drainer_set_authority` | An instruction tries to call SPL `SetAuthority` on a burner-owned account | Surface reason. Refuse. Suggest the user investigate or report. |
+| `drainer_approve` | SPL `Approve` / `Approve2` on a burner ATA — would let a third party drain | Same. |
+| `drainer_close_account` | SPL `CloseAccount` on a burner ATA in a non-cancel kind | Same. Cancel flows allow this via `zero_value_cancel`. |
+| `drainer_assign` | System `Assign` reassigning burner-owned account ownership | Same. |
+| `drainer_nonce_blank_check` | `AdvanceNonceAccount` as first instruction — durable-nonce blank-check signing | Same. |
+| `signer_set_unexpected` | Required signer list contains an unknown pubkey not in `feePayerAllowlist` or `cosignerAllowlist` | Surface reason with the offending pubkey. Refuse. |
+| `signer_count_mismatch` | numRequiredSignatures doesn't match the declared signer mode (e.g. cosigned expected 2, got 3) | Same. |
+| `burner_not_signer` | Burner pubkey is not in the required-signer set | Same. |
+| `payer_mismatch` | Fee payer is not the burner (default mode) | Same. |
+| `fee_payer_not_in_allowlist` | Fee payer matches no allowed pubkey (sponsored/cosigned modes) | Same. |
+| `cosigner_not_in_allowlist` | Extra required signer not declared by the protocol response | Same. |
+| `simulation_delta_mismatch` | Simulation shows burner's balance change doesn't match the declared expectedDelta within tolerance | Surface BOTH expected and observed values. Refuse. Common cause: bundled-instruction injection attack (Crypto Copilot class). |
+| `simulation_mint_mismatch` | Simulation shows the account's mint doesn't match the declared one | Same. |
+| `simulation_recipient_mismatch` | Recipient credit observed in simulation doesn't match declared atomicAmount | Same. |
+| `account_ownership_uncertain` | Drainer-opcode walk found an instruction whose target account ownership can't be resolved | Same. |
+| `token_2022_undeclared` | Tx uses Token-2022 program but `expectedDelta.tokenStandard !== 'token_2022'` | Same. |
+
+### Availability class — surface reason, ask user to retry burner once OR fall back to MWA
+
+These are infrastructure / RPC failures, not security failures. User can legitimately retry. On the first availability reject in a session when the active simulator is `public` (no Helius API key), surface a one-time hint suggesting Helius.
+
+| Code | What happened | Agent action |
+|---|---|---|
+| `simulation_failed` | Simulator (RPC) call threw — timeout, network error, rate-limited beyond shaper backoff | Tell user. Offer: retry burner OR fall back to MWA. |
+| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError) | Surface the error. Same options. |
+| `simulation_metadata_missing` | `value.accounts[i]` was null for a required address, or `getMultipleAccounts` pre-snapshot missing | Same. Often caused by public RPC dropping data under load. |
+| `tx_unparseable` | The tx bytes couldn't be parsed as legacy or v0 — likely a malformed Jupiter response | Surface. Offer retry. |
+| `alt_unresolved` | An instruction references an ALT-resolved program ID that simulation didn't surface | Same. Common when Helius cache misses. |
+| `policy_parse_uncertainty` | Catch-all for unexpected parser errors | Same. Report as bug. |
+
+### Contract-gap class — internal bug, report to user, do NOT retry/bypass
+
+These mean a SeekerClaw tool failed to construct the expected per-tool contract. NOT the user's fault.
+
+| Code | What happened | Agent action |
+|---|---|---|
+| `expected_delta_required` | A caller (one of: solana_swap, jupiter_trigger_create V1+V2, jupiter_dca_create, solana_send, agent_pay) didn't pass expectedDelta | Tell user "internal error in <tool>", report as bug, do NOT retry. |
+| `expected_delta_invalid_kind` | Caller passed an unknown `kind` | Same. |
+| `expected_delta_invalid_shape` | Caller passed malformed expectedDelta (e.g. agent_pay v2 with signerMode 'burner_only') | Same. |
+| `payer_missing` | `/burner/status` returned no pubkey OR pubkey is non-base58 | Tell user "burner not configured properly". Suggest: re-create burner wallet in Settings. |
+
+### Kill switch (per Codex amendment #5)
+
+For users who want to halt autonomous signing immediately:
+
+1. **Cap-to-zero pause** — Settings → Burner Wallet → Caps → set per-tx caps to 0. Existing autonomous flows immediately fail `burner_over_cap`. Reversible.
+2. **Stop service** — notification tile → Stop. Node.js process dies; no signing possible. Restart to resume.
+3. **Wipe burner** — Settings → Burner Wallet → Wipe Burner. Destroys sealed key. Funds remain on-chain but unreachable until a new key is generated and the user transfers them.
+
+The agent SHOULD walk users through option 1 first when they ask "how do I stop the agent from signing" — it's the least destructive and fully reversible.
+
+### Live test (Codex amendment #7 v8.1)
+
+The dual-source contract (accounts-config + getMultipleAccounts) has a load-bearing live test at `tests/jupiter-ultra/live-burner-policy-helius.js`. It exercises the real Solana RPC against a real Jupiter Ultra order and asserts the policy accepts. Run via `cd tests/jupiter-ultra && node live-burner-policy-helius.js` — requires `BURNER_SECRET_KEY` + `JUPITER_API_KEY` + `SOLANA_RPC` in `.env.test`. See file header for safety notes (no signing, no broadcast).
