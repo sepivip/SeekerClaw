@@ -662,6 +662,16 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
 
+        // Buffer-bounds guard (Copilot PR #397 R3): a malformed/truncated
+        // tx can claim a huge numAccounts; if we don't verify the bytes
+        // exist, the loop reads past end-of-buffer (txBuf.slice returns
+        // short buffer / empty), produces bogus base58 keys, and combined
+        // with later reads that silently return 0 (compact-u16 past end)
+        // the whole verification slips through. Fail closed.
+        if (offset + numAccounts.value * 32 > txBuf.length) {
+            return { valid: false, error: `Legacy: declared ${numAccounts.value} account keys exceeds remaining buffer (${txBuf.length - offset} bytes; need ${numAccounts.value * 32}).`, programs };
+        }
+
         const legacyAccountKeys = [];
         for (let i = 0; i < numAccounts.value; i++) {
             legacyAccountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
@@ -681,11 +691,25 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
             return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${legacyAccountKeys[0]}`, programs };
         }
 
-        // Skip recent blockhash (32 bytes).
+        // Skip recent blockhash (32 bytes). Bounds-check first: without it,
+        // a tx truncated right after the account keys would push offset past
+        // the buffer end. readCompactU16 then returns {value: 0} and the
+        // instruction walk is silently skipped — verifier returns valid.
+        if (offset + 32 > txBuf.length) {
+            return { valid: false, error: `Legacy: blockhash truncated (offset ${offset} + 32 > length ${txBuf.length}).`, programs };
+        }
         offset += 32;
 
         // Walk instructions to collect programs[] labels (no gating).
+        // Bounds check (Copilot R3): readCompactU16 returns {value:0, offset}
+        // when called past buffer end (loop never runs). Without verifying
+        // bytes were actually consumed, a tx truncated at the blockhash
+        // boundary parses as "0 instructions" and silently returns valid.
+        const legacyInstOffsetBefore = offset;
         const legacyNumInstructions = readCompactU16(txBuf, offset);
+        if (legacyNumInstructions.offset === legacyInstOffsetBefore) {
+            return { valid: false, error: 'Legacy: instruction count truncated (no varint bytes available).', programs };
+        }
         offset = legacyNumInstructions.offset;
         for (let i = 0; i < legacyNumInstructions.value; i++) {
             // Truncated-buffer guard (Copilot PR #397 R2): txBuf[offset]
@@ -727,6 +751,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);
     offset = numStaticAccounts.offset;
+    // Buffer-bounds guard (Copilot PR #397 R3): see legacy path comment above.
+    if (offset + numStaticAccounts.value * 32 > txBuf.length) {
+        return { valid: false, error: `v0: declared ${numStaticAccounts.value} static account keys exceeds remaining buffer (${txBuf.length - offset} bytes; need ${numStaticAccounts.value * 32}).`, programs };
+    }
     const accountKeys = [];
     for (let i = 0; i < numStaticAccounts.value; i++) {
         accountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
@@ -751,7 +779,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
     }
 
-    // Skip recent blockhash (32 bytes).
+    // Skip recent blockhash (32 bytes). Bounds-check first (PR #397 R3):
+    // a tx truncated right after static account keys would push offset past
+    // the buffer end; readCompactU16 returns {value:0} silently and the
+    // instruction walk is skipped, returning valid:true on a malformed tx.
+    if (offset + 32 > txBuf.length) {
+        return { valid: false, error: `v0: blockhash truncated (offset ${offset} + 32 > length ${txBuf.length}).`, programs };
+    }
     offset += 32;
 
     // Walk instructions to collect programs[] labels. ALT-resolved programs
@@ -764,7 +798,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Without this, a structurally malformed tx with no ALTs declared but
     // `programIdIdx >> accountKeys.length` was silently accepted (Copilot
     // PR #397 finding).
+    // Bounds check (Copilot R3): readCompactU16 returns {value:0} silently
+    // past buffer end; verify the varint actually consumed bytes.
+    const v0InstOffsetBefore = offset;
     const numInstructions = readCompactU16(txBuf, offset);
+    if (numInstructions.offset === v0InstOffsetBefore) {
+        return { valid: false, error: 'v0: instruction count truncated (no varint bytes available).', programs };
+    }
     offset = numInstructions.offset;
     const altProgramIndexes = [];
     for (let i = 0; i < numInstructions.value; i++) {
