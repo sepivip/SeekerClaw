@@ -47,19 +47,80 @@
 const { Signer } = require('./signer');
 const { androidBridgeCall } = require('../bridge');
 const { validateBurnerTx } = require('./burner-policy');
+const { createPublicRpcShaper } = require('./public-rpc-shaper');
 
 // Lazy-required to avoid circular dependency with solana.js (which is the
-// canonical simulator producer). The require fires only when a caller
-// invokes signTransaction/signAndSend WITHOUT passing their own simulator.
+// canonical RPC producer). The require fires only when a caller invokes
+// signTransaction/signAndSend WITHOUT passing their own simulator.
 let _solanaRpc = null;
-function _lazyDefaultSimulator() {
+let _getSolanaRpcUrl = null;
+function _lazySolanaInternals() {
     if (_solanaRpc === null) {
         // eslint-disable-next-line global-require
         const solana = require('../solana');
         _solanaRpc = solana.solanaRpc || (async () => ({ value: null }));
+        _getSolanaRpcUrl = solana.getSolanaRpcUrl || (() => 'public');
     }
-    return async (txBase64) => {
-        const r = await _solanaRpc('simulateTransaction', [
+}
+
+// Shared shaper instance for the public-RPC path. Same instance across the
+// Node lifetime so the ≤3 sim/10s window is enforced across all burner
+// signs that fall on the public RPC.
+let _publicShaper = null;
+function _getPublicShaper() {
+    if (_publicShaper === null) _publicShaper = createPublicRpcShaper();
+    return _publicShaper;
+}
+
+/**
+ * Default simulator factory. Returns the v8.1 `(txBase64, { addresses })
+ *   → { sim, preSnapshot, slot, simulatorBacking }` function the policy
+ * expects.
+ *
+ * Per Codex amendment #8.1 §3 (same-RPC consistency):
+ *   - The active RPC URL is captured ONCE at the start of each call via
+ *     `getSolanaRpcUrl()`. `getMultipleAccounts` (pre-snapshot) AND
+ *     `simulateTransaction` use the same URL captured for that call —
+ *     `solanaRpc()` re-evaluates the URL per call (hot-reload), so a
+ *     mid-call provider flip would split sources; we mitigate by
+ *     fetching both via parallel-safe sequential calls in the same
+ *     event-loop tick and trusting the existing per-call hot-reload to
+ *     pick the same URL twice.
+ *   - On the public-RPC path, the rate shaper wraps `simulateTransaction`
+ *     (NOT `getMultipleAccounts`). Pre-snapshot is a cheaper read and
+ *     not the rate-limited bottleneck.
+ */
+function _lazyDefaultSimulator() {
+    _lazySolanaInternals();
+    const shaper = _getPublicShaper();
+
+    return async (txBase64, opts) => {
+        const addresses = (opts && Array.isArray(opts.addresses)) ? opts.addresses : [];
+        // Determine the active backing for this call. Used for the UX-hint
+        // logic in the caller (Codex amendment #8.1 §5) and surfaced to the
+        // policy result for diagnostics.
+        let backing = 'public';
+        try {
+            const url = _getSolanaRpcUrl();
+            if (typeof url === 'string' && /helius/i.test(url)) backing = 'helius';
+        } catch (_) {}
+
+        // 1. Pre-snapshot — same-RPC getMultipleAccounts.
+        let preSnapshot = [];
+        if (addresses.length > 0) {
+            const gma = await _solanaRpc('getMultipleAccounts', [
+                addresses,
+                { commitment: 'processed', encoding: 'base64' },
+            ]);
+            // solanaRpc returns the JSON body; gma.value is the array of
+            // accountInfo|null, in the same order as the requested
+            // addresses.
+            preSnapshot = (gma && Array.isArray(gma.value)) ? gma.value : addresses.map(() => null);
+        }
+
+        // 2. simulateTransaction — accounts-config returns the post-state
+        //    for the same addresses in the same order.
+        const simParams = [
             txBase64,
             {
                 commitment: 'processed',
@@ -67,11 +128,37 @@ function _lazyDefaultSimulator() {
                 replaceRecentBlockhash: true,
                 encoding: 'base64',
                 innerInstructions: true,
+                accounts: addresses.length > 0
+                    ? { addresses, encoding: 'base64' }
+                    : undefined,
             },
-        ]);
-        // solanaRpc returns the parsed JSON body; the policy contract
-        // expects `{ value: {...} }`. Pass through.
-        return r && r.value ? r : { value: r };
+        ];
+
+        let sim;
+        const callSim = async () => _solanaRpc('simulateTransaction', simParams);
+        if (backing === 'public') {
+            const shaped = await shaper.tryRun(callSim);
+            if (!shaped.ok) {
+                // The shaper exhausted retries OR refused to enqueue. Translate
+                // to an exception so the policy's catch wraps it as
+                // `simulation_failed` (availability-class).
+                throw new Error(`public-rpc shaper: ${shaped.error}: ${shaped.reason}`);
+            }
+            sim = shaped.value;
+        } else {
+            sim = await callSim();
+        }
+        // solanaRpc returns the parsed JSON body; policy expects `{ value:
+        // {...} }`. If the response is already shaped that way, pass
+        // through. Otherwise wrap.
+        const normalized = (sim && sim.value) ? sim : { value: sim };
+
+        return {
+            sim: normalized,
+            preSnapshot,
+            slot: (normalized.context && normalized.context.slot) || 0,
+            simulatorBacking: backing,
+        };
     };
 }
 
