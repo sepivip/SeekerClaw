@@ -668,12 +668,31 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
     } else if (kind === 'jupiter_trigger_create_deposit' || kind === 'jupiter_dca_create_deposit') {
         // No burner credit at deposit time; output happens at fill time
         // in a separate tx the burner doesn't sign. depositVault is
-        // REQUIRED for deposit kinds (contract v8.3): we verify a positive
-        // credit on the named vault >= burnerDebit.atomicAmount minus a
-        // 50 bps headroom for any internal Jupiter fee/slippage. The shape
+        // REQUIRED for deposit kinds (contract v8.3): we verify the
+        // named vault receives EXACTLY the burner's debit. The shape
         // validator above rejects with expected_delta_invalid_shape if
         // depositVault is absent, so callers that cannot provide it must
         // route to main wallet (forceRouting='main') instead.
+        //
+        // Contract v8.3 amendment (Codex review of v8.3 report): the
+        // previous 50-bps headroom was a sanctioned skim window — a
+        // tampered tx could route 0.5% of the burner's deposit to an
+        // attacker-controlled account while still passing the vault
+        // delta check. Default is now `mode: 'exact'`. Jupiter does
+        // not skim fees at deposit time (fees are taken at fill time
+        // in a separate tx the burner doesn't sign), so exact mode
+        // does not break the happy path.
+        //
+        // Future fee-bearing paths (Token-2022 transfer fee, explicit
+        // platform/referral fee) require:
+        //   - `expectedDelta.tokenStandard: 'token_2022'` declared AND
+        //     fee math validated against on-chain mint config, OR
+        //   - explicit `expectedDelta.depositFee: { recipient, maxAtomic }`
+        //     with policy verifying BOTH the vault credit AND the fee
+        //     destination.
+        // Neither is implemented yet — those paths fail closed (the
+        // vault delta will be off and exact mode rejects), and users
+        // fall back to MWA.
         const vault = expectedDelta.depositVault;
         if (vault) {
             checks.push({
@@ -684,7 +703,7 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
                 // Vault MAY be created at deposit time (Jupiter Trigger V2
                 // registers vaults lazily).
                 existencePolicy: { mustExistBefore: false, allowCreate: true, allowClose: false },
-                deltaTolerance: { mode: 'gte_min_minus_bps', minRequired: BigInt(expectedDelta.burnerDebit ? expectedDelta.burnerDebit.atomicAmount : 0), bps: 50n },
+                deltaTolerance: { mode: 'exact' },
             });
         }
     }

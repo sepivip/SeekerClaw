@@ -366,6 +366,57 @@ function _burnerOff() {
         assert.strictEqual(ownershipCall.body.creatorWalletRole, 'main');
     });
 
+    // ── v8.3 behavioral assertions (Codex amendment): autonomous burner must
+    //    NOT be invoked for deposit flows that cannot verify destination ──────
+    await check('v8.3: jupiter_trigger_create V1 missing data.order → routes to main, burner NOT invoked', async () => {
+        // Jupiter responds WITHOUT the `order` PDA — autonomous burner cannot
+        // verify deposit destination. Call site must forceRouting='main'.
+        triggerCreateApiResponse = { status: 200, data: JSON.stringify({ transaction: 'UNSIGNED-TRIGGER-TX', requestId: 'trig-req-no-order' }) };
+        _burnerOn(); // burner is available but should NOT be used
+        bridgeResponses['/solana/sign-only'] = { signedTransaction: 'SIGNED-MAIN-TRIG-FALLBACK' };
+        bridgeResponses['/jupiter/order-owner/set'] = { ok: true };
+        try {
+            const result = await tools.handlers.jupiter_trigger_create({
+                inputToken: 'SOL',
+                outputToken: 'USDC',
+                inputAmount: 0.001,
+                triggerPrice: 100,
+            });
+            if (result.error) throw new Error(`unexpected error: ${JSON.stringify(result)}`);
+            assert.strictEqual(result.wallet, 'main', 'V1 with missing data.order must route to main');
+            // Burner must NOT have been reserved or invoked
+            assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'burner must not reserve when data.order missing');
+            assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must not sign when data.order missing');
+            // MWA path was used instead
+            assert.ok(bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'expected /solana/sign-only call for main routing');
+        } finally {
+            triggerCreateApiResponse = null;
+        }
+    });
+
+    await check('v8.3: jupiter_dca_create always routes to main, burner NOT invoked even when ON', async () => {
+        // DCA create has no pre-sign vault pubkey from Jupiter Recurring API.
+        // v8.3 call site sets forceRouting='main' unconditionally. Even with
+        // burner ON and ample caps, the burner must NOT be invoked.
+        _burnerOn({ capPerTxUsdc: '50000000', capDailyUsdc: '100000000' }); // 50 USDC per-tx
+        bridgeResponses['/solana/sign-only'] = { signedTransaction: 'SIGNED-MAIN-DCA-FORCED' };
+        bridgeResponses['/jupiter/order-owner/set'] = { ok: true };
+        const result = await tools.handlers.jupiter_dca_create({
+            inputToken: 'USDC',
+            outputToken: 'SOL',
+            amountPerCycle: 1,
+            cycleInterval: 'daily',
+            totalCycles: 5,
+        });
+        if (result.error) {
+            throw new Error(`unexpected error: ${JSON.stringify(result)} | bridgeCalls: ${JSON.stringify(bridgeCalls.map(c => c.endpoint))}`);
+        }
+        assert.strictEqual(result.wallet, 'main', 'DCA create must always route to main (v8.3)');
+        // Burner must NOT have been reserved or invoked
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'burner must not reserve for DCA create');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must not sign DCA create');
+    });
+
     // ── jupiter_trigger_cancel routing by creator role ──────────────────────
     await check('jupiter_trigger_cancel: creator=burner → signs via burner (zero-amount reserve)', async () => {
         _burnerOn();

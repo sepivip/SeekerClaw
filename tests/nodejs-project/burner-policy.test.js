@@ -939,6 +939,46 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.class, 'security');
     });
 
+    await runAsync('v8.3 amendment regression: skim attack — vault credit X-50bps + attacker takes 50bps → REJECT (exact mode)', async () => {
+        // Codex amendment to v8.3: the previous 50-bps tolerance was a
+        // sanctioned skim window. This test proves exact mode catches
+        // the case where the burner debit looks correct AND the named
+        // vault receives almost-correct credit (e.g. 99.5%) but a 0.5%
+        // skim lands in an attacker account. Without exact mode, the
+        // vault-credit check would have accepted this as "within tolerance".
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, JUPITER_V2_VAULT, ATTACKER_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3, 4], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                // Burner spent exactly the declared 1 USDC
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                // Jupiter vault received only 99.5% — 5000 atomic units skimmed
+                [JUPITER_V2_VAULT]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: JUP_V2_PROGRAM, amountAtomic: '0' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: JUP_V2_PROGRAM, amountAtomic: '995000' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: { pubkey: JUPITER_V2_VAULT, expectedOwner: JUP_V2_PROGRAM },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, false, `expected reject of skim attack, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+        assert.strictEqual(r.class, 'security');
+        // Reason should mention the exact-vs-observed mismatch
+        assert.match(r.reason, /delta does not match exactly|995000|1000000/);
+    });
+
     await runAsync('v8.3 happy path: V2 trigger deposit — burner debit X + vault credit X → accept', async () => {
         const txB64 = buildTx({
             accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, JUPITER_V2_VAULT],
