@@ -98,6 +98,8 @@ const LOAD_TARGETS = [
     // burner-policy.js depends only on tx-parser.js for parser primitives.
     'wallet/tx-parser.js',
     'wallet/burner-policy.js',
+    'wallet/spl-token-layout.js',
+    'wallet/public-rpc-shaper.js',
     'payment/protocol.js',
     'payment/x402.js',
     'payment/index.js',

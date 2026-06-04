@@ -1,0 +1,139 @@
+// tests/nodejs-project/public-rpc-shaper.test.js
+//
+// BAT-1013 v8.1 amendment #6: public-RPC rate shaper.
+// Pure module with injected clock + sleep — fully deterministic.
+
+'use strict';
+
+const assert = require('assert');
+const path = require('path');
+
+const BUNDLE = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
+const { createPublicRpcShaper, _is429 } = require(path.join(BUNDLE, 'wallet', 'public-rpc-shaper.js'));
+
+let pass = 0, fail = 0;
+async function runAsync(name, fn) {
+    try {
+        await fn();
+        pass++;
+        console.log(`  ✓ ${name}`);
+    } catch (e) {
+        fail++;
+        console.error(`  ✗ ${name}: ${e.message}`);
+        if (process.env.VERBOSE) console.error(e.stack);
+    }
+}
+function check(name, fn) {
+    try {
+        fn();
+        pass++;
+        console.log(`  ✓ ${name}`);
+    } catch (e) {
+        fail++;
+        console.error(`  ✗ ${name}: ${e.message}`);
+    }
+}
+
+(async function main() {
+    console.log('public-rpc-shaper.test.js — wallet/public-rpc-shaper.js');
+    console.log();
+
+    console.log('_is429');
+    check('matches "429"', () => assert.strictEqual(_is429('HTTP 429: too many'), true));
+    check('matches "rate limit"', () => assert.strictEqual(_is429('rate limit exceeded'), true));
+    check('matches "Too Many Requests"', () => assert.strictEqual(_is429('Too Many Requests'), true));
+    check('does NOT match unrelated errors', () => assert.strictEqual(_is429('ECONNRESET'), false));
+    check('handles null safely', () => assert.strictEqual(_is429(null), false));
+
+    console.log();
+    console.log('window cap (≤3 per 10s)');
+    await runAsync('allows 3 calls in window', async () => {
+        let t = 1000;
+        const s = createPublicRpcShaper({ now: () => t, sleep: async () => {} });
+        const r1 = await s.tryRun(async () => 'A'); t += 100;
+        const r2 = await s.tryRun(async () => 'B'); t += 100;
+        const r3 = await s.tryRun(async () => 'C');
+        assert.strictEqual(r1.ok, true);
+        assert.strictEqual(r2.ok, true);
+        assert.strictEqual(r3.ok, true);
+    });
+    await runAsync('refuses 4th call within window', async () => {
+        let t = 1000;
+        const s = createPublicRpcShaper({ now: () => t, sleep: async () => {} });
+        await s.tryRun(async () => 'A'); t += 100;
+        await s.tryRun(async () => 'B'); t += 100;
+        await s.tryRun(async () => 'C'); t += 100;
+        const r4 = await s.tryRun(async () => 'D');
+        assert.strictEqual(r4.ok, false);
+        assert.strictEqual(r4.error, 'rate_exhausted');
+        assert.match(r4.reason, /attempts already in last/);
+    });
+    await runAsync('allows new call after window slides past', async () => {
+        let t = 1000;
+        const s = createPublicRpcShaper({ now: () => t, sleep: async () => {} });
+        await s.tryRun(async () => 'A'); t += 100;
+        await s.tryRun(async () => 'B'); t += 100;
+        await s.tryRun(async () => 'C');
+        // Advance past the window
+        t += 15_000;
+        const r4 = await s.tryRun(async () => 'D');
+        assert.strictEqual(r4.ok, true);
+        assert.strictEqual(r4.value, 'D');
+    });
+
+    console.log();
+    console.log('429 backoff');
+    await runAsync('backs off on 429 then retries successfully', async () => {
+        let t = 1000;
+        const slept = [];
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async (ms) => { slept.push(ms); t += ms; },
+        });
+        let attempts = 0;
+        const fn = async () => {
+            attempts++;
+            if (attempts === 1) throw new Error('HTTP 429: too many');
+            return 'OK';
+        };
+        const r = await s.tryRun(fn);
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.value, 'OK');
+        assert.strictEqual(attempts, 2);
+        assert.deepStrictEqual(slept, [1000]); // first backoff = 1s
+    });
+    await runAsync('exhausts 3 backoffs then returns rate_exhausted', async () => {
+        let t = 1000;
+        const slept = [];
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async (ms) => { slept.push(ms); t += ms; },
+        });
+        const fn = async () => { throw new Error('429'); };
+        const r = await s.tryRun(fn);
+        assert.strictEqual(r.ok, false);
+        // backoffs: 1s, 2s, 4s (=7s total) — all 3 attempts hit 429 then window
+        // still has capacity but no more backoffs left so the final throw
+        // propagates as rate_exhausted (since msg matches 429).
+        assert.strictEqual(r.error, 'rate_exhausted');
+        assert.deepStrictEqual(slept, [1000, 2000, 4000]);
+    });
+    await runAsync('non-429 error returns rpc_error without retry', async () => {
+        let t = 1000;
+        const slept = [];
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async (ms) => { slept.push(ms); t += ms; },
+        });
+        const fn = async () => { throw new Error('ECONNRESET'); };
+        const r = await s.tryRun(fn);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'rpc_error');
+        assert.deepStrictEqual(slept, []); // no backoff for non-429
+    });
+
+    console.log();
+    console.log(`Result: ${pass} passed, ${fail} failed`);
+    if (fail > 0) process.exit(1);
+    console.log('PASS: public-rpc-shaper.test.js');
+})();
