@@ -227,6 +227,15 @@ function parseTransaction(txBase64) {
         throw new TxParseError('invalid_base64', 0, 'tx must be a non-empty base64 string');
     }
     let txBuf;
+    // Strict base64 validation (Copilot PR #398 R6): Buffer.from(str, 'base64')
+    // silently strips invalid chars and decodes partial input. For a security-
+    // sensitive parser the input shape must be validated up front.
+    if (typeof txBase64 !== 'string' || txBase64.length === 0) {
+        throw new TxParseError('invalid_base64', 0, 'empty or non-string input');
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        throw new TxParseError('invalid_base64', 0, 'invalid base64 characters or length');
+    }
     try {
         txBuf = Buffer.from(txBase64, 'base64');
     } catch (e) {

@@ -907,14 +907,18 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
 // Returns { value, offset, terminated } — `terminated: false` indicates
 // buffer ran out mid-varint (last byte read had high bit set). Callers
 // MUST check `terminated` for fail-closed parsing (Copilot PR #397 R4).
+// Returns { value, offset, terminated, overflowed }. On `!terminated || overflowed`,
+// `value` is set to a 0xFFFFFFFF sentinel so downstream bounds checks of the
+// shape `offset + value * N > buf.length` reject vacuously, and for-loops
+// `for (let i=0; i<value; i++)` hit the per-iter bounds guard immediately.
+// (Copilot PR #397 R6: per-call-site checks of overflowed/terminated were
+// repeatedly missed; fail-closed at function level is the durable fix.)
 function readCompactU16(buf, offset) {
     let value = 0;
     let shift = 0;
     let pos = offset;
     let terminated = false;
     let overflowed = false;
-    // Compact-u16 max = 0xFFFF (3 bytes); cap loop at 3 bytes to prevent
-    // bitwise overflow into negative 32-bit (Copilot PR #397 R5).
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
         value = (value | ((byte & 0x7F) << shift)) >>> 0;
@@ -923,6 +927,9 @@ function readCompactU16(buf, offset) {
         if (shift > 14) { overflowed = true; break; }
     }
     if (value > 0xFFFF) overflowed = true;
+    if (!terminated || overflowed) {
+        return { value: 0xFFFFFFFF, offset: pos, terminated, overflowed };
+    }
     return { value, offset: pos, terminated, overflowed };
 }
 

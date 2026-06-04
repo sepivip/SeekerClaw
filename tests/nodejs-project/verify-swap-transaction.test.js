@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // tests/nodejs-project/verify-swap-transaction.test.js
 //
 // Unit tests for solana.js verifySwapTransaction (PR #397 R3): proves the
@@ -378,6 +379,52 @@ test('R5: readCompactU16 rejects 5+ byte varint overflow', () => {
     parts.push(Buffer.from([1, 0, 0]));
     // numStaticAccounts as a 5-byte overflowing varint
     parts.push(Buffer.from([0xFF, 0xFF, 0xFF, 0xFF, 0x7F])); // overflow
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+});
+
+test('R6: fails closed on overflowing numSigs varint (5-byte)', () => {
+    // numSigs = 5-byte varint overflow. With the R6 sentinel fix, value
+    // becomes 0xFFFFFFFF -> 0xFFFFFFFF * 64 bytes required = catastrophically
+    // larger than buffer -> reject.
+    const parts = [];
+    parts.push(Buffer.from([0xFF, 0xFF, 0xFF, 0xFF, 0x7F])); // overflowing numSigs
+    parts.push(Buffer.alloc(64)); // some sig bytes
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+});
+
+test('R6: fails closed on legacy per-instruction numAcctIdx mid-varint truncation', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([1, 0, 0]));
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(1)); // 1 instruction
+    parts.push(Buffer.from([0])); // programIdIdx=0
+    parts.push(Buffer.from([0x80])); // numAcctIdx as continuation byte with no terminator
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+});
+
+test('R6: fails closed on v0 ALT numWritable mid-varint truncation', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80]));
+    parts.push(Buffer.from([1, 0, 0]));
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(0)); // 0 instructions
+    parts.push(compactU16(1)); // 1 ALT
+    parts.push(pubkeyBytes('AltAddrXX'));
+    parts.push(Buffer.from([0x80])); // numWritable as continuation byte (no terminator)
     const txB64 = Buffer.concat(parts).toString('base64');
     const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
     assert.strictEqual(r.valid, false);
