@@ -53,14 +53,16 @@ const tools = [
         name: 'solana_balance',
         description:
             'Get SOL balance and SPL token balances for a Solana wallet address. ' +
-            'Three-state return shape (BAT-1002): ' +
-            '(1) RPC success → { address, sol, tokens: [...accounts], tokenCount: N } ' +
+            'Return shapes (BAT-1002): ' +
+            '(a) Success → { address, sol, tokens: [...accounts], tokenCount: N } ' +
             '— tokens: [] + tokenCount: 0 means the wallet has no SPL token accounts with a non-zero balance ' +
             '(the handler filters out zero-balance / closed-to-zero accounts; the wallet may still ' +
             'hold empty SPL token accounts on-chain). ' +
-            '(2) SPL RPC failure (SOL fetch OK) → { address, sol, tokens: null, tokenCount: null, tokensError: <reason> } ' +
+            '(b) SPL RPC failure (SOL fetch OK, partial result) → ' +
+            '{ address, sol, tokens: null, tokenCount: null, tokensError: <reason> } ' +
             '— tokens === null signals the RPC could not be reached (SPL balance UNKNOWN, not zero). ' +
-            '(3) SOL RPC failure → { error: <reason> } (whole-call failure, no partial data). ' +
+            '(c) Whole-call failure (SOL RPC failed OR address resolution failed) → { error: <reason> } ' +
+            '— no partial data, the call could not produce any trustworthy value. ' +
             'Never report tokens: null as "0 tokens" or "wallet has no USDC" — that is a confabulation. ' +
             'Say "SPL token balance temporarily unavailable" and suggest a retry, or if no Helius API key is ' +
             'configured, suggest adding one at Settings > Solana Wallet > Helius API Key for more reliable RPC.',
@@ -1068,12 +1070,13 @@ const handlers = {
         // wallet, which led the agent to confabulate "wallet has 0 USDC"
         // on a transient timeout (2026-06-03 BAT-995 device incident).
         //
-        // Three-state contract:
+        // Return-shape contract (matches the description above the tool):
         //   - RPC success + non-empty → tokens: [...accounts], tokenCount: N
         //   - RPC success + empty     → tokens: [],            tokenCount: 0
         //   - SPL RPC failure (SOL ok)→ tokens: null,          tokenCount: null,
         //                                tokensError: <reason string>
-        //   - SOL RPC failure         → handler already returned { error } above.
+        //   - SOL RPC failure         → handler already returned { error } above
+        //                                (whole-call failure, no partial data).
         //
         // tokens === null (NOT undefined) — per CLAUDE.md "Consistent JSON
         // Output", undefined drops from JSON.stringify; null survives and
