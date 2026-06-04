@@ -51,7 +51,21 @@ function _setNumberToDecimalString(fn) { numberToDecimalString = fn; }
 const tools = [
     {
         name: 'solana_balance',
-        description: 'Get SOL balance and SPL token balances for a Solana wallet address.',
+        description:
+            'Get SOL balance and SPL token balances for a Solana wallet address. ' +
+            'Return shapes (BAT-1002): ' +
+            '(a) Success → { address, sol, tokens: [...accounts], tokenCount: N } ' +
+            '— tokens: [] + tokenCount: 0 means the wallet has no SPL token accounts with a non-zero balance ' +
+            '(the handler filters out zero-balance / closed-to-zero accounts; the wallet may still ' +
+            'hold empty SPL token accounts on-chain). ' +
+            '(b) SPL RPC failure (SOL fetch OK, partial result) → ' +
+            '{ address, sol, tokens: null, tokenCount: null, tokensError: <reason> } ' +
+            '— tokens === null signals the RPC could not be reached (SPL balance UNKNOWN, not zero). ' +
+            '(c) Whole-call failure (SOL RPC failed OR address resolution failed) → { error: <reason> } ' +
+            '— no partial data, the call could not produce any trustworthy value. ' +
+            'Never report tokens: null as "0 tokens" or "wallet has no USDC" — that is a confabulation. ' +
+            'Say "SPL token balance temporarily unavailable" and suggest a retry, or if no Helius API key is ' +
+            'configured, suggest adding one at Settings > Solana Wallet > Helius API Key for more reliable RPC.',
         input_schema: {
             type: 'object',
             properties: {
@@ -1049,6 +1063,56 @@ const handlers = {
             { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
             { encoding: 'jsonParsed' }
         ]);
+
+        // BAT-1002 PR-C: distinguish SPL-RPC failure from a genuinely empty
+        // token-account set. Pre-fix, an RPC failure surfaced as
+        // { tokens: [], tokenCount: 0 } — indistinguishable from an empty
+        // wallet, which led the agent to confabulate "wallet has 0 USDC"
+        // on a transient timeout (2026-06-03 BAT-995 device incident).
+        //
+        // Return-shape contract (matches the description above the tool):
+        //   - RPC success + non-empty → tokens: [...accounts], tokenCount: N
+        //   - RPC success + empty     → tokens: [],            tokenCount: 0
+        //   - SPL RPC failure (SOL ok)→ tokens: null,          tokenCount: null,
+        //                                tokensError: <reason string>
+        //   - SOL RPC failure         → handler already returned { error } above
+        //                                (whole-call failure, no partial data).
+        //
+        // tokens === null (NOT undefined) — per CLAUDE.md "Consistent JSON
+        // Output", undefined drops from JSON.stringify; null survives and
+        // is the load-bearing signal the agent reads.
+        // Top-level { error } is reserved for full-failure (SOL side); on
+        // SPL-only failure we preserve the SOL value because the agent
+        // can still report it truthfully.
+        if (tokenResult.error) {
+            return {
+                address,
+                sol: solBalance,
+                tokens: null,
+                tokenCount: null,
+                tokensError: typeof tokenResult.error === 'string'
+                    ? tokenResult.error
+                    : JSON.stringify(tokenResult.error),
+            };
+        }
+
+        // Adversarial sweep w0hswp0yu blocker: handle the degraded
+        // success shape { value: null } the same way we handle
+        // { error: ... }. Pre-fix, a 200 response with a null value
+        // (which a misbehaving / partial-RPC could return) fell through
+        // to the for-loop being skipped and produced { tokens: [],
+        // tokenCount: 0 } — exactly the empty-wallet/RPC-fail collision
+        // PR-C is supposed to eliminate. Require an explicit array so
+        // any non-array value surfaces as the partial-failure shape.
+        if (!Array.isArray(tokenResult.value)) {
+            return {
+                address,
+                sol: solBalance,
+                tokens: null,
+                tokenCount: null,
+                tokensError: 'SPL RPC returned non-array value (unexpected response shape)',
+            };
+        }
 
         const tokens = [];
         if (tokenResult.value) {

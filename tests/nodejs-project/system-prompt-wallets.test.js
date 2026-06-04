@@ -228,6 +228,85 @@ check('burner configured: prompt lists both Burner and Main with caps + network'
         'must explicitly state the app has no rotate/generate path (BAT-936)');
     assert.ok(stable.includes('No exceptions'),
         'must include the "No exceptions" push-back response (BAT-936)');
+
+    // BAT-1002 PR-C: V2 error-code playbook phrase-lock.
+    // Each code identifier MUST appear verbatim because the agent sees
+    // them as `error: '<code>'` in tool envelopes — a missing code re-
+    // opens the BAT-995 device-test confabulation class. Locked here
+    // so any future prompt edit that drops a code fails the build with
+    // a specific message naming the missing code (vs a generic
+    // substring miss).
+    //
+    // 21 codes total: 15 verified-emitted from v1.1 + 4 input-validation
+    // (input_usd_value_invalid, min_order_size_below_10_usd,
+    // expires_at_too_soon, slippage_out_of_range) added in v1.1 +
+    // auth_failed restored after 2026-06-04 re-grep found it at
+    // jupiter/trigger-v2.js:522 (msgResult.error || 'auth_failed' fallback) +
+    // trigger_price_required added in Copilot R2 (jupiter/trigger-v2.js:729,
+    // validateOrderArgs — fires when triggerPriceUsd is present but
+    // NaN/<=0, semantically distinct from trigger_price_usd_required
+    // which fires when the field is missing entirely at tools/solana.js:597).
+    //
+    // The 4 BAT-1000 roadmap codes (insufficient_sol_for_rent etc.) are
+    // NOT locked — they have zero emissions today per Codex OQ-5 Option B;
+    // lock them when the V2 handler starts emitting.
+    //
+    // Codes intentionally deferred per Codex OQ-3 ("defer 6 pre-flow
+    // auth-family codes unless they surface through trigger-create"):
+    // auth_challenge_failed, auth_challenge_invalid, auth_required,
+    // auth_sign_failed, auth_tx_invalid, auth_verify_failed.
+    // Cancel/list/bootstrap flows also deferred (cancel_step1_failed,
+    // confirm_cancel_failed, list_failed, jupiter_api_key_required,
+    // bridge_threw, broadcast_failed, no_burner_wallet, reserve_failed,
+    // rpc_send_failed, execute_failed, invalid_input, unsupported_capability) —
+    // they're emitted but on separate user-facing surfaces (cancel,
+    // list, MCP, provider setup) that PR-C deliberately scopes out.
+    assert.ok(stable.includes('### Trigger V2 error-code playbook'),
+        'must include "### Trigger V2 error-code playbook" sub-section header (BAT-1002)');
+    const V2_CODES = [
+        'burner_over_cap',
+        'trigger_price_usd_required',
+        'trigger_price_required',
+        'expires_at_required',
+        'trigger_condition_required',
+        'trigger_mint_required',
+        'trigger_mint_invalid',
+        'price_unavailable',
+        'price_lookup_failed',
+        'input_usd_value_invalid',
+        'min_order_size_below_10_usd',
+        'expires_at_too_soon',
+        'slippage_out_of_range',
+        'deposit_craft_failed',
+        'create_failed',
+        'create_ambiguous_no_recovery',
+        'auth_failed',
+        'auth_expired',
+        'vault_unavailable',
+        'wallet_not_authorized',
+        'sign_failed',
+    ];
+    // Drift guard: lock the EXACT count. If someone adds a code to the
+    // array, this fails until they update both the count and the
+    // documentation breakdown above. Prevents the off-by-one Copilot R1
+    // caught (comment said 19, array had 20) AND the missing code
+    // class Copilot R2 caught (trigger_price_required emitted but not
+    // locked).
+    assert.strictEqual(V2_CODES.length, 21,
+        'V2_CODES must contain exactly 21 codes; if you add/remove, update the comment breakdown above');
+    for (const code of V2_CODES) {
+        assert.ok(stable.includes(code),
+            `V2 error-code playbook must mention \`${code}\` verbatim (BAT-1002 phrase-lock)`);
+    }
+    // Catch-all guard — load-bearing defense against unknown future
+    // codes per Codex v1.1 OQ-3.
+    assert.ok(stable.includes('surface the `reason` field VERBATIM'),
+        'must include catch-all guard for unrecognized error codes (BAT-1002 — confabulation defense)');
+    // solana_balance three-state distinguisher guidance.
+    assert.ok(stable.includes('solana_balance') && stable.includes('tokens: null') && stable.includes('tokensError'),
+        'must include solana_balance RPC-fail distinguisher guidance with tokens: null + tokensError (BAT-1002)');
+    assert.ok(stable.includes('SPL token balance temporarily unavailable'),
+        'must teach agent the verbatim "SPL token balance temporarily unavailable" copy instead of "0 tokens" on RPC fail (BAT-1002)');
 });
 
 // ── Burner UNCONFIGURED → single-wallet section + Settings hint ─────────────
