@@ -215,6 +215,44 @@ async function check(label, fn) {
         assert.strictEqual(result.tokensError, undefined, 'no tokensError on full failure');
     });
 
+    // ── (5) Degraded RPC success ({ value: null }) — surface as
+    // partial-failure shape, not empty-success. Adversarial sweep
+    // w0hswp0yu blocker: pre-fix this fell through to tokens: [] /
+    // tokenCount: 0, exactly the empty-wallet/RPC-fail collision
+    // PR-C is supposed to eliminate. The Array.isArray guard at
+    // tools/solana.js:1100 makes this case surface as the null-
+    // sentinel shape instead.
+    await check('degraded RPC ({ value: null }) → tokens: null + tokensError (NOT empty-success)', async () => {
+        setRpcResponses({
+            getBalance: { value: 500_000_000 }, // SOL fetch fine
+            getTokenAccountsByOwner: { value: null }, // 200 OK but null value
+        });
+        const result = await solana_balance({ address: FAKE_PUBKEY }, 'test-chat');
+        // SOL value preserved — same as the SPL-only-fail case.
+        assert.strictEqual(result.sol, 0.5);
+        // Null-sentinel shape, NOT empty-success. The whole point
+        // of PR-C is that this case must NOT collapse to tokens: [].
+        assert.strictEqual(result.tokens, null,
+            'degraded { value: null } MUST surface as tokens: null, NOT tokens: []');
+        assert.strictEqual(result.tokenCount, null);
+        assert.strictEqual(typeof result.tokensError, 'string',
+            'tokensError MUST be set for degraded RPC responses');
+    });
+
+    // ── (5b) Same case but value is some non-array junk (e.g. an
+    // object instead of an array). Same expected outcome.
+    await check('degraded RPC ({ value: <object> }) → tokens: null + tokensError', async () => {
+        setRpcResponses({
+            getBalance: { value: 1_000_000_000 },
+            getTokenAccountsByOwner: { value: { unexpected: 'shape' } },
+        });
+        const result = await solana_balance({ address: FAKE_PUBKEY }, 'test-chat');
+        assert.strictEqual(result.sol, 1);
+        assert.strictEqual(result.tokens, null);
+        assert.strictEqual(result.tokenCount, null);
+        assert.strictEqual(typeof result.tokensError, 'string');
+    });
+
     // ── Contract drift guard: tokens: null is a distinct value (NOT
     // tokens: undefined). undefined silently disappears through
     // JSON.stringify, breaking the load-bearing signal the agent reads.

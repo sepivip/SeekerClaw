@@ -1096,6 +1096,24 @@ const handlers = {
             };
         }
 
+        // Adversarial sweep w0hswp0yu blocker: handle the degraded
+        // success shape { value: null } the same way we handle
+        // { error: ... }. Pre-fix, a 200 response with a null value
+        // (which a misbehaving / partial-RPC could return) fell through
+        // to the for-loop being skipped and produced { tokens: [],
+        // tokenCount: 0 } — exactly the empty-wallet/RPC-fail collision
+        // PR-C is supposed to eliminate. Require an explicit array so
+        // any non-array value surfaces as the partial-failure shape.
+        if (!Array.isArray(tokenResult.value)) {
+            return {
+                address,
+                sol: solBalance,
+                tokens: null,
+                tokenCount: null,
+                tokensError: 'SPL RPC returned non-array value (unexpected response shape)',
+            };
+        }
+
         const tokens = [];
         if (tokenResult.value) {
             for (const account of tokenResult.value) {
