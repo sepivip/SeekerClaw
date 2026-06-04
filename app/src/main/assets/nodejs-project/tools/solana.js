@@ -55,7 +55,9 @@ const tools = [
             'Get SOL balance and SPL token balances for a Solana wallet address. ' +
             'Three-state return shape (BAT-1002): ' +
             '(1) RPC success → { address, sol, tokens: [...accounts], tokenCount: N } ' +
-            '— tokens: [] + tokenCount: 0 means the wallet genuinely holds no SPL tokens. ' +
+            '— tokens: [] + tokenCount: 0 means the wallet has no SPL token accounts with a non-zero balance ' +
+            '(the handler filters out zero-balance / closed-to-zero accounts; the wallet may still ' +
+            'hold empty SPL token accounts on-chain). ' +
             '(2) SPL RPC failure (SOL fetch OK) → { address, sol, tokens: null, tokenCount: null, tokensError: <reason> } ' +
             '— tokens === null signals the RPC could not be reached (SPL balance UNKNOWN, not zero). ' +
             '(3) SOL RPC failure → { error: <reason> } (whole-call failure, no partial data). ' +

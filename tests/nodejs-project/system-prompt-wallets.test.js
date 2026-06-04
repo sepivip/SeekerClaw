@@ -237,12 +237,14 @@ check('burner configured: prompt lists both Burner and Main with caps + network'
     // a specific message naming the missing code (vs a generic
     // substring miss).
     //
-    // 19 codes total: 15 verified-emitted from v1.1 + 4 input-validation
-    // added in v1.1 + auth_failed restored after 2026-06-04 re-grep
-    // found it at jupiter/trigger-v2.js:522 (msgResult.error || 'auth_failed'
-    // fallback). The 4 BAT-1000 roadmap codes (insufficient_sol_for_rent
-    // etc.) are NOT locked — they have zero emissions today per
-    // Codex OQ-5 Option B; lock them when the V2 handler starts emitting.
+    // 20 codes total: 15 verified-emitted from v1.1 + 4 input-validation
+    // (input_usd_value_invalid, min_order_size_below_10_usd,
+    // expires_at_too_soon, slippage_out_of_range) added in v1.1 +
+    // auth_failed restored after 2026-06-04 re-grep found it at
+    // jupiter/trigger-v2.js:522 (msgResult.error || 'auth_failed' fallback).
+    // The 4 BAT-1000 roadmap codes (insufficient_sol_for_rent etc.) are
+    // NOT locked — they have zero emissions today per Codex OQ-5 Option B;
+    // lock them when the V2 handler starts emitting.
     assert.ok(stable.includes('### Trigger V2 error-code playbook'),
         'must include "### Trigger V2 error-code playbook" sub-section header (BAT-1002)');
     const V2_CODES = [
@@ -267,6 +269,12 @@ check('burner configured: prompt lists both Burner and Main with caps + network'
         'wallet_not_authorized',
         'sign_failed',
     ];
+    // Drift guard: lock the EXACT count. If someone adds a code to the
+    // array, this fails until they update both the count and the
+    // documentation breakdown above. Prevents the off-by-one Copilot R1
+    // caught (comment said 19, array had 20).
+    assert.strictEqual(V2_CODES.length, 20,
+        'V2_CODES must contain exactly 20 codes; if you add/remove, update the comment breakdown above');
     for (const code of V2_CODES) {
         assert.ok(stable.includes(code),
             `V2 error-code playbook must mention \`${code}\` verbatim (BAT-1002 phrase-lock)`);
