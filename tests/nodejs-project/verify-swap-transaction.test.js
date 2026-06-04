@@ -343,6 +343,46 @@ test('R4: fails closed on v0 tx with mid-varint truncation (instruction count)',
     assert.match(r.error, /truncated mid-varint/);
 });
 
+test('R5: fails closed on v0 tx missing ALT section (truncated after last instruction)', () => {
+    // Valid v0 tx structure but ends immediately after the last instruction's
+    // data — no numAlts byte.
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80]));
+    parts.push(Buffer.from([1, 0, 0]));
+    parts.push(compactU16(2));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(pubkeyBytes(PROGRAM));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(1));
+    parts.push(Buffer.from([1])); // programIdIdx=1 (in static range)
+    parts.push(compactU16(0)); // 0 account indexes
+    parts.push(compactU16(0)); // 0 data bytes
+    // STOP — no numAlts byte.
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /ALT section truncated/i);
+});
+
+test('R5: readCompactU16 rejects 5+ byte varint overflow', () => {
+    // A varint encoded with 5 bytes all 0xFF (except last) would overflow
+    // into negative 32-bit. Through the verifier, this manifests as a
+    // bounds failure (huge value catches in the * 32 check) OR an
+    // overflowed signal. Either way: not valid.
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80]));
+    parts.push(Buffer.from([1, 0, 0]));
+    // numStaticAccounts as a 5-byte overflowing varint
+    parts.push(Buffer.from([0xFF, 0xFF, 0xFF, 0xFF, 0x7F])); // overflow
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+});
+
 test('fails closed: fee payer mismatch on legacy tx', () => {
     const txB64 = buildLegacyTx({
         accountKeys: [PAYER, PROGRAM],

@@ -867,9 +867,19 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // carrying those index bytes would silently inflate altKeyCount and
     // let an out-of-range programIdIdx slip past totalKeys check. Verify
     // each declared count fits within the remaining buffer before trusting it.
+    // v0 messages REQUIRE the ALT section to be present — even if zero
+    // tables are declared, the numAlts compact-u16 byte (`0x00`) must
+    // exist (Copilot PR #397 R5). A v0 tx truncated immediately after
+    // the last instruction's data is malformed and must fail closed.
+    if (offset >= txBuf.length) {
+        return { valid: false, error: 'v0: ALT section truncated (numAlts byte missing — v0 messages require an ALT section).', programs };
+    }
     let altKeyCount = 0;
-    if (offset < txBuf.length) {
+    {
         const numAlts = readCompactU16(txBuf, offset);
+        if (!numAlts.terminated || numAlts.overflowed) {
+            return { valid: false, error: 'v0: numAlts varint truncated or overflowed.', programs };
+        }
         offset = numAlts.offset;
         for (let a = 0; a < numAlts.value; a++) {
             if (offset + 32 > txBuf.length) {
@@ -919,13 +929,28 @@ function readCompactU16(buf, offset) {
     let shift = 0;
     let pos = offset;
     let terminated = false;
+    let overflowed = false;
+    // Compact-u16 max value is 0xFFFF (65535), encoded in AT MOST 3 bytes
+    // (Copilot PR #397 R5): bytes 1-2 carry 7 bits each, byte 3 carries
+    // the remaining 2 bits. A 5+ byte varint would let `value |= (byte & 0x7F) << shift`
+    // overflow into the sign bit (shift=28 yields a negative 32-bit int),
+    // which then poisons offset arithmetic downstream. Cap at 3 bytes.
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
-        value |= (byte & 0x7F) << shift;
+        const chunk = byte & 0x7F;
+        const high = chunk << shift;
+        value = (value | high) >>> 0; // force unsigned
         if ((byte & 0x80) === 0) { terminated = true; break; }
         shift += 7;
+        if (shift > 14) {
+            // 4th byte present — must be the terminator and only carry the
+            // remaining 2 bits (any high bit beyond bit 16 is overflow).
+            overflowed = true;
+            break;
+        }
     }
-    return { value, offset: pos, terminated };
+    if (value > 0xFFFF) overflowed = true;
+    return { value, offset: pos, terminated, overflowed };
 }
 
 // Jupiter Ultra API — get order (quote + unsigned tx in one call, gasless)
