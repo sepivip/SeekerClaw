@@ -1520,12 +1520,55 @@ const handlers = {
             // is comfortably wider.
             const ULTRA_RPC_HINT = 'jupiter';
 
+            // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
+            // Only the burner path consumes it; main path ignores the field.
+            // Ultra is a sponsored-fee flow, so signerMode is 'sponsored' when
+            // routed through Ultra's gasless mode (Jupiter pays the fee + may
+            // co-sign). The cosigner allowlist is left empty by default — the
+            // policy's `sponsored` mode allows the fee payer to be ANY signer
+            // declared in feePayerAllowlist; for Ultra the relayer pubkey is
+            // surfaced as `order.feePayer` in some responses. When the
+            // expectedDelta fields are imprecise (sponsored mode + missing
+            // relayer pubkey), the burner-policy reject is availability-class
+            // and the agent surfaces it; in v2.1 first-ship we err on the
+            // side of fail-closed for Ultra-via-burner until the live test
+            // fixtures pin the exact field shapes.
+            let expectedDelta = null;
+            try {
+                const burnerPubkey = userPublicKey; // burner path uses burner as taker
+                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                const outputIsSol = outputToken.address === 'So11111111111111111111111111111111111111112';
+                const ata = require('../wallet/ata');
+                const debitAccount = inputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, inputToken.address);
+                const creditAccount = outputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, outputToken.address);
+                const minOut = String(order.otherAmountThreshold || order.outAmount || '0');
+                expectedDelta = {
+                    kind: 'jupiter_swap_immediate',
+                    signerMode: 'burner_only', // single-signer path; sponsored mode wires in Phase 3b-follow-up once Ultra fee-payer pubkey is plumbed
+                    burnerDebit: {
+                        account: debitAccount,
+                        mint: inputIsSol ? 'native_sol' : inputToken.address,
+                        atomicAmount: String(amountRaw),
+                    },
+                    burnerCreditMin: {
+                        account: creditAccount,
+                        mint: outputIsSol ? 'native_sol' : outputToken.address,
+                        atomicAmount: minOut,
+                    },
+                    burnerOwnedAccounts: [debitAccount, creditAccount].filter(a => a !== burnerPubkey),
+                    toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
+                };
+            } catch (eDelta) {
+                log(`[Jupiter Ultra] Could not build expectedDelta (burner path will fail-closed): ${eDelta.message}`, 'WARN');
+            }
+
             const result = await routeAndSign({
                 toolName: 'solana_swap',
                 toolArgs: input,
                 unsignedTxBase64: order.transaction,
                 broadcastVia: ULTRA_RPC_HINT,
                 flowName: 'solana_swap',
+                expectedDelta,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
                     // ctx.signed === false → main path  (txOrUnsigned is unsigned, sign via MWA)
