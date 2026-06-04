@@ -237,19 +237,36 @@ check('burner configured: prompt lists both Burner and Main with caps + network'
     // a specific message naming the missing code (vs a generic
     // substring miss).
     //
-    // 20 codes total: 15 verified-emitted from v1.1 + 4 input-validation
+    // 21 codes total: 15 verified-emitted from v1.1 + 4 input-validation
     // (input_usd_value_invalid, min_order_size_below_10_usd,
     // expires_at_too_soon, slippage_out_of_range) added in v1.1 +
     // auth_failed restored after 2026-06-04 re-grep found it at
-    // jupiter/trigger-v2.js:522 (msgResult.error || 'auth_failed' fallback).
+    // jupiter/trigger-v2.js:522 (msgResult.error || 'auth_failed' fallback) +
+    // trigger_price_required added in Copilot R2 (jupiter/trigger-v2.js:729,
+    // validateOrderArgs — fires when triggerPriceUsd is present but
+    // NaN/<=0, semantically distinct from trigger_price_usd_required
+    // which fires when the field is missing entirely at tools/solana.js:597).
+    //
     // The 4 BAT-1000 roadmap codes (insufficient_sol_for_rent etc.) are
     // NOT locked — they have zero emissions today per Codex OQ-5 Option B;
     // lock them when the V2 handler starts emitting.
+    //
+    // Codes intentionally deferred per Codex OQ-3 ("defer 6 pre-flow
+    // auth-family codes unless they surface through trigger-create"):
+    // auth_challenge_failed, auth_challenge_invalid, auth_required,
+    // auth_sign_failed, auth_tx_invalid, auth_verify_failed.
+    // Cancel/list/bootstrap flows also deferred (cancel_step1_failed,
+    // confirm_cancel_failed, list_failed, jupiter_api_key_required,
+    // bridge_threw, broadcast_failed, no_burner_wallet, reserve_failed,
+    // rpc_send_failed, execute_failed, invalid_input, unsupported_capability) —
+    // they're emitted but on separate user-facing surfaces (cancel,
+    // list, MCP, provider setup) that PR-C deliberately scopes out.
     assert.ok(stable.includes('### Trigger V2 error-code playbook'),
         'must include "### Trigger V2 error-code playbook" sub-section header (BAT-1002)');
     const V2_CODES = [
         'burner_over_cap',
         'trigger_price_usd_required',
+        'trigger_price_required',
         'expires_at_required',
         'trigger_condition_required',
         'trigger_mint_required',
@@ -272,9 +289,11 @@ check('burner configured: prompt lists both Burner and Main with caps + network'
     // Drift guard: lock the EXACT count. If someone adds a code to the
     // array, this fails until they update both the count and the
     // documentation breakdown above. Prevents the off-by-one Copilot R1
-    // caught (comment said 19, array had 20).
-    assert.strictEqual(V2_CODES.length, 20,
-        'V2_CODES must contain exactly 20 codes; if you add/remove, update the comment breakdown above');
+    // caught (comment said 19, array had 20) AND the missing code
+    // class Copilot R2 caught (trigger_price_required emitted but not
+    // locked).
+    assert.strictEqual(V2_CODES.length, 21,
+        'V2_CODES must contain exactly 21 codes; if you add/remove, update the comment breakdown above');
     for (const code of V2_CODES) {
         assert.ok(stable.includes(code),
             `V2 error-code playbook must mention \`${code}\` verbatim (BAT-1002 phrase-lock)`);
