@@ -119,6 +119,34 @@ require.cache[solanaPath] = {
     },
 };
 
+// ── Mock wallet/burner-policy.js (BAT-1013) ────────────────────────────────
+// The routing tests exercise routing DECISIONS, not the burner policy gate
+// itself. The policy gate has its own dedicated test file
+// (`burner-policy.test.js`). For the routing tests, we stub `validateBurnerTx`
+// to always accept — otherwise the placeholder tx fixtures (e.g.
+// 'UNSIGNED-TRIGGER-CANCEL-TX') would fail the structural parser and
+// every burner-routed test would reject with `tx_unparseable`.
+const burnerPolicyPath = require.resolve(path.join(BUNDLE, 'wallet', 'burner-policy.js'));
+require.cache[burnerPolicyPath] = {
+    id: burnerPolicyPath,
+    filename: burnerPolicyPath,
+    loaded: true,
+    exports: {
+        REJECT_CODES: [], // routing tests don't assert on reject codes
+        REJECT_CLASS: {},
+        DELTA_KINDS: [],
+        SIGNER_MODES: [],
+        validateBurnerTx: async () => ({ ok: true, simulated: false }),
+        _validateSignerMode: () => ({ ok: true }),
+        _validateDrainerOpcodes: () => ({ ok: true }),
+        _validateExpectedDeltaShape: () => ({ ok: true }),
+        _validateSimDelta: () => ({ ok: true }),
+        _buildAccountChecks: () => [],
+        _applyTolerance: () => null,
+        _indexOfPubkey: () => -1,
+    },
+};
+
 // ── Mock http.js (used by jupiter_trigger_create / jupiter_dca_create create-order calls) ─
 const httpPath = require.resolve(path.join(BUNDLE, 'http.js'));
 require.cache[httpPath] = {
@@ -167,10 +195,17 @@ async function check(label, fn) {
 }
 
 // Convenience: pre-populate /burner/status responses for routing decisions.
+// BAT-1013 Phase 3: pubkey must be a valid base58 (>= 32 chars) so the
+// BurnerSigner policy gate (which validates burnerPubkey shape) accepts it.
+// Reset the BurnerSigner per-process pubkey cache so each test starts clean.
 function _burnerOn(opts = {}) {
+    try {
+        const { _resetBurnerPubkeyCache } = require('../../app/src/main/assets/nodejs-project/wallet/burner-signer.js');
+        if (typeof _resetBurnerPubkeyCache === 'function') _resetBurnerPubkeyCache();
+    } catch (_) { /* may not be loaded yet in early test setup */ }
     bridgeResponses['/burner/status'] = {
         configured: true,
-        pubkey: opts.pubkey || 'BURNER-PUBKEY-FIXTURE',
+        pubkey: opts.pubkey || '11111111111111111111111111111112',
         balanceSol: '1000000000',
         balanceUsdc: '1000000',
         capPerTxSol: opts.capPerTxSol || '50000000',     // 0.05 SOL default
