@@ -50,13 +50,14 @@ function compactU16(value) {
     return Buffer.from(bytes);
 }
 
-function pubkeyBytes(base58) {
-    // Synthetic pubkeys for tests: pad to 32 zero-bytes then overlay first
-    // bytes of the label so tx-builder's decoder roundtrips. For these
-    // tests we don't need real base58 round-tripping — just unique 32-byte
-    // slabs that compare equal to the base58Encode of themselves.
+// Build a 32-byte synthetic pubkey for tests from an arbitrary ASCII label.
+// The label is NOT base58 — we just need unique 32-byte slabs whose
+// base58Encode() output is deterministic and comparable. Renamed parameter
+// from `base58` to `label` (Copilot PR #397 R8 doc-clarity nit) so the
+// helper's purpose is self-evident when debugging.
+function pubkeyBytes(label) {
     const buf = Buffer.alloc(32);
-    Buffer.from(base58).copy(buf);
+    Buffer.from(label).copy(buf);
     return buf;
 }
 
