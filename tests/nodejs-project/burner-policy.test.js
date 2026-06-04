@@ -851,6 +851,125 @@ async function runAsync(name, fn) {
     });
 
     console.log();
+    console.log('Contract v8.3: depositVault REQUIRED + deposit destination is load-bearing (Codex review)');
+
+    // Canonical Jupiter program IDs — cross-verified via 5-source workflow
+    // (jup-ag/docs, jup-ag/platform-list, @jup-ag/* npm SDKs, Solscan,
+    // web-search) AND empirically confirmed on mainnet via getAccountInfo.
+    // Drift guard: if these strings change, the matching tools/solana.js
+    // expectedOwner constants must change in lockstep.
+    const JUP_V1_PROGRAM = 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu';
+    const JUP_V2_PROGRAM = 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X';
+    const JUP_DCA_PROGRAM = 'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M';
+    const JUPITER_V2_VAULT = 'JupV2VauLtXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+    const ATTACKER_ATA = 'AttacKerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+
+    check('drift guard: V1 program ID locked to canonical jupoN...', () => {
+        assert.strictEqual(JUP_V1_PROGRAM, 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu');
+        // Catch the EQefh vs EQefr typo class: V1 must NOT contain EQef substring
+        assert.ok(!JUP_V1_PROGRAM.includes('EQef'), 'V1 should not contain EQef substring');
+    });
+    check('drift guard: V2 program ID locked to canonical j1o2...EQefh... (NOT EQefr typo)', () => {
+        assert.strictEqual(JUP_V2_PROGRAM, 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X');
+        // Codex amendment: pin the EXACT EQefh773 string to catch the EQefr773 typo
+        assert.ok(JUP_V2_PROGRAM.includes('EQefh773'), 'V2 must contain EQefh773 (catches EQefr typo class)');
+        assert.ok(!JUP_V2_PROGRAM.includes('EQefr'), 'V2 must not contain EQefr (typo)');
+    });
+    check('drift guard: DCA program ID locked to canonical DCA265...', () => {
+        assert.strictEqual(JUP_DCA_PROGRAM, 'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M');
+    });
+
+    check('v8.3: jupiter_trigger_create_deposit with depositVault=null → expected_delta_invalid_shape', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: null,
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+    });
+
+    check('v8.3: jupiter_dca_create_deposit with depositVault=undefined → expected_delta_invalid_shape', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_dca_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+    });
+
+    await runAsync('v8.3 regression: malicious deposit — burner debit X to attacker ATA (vault gets 0 credit) → simulation_delta_mismatch', async () => {
+        // The attack: a tampered Jupiter deposit response that credits an
+        // attacker-controlled ATA instead of the real Jupiter vault. The
+        // burner's debit looks correct. Without the depositVault check,
+        // signerMode + drainer-walk + burnerDebit would all pass and the
+        // burner would silently sign. This test PROVES the depositVault
+        // load-bearing check catches it.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, ATTACKER_ATA, JUPITER_V2_VAULT],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3, 4], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                // Burner spent 1 USDC — looks legitimate
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                // Jupiter vault: NO credit (the tx routed funds elsewhere)
+                [JUPITER_V2_VAULT]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: JUP_V2_PROGRAM, amountAtomic: '0' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: JUP_V2_PROGRAM, amountAtomic: '0' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: { pubkey: JUPITER_V2_VAULT, expectedOwner: JUP_V2_PROGRAM },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+        }, { burnerPubkey: BURNER, simulator });
+        // Vault delta is 0 but expected was 1_000_000 → policy fails closed.
+        assert.strictEqual(r.ok, false, `expected reject, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+        assert.strictEqual(r.class, 'security');
+    });
+
+    await runAsync('v8.3 happy path: V2 trigger deposit — burner debit X + vault credit X → accept', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, JUPITER_V2_VAULT],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                // Vault: receives the exact debit amount
+                [JUPITER_V2_VAULT]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: JUP_V2_PROGRAM, amountAtomic: '0' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: JUP_V2_PROGRAM, amountAtomic: '1000000' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: { pubkey: JUPITER_V2_VAULT, expectedOwner: JUP_V2_PROGRAM },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected ok, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.simulated, true);
+    });
+
+    console.log();
     console.log('validateBurnerTx: end-to-end with synthetic txs');
     await runAsync('end-to-end: malformed base64 → tx_unparseable (allowStructuralOnly to bypass simulator gate)', async () => {
         const r = await policy.validateBurnerTx('not-base64-at-all-zzz', {

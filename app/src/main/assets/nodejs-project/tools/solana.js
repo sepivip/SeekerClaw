@@ -1919,6 +1919,7 @@ const handlers = {
 
             // BAT-1013 Phase 3b: V1 trigger create deposit shape.
             let v1ExpectedDelta = null;
+            let v1ForceRouting = null;
             try {
                 const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
                 const ataMod = require('../wallet/ata');
@@ -1927,23 +1928,33 @@ const handlers = {
                 // when present. expectedOwner is Jupiter Limit Order V1 — cross-
                 // verified against jup-ag/platform-list (jupiterLimitContract),
                 // @jup-ag/limit-order-sdk@0.1.10 (PROGRAM_ID_BY_CLUSTER), and
-                // Solscan label 'Jupiter Limit Order V1'. When data.order is
-                // absent (older Jupiter response shape), fall back to null —
-                // drainer-walk + signerMode + burnerDebit still gate the tx.
-                v1ExpectedDelta = {
-                    kind: 'jupiter_trigger_create_deposit',
-                    signerMode: 'burner_only',
-                    burnerDebit: {
-                        account: debitAccount,
-                        mint: inputIsSol ? 'native_sol' : inputToken.address,
-                        atomicAmount: String(makingAmount),
-                    },
-                    depositVault: data.order ? {
-                        pubkey: data.order,
-                        expectedOwner: 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',
-                    } : null,
-                    burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
-                };
+                // Solscan label 'Jupiter Limit Order V1'.
+                //
+                // Contract v8.3 (per Codex review): depositVault is REQUIRED
+                // for autonomous burner signing of deposit flows. If Jupiter
+                // omits `data.order` from its response (older API shape),
+                // we cannot verify the destination — fail closed by routing
+                // to main wallet (MWA popup) rather than silently signing
+                // without destination verification.
+                if (!data.order) {
+                    log('[Jupiter Trigger V1] data.order missing from Jupiter response — autonomous burner cannot verify deposit destination; routing to main wallet', 'WARN');
+                    v1ForceRouting = { routingDecision: 'main' };
+                } else {
+                    v1ExpectedDelta = {
+                        kind: 'jupiter_trigger_create_deposit',
+                        signerMode: 'burner_only',
+                        burnerDebit: {
+                            account: debitAccount,
+                            mint: inputIsSol ? 'native_sol' : inputToken.address,
+                            atomicAmount: String(makingAmount),
+                        },
+                        depositVault: {
+                            pubkey: data.order,
+                            expectedOwner: 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',
+                        },
+                        burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
+                    };
+                }
             } catch (eDelta) {
                 log(`[Jupiter Trigger V1] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
             }
@@ -1959,6 +1970,7 @@ const handlers = {
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_trigger_create',
                 expectedDelta: v1ExpectedDelta,
+                forceRouting: v1ForceRouting,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {
@@ -2454,36 +2466,19 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
-            // BAT-1013 Phase 3b: DCA deposit shape (same as Trigger — net
-            // burner SPL debit, no immediate output credit, vault may be
-            // created lazily).
-            let dcaExpectedDelta = null;
-            try {
-                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
-                const ataMod = require('../wallet/ata');
-                const debitAccount = inputIsSol ? walletAddress : ataMod.deriveAtaBase58(walletAddress, inputToken.address);
-                // Jupiter Recurring createOrder response does NOT include the
-                // DCA position account pubkey before sign (orderId is only on
-                // execResult after broadcast). Pass depositVault: null per
-                // contract v8.2 — drainer-walk + signerMode burner_only +
-                // burnerDebit cover the safety surface. The DCA program ID
-                // for follow-up vault-discovery is DCA265Vj8a9CEuX1eb1LWRn
-                // DT7uK6q1xMipnNyatn23M (cross-verified via jup-ag/platform-
-                // list, @jup-ag/dca-sdk, jupiter-python-sdk, Solscan label).
-                dcaExpectedDelta = {
-                    kind: 'jupiter_dca_create_deposit',
-                    signerMode: 'burner_only',
-                    burnerDebit: {
-                        account: debitAccount,
-                        mint: inputIsSol ? 'native_sol' : inputToken.address,
-                        atomicAmount: String(inAmountNum),
-                    },
-                    depositVault: null,
-                    burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
-                };
-            } catch (eDelta) {
-                log(`[Jupiter DCA] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
-            }
+            // BAT-1013 contract v8.3 (per Codex review): Jupiter Recurring
+            // createOrder response does NOT include the DCA position account
+            // pubkey before sign (orderId only surfaces on execResult after
+            // broadcast). Without a verified deposit destination, autonomous
+            // burner signing cannot prove the burner's debit lands in a
+            // DCA-controlled account vs an attacker-controlled token account.
+            // Per Codex: route DCA create to main wallet (MWA popup) until
+            // the equivalent destination assertion is implemented as
+            // follow-up work (BAT-XXXX: derive DCA position account from
+            // tx instruction set or scan simulation pre-snapshot for
+            // accounts owned by DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M).
+            const dcaForceRouting = { routingDecision: 'main' };
+            log('[Jupiter DCA] Autonomous burner unsupported for DCA create until vault discovery ships — routing to main wallet', 'INFO');
 
             // 7 + 8. Sign + execute via wallet dispatch.
             const dispatchResult = await routeAndSign({
@@ -2492,7 +2487,8 @@ const handlers = {
                 unsignedTxBase64: data.transaction,
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_dca_create',
-                expectedDelta: dcaExpectedDelta,
+                expectedDelta: null,
+                forceRouting: dcaForceRouting,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {
