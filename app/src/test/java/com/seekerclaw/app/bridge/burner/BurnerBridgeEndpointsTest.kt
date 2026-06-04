@@ -1,11 +1,15 @@
 package com.seekerclaw.app.bridge.burner
 
 import com.seekerclaw.app.data.caps.CapEnforcer
+import com.seekerclaw.app.data.wallet.SolanaBalanceFetcher
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigInteger
 
@@ -308,6 +312,141 @@ class BurnerBridgeEndpointsTest {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // BAT-1001 PR-B: /burner/status live SOL+USDC balance wiring.
+    //
+    // Atomic-string-or-omit contract:
+    //   - balanceFetcher == null OR fetcher.fetch returns null →
+    //     balanceSol AND balanceUsdc are OMITTED from the response.
+    //     (Never sent as "0" or as null — downstream
+    //     wallet_status.handlers distinguishes field-absent from
+    //     field-present-as-zero via `status.balanceSol != null`.)
+    //   - fetcher.fetch returns Balances → BOTH fields present as
+    //     atomic-unit decimal strings (lamports for SOL, microunits
+    //     for USDC). u64-safe via BigInteger.toString().
+    //
+    // We test via dispatch("/burner/status", JSONObject()) because
+    // handleStatus is private; the public dispatch entry point gives
+    // us the same EndpointResult to assert on.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `handleStatus omits balance fields when fetcher returns null`() = runBlocking {
+        val ep = TestEndpointBuilder.buildForStatus(
+            balanceFetcher = TestEndpointBuilder.StubBalanceFetcher(result = null),
+            pubkey = "FakePubkey11111111111111111111111111111111",
+        )
+        val result = ep.dispatch("/burner/status", JSONObject())
+        assertEquals(200, result!!.httpStatus)
+        // The "unavailable" contract: fields ABSENT from the map,
+        // not present-as-null and not present-as-"0".
+        assertFalse(
+            "balanceSol must be OMITTED when fetcher returns null, not present-as-null",
+            result.body.containsKey("balanceSol"),
+        )
+        assertFalse(
+            "balanceUsdc must be OMITTED when fetcher returns null, not present-as-null",
+            result.body.containsKey("balanceUsdc"),
+        )
+        // Sanity: caps and spend ARE still present (they don't depend
+        // on the RPC fetcher).
+        assertTrue("capPerTxSol should still be present", result.body.containsKey("capPerTxSol"))
+    }
+
+    @Test
+    fun `handleStatus emits atomic-unit decimal strings when fetcher returns balances`() = runBlocking {
+        val ep = TestEndpointBuilder.buildForStatus(
+            balanceFetcher = TestEndpointBuilder.StubBalanceFetcher(
+                result = SolanaBalanceFetcher.Balances(
+                    solLamports = BigInteger("1234567890"),       // 1.234... SOL
+                    usdcMicrounits = BigInteger("9876543"),       // 9.876... USDC
+                ),
+            ),
+            pubkey = "FakePubkey11111111111111111111111111111111",
+        )
+        val result = ep.dispatch("/burner/status", JSONObject())
+        assertEquals(200, result!!.httpStatus)
+        // Atomic units, as STRINGS (not numbers, not decimals).
+        assertEquals("1234567890", result.body["balanceSol"])
+        assertEquals("9876543", result.body["balanceUsdc"])
+        // Type assertion: the wire shape MUST be String, not Long /
+        // BigInteger / decimal. JSON serialization would coerce
+        // BigInteger to scientific notation for large values; only
+        // String preserves the exact atomic-unit shape.
+        assertTrue("balanceSol must be a String", result.body["balanceSol"] is String)
+        assertTrue("balanceUsdc must be a String", result.body["balanceUsdc"] is String)
+    }
+
+    @Test
+    fun `handleStatus atomic strings are u64-safe at the upper bound`() = runBlocking {
+        // u64 max = 2^64 - 1 = 18446744073709551615. Java Long max is
+        // ~9.2e18, less than u64 max. Real Solana SOL supply is ~580M
+        // (far below either) and USDC is similar, but the Solana spec
+        // documents these fields as u64 — be correct against the spec
+        // rather than the current supply. BigInteger.toString()
+        // preserves the full unsigned range.
+        val u64Max = BigInteger("18446744073709551615")
+        val ep = TestEndpointBuilder.buildForStatus(
+            balanceFetcher = TestEndpointBuilder.StubBalanceFetcher(
+                result = SolanaBalanceFetcher.Balances(
+                    solLamports = u64Max,
+                    usdcMicrounits = u64Max,
+                ),
+            ),
+            pubkey = "FakePubkey11111111111111111111111111111111",
+        )
+        val result = ep.dispatch("/burner/status", JSONObject())
+        assertEquals(200, result!!.httpStatus)
+        // Round-trip: exact decimal-string representation preserved.
+        assertEquals("18446744073709551615", result.body["balanceSol"])
+        assertEquals("18446744073709551615", result.body["balanceUsdc"])
+    }
+
+    @Test
+    fun `handleStatus omits balance fields when fetcher is null (legacy path)`() = runBlocking {
+        // Back-compat: an endpoint built without a fetcher (e.g. via
+        // the 3-arg internal constructor in older tests) MUST omit
+        // balance fields rather than crash. This preserves the v1
+        // BAT-582 R2 behaviour for any code path that hasn't been
+        // migrated yet.
+        val ep = TestEndpointBuilder.buildForStatus(
+            balanceFetcher = null,
+            pubkey = "FakePubkey11111111111111111111111111111111",
+        )
+        val result = ep.dispatch("/burner/status", JSONObject())
+        assertEquals(200, result!!.httpStatus)
+        assertFalse(result.body.containsKey("balanceSol"))
+        assertFalse(result.body.containsKey("balanceUsdc"))
+    }
+
+    @Test
+    fun `handleStatus omits balance fields when burner is not configured (pubkey null)`() = runBlocking {
+        // The fetcher only fires when configured == true. An
+        // unconfigured burner (no pubkey) should never trigger an
+        // RPC call — even if a fetcher is wired. Verifies the
+        // configured-gate around the fetch.
+        val recordingFetcher = TestEndpointBuilder.StubBalanceFetcher(
+            result = SolanaBalanceFetcher.Balances(
+                solLamports = BigInteger("100"),
+                usdcMicrounits = BigInteger("200"),
+            ),
+        )
+        val ep = TestEndpointBuilder.buildForStatus(
+            balanceFetcher = recordingFetcher,
+            pubkey = null, // not configured
+        )
+        val result = ep.dispatch("/burner/status", JSONObject())
+        assertEquals(200, result!!.httpStatus)
+        assertEquals(false, result.body["configured"])
+        assertFalse("balanceSol must NOT appear for unconfigured burner", result.body.containsKey("balanceSol"))
+        assertFalse("balanceUsdc must NOT appear for unconfigured burner", result.body.containsKey("balanceUsdc"))
+        assertEquals(
+            "fetcher.fetch must NOT be invoked when pubkey is null",
+            0,
+            recordingFetcher.fetchCallCount,
+        )
+    }
+
     @Test
     fun `sign-transaction missing fields still fails before reservation lookup`() = runBlocking {
         val (ep, _, recorder) = TestEndpointBuilder.buildWithRealCapEnforcer()
@@ -400,6 +539,37 @@ private object TestEndpointBuilder {
         testClockMs += deltaMs
     }
 
+    /**
+     * BAT-1001 PR-B: build an endpoint instance for /burner/status
+     * balance-wiring tests. The KeyVault returns the given [pubkey]
+     * (so `configured` is true when non-null), the CapEnforcer is
+     * real with sensible defaults so status() returns valid cap
+     * fields, the JupiterOwnership is the noop seam, and the
+     * [balanceFetcher] is whatever the test passed (typically a
+     * StubBalanceFetcher returning a fixed Balances? value).
+     */
+    fun buildForStatus(
+        balanceFetcher: SolanaBalanceFetcher?,
+        pubkey: String?,
+    ): BurnerBridgeEndpoints {
+        val tmpCaps = newTempDir("status-caps")
+        val capStore = com.seekerclaw.app.util.CrossProcessStore(
+            filesDir = tmpCaps,
+            fileName = com.seekerclaw.app.data.caps.BurnerCapsState.FILE_NAME,
+            serializer = com.seekerclaw.app.data.caps.BurnerCapsState.serializer(),
+            initial = com.seekerclaw.app.data.caps.BurnerCapsState(),
+        )
+        val enforcer = com.seekerclaw.app.data.caps.CapEnforcer(
+            ledger = com.seekerclaw.app.data.caps.ReservationLedger(capStore),
+        )
+        return BurnerBridgeEndpoints(
+            keyVault = FixedPubkeyKeyVault(pubkey),
+            capEnforcer = enforcer,
+            jupiterOwnership = noopOwnership(),
+            balanceFetcher = balanceFetcher,
+        )
+    }
+
     fun cleanupTempDirs() {
         synchronized(tempDirs) {
             for (dir in tempDirs) {
@@ -427,6 +597,42 @@ private object TestEndpointBuilder {
             throw NotImplementedError()
         override suspend fun getPubkey(id: String): String? = null
         override suspend fun wipe(id: String) = Unit
+    }
+
+    /**
+     * BAT-1001 PR-B: KeyVault that returns a fixed pubkey (or null
+     * to simulate "burner not configured"). Used by [buildForStatus]
+     * so handleStatus can compute `configured = pubkey != null`
+     * without needing the real EncryptedPrefsKeyVault wiring (which
+     * requires a Context).
+     */
+    private class FixedPubkeyKeyVault(private val pubkey: String?) :
+        com.seekerclaw.app.data.wallet.KeyVault {
+        override suspend fun store(id: String, expanded64: ByteArray) = Unit
+        override suspend fun signTransaction(id: String, txBytes: ByteArray, allowPartiallySigned: Boolean): ByteArray =
+            throw NotImplementedError()
+        override suspend fun getPubkey(id: String): String? = pubkey
+        override suspend fun wipe(id: String) = Unit
+    }
+
+    /**
+     * BAT-1001 PR-B: SolanaBalanceFetcher subclass that returns a
+     * fixed Balances? result and counts fetch invocations. Used by
+     * the /burner/status balance-wiring tests to verify the atomic-
+     * string-or-omit contract without needing a real RPC server. The
+     * primary constructor's `rpcUrlProvider` default is preserved
+     * (we never reach the URL — fetch() is fully overridden).
+     */
+    class StubBalanceFetcher(
+        private val result: SolanaBalanceFetcher.Balances?,
+    ) : SolanaBalanceFetcher() {
+        @Volatile var fetchCallCount: Int = 0
+            private set
+
+        override suspend fun fetch(pubkey: String): SolanaBalanceFetcher.Balances? {
+            fetchCallCount++
+            return result
+        }
     }
 
     /**

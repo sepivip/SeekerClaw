@@ -28,12 +28,28 @@
 'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 
 const PORT = 8766;
 const HOST = '127.0.0.1';
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_RECONCILE = 30; // 30 reconciles/min — drain coalesces, this is just intake throttle
 const RATE_LIMIT_HEALTHZ = 60;   // 1/sec average is fine for a liveness probe
+
+// BAT-1001 PR-B: DNS-rebind defense + IPv6 policy.
+// The server binds only `127.0.0.1` (line 33). A browser doing a
+// DNS-rebind attack would resolve `attacker.com` to 127.0.0.1 and the
+// connection would land here, but the browser still sends
+// `Host: attacker.com:8766` per RFC 7230 §5.4 — we reject any Host
+// that isn't the bound loopback authority. Allowlist is a single
+// literal (NOT sourced from PORT) so the allowed value is auditable
+// at a glance. Case-insensitive compare (`Host: 127.0.0.1:8766` and
+// `127.0.0.1:8766` already collapse, but `Host: LOCALHOST` etc. are
+// rejected explicitly). IPv6 loopback `[::1]:8766` is NOT accepted
+// (server doesn't dual-bind; accepting would be a policy/code
+// mismatch per Codex BAT-1001 v1.1 #6). `localhost:8766` is rejected
+// too — too many name-resolution surprises to allow.
+const ALLOWED_HOST = '127.0.0.1:8766';
 
 // Per-endpoint rate-limit state. Cleared on stop() so test harnesses
 // don't leak state between cases.
@@ -104,7 +120,15 @@ function _json(res, status, obj, extraHeaders) {
 }
 
 let _server = null;
-let _bridgeToken = null;
+// BAT-1001 PR-B: per-request bridge-token getter (was a startup-frozen
+// string `_bridgeToken`). main.js passes `getBridgeToken: () =>
+// getBridgeToken()` so a Kotlin-side rotation (NodeControlClient
+// reads ServiceState.bridgeToken per call → server now reads the
+// matching live file per call) authenticates the next inbound POST
+// without a server restart. Default `() => ''` makes the auth gate
+// always reject when start() was called without the option — never
+// short-circuits to "no token configured = allow".
+let _getBridgeToken = () => '';
 let _getDbSummary = null;
 let _requestReconcile = null;
 // BAT-525: flushShutdown is an async callback that drives Node's
@@ -128,7 +152,16 @@ function start(options) {
     if (!options || typeof options !== 'object') {
         throw new Error('internal-control-server.start: options required');
     }
-    _bridgeToken = typeof options.bridgeToken === 'string' ? options.bridgeToken : '';
+    // BAT-1001 PR-B: getBridgeToken (function) replaces the
+    // startup-frozen bridgeToken (string). The function form is the
+    // only supported option — the previous `bridgeToken: <string>`
+    // option is intentionally NOT honored as a back-compat shim
+    // because it would silently preserve the rotation bug v1.1 is
+    // fixing. Existing tests have been updated to pass
+    // `getBridgeToken: () => TOKEN` (constant getter == old behavior).
+    _getBridgeToken = typeof options.getBridgeToken === 'function'
+        ? options.getBridgeToken
+        : () => '';
     _getDbSummary = typeof options.getDbSummary === 'function' ? options.getDbSummary : null;
     _requestReconcile = typeof options.requestReconcile === 'function' ? options.requestReconcile : null;
     _flushShutdown = typeof options.flushShutdown === 'function' ? options.flushShutdown : null;
@@ -156,15 +189,101 @@ function start(options) {
     return _server;
 }
 
+// BAT-1001 PR-B: constant-time token compare with byte-length guard.
+// `crypto.timingSafeEqual` throws on Buffer-length mismatch — we MUST
+// pre-check, otherwise an attacker can probe the token's length by
+// triggering 500s.
+//
+// Subtlety (Copilot PR #395 R2 finding): the length check is on
+// **byte length**, not String `.length` (which is UTF-16 code units).
+// A non-ASCII input like `Buffer.from('ñ', 'utf8').length === 2`
+// while `'ñ'.length === 1`. If we length-checked on `.length` and
+// then fed Buffers to timingSafeEqual, an attacker sending
+// X-Bridge-Token: '<UTF-8-multibyte string with the same JS .length
+// as the expected token>' would pass the pre-check, hit timingSafeEqual
+// with mismatched Buffer lengths, throw, get a 500 from the outer
+// try/catch — reintroducing the length-probe surface this helper
+// exists to close. Solution: build the Buffers first, then compare
+// buffer.length (== byte length) before timingSafeEqual.
+//
+// Both inputs are strict-type-checked to be strings (no coercion —
+// a non-string header from header folding etc. returns false cleanly
+// instead of throwing). Empty expected → reject (we never short-
+// circuit to "no token = allow").
+function _safeTokenEq(expected, actual) {
+    if (typeof expected !== 'string' || typeof actual !== 'string') return false;
+    if (expected.length === 0) return false;
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    const actualBuf = Buffer.from(actual, 'utf8');
+    if (expectedBuf.length !== actualBuf.length) return false;
+    return crypto.timingSafeEqual(expectedBuf, actualBuf);
+}
+
 async function _route(req, res) {
     const method = (req.method || 'GET').toUpperCase();
     const url = req.url || '/';
 
-    // GET /stats/db-summary — preserved BAT-31 behavior. No auth, no
-    // rate-limit. AndroidBridge proxies this from its own (already-
-    // authed + rate-limited) /stats/db-summary endpoint, so the inner
-    // hop doesn't need to reauthenticate. Keeping it open also matches
-    // the pre-BAT-514 contract — no UI behaviour change.
+    // BAT-1001 PR-B: DNS-rebind defense, applied BEFORE any path
+    // matching so the gate covers `/stats/db-summary` too (and any
+    // future unauthenticated endpoint). Two layers:
+    //
+    //   1. Host header allowlist — rejects DNS-rebind attempts where
+    //      the browser resolved attacker.com → 127.0.0.1 but is still
+    //      sending `Host: attacker.com:8766` per RFC 7230 §5.4. Only
+    //      `127.0.0.1:8766` is accepted (case-insensitive). `[::1]:8766`
+    //      and `localhost:8766` are rejected — the server binds only
+    //      127.0.0.1 (no dual-bind) and accepting other Hosts would
+    //      create a policy/code mismatch.
+    //
+    //   2. Origin header rejection — any non-empty Origin header
+    //      means a browser sent the request. Every legitimate caller
+    //      (AndroidBridge.kt:954-975 proxy via HttpURLConnection,
+    //      Kotlin NodeControlClient, in-process tests) sends NO
+    //      Origin. Deny-all is strictly safer than an allowlist
+    //      while we have zero legitimate browser callers (per
+    //      Codex BAT-1001 v1.1 #4 sign-off).
+    //
+    // Status code 403 (not 400) since the request reached the
+    // listener cleanly — it's the *origin* of the call that we're
+    // rejecting, not a malformed wire.
+    //
+    // Copilot R3 #3349684637: `req.headers.host` and `.origin` are
+    // typed as `string | string[] | undefined` in Node's HTTP types.
+    // Today Node's HTTP parser discards duplicate Host headers (only
+    // the first wins, kept as string) — but Copilot is correct that
+    // a future parser change OR a pathological proxy chain could
+    // surface an array. Calling `.toLowerCase()` on a non-string
+    // would throw → outer try/catch → 500, reintroducing the DoS
+    // surface this gate exists to close. Defensive: explicit
+    // typeof checks, anything non-string rejects 403 cleanly.
+    const rawHost = req.headers.host;
+    if (typeof rawHost !== 'string') {
+        return _json(res, 403, { error: 'host not allowed' });
+    }
+    const hostHeader = rawHost.toLowerCase();
+    if (hostHeader !== ALLOWED_HOST) {
+        return _json(res, 403, { error: 'host not allowed' });
+    }
+    const rawOrigin = req.headers.origin;
+    if (typeof rawOrigin === 'string') {
+        // Empty string passes (some HTTP libs always set the header);
+        // any non-empty value is browser-initiated → reject.
+        if (rawOrigin.length > 0) {
+            return _json(res, 403, { error: 'origin not allowed' });
+        }
+    } else if (rawOrigin !== undefined) {
+        // Non-string non-undefined Origin (array from duplicate
+        // headers, or anything else exotic) → definitely not a
+        // legitimate Kotlin caller, reject.
+        return _json(res, 403, { error: 'origin not allowed' });
+    }
+
+    // GET /stats/db-summary — preserved BAT-31 behavior. No bridge-
+    // token auth, no rate-limit. AndroidBridge proxies this from its
+    // own (already-authed + rate-limited) /stats/db-summary endpoint,
+    // so the inner hop doesn't need to reauthenticate. The new Host/
+    // Origin gate above now covers exfil risk — a browser can't reach
+    // this endpoint via DNS-rebind even though it's unauthenticated.
     if (method === 'GET' && url === '/stats/db-summary') {
         if (!_getDbSummary) return _json(res, 503, { error: 'stats unavailable' });
         try {
@@ -181,9 +300,17 @@ async function _route(req, res) {
         return _json(res, 405, { error: 'method not allowed' });
     }
 
-    // Bridge-token auth for the new endpoints (NOT /stats — see above).
+    // BAT-1001 PR-B: bridge-token auth via per-request getter +
+    // constant-time compare. The getter (wired from main.js as
+    // `() => getBridgeToken()`) re-reads `filesDir/bridge_token` on
+    // every call so a Kotlin rotation is picked up without restarting
+    // the server. _safeTokenEq length-guards before timingSafeEqual
+    // so a length mismatch returns 401 cleanly instead of throwing
+    // 500. Empty `expected` (file missing / getter returns '') also
+    // rejects — we never short-circuit to "no token = allow".
     const headerToken = req.headers['x-bridge-token'];
-    if (!_bridgeToken || headerToken !== _bridgeToken) {
+    const expected = _getBridgeToken();
+    if (!_safeTokenEq(expected, headerToken)) {
         return _json(res, 401, { error: 'unauthorized' });
     }
 

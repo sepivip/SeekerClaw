@@ -73,7 +73,11 @@ jobs:
             wallet-registry \
             wallet-set-caps-errors \
             x402 \
-            x402-v2-tx
+            x402-v2-tx \
+            internal-control-server \
+            internal-control-server-token-rotation \
+            internal-control-server-proxy-passthrough \
+            bridge-token-reload
           do
             echo "── $t ──"
             node "tests/nodejs-project/${t}.test.js"
