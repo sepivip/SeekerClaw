@@ -489,6 +489,277 @@ function validateExpectedDeltaShape(expectedDelta) {
     }
 }
 
+// ─── Simulation helpers ────────────────────────────────────────────────────
+
+/**
+ * Find the (accountIndex, mint) pair in a pre/post token balance array.
+ * Returns the entry or null. Per Solana RPC spec, balance arrays are
+ * sparse — only entries for token accounts the tx touches.
+ */
+function findTokenBalanceEntry(balances, accountIndex, mint) {
+    if (!Array.isArray(balances)) return null;
+    for (const b of balances) {
+        if (b && b.accountIndex === accountIndex && b.mint === mint) return b;
+    }
+    return null;
+}
+
+/**
+ * Read `amount` (atomic-unit string) from a token-balance entry and parse
+ * as BigInt. Returns null if metadata missing or malformed.
+ */
+function getTokenAtomicBigInt(entry) {
+    if (!entry || !entry.uiTokenAmount || typeof entry.uiTokenAmount.amount !== 'string') return null;
+    try { return BigInt(entry.uiTokenAmount.amount); } catch { return null; }
+}
+
+/**
+ * Resolve a base58 pubkey to its index in the combined account keys
+ * (static + ALT.writable + ALT.readonly). Returns -1 if not found.
+ */
+function indexOfPubkey(combinedAccountKeys, pubkey) {
+    for (let i = 0; i < combinedAccountKeys.length; i++) {
+        if (combinedAccountKeys[i] === pubkey) return i;
+    }
+    return -1;
+}
+
+/**
+ * Compute the net token delta (post - pre, BigInt) for a specific
+ * (accountIndex, mint) pair across the simulation pre/post arrays.
+ * Returns { delta: BigInt, hadMetadata: boolean } — if neither pre nor
+ * post has the entry, hadMetadata is false (caller must decide whether
+ * that's expected_zero or simulation_metadata_missing).
+ */
+function netTokenDelta(simValue, accountIndex, mint) {
+    const preEntry = findTokenBalanceEntry(simValue.preTokenBalances, accountIndex, mint);
+    const postEntry = findTokenBalanceEntry(simValue.postTokenBalances, accountIndex, mint);
+    const hadMetadata = !!(preEntry || postEntry);
+    const preAmt = getTokenAtomicBigInt(preEntry) || 0n;
+    const postAmt = getTokenAtomicBigInt(postEntry) || 0n;
+    return { delta: postAmt - preAmt, hadMetadata };
+}
+
+/**
+ * Compute the net SOL delta (postBalances[idx] - preBalances[idx]) for
+ * a specific account index, as BigInt lamports. Returns null if
+ * preBalances/postBalances are missing or index out of range.
+ */
+function netSolDelta(simValue, accountIndex) {
+    if (!Array.isArray(simValue.preBalances) || !Array.isArray(simValue.postBalances)) return null;
+    if (accountIndex < 0 || accountIndex >= simValue.preBalances.length) return null;
+    if (accountIndex >= simValue.postBalances.length) return null;
+    try {
+        return BigInt(simValue.postBalances[accountIndex]) - BigInt(simValue.preBalances[accountIndex]);
+    } catch {
+        return null;
+    }
+}
+
+// Network fee + ATA rent ceiling for "zero-value" cancel/auth shapes.
+// Solana base fee is 5000 lamports per signature; ATA rent-exempt minimum
+// is ~2_039_280 lamports (165 bytes). Allow generous headroom: 10 SOL-
+// cents-equivalent (~0.01 SOL = 10_000_000 lamports) as the upper bound
+// on what an autonomous zero-value tx is allowed to consume from the
+// burner. Larger SOL delta on a "zero_value_*" shape indicates the agent
+// is signing something other than the declared no-movement contract.
+const ZERO_VALUE_SOL_HEADROOM_LAMPORTS = 10_000_000n;
+
+// ─── Per-shape delta validators ────────────────────────────────────────────
+
+function rejectDeltaMismatch(reason, ctx) {
+    const detail = ctx ? ` (${JSON.stringify(ctx)})` : '';
+    return reject('simulation_delta_mismatch', `${reason}${detail}`);
+}
+
+/**
+ * Validate burner balance changes from simulation match the caller's
+ * declared `expectedDelta`. Dispatches on `expectedDelta.kind`.
+ *
+ * @param {object} simValue - sim.value from solanaRpc('simulateTransaction')
+ * @param {string[]} combinedAccountKeys - static + loadedAddresses combined
+ * @param {string} burnerPubkey
+ * @param {object} expectedDelta
+ * @returns {{ ok: boolean, error?: string, reason?: string, class?: string }}
+ */
+function validateSimDelta(simValue, combinedAccountKeys, burnerPubkey, expectedDelta) {
+    const kind = expectedDelta.kind;
+
+    if (kind === 'zero_value_auth' || kind === 'zero_value_cancel') {
+        // Sanity: burner's SOL delta must be within headroom (network fee +
+        // possibly rent refund for cancel). Token deltas on burner-owned
+        // accounts must be zero (auth) or non-negative (cancel returns).
+        const burnerIdx = indexOfPubkey(combinedAccountKeys, burnerPubkey);
+        if (burnerIdx >= 0) {
+            const solDelta = netSolDelta(simValue, burnerIdx);
+            if (solDelta === null) {
+                return reject('simulation_metadata_missing', 'preBalances/postBalances missing for burner index');
+            }
+            if (solDelta < -ZERO_VALUE_SOL_HEADROOM_LAMPORTS) {
+                return rejectDeltaMismatch('zero-value tx drains more SOL than network-fee headroom', {
+                    deltaLamports: solDelta.toString(),
+                    headroom: ZERO_VALUE_SOL_HEADROOM_LAMPORTS.toString(),
+                });
+            }
+        }
+        // No token-delta deep check needed — drainer-opcode walk already
+        // forbids drainer-class instructions, and zero_value shapes have
+        // no debit/credit fields to compare against.
+        return accept();
+    }
+
+    // For all other shapes, validate burnerDebit + optional burnerCreditMin
+    const debit = expectedDelta.burnerDebit;
+    if (!debit) return reject('expected_delta_invalid_shape', 'burnerDebit missing at delta-check time');
+
+    const debitIdx = indexOfPubkey(combinedAccountKeys, debit.account);
+    if (debitIdx < 0) {
+        return rejectDeltaMismatch('burnerDebit.account not present in tx', { account: debit.account });
+    }
+
+    // Compute observed debit delta (negative number = burner spent).
+    let observedDebit;
+    if (debit.mint === 'native_sol') {
+        observedDebit = netSolDelta(simValue, debitIdx);
+        if (observedDebit === null) {
+            return reject('simulation_metadata_missing', 'pre/postBalances missing for native_sol debit');
+        }
+    } else {
+        const { delta, hadMetadata } = netTokenDelta(simValue, debitIdx, debit.mint);
+        if (!hadMetadata) {
+            return reject('simulation_metadata_missing',
+                `pre/postTokenBalances missing for debit account ${debit.account} mint ${debit.mint}`);
+        }
+        observedDebit = delta;
+    }
+
+    const expectedDebit = BigInt(debit.atomicAmount); // positive
+    // The burner's balance should decrease by expectedDebit. So we expect
+    // `observedDebit === -expectedDebit`. For native_sol we also include
+    // network fees in the observation; the wallet pays the fee. Allow up
+    // to ZERO_VALUE_SOL_HEADROOM_LAMPORTS slack on native_sol to absorb
+    // fees + ATA rent.
+    let expectedNegative = -expectedDebit;
+    if (debit.mint === 'native_sol') {
+        // observedDebit may be more negative than expectedNegative by up
+        // to network fee + rent. Be conservative: tolerate up to headroom.
+        if (observedDebit > expectedNegative) {
+            return rejectDeltaMismatch('burner spent less SOL than declared debit', {
+                expectedNegative: expectedNegative.toString(),
+                observed: observedDebit.toString(),
+            });
+        }
+        if (observedDebit < expectedNegative - ZERO_VALUE_SOL_HEADROOM_LAMPORTS) {
+            return rejectDeltaMismatch('burner spent more SOL than declared debit + fee headroom', {
+                expectedNegative: expectedNegative.toString(),
+                observed: observedDebit.toString(),
+                headroom: ZERO_VALUE_SOL_HEADROOM_LAMPORTS.toString(),
+            });
+        }
+    } else {
+        if (observedDebit !== expectedNegative) {
+            return rejectDeltaMismatch('burner SPL debit delta does not match declared atomicAmount', {
+                mint: debit.mint,
+                expectedNegative: expectedNegative.toString(),
+                observed: observedDebit.toString(),
+            });
+        }
+    }
+
+    // Shape-specific credit / recipient checks
+    switch (kind) {
+        case 'jupiter_swap_immediate': {
+            const credit = expectedDelta.burnerCreditMin;
+            const creditIdx = indexOfPubkey(combinedAccountKeys, credit.account);
+            if (creditIdx < 0) {
+                return rejectDeltaMismatch('burnerCreditMin.account not present in tx', { account: credit.account });
+            }
+            let observedCredit;
+            if (credit.mint === 'native_sol') {
+                observedCredit = netSolDelta(simValue, creditIdx);
+                if (observedCredit === null) {
+                    return reject('simulation_metadata_missing', 'pre/postBalances missing for native_sol credit');
+                }
+            } else {
+                const { delta, hadMetadata } = netTokenDelta(simValue, creditIdx, credit.mint);
+                if (!hadMetadata) {
+                    return reject('simulation_metadata_missing',
+                        `pre/postTokenBalances missing for credit account ${credit.account} mint ${credit.mint}`);
+                }
+                observedCredit = delta;
+            }
+            // Credit must be >= burnerCreditMin minus toleranceBps of itself.
+            const minRequired = BigInt(credit.atomicAmount);
+            const toleranceBps = BigInt(expectedDelta.toleranceBps || 0);
+            const minWithTolerance = (minRequired * (10000n - toleranceBps)) / 10000n;
+            if (observedCredit < minWithTolerance) {
+                return rejectDeltaMismatch('burner credit delta below minimum (after slippage tolerance)', {
+                    minRequired: minRequired.toString(),
+                    minWithTolerance: minWithTolerance.toString(),
+                    observed: observedCredit.toString(),
+                    toleranceBps: toleranceBps.toString(),
+                });
+            }
+            return accept();
+        }
+        case 'jupiter_trigger_create_deposit':
+        case 'jupiter_dca_create_deposit': {
+            // No burner credit at deposit time; output happens at fill time
+            // in a separate tx the burner doesn't sign. Debit was already
+            // asserted == -atomicAmount above. The depositVault check is
+            // covered by the drainer-opcode walk + signer-mode check.
+            return accept();
+        }
+        case 'solana_send':
+        case 'agent_pay_x402': {
+            const recipient = expectedDelta.recipient;
+            const recipientIdx = indexOfPubkey(combinedAccountKeys, recipient.account);
+            if (recipientIdx < 0) {
+                return rejectDeltaMismatch('recipient.account not present in tx', { account: recipient.account });
+            }
+            let observedRecipient;
+            if (recipient.mint === 'native_sol') {
+                observedRecipient = netSolDelta(simValue, recipientIdx);
+                if (observedRecipient === null) {
+                    return reject('simulation_metadata_missing', 'pre/postBalances missing for native_sol recipient');
+                }
+            } else {
+                const { delta, hadMetadata } = netTokenDelta(simValue, recipientIdx, recipient.mint);
+                if (!hadMetadata) {
+                    return reject('simulation_metadata_missing',
+                        `pre/postTokenBalances missing for recipient ${recipient.account} mint ${recipient.mint}`);
+                }
+                observedRecipient = delta;
+            }
+            // Recipient must receive >= expectedDebit (allowing for
+            // Token-2022 transfer-fee deductions; for plain Token program
+            // we require exact match).
+            const expectedReceived = expectedDebit;
+            if (recipient.mint !== 'native_sol' && expectedDelta.tokenStandard !== 'token_2022') {
+                if (observedRecipient !== expectedReceived) {
+                    return reject('simulation_recipient_mismatch',
+                        `recipient SPL credit ${observedRecipient.toString()} != expected ${expectedReceived.toString()}`);
+                }
+            } else {
+                // Token-2022 with possible transfer fee, or native SOL with
+                // network fee deductions on the recipient (rare): accept any
+                // delta >= 50% of expected as a sanity floor. Tighter
+                // bounds require caller passing transferFeeBps explicitly,
+                // which Token-2022 routes aren't reachable today (Codex
+                // amendment #5).
+                const minRecipient = expectedReceived / 2n;
+                if (observedRecipient < minRecipient) {
+                    return reject('simulation_recipient_mismatch',
+                        `recipient credit ${observedRecipient.toString()} below floor ${minRecipient.toString()}`);
+                }
+            }
+            return accept();
+        }
+        default:
+            return reject('expected_delta_invalid_kind', `validateSimDelta unhandled kind "${kind}"`);
+    }
+}
+
 // ─── Public entry point ───────────────────────────────────────────────────
 
 /**
@@ -502,13 +773,18 @@ function validateExpectedDeltaShape(expectedDelta) {
  * @param {object} options
  * @param {string} options.burnerPubkey - REQUIRED. Caller is responsible
  *   for fetching this from `/burner/status` per Codex amendment #3.
+ * @param {Function} [options.simulator] - OPTIONAL but PRODUCTION CALLERS
+ *   MUST provide one. Async function `(txBase64) => simulationResult`
+ *   where simulationResult.value follows Solana RPC simulateTransaction
+ *   shape (preTokenBalances, postTokenBalances, preBalances, postBalances,
+ *   loadedAddresses, err, ...). If omitted, the function performs
+ *   structural + signer-mode + drainer checks only and returns
+ *   `{ ok: true, structuralOnly: true }` to signal that simulation was
+ *   skipped. `BurnerSigner.signTransaction()` (Phase 2d) always supplies
+ *   a Helius-backed simulator.
  * @returns {Promise<{ ok: boolean, error?: string, reason?: string,
  *   class?: 'security'|'availability'|'contract_gap',
- *   programs?: string[] }>}
- *
- * Note: this function is currently synchronous (no `await`) because
- * simulation is deferred to Phase 2c. The signature is `async` to keep
- * the call site shape stable when simulation lands.
+ *   programs?: number[], structuralOnly?: boolean, simulated?: boolean }>}
  */
 async function validateBurnerTx(txBase64, expectedDelta, options) {
     options = options || {};
@@ -538,26 +814,90 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
     const signerCheck = validateSignerMode(parsed, options.burnerPubkey, expectedDelta);
     if (!signerCheck.ok) return signerCheck;
 
-    // ── 4. Drainer opcodes ──
-    // Layered burner-owned account detection per Codex amendment #4:
-    //   layer 1: caller-declared `expectedDelta.burnerOwnedAccounts[]`
-    //   layer 2: simulation-derived owners (Phase 2c follow-up)
+    // ── 4. Drainer opcodes (static-key only; ALT-resolved instructions
+    //       are re-walked after simulation with combined keys) ──
     const declaredOwned = Array.isArray(expectedDelta.burnerOwnedAccounts)
         ? expectedDelta.burnerOwnedAccounts.filter(isNonEmptyBase58)
         : [];
     const drainerCheck = validateDrainerOpcodes(parsed, declaredOwned, expectedDelta);
     if (!drainerCheck.ok) return drainerCheck;
 
-    // ── 5. Simulation + delta-vs-quote (Phase 2c — deferred) ──
-    // The following checks land in a follow-up commit:
-    //   - simulateTransaction call (via injected `options.simulator`)
-    //   - parse value.preTokenBalances / postTokenBalances / preBalances /
-    //     postBalances / loadedAddresses
-    //   - per-shape delta assertion (swap: debit + creditMin within
-    //     toleranceBps; deposit: net debit == atomicAmount; payment:
-    //     burner USDC delta == -atomicAmount + recipient match)
+    // ── 5. Structural-only short-circuit (testing / no-sim mode) ──
+    if (typeof options.simulator !== 'function') {
+        return accept({
+            structuralOnly: true,
+            programs: parsed.instructions.map(i => i.programIdIdx),
+        });
+    }
 
-    return accept({ programs: parsed.instructions.map(i => i.programIdIdx) });
+    // ── 6. Simulation ──
+    let sim;
+    try {
+        sim = await options.simulator(txBase64);
+    } catch (e) {
+        return reject('simulation_failed', e && e.message ? e.message : String(e));
+    }
+    if (!sim || typeof sim !== 'object' || !sim.value || typeof sim.value !== 'object') {
+        return reject('simulation_failed', 'simulator returned no .value object');
+    }
+    if (sim.value.err !== null && sim.value.err !== undefined) {
+        const errStr = typeof sim.value.err === 'string' ? sim.value.err : JSON.stringify(sim.value.err);
+        return reject('simulation_returned_error', `simulation failed on-chain: ${errStr}`);
+    }
+
+    // ── 7. Build combined account keys (static + loadedAddresses) ──
+    const loaded = sim.value.loadedAddresses || {};
+    const writableALT = Array.isArray(loaded.writable) ? loaded.writable.filter(isNonEmptyBase58) : [];
+    const readonlyALT = Array.isArray(loaded.readonly) ? loaded.readonly.filter(isNonEmptyBase58) : [];
+    const combinedAccountKeys = [
+        ...parsed.staticAccountKeys,
+        ...writableALT,
+        ...readonlyALT,
+    ];
+
+    // ── 8. ALT resolution check (Codex amendment #2) ──
+    for (let i = 0; i < parsed.instructions.length; i++) {
+        const idx = parsed.instructions[i].programIdIdx;
+        if (idx >= combinedAccountKeys.length) {
+            return reject('alt_unresolved',
+                `instruction[${i}] programIdIdx ${idx} not resolved via static (${parsed.staticAccountKeys.length}) + loadedAddresses (${writableALT.length + readonlyALT.length})`);
+        }
+    }
+
+    // ── 9. Simulation-derived burner-owned set (Codex amendment #4 layer 2) ──
+    const simOwned = new Set();
+    simOwned.add(options.burnerPubkey);
+    const addOwnedFromBalances = (balances) => {
+        if (!Array.isArray(balances)) return;
+        for (const b of balances) {
+            if (!b || b.owner !== options.burnerPubkey) continue;
+            if (!Number.isInteger(b.accountIndex)) continue;
+            if (b.accountIndex >= 0 && b.accountIndex < combinedAccountKeys.length) {
+                simOwned.add(combinedAccountKeys[b.accountIndex]);
+            }
+        }
+    };
+    addOwnedFromBalances(sim.value.preTokenBalances);
+    addOwnedFromBalances(sim.value.postTokenBalances);
+
+    // ── 10. Drainer re-walk with combined keys + full ownership union ──
+    const ownedUnion = [...new Set([...declaredOwned, ...simOwned])];
+    const combinedParsed = {
+        staticAccountKeys: combinedAccountKeys,
+        numRequiredSignatures: parsed.numRequiredSignatures,
+        instructions: parsed.instructions,
+    };
+    const drainerCheck2 = validateDrainerOpcodes(combinedParsed, ownedUnion, expectedDelta);
+    if (!drainerCheck2.ok) return drainerCheck2;
+
+    // ── 11. Per-shape delta validation ──
+    const deltaResult = validateSimDelta(sim.value, combinedAccountKeys, options.burnerPubkey, expectedDelta);
+    if (!deltaResult.ok) return deltaResult;
+
+    return accept({
+        simulated: true,
+        programs: parsed.instructions.map(i => i.programIdIdx),
+    });
 }
 
 module.exports = {
@@ -570,4 +910,8 @@ module.exports = {
     _validateSignerMode: validateSignerMode,
     _validateDrainerOpcodes: validateDrainerOpcodes,
     _validateExpectedDeltaShape: validateExpectedDeltaShape,
+    _validateSimDelta: validateSimDelta,
+    _netTokenDelta: netTokenDelta,
+    _netSolDelta: netSolDelta,
+    _indexOfPubkey: indexOfPubkey,
 };

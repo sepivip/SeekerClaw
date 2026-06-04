@@ -442,6 +442,260 @@ async function runAsync(name, fn) {
     });
 
     console.log();
+    console.log('validateSimDelta: per-shape delta enforcement (Phase 2c)');
+
+    // Build a mock simulator that returns a canned result.
+    function mockSimulator(canned) {
+        return async (_txBase64) => canned;
+    }
+
+    // Helper: simulation response shape mirroring Solana RPC simulateTransaction.
+    function simResult({
+        err = null,
+        preTokenBalances = [],
+        postTokenBalances = [],
+        preBalances = [],
+        postBalances = [],
+        loadedAddresses = { writable: [], readonly: [] },
+    } = {}) {
+        return { value: { err, preTokenBalances, postTokenBalances, preBalances, postBalances, loadedAddresses } };
+    }
+
+    await runAsync('simulator throws → simulation_failed', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = async () => { throw new Error('helius unreachable'); };
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_failed');
+        assert.strictEqual(r.class, 'availability');
+        assert.match(r.reason, /helius unreachable/);
+    });
+
+    await runAsync('simulation returns err → simulation_returned_error', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator(simResult({ err: { InstructionError: [0, 'Custom'] } }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_returned_error');
+        assert.strictEqual(r.class, 'availability');
+    });
+
+    await runAsync('zero_value_auth: SOL drain beyond fee headroom → delta_mismatch', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator(simResult({
+            // burner at index 0; spent 1 SOL (1_000_000_000 lamports) — far above headroom
+            preBalances: [2_000_000_000, 0],
+            postBalances: [1_000_000_000, 0],
+        }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+        assert.strictEqual(r.class, 'security');
+    });
+
+    await runAsync('zero_value_auth: tiny SOL fee → accepted', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator(simResult({
+            // burner pays 5000 lamports network fee — well within 10_000_000 headroom
+            preBalances: [2_000_000_000, 0],
+            postBalances: [1_999_995_000, 0],
+        }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.simulated, true);
+    });
+
+    await runAsync('jupiter_swap_immediate: happy path within tolerance', async () => {
+        // Realistic swap: burner trades 1 USDC for SOL. Net deltas:
+        //   - SOL: +0.001 SOL gained (minus 5000 lamport fee) = +995000 net
+        //   - USDC: -1_000_000 (sold full amount)
+        // burnerCreditMin = 500000 lamports (0.0005 SOL minimum); observed 995000
+        // is well above even after 100 bps tolerance reduction.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator(simResult({
+            preBalances: [2_000_000_000, 0, 2_039_280],
+            postBalances: [2_000_995_000, 0, 2_039_280], // +995_000 net SOL gain
+            preTokenBalances: [{
+                accountIndex: 2, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM,
+                uiTokenAmount: { amount: '1000000', decimals: 6 },
+            }],
+            postTokenBalances: [{
+                accountIndex: 2, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM,
+                uiTokenAmount: { amount: '0', decimals: 6 },
+            }],
+        }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER, mint: 'native_sol', atomicAmount: '500000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected ok, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.simulated, true);
+    });
+
+    await runAsync('jupiter_swap_immediate: burner debit too small → delta_mismatch', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator(simResult({
+            preBalances: [2_000_000_000, 0, 2_039_280],
+            postBalances: [1_999_995_000, 0, 2_039_280],
+            preTokenBalances: [{
+                accountIndex: 2, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM,
+                uiTokenAmount: { amount: '1000000', decimals: 6 },
+            }],
+            postTokenBalances: [{
+                accountIndex: 2, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM,
+                uiTokenAmount: { amount: '500000', decimals: 6 }, // only sold 500k
+            }],
+        }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER, mint: 'native_sol', atomicAmount: '0' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+    });
+
+    await runAsync('agent_pay_x402 v2 cosigned: recipient mismatch → simulation_recipient_mismatch', async () => {
+        const txB64 = buildTx({
+            accountKeys: [FACILITATOR, BURNER, BURNER_USDC_ATA, RECIPIENT_USDC_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 2,
+            instructions: [{ programIdIdx: 4, accountIdxs: [2, 3, 1], dataBytes: Buffer.from([3, 0xE8, 0x03, 0, 0, 0, 0, 0, 0]) }],
+        });
+        const simulator = mockSimulator(simResult({
+            preBalances: [1_000_000_000, 1_000_000_000, 2_039_280, 2_039_280, 0],
+            postBalances: [999_995_000, 1_000_000_000, 2_039_280, 2_039_280, 0],
+            preTokenBalances: [
+                { accountIndex: 2, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM, uiTokenAmount: { amount: '100000', decimals: 6 } },
+                { accountIndex: 3, mint: USDC, owner: 'someoneElse', programId: TOKEN_PROGRAM, uiTokenAmount: { amount: '0', decimals: 6 } },
+            ],
+            postTokenBalances: [
+                { accountIndex: 2, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM, uiTokenAmount: { amount: '90000', decimals: 6 } },
+                // recipient only got 5000 instead of 10000 (we declared 10000 atomicAmount)
+                { accountIndex: 3, mint: USDC, owner: 'someoneElse', programId: TOKEN_PROGRAM, uiTokenAmount: { amount: '5000', decimals: 6 } },
+            ],
+        }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'agent_pay_x402',
+            x402Version: 2,
+            signerMode: 'cosigned',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            feePayerAllowlist: [FACILITATOR],
+            cosignerAllowlist: [FACILITATOR],
+        }, { burnerPubkey: BURNER, simulator });
+        // First: burner debit was -10000 declared but observed -10000 (100k→90k). That matches.
+        // Then: recipient credit was 5000 vs expected 10000 → recipient_mismatch.
+        assert.strictEqual(r.error, 'simulation_recipient_mismatch');
+        assert.strictEqual(r.class, 'security');
+    });
+
+    await runAsync('ALT-unresolved program → alt_unresolved', async () => {
+        // Build a v0 tx where an instruction references an ALT-resolved program
+        const txB64 = buildTx({
+            accountKeys: [BURNER],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 99, accountIdxs: [0], dataBytes: Buffer.from([0xAB]) }],
+            v0: true,
+        });
+        const simulator = mockSimulator(simResult({
+            preBalances: [2_000_000_000],
+            postBalances: [1_999_995_000],
+            loadedAddresses: { writable: [], readonly: [] }, // no ALT resolved
+        }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'alt_unresolved');
+        assert.strictEqual(r.class, 'availability');
+    });
+
+    await runAsync('simulation-derived ownership detects non-ATA burner-owned token account', async () => {
+        // Synthetic: burner-owned non-ATA token account (e.g. a vault PDA)
+        // not in declared burnerOwnedAccounts, but simulation reveals it's
+        // burner-owned via preTokenBalances[].owner. A SetAuthority targeting
+        // this account in non-cancel kind should be rejected.
+        // Base58-safe (no '0', 'O', 'I', 'l'): synthetic non-ATA token account.
+        const NON_ATA_BURNER_ACCT = 'NonAtaBurnerownedXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const txB64 = buildTx({
+            accountKeys: [BURNER, NON_ATA_BURNER_ACCT, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2, accountIdxs: [1, 0],
+                dataBytes: Buffer.from([6, 0]), // SetAuthority
+            }],
+        });
+        const simulator = mockSimulator(simResult({
+            preBalances: [2_000_000_000, 2_039_280, 0],
+            postBalances: [2_000_000_000, 2_039_280, 0],
+            preTokenBalances: [{
+                accountIndex: 1, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM,
+                uiTokenAmount: { amount: '100', decimals: 6 },
+            }],
+            postTokenBalances: [{
+                accountIndex: 1, mint: USDC, owner: BURNER, programId: TOKEN_PROGRAM,
+                uiTokenAmount: { amount: '100', decimals: 6 },
+            }],
+        }));
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+            // burnerOwnedAccounts intentionally OMITS NON_ATA_BURNER_ACCT —
+            // simulation layer should detect ownership.
+        }, { burnerPubkey: BURNER, simulator });
+        // Phase-1 drainer check (static keys only, declared owned only) doesn't
+        // catch this because NON_ATA_BURNER_ACCT isn't in declaredOwned.
+        // Phase-2 drainer re-walk after simulation DOES catch it via simOwned.
+        assert.strictEqual(r.error, 'drainer_set_authority');
+    });
+
+    console.log();
     console.log('validateBurnerTx: end-to-end with synthetic txs');
     await runAsync('end-to-end: burner_only happy path with parsed real tx bytes', async () => {
         const txB64 = buildTx({
