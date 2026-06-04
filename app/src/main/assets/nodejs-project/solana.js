@@ -211,11 +211,14 @@ const WELL_KNOWN_TOKENS = {
     'usdt': { address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6, symbol: 'USDT', name: 'USDT' },
 };
 
-// Known program names for swap transaction verification.
-// Maps program ID → human-readable label. Used for:
-//   1. TRUSTED_PROGRAMS whitelist (derived from map keys)
-//   2. Labeling unknown programs in error messages
-// Initialized with hardcoded fallback, updated dynamically from Jupiter API on startup.
+// Known program names for swap transaction logging.
+// Maps program ID → human-readable label. BAT-1013: used for log readability
+// ONLY — the prior program-ID allowlist enforcement was removed because
+// (1) it DoS'd legitimate swaps when Jupiter routed through programs we
+// hadn't labeled yet, and (2) industry consensus (Phantom/Backpack/Solflare/
+// MWA spec) is blocklist+simulation, not integrator-side allowlist. See
+// verifySwapTransaction() + wallet/burner-policy.js for the new primitives.
+// Initialized with hardcoded fallback, refreshed from Jupiter API on startup.
 const KNOWN_PROGRAM_NAMES = new Map([
     // === System Programs ===
     ['11111111111111111111111111111111',           'System Program'],
@@ -310,8 +313,15 @@ const KNOWN_PROGRAM_NAMES = new Map([
     ['ALPHAQmeA7bjrVuccPsYPiCvsi428SNwte66Srvs4pHA', 'AlphaQ'],
 ]);
 
-// Derive trusted programs set from the map (single source of truth)
-let TRUSTED_PROGRAMS = new Set(KNOWN_PROGRAM_NAMES.keys());
+// KNOWN_PROGRAM_NAMES is used for log readability only (BAT-1013).
+// Program-ID allowlist enforcement was removed because (1) Jupiter ships new
+// routing programs faster than they label them in their public API, which
+// silently DoS'd legitimate swaps (2026-06-03 device incident), and
+// (2) Phantom/Backpack/Solflare all use simulation+blocklist patterns rather
+// than integrator-side program allowlists — Solana Cookbook + audit firm
+// consensus (workflow `wx2c95307`). Structural fee-payer/signer check stays
+// in verifySwapTransaction(); drainer-opcode blocklist + simulate-vs-quote
+// lives in wallet/burner-policy.js for autonomous burner signing.
 
 // Fetch latest program labels from Jupiter API on startup, merge into KNOWN_PROGRAM_NAMES.
 // Falls back to the hardcoded list above if the fetch fails.
@@ -334,9 +344,7 @@ async function refreshJupiterProgramLabels() {
                 added++;
             }
         }
-        // Rebuild TRUSTED_PROGRAMS from updated map
-        TRUSTED_PROGRAMS = new Set(KNOWN_PROGRAM_NAMES.keys());
-        log(`[Jupiter] Program labels refreshed: ${KNOWN_PROGRAM_NAMES.size} total (${added} new from API)`, 'INFO');
+        log(`[Jupiter] Program labels refreshed: ${KNOWN_PROGRAM_NAMES.size} total (${added} new from API, log labels only — no policy effect)`, 'INFO');
     } catch (err) {
         log(`[Jupiter] Program label fetch error (using hardcoded fallback): ${err.message}`, 'WARN');
     }
@@ -586,177 +594,178 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
     return res.data;
 }
 
-// Verify a Jupiter swap transaction before sending to wallet
-// Decodes the versioned transaction and checks:
-// 1. Fee payer matches user's public key (unless skipPayerCheck is set)
-// 2. Only known/trusted programs are referenced
-// Options: { skipPayerCheck: true } for Jupiter Ultra (Jupiter pays fees)
+// Verify a Jupiter swap transaction before sending to wallet.
+//
+// Structural + signer check ONLY (BAT-1013, replaces program-ID allowlist):
+//   1. Fee payer matches user's pubkey (default) OR user is among required
+//      signers (Ultra gasless mode via `skipPayerCheck: true`).
+//   2. Walks instructions to collect a labeled `programs` list FOR LOG
+//      READABILITY ONLY — an unlabeled or new program NEVER fails verification.
+//
+// What this function intentionally does NOT do anymore:
+//   - No program-ID allowlist (`TRUSTED_PROGRAMS` removed; Jupiter ships
+//     routing programs faster than they label them, and Phantom/Backpack
+//     /Solflare all use simulation+blocklist instead of integrator allowlists).
+//   - No Address Lookup Table rejection (ALT-resolved programs are part of
+//     Jupiter's normal routing for V2 trigger and Ultra flows).
+//
+// Drainer-opcode blocking + simulate-vs-quote enforcement lives in
+// `wallet/burner-policy.js` for autonomous (burner) signing flows. MWA
+// flows still get the final user click-through inside the wallet UI.
+//
+// Options: { skipPayerCheck: true } for Jupiter Ultra (Jupiter pays fees).
+// Returns: { valid: boolean, error?: string, programs: string[] }
 function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const { skipPayerCheck = false } = options;
-    const txBuf = Buffer.from(txBase64, 'base64');
+    let txBuf;
+    try {
+        txBuf = Buffer.from(txBase64, 'base64');
+    } catch (e) {
+        return { valid: false, error: `tx_unparseable: ${e.message}`, programs: [] };
+    }
 
-    // TRUSTED_PROGRAMS is module-level (KNOWN_PROGRAM_NAMES-derived, refreshed from Jupiter API)
+    const programs = [];
+    const labelProgram = (id) => {
+        const name = KNOWN_PROGRAM_NAMES.get(id);
+        if (name) {
+            // Snake-case for log greppability ("jupiter_aggregator_v6" not
+            // "Jupiter Aggregator v6"). Lowercase + replace whitespace.
+            programs.push(name.toLowerCase().replace(/\s+/g, '_'));
+        } else {
+            // Truncated base58 + (unlabeled) suffix so forensics can still
+            // find the program ID without dumping the full 44-char string.
+            programs.push(`${id.slice(0, 4)}…${id.slice(-4)}(unlabeled)`);
+        }
+    };
 
-    // Full serialized transaction: [sig_count] [signatures...] [message]
-    // Skip signature section to reach the message
+    // Skip signature section to reach the message.
     let offset = 0;
     const numSigs = readCompactU16(txBuf, offset);
     offset = numSigs.offset;
-    offset += numSigs.value * 64; // skip signature slots
+    offset += numSigs.value * 64;
 
-    // Message starts here — check for v0 prefix (0x80)
+    // Detect v0 vs legacy (v0 prefix = 0x80).
     const prefix = txBuf[offset];
     const isV0 = prefix === 0x80;
 
     if (!isV0) {
-        // Legacy transaction — Ultra always uses v0, so reject legacy in gasless mode
+        // Legacy transaction. Ultra always uses v0, so reject legacy under
+        // Ultra mode — that's a structural mismatch, not a program check.
         if (skipPayerCheck) {
-            return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format' };
+            return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format', programs };
         }
 
         // Legacy message: header (3 bytes) + account keys + blockhash + instructions
-        const numRequired = txBuf[offset]; offset++;
-        const numReadonlySigned = txBuf[offset]; offset++;
-        const numReadonlyUnsigned = txBuf[offset]; offset++;
+        offset++; // numRequired
+        offset++; // numReadonlySigned
+        offset++; // numReadonlyUnsigned
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
 
-        // Read all account keys
         const legacyAccountKeys = [];
         for (let i = 0; i < numAccounts.value; i++) {
             legacyAccountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
             offset += 32;
         }
 
-        // First account is fee payer
-        if (legacyAccountKeys.length > 0 && legacyAccountKeys[0] !== expectedPayerBase58) {
-            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${legacyAccountKeys[0]}` };
+        // Reject zero-account tx. The original allowlist-based code guarded the
+        // payer check with `if (length > 0)` and silently accepted txs with no
+        // accounts. Now that the program-ID allowlist is gone, the structural
+        // payer check is the last line of defence, so an unverifiable
+        // zero-account tx must fail closed.
+        if (legacyAccountKeys.length === 0) {
+            return { valid: false, error: 'Transaction has no account keys (cannot verify fee payer)', programs };
+        }
+        // First account is fee payer.
+        if (legacyAccountKeys[0] !== expectedPayerBase58) {
+            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${legacyAccountKeys[0]}`, programs };
         }
 
-        // BAT-255: Skip blockhash (32 bytes) and verify program whitelist (matches v0 path)
+        // Skip recent blockhash (32 bytes).
         offset += 32;
 
+        // Walk instructions to collect programs[] labels (no gating).
         const legacyNumInstructions = readCompactU16(txBuf, offset);
         offset = legacyNumInstructions.offset;
-
-        const legacyUntrusted = [];
         for (let i = 0; i < legacyNumInstructions.value; i++) {
             const programIdIdx = txBuf[offset]; offset++;
             if (programIdIdx >= legacyAccountKeys.length) {
-                return { valid: false, error: `Instruction ${i} references invalid account index ${programIdIdx} (only ${legacyAccountKeys.length} accounts). Transaction rejected for safety.` };
+                return { valid: false, error: `Instruction ${i} references invalid account index ${programIdIdx} (only ${legacyAccountKeys.length} accounts).`, programs };
             }
-            const programId = legacyAccountKeys[programIdIdx];
-            if (!TRUSTED_PROGRAMS.has(programId)) {
-                legacyUntrusted.push(programId);
-            }
-            // Skip accounts
+            labelProgram(legacyAccountKeys[programIdIdx]);
             const numAcctIdx = readCompactU16(txBuf, offset);
             offset = numAcctIdx.offset;
             offset += numAcctIdx.value;
-            // Skip data
             const dataLen = readCompactU16(txBuf, offset);
             offset = dataLen.offset;
             offset += dataLen.value;
         }
 
-        if (legacyUntrusted.length > 0) {
-            const unique = [...new Set(legacyUntrusted)];
-            const labeled = unique.map(id => {
-                const name = KNOWN_PROGRAM_NAMES.get(id);
-                return name ? `${id} (${name})` : id;
-            });
-            return {
-                valid: false,
-                error: `Transaction contains unwhitelisted program(s): ${labeled.join(', ')}. ` +
-                       `This may be a new routing program not yet in the trusted list.`
-            };
-        }
-
-        return { valid: true }; // Legacy tx passed payer + program whitelist check
+        return { valid: true, programs };
     }
 
-    // V0 transaction format — skip prefix byte
+    // V0 transaction — skip prefix byte.
     offset++;
 
-    // Message header: num_required_signatures (1), num_readonly_signed (1), num_readonly_unsigned (1)
+    // Message header: numRequired, numReadonlySigned, numReadonlyUnsigned.
     const numRequired = txBuf[offset]; offset++;
-    const numReadonlySigned = txBuf[offset]; offset++;
-    const numReadonlyUnsigned = txBuf[offset]; offset++;
+    offset++; // numReadonlySigned
+    offset++; // numReadonlyUnsigned
 
-    // Static account keys
+    // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);
     offset = numStaticAccounts.offset;
-
     const accountKeys = [];
     for (let i = 0; i < numStaticAccounts.value; i++) {
         accountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
         offset += 32;
     }
 
-    if (accountKeys.length > 0) {
-        if (!skipPayerCheck) {
-            // Standard mode: ensure connected wallet is the fee payer
-            if (accountKeys[0] !== expectedPayerBase58) {
-                return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}` };
-            }
-        } else {
-            // Ultra gasless mode: Jupiter pays fees, but wallet must still be a required signer
-            const requiredSignerCount = Math.min(numRequired, accountKeys.length);
-            const requiredSigners = accountKeys.slice(0, requiredSignerCount);
-            if (!requiredSigners.includes(expectedPayerBase58)) {
-                return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers` };
-            }
+    // Reject zero-account tx (same rationale as the legacy path above).
+    if (accountKeys.length === 0) {
+        return { valid: false, error: 'Transaction has no account keys (cannot verify fee payer)', programs };
+    }
+    if (!skipPayerCheck) {
+        // Default mode: connected wallet is fee payer.
+        if (accountKeys[0] !== expectedPayerBase58) {
+            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}`, programs };
+        }
+    } else {
+        // Ultra gasless mode: Jupiter pays fees, wallet must still be a required signer.
+        const requiredSignerCount = Math.min(numRequired, accountKeys.length);
+        const requiredSigners = accountKeys.slice(0, requiredSignerCount);
+        if (!requiredSigners.includes(expectedPayerBase58)) {
+            return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers`, programs };
         }
     }
 
-    // Check that program IDs in instructions are trusted
-    // Recent blockhash (32 bytes)
+    // Skip recent blockhash (32 bytes).
     offset += 32;
 
-    // Instructions
+    // Walk instructions to collect programs[] labels. ALT-resolved programs
+    // (programIdIdx >= numStaticAccounts) are part of Jupiter's normal v0
+    // routing and are NOT rejected here — strict ALT resolution lives in
+    // wallet/burner-policy.js where we have access to simulation metadata.
     const numInstructions = readCompactU16(txBuf, offset);
     offset = numInstructions.offset;
-
-    const untrustedPrograms = [];
     for (let i = 0; i < numInstructions.value; i++) {
         const programIdIdx = txBuf[offset]; offset++;
-        if (programIdIdx >= accountKeys.length) {
-            // Program referenced via Address Lookup Table — cannot verify identity.
-            // Reject for safety (Jupiter Ultra uses static keys anyway).
-            return {
-                valid: false,
-                error: `Instruction ${i} references program via Address Lookup Table (index ${programIdIdx}, ` +
-                       `only ${accountKeys.length} static keys). Cannot verify program identity. Transaction rejected for safety.`
-            };
+        if (programIdIdx < accountKeys.length) {
+            labelProgram(accountKeys[programIdIdx]);
+        } else {
+            // Program resolved via Address Lookup Table — record it as
+            // alt-resolved for log forensics without blocking the tx.
+            programs.push('alt_resolved(unlabeled)');
         }
-        const programId = accountKeys[programIdIdx];
-        if (!TRUSTED_PROGRAMS.has(programId)) {
-            untrustedPrograms.push(programId);
-        }
-        // Skip accounts
         const numAcctIdx = readCompactU16(txBuf, offset);
         offset = numAcctIdx.offset;
         offset += numAcctIdx.value;
-        // Skip data
         const dataLen = readCompactU16(txBuf, offset);
         offset = dataLen.offset;
         offset += dataLen.value;
     }
 
-    if (untrustedPrograms.length > 0) {
-        const unique = [...new Set(untrustedPrograms)];
-        const labeled = unique.map(id => {
-            const name = KNOWN_PROGRAM_NAMES.get(id);
-            return name ? `${id} (${name})` : id;
-        });
-        return {
-            valid: false,
-            error: `Transaction contains unwhitelisted program(s): ${labeled.join(', ')}. ` +
-                   `This may be a new Jupiter routing program not yet in the trusted list.`
-        };
-    }
-
-    return { valid: true };
+    return { valid: true, programs };
 }
 
 // Read Solana compact-u16 encoding
