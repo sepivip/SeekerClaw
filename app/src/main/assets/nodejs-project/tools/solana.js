@@ -737,7 +737,13 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                 burnerOwnedAccounts: [debitAccount].filter(a => a !== burnerPubkey),
             };
         } catch (eDelta) {
-            log(`[Jupiter Trigger V2] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
+            // Copilot PR #398 R2 finding: a falsy expectedDelta is NOT
+            // forwarded to BurnerSigner by dispatch.js, which would let
+            // the burner sign without the policy gate running. Force
+            // routing to main so the user sees an MWA popup instead.
+            log(`[Jupiter Trigger V2] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+            routingHint.routingDecision = 'main';
+            expectedDelta = null;
         }
 
         const dispatchResult = await routeAndSign({
@@ -1613,7 +1619,13 @@ const handlers = {
                     toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
                 };
             } catch (eDelta) {
-                log(`[Jupiter Ultra] Could not build expectedDelta (burner path will fail-closed): ${eDelta.message}`, 'WARN');
+                // Copilot PR #398 R2: a null expectedDelta is silently
+                // skipped by dispatch.js -> BurnerSigner, which would let
+                // the burner sign without the policy gate. Force main
+                // routing so the user sees the MWA popup instead.
+                log(`[Jupiter Ultra] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+                routingHint.routingDecision = 'main';
+                expectedDelta = null;
             }
 
             const result = await routeAndSign({
@@ -1956,7 +1968,12 @@ const handlers = {
                     };
                 }
             } catch (eDelta) {
-                log(`[Jupiter Trigger V1] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
+                // Copilot PR #398 R2 (same class as V2/Ultra): null
+                // expectedDelta is skipped by dispatch.js -> BurnerSigner;
+                // force main routing so policy gate isn't silently bypassed.
+                log(`[Jupiter Trigger V1] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+                v1ForceRouting = { routingDecision: 'main' };
+                v1ExpectedDelta = null;
             }
 
             // 8 + 9. Sign + execute via wallet dispatch. Jupiter Trigger

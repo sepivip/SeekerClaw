@@ -883,14 +883,28 @@ async function _handle(input /* , chatId */) {
             } : {}),
         };
     } catch (eDelta) {
-        log(`[agent_pay] Could not build expectedDelta (will fail-closed at burner policy): ${eDelta.message}`, 'WARN');
+        log(`[agent_pay] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
+    }
+
+    // Copilot PR #398 R2: a null expectedDelta is silently skipped by
+    // BurnerSigner (no policy gate), which would let the burner sign an
+    // x402 payment without destination verification. agent_pay has no
+    // MWA fallback path (x402 is autonomous-burner-only by design), so
+    // the only safe response is to release the reservation and refuse
+    // to sign. The agent reports the failure to the user.
+    if (!payExpectedDelta) {
+        await _release(reservationId, 'expected_delta_build_failed');
+        return {
+            error: 'sign_failed',
+            reason: 'Could not build expectedDelta for burner policy gate; refusing to sign without destination verification',
+        };
     }
 
     let signedTxBase64;
     try {
         const signOpts = { reservationId };
         if (isV2) signOpts.allowPartiallySigned = true;
-        if (payExpectedDelta) signOpts.expectedDelta = payExpectedDelta;
+        signOpts.expectedDelta = payExpectedDelta;
         const signed = await burner.signer().signTransaction(txBase64, signOpts);
         if (!signed || signed.error) {
             await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');

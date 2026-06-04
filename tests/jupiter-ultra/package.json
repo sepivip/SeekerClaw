@@ -2,7 +2,10 @@
   "name": "jupiter-ultra-test-harness",
   "version": "0.0.0",
   "private": true,
-  "description": "Live Jupiter Solana integration test harness. Uses BURNER_SECRET_KEY from .env.test against real Jupiter mainnet. NEVER commit secrets.",
+  "description": "Host-only test harness for live Jupiter/Solana integration tests. Runs on developer machines + CI (Node >=20.18), NOT on the nodejs-mobile (Node 18 LTS) on-device runtime. Uses BURNER_SECRET_KEY from .env.test against real Jupiter mainnet. NEVER commit secrets.",
+  "engines": {
+    "node": ">=20.18.0"
+  },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
     "bs58": "^4.0.1",

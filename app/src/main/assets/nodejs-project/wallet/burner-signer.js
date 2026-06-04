@@ -78,14 +78,16 @@ function _getPublicShaper() {
  * expects.
  *
  * Per Codex amendment #8.1 §3 (same-RPC consistency):
- *   - The active RPC URL is captured ONCE at the start of each call via
- *     `getSolanaRpcUrl()`. `getMultipleAccounts` (pre-snapshot) AND
- *     `simulateTransaction` use the same URL captured for that call —
- *     `solanaRpc()` re-evaluates the URL per call (hot-reload), so a
- *     mid-call provider flip would split sources; we mitigate by
- *     fetching both via parallel-safe sequential calls in the same
- *     event-loop tick and trusting the existing per-call hot-reload to
- *     pick the same URL twice.
+ *   - `solanaRpc()` re-reads `getSolanaRpcUrl()` per call (BAT-1000
+ *     hot-reload). To enforce that `getMultipleAccounts` (pre-snapshot)
+ *     and `simulateTransaction` BOTH hit the same backing, we sample the
+ *     URL before the first call AND after the second; if the URL flipped
+ *     mid-validation (the user toggled the Helius API key in Settings
+ *     between the two reads), we throw a drift error which the policy's
+ *     catch wraps as `simulation_failed` (availability-class). In normal
+ *     operation the two reads happen within ~50ms in the same event-loop
+ *     tick and the URL is stable. A URL-explicit RPC variant is a
+ *     follow-up — for now drift detection is the contract guarantee.
  *   - On the public-RPC path, the rate shaper wraps `simulateTransaction`
  *     (NOT `getMultipleAccounts`). Pre-snapshot is a cheaper read and
  *     not the rate-limited bottleneck.
@@ -98,11 +100,13 @@ function _lazyDefaultSimulator() {
         const addresses = (opts && Array.isArray(opts.addresses)) ? opts.addresses : [];
         // Determine the active backing for this call. Used for the UX-hint
         // logic in the caller (Codex amendment #8.1 §5) and surfaced to the
-        // policy result for diagnostics.
+        // policy result for diagnostics. ALSO captured for the same-RPC
+        // drift check below.
         let backing = 'public';
+        let urlAtStart = null;
         try {
-            const url = _getSolanaRpcUrl();
-            if (typeof url === 'string' && /helius/i.test(url)) backing = 'helius';
+            urlAtStart = _getSolanaRpcUrl();
+            if (typeof urlAtStart === 'string' && /helius/i.test(urlAtStart)) backing = 'helius';
         } catch (_) {}
 
         // 1. Pre-snapshot — same-RPC getMultipleAccounts.
@@ -148,6 +152,24 @@ function _lazyDefaultSimulator() {
         } else {
             sim = await callSim();
         }
+
+        // Same-RPC drift detection (Codex amendment #8.1 §3): if the active
+        // RPC URL changed between the two reads (e.g. user toggled Helius
+        // API key in Settings mid-validation), `getMultipleAccounts` and
+        // `simulateTransaction` hit different backings — pre/post-state
+        // come from different chain views. Fail closed so the caller does
+        // not bridge-sign on inconsistent data. The policy wraps the throw
+        // as `simulation_failed` (availability-class).
+        try {
+            const urlAtEnd = _getSolanaRpcUrl();
+            if (typeof urlAtStart === 'string' && typeof urlAtEnd === 'string' && urlAtStart !== urlAtEnd) {
+                throw new Error('rpc_url_drift: active RPC URL changed between getMultipleAccounts and simulateTransaction');
+            }
+        } catch (e) {
+            if (e && typeof e.message === 'string' && e.message.startsWith('rpc_url_drift')) throw e;
+            // _getSolanaRpcUrl() itself threw — ignore, drift check is best-effort.
+        }
+
         // solanaRpc returns the parsed JSON body; policy expects `{ value:
         // {...} }`. If the response is already shaped that way, pass
         // through. Otherwise wrap.

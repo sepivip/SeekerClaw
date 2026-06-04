@@ -61,7 +61,7 @@
 // (A6) Rejection wording: see `REJECT_CLASS` map below. Security-class
 //      rejections explicitly do NOT recommend MWA retry.
 // (A7) Live simulation gate: enforced in Tier 6 live test
-//      `tests/jupiter-ultra/live-burner-policy.js`, NOT in this module.
+//      `tests/jupiter-ultra/live-burner-policy-helius.js`, NOT in this module.
 // (A8) Foundation/security review class — R10+ Copilot expected.
 
 'use strict';
