@@ -918,38 +918,34 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
 }
 
 // Read Solana compact-u16 encoding.
-// Returns { value, offset, terminated } — `terminated: false` indicates
-// the buffer ran out mid-varint (the last byte read had the high bit set,
-// meaning more bytes were expected). Callers MUST check `terminated` for
-// fail-closed verification (Copilot PR #397 R4): a truncated varint like
-// `[0x80]` advances offset but represents an incomplete value, which
-// older R3 guards (`offset === offsetBefore`) silently let through.
+// Returns { value, offset, terminated, overflowed }.
+//   - `terminated: false` → buffer ran out mid-varint.
+//   - `overflowed: true` → > 0xFFFF OR > 3 bytes (Solana compact-u16 max).
+// On either invalid case, `value` is forced to a sentinel (0xFFFFFFFF) so
+// downstream bounds checks of the shape `offset + value * N > buf.length`
+// reject naturally without per-call-site checking (Copilot PR #397 R6:
+// callers were repeatedly missing the explicit overflowed/terminated
+// check; fail-closed at the function level is the durable fix).
 function readCompactU16(buf, offset) {
     let value = 0;
     let shift = 0;
     let pos = offset;
     let terminated = false;
     let overflowed = false;
-    // Compact-u16 max value is 0xFFFF (65535), encoded in AT MOST 3 bytes
-    // (Copilot PR #397 R5): bytes 1-2 carry 7 bits each, byte 3 carries
-    // the remaining 2 bits. A 5+ byte varint would let `value |= (byte & 0x7F) << shift`
-    // overflow into the sign bit (shift=28 yields a negative 32-bit int),
-    // which then poisons offset arithmetic downstream. Cap at 3 bytes.
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
-        const chunk = byte & 0x7F;
-        const high = chunk << shift;
-        value = (value | high) >>> 0; // force unsigned
+        value = (value | ((byte & 0x7F) << shift)) >>> 0;
         if ((byte & 0x80) === 0) { terminated = true; break; }
         shift += 7;
-        if (shift > 14) {
-            // 4th byte present — must be the terminator and only carry the
-            // remaining 2 bits (any high bit beyond bit 16 is overflow).
-            overflowed = true;
-            break;
-        }
+        if (shift > 14) { overflowed = true; break; }
     }
     if (value > 0xFFFF) overflowed = true;
+    if (!terminated || overflowed) {
+        // Sentinel: any downstream `offset + value * N > buf.length` check
+        // becomes vacuously true; for-loops `for (let i=0; i<value; i++)`
+        // immediately hit the per-iteration bounds guard.
+        return { value: 0xFFFFFFFF, offset: pos, terminated, overflowed };
+    }
     return { value, offset: pos, terminated, overflowed };
 }
 
