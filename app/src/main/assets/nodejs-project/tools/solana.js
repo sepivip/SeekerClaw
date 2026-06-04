@@ -705,6 +705,40 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         // reach burner pubkey so flipped routingHint to 'main'), pass that
         // override into routeAndSign so it does NOT re-route to burner and
         // try to sign with a burner the deposit tx isn't paying from.
+        // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
+        // Trigger V2 deposits move `inputAmountAtomic` of `inputToken` from
+        // the burner's input ATA into the Jupiter Limit Order V2 vault. There's
+        // NO credit at deposit time (output happens at fill time in a separate
+        // tx the burner doesn't sign — see DELTA_KINDS doc).
+        let expectedDelta = null;
+        try {
+            const burnerPubkey = walletAddress;
+            const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+            const ataMod = require('../wallet/ata');
+            const debitAccount = inputIsSol ? burnerPubkey : ataMod.deriveAtaBase58(burnerPubkey, inputToken.address);
+            expectedDelta = {
+                kind: 'jupiter_trigger_create_deposit',
+                signerMode: 'burner_only',
+                burnerDebit: {
+                    account: debitAccount,
+                    mint: inputIsSol ? 'native_sol' : inputToken.address,
+                    atomicAmount: String(inputAmountAtomic),
+                },
+                depositVault: {
+                    // V2 vault is Jupiter's per-user PDA; we don't derive it
+                    // here, surface it via burnerOwnedAccounts so simulation
+                    // sees the pre/post-state and the per-shape validator
+                    // accepts allowCreate (V2 vault registration may create
+                    // it lazily).
+                    pubkey: burnerPubkey,
+                    expectedOwner: 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X', // Jupiter Limit Order V2
+                },
+                burnerOwnedAccounts: [debitAccount].filter(a => a !== burnerPubkey),
+            };
+        } catch (eDelta) {
+            log(`[Jupiter Trigger V2] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
+        }
+
         const dispatchResult = await routeAndSign({
             toolName: 'jupiter_trigger_create',
             toolArgs: input,
@@ -712,6 +746,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             broadcastVia: 'jupiter',
             flowName: 'jupiter_trigger_create_v2',
             forceRouting: routingHint,
+            expectedDelta,
             broadcast: async (txOrUnsigned, _signer, ctx) => {
                 let signedDeposit;
                 if (ctx && ctx.signed) {
@@ -1173,12 +1208,30 @@ const handlers = {
         // atomically via /solana/sign (existing MWA behavior); burner
         // signs only, then we broadcast the signed bytes via RPC
         // sendTransaction.
+        // BAT-1013 Phase 3b: solana_send for native SOL only (this code path
+        // is the SOL transfer branch — SPL goes through a different handler).
+        const sendExpectedDelta = {
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: {
+                account: sourceAddress,
+                mint: 'native_sol',
+                atomicAmount: String(lamports),
+            },
+            recipient: {
+                account: to,
+                mint: 'native_sol',
+            },
+            burnerOwnedAccounts: [],
+        };
+
         const result = await routeAndSign({
             toolName: 'solana_send',
             toolArgs: input,
             unsignedTxBase64: txBase64,
             broadcastVia: 'rpc',
             flowName: 'solana_send',
+            expectedDelta: sendExpectedDelta,
             broadcast: async (txBase64, _signer, ctx) => {
                 // ctx.signed === false for main path (unsigned tx → sign+broadcast via MWA)
                 // ctx.signed === true  for burner path (signed bytes → RPC sendTransaction)
@@ -1863,6 +1916,30 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
+            // BAT-1013 Phase 3b: V1 trigger create deposit shape.
+            let v1ExpectedDelta = null;
+            try {
+                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                const ataMod = require('../wallet/ata');
+                const debitAccount = inputIsSol ? walletAddress : ataMod.deriveAtaBase58(walletAddress, inputToken.address);
+                v1ExpectedDelta = {
+                    kind: 'jupiter_trigger_create_deposit',
+                    signerMode: 'burner_only',
+                    burnerDebit: {
+                        account: debitAccount,
+                        mint: inputIsSol ? 'native_sol' : inputToken.address,
+                        atomicAmount: String(makingAmount),
+                    },
+                    depositVault: {
+                        pubkey: walletAddress,
+                        expectedOwner: 'jup6SoC2JQ3FWcz6aKdR6FMWbN4mk2VmC3S7sREqLhw', // Jupiter Limit Order V1
+                    },
+                    burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
+                };
+            } catch (eDelta) {
+                log(`[Jupiter Trigger V1] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
+            }
+
             // 8 + 9. Sign + execute via wallet dispatch. Jupiter Trigger
             // broadcasts the tx itself (we never hit RPC sendTransaction);
             // the broadcast callback always calls jupiterTriggerExecute on
@@ -1873,6 +1950,7 @@ const handlers = {
                 unsignedTxBase64: data.transaction,
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_trigger_create',
+                expectedDelta: v1ExpectedDelta,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {
@@ -2368,6 +2446,32 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
+            // BAT-1013 Phase 3b: DCA deposit shape (same as Trigger — net
+            // burner SPL debit, no immediate output credit, vault may be
+            // created lazily).
+            let dcaExpectedDelta = null;
+            try {
+                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                const ataMod = require('../wallet/ata');
+                const debitAccount = inputIsSol ? walletAddress : ataMod.deriveAtaBase58(walletAddress, inputToken.address);
+                dcaExpectedDelta = {
+                    kind: 'jupiter_dca_create_deposit',
+                    signerMode: 'burner_only',
+                    burnerDebit: {
+                        account: debitAccount,
+                        mint: inputIsSol ? 'native_sol' : inputToken.address,
+                        atomicAmount: String(inAmountNum),
+                    },
+                    depositVault: {
+                        pubkey: walletAddress,
+                        expectedOwner: 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu', // Jupiter DCA
+                    },
+                    burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
+                };
+            } catch (eDelta) {
+                log(`[Jupiter DCA] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
+            }
+
             // 7 + 8. Sign + execute via wallet dispatch.
             const dispatchResult = await routeAndSign({
                 toolName: 'jupiter_dca_create',
@@ -2375,6 +2479,7 @@ const handlers = {
                 unsignedTxBase64: data.transaction,
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_dca_create',
+                expectedDelta: dcaExpectedDelta,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {

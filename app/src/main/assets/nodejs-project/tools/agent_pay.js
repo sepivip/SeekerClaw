@@ -848,10 +848,49 @@ async function _handle(input /* , chatId */) {
     // legacy v1-shaped pay.sh services) skip the flag and use the
     // fully-signed-only path.
     const isV2 = paymentMeta && paymentMeta.x402Version === 2;
+
+    // BAT-1013 Phase 3c: build expectedDelta for x402 v1 or v2 (Codex
+    // amendment #4 — v2 cosigned mode REQUIRES both allowPartiallySigned
+    // AND signerMode 'cosigned' with facilitator pubkey from paymentMeta).
+    let payExpectedDelta = null;
+    try {
+        const USDC_MINT = paymentMeta.asset || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+        const ataMod = require('../wallet/ata');
+        const burnerUsdcAta = ataMod.deriveAtaBase58(status.pubkey, USDC_MINT);
+        const recipientPubkey = (paymentMeta.requirement && paymentMeta.requirement.payTo) || paymentMeta.recipient;
+        const recipientUsdcAta = recipientPubkey ? ataMod.deriveAtaBase58(recipientPubkey, USDC_MINT) : null;
+        const facilitatorPubkey = isV2 && paymentMeta.requirement && paymentMeta.requirement.extra
+            ? paymentMeta.requirement.extra.feePayer
+            : null;
+        payExpectedDelta = {
+            kind: 'agent_pay_x402',
+            x402Version: isV2 ? 2 : 1,
+            signerMode: isV2 ? 'cosigned' : 'burner_only',
+            burnerDebit: {
+                account: burnerUsdcAta,
+                mint: USDC_MINT,
+                atomicAmount: String(paymentMeta.amountAtomic),
+            },
+            recipient: {
+                account: recipientUsdcAta || recipientPubkey,
+                mint: USDC_MINT,
+            },
+            burnerOwnedAccounts: [burnerUsdcAta],
+            allowMemo: true,
+            ...(isV2 && facilitatorPubkey ? {
+                feePayerAllowlist: [facilitatorPubkey],
+                cosignerAllowlist: [facilitatorPubkey],
+            } : {}),
+        };
+    } catch (eDelta) {
+        log(`[agent_pay] Could not build expectedDelta (will fail-closed at burner policy): ${eDelta.message}`, 'WARN');
+    }
+
     let signedTxBase64;
     try {
         const signOpts = { reservationId };
         if (isV2) signOpts.allowPartiallySigned = true;
+        if (payExpectedDelta) signOpts.expectedDelta = payExpectedDelta;
         const signed = await burner.signer().signTransaction(txBase64, signOpts);
         if (!signed || signed.error) {
             await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');
