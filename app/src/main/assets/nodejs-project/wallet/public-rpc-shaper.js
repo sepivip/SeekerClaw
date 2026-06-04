@@ -109,7 +109,9 @@ function createPublicRpcShaper(opts) {
                     // Re-check window after sleep — other concurrent
                     // callers may have filled the window during our sleep.
                     pruneWindow(now());
-                    if (attempts.length > maxPerWindow) {
+                    // Copilot PR #398 R4: must be `>=`, not `>`. At exactly
+                    // maxPerWindow we are AT cap, no more attempts allowed.
+                    if (attempts.length >= maxPerWindow) {
                         return {
                             ok: false,
                             error: 'rate_exhausted',

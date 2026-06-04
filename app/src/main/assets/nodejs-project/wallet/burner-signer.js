@@ -116,6 +116,15 @@ function _lazyDefaultSimulator() {
                 addresses,
                 { commitment: 'processed', encoding: 'base64' },
             ]);
+            // Copilot PR #398 R4: `solanaRpc()` returns `{ error: '...' }`
+            // on RPC failure / timeout instead of throwing. The previous
+            // fallback `addresses.map(() => null)` silently treated a
+            // failed RPC as an all-null pre-snapshot, which let the policy
+            // proceed with bogus pre-state. Translate to an exception so
+            // the policy's catch wraps it as `simulation_failed`.
+            if (gma && gma.error) {
+                throw new Error(`getMultipleAccounts: ${gma.error}`);
+            }
             // solanaRpc returns the JSON body; gma.value is the array of
             // accountInfo|null, in the same order as the requested
             // addresses.
@@ -139,7 +148,18 @@ function _lazyDefaultSimulator() {
         ];
 
         let sim;
-        const callSim = async () => _solanaRpc('simulateTransaction', simParams);
+        // Copilot PR #398 R4: wrap solanaRpc in a function that THROWS on
+        // its `{ error }` return so `public-rpc-shaper` can correctly
+        // detect 429s / failures and apply backoff/retry. Without this,
+        // an HTTP 429 returned as `{ error: '... 429 ...' }` was treated
+        // as a successful response carrying garbage payload.
+        const callSim = async () => {
+            const r = await _solanaRpc('simulateTransaction', simParams);
+            if (r && r.error) {
+                throw new Error(String(r.error));
+            }
+            return r;
+        };
         if (backing === 'public') {
             const shaped = await shaper.tryRun(callSim);
             if (!shaped.ok) {

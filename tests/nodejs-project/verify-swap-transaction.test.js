@@ -278,6 +278,71 @@ test('fails closed: v0 ALT key-count exceeds remaining buffer', () => {
     assert.match(r.error, /writable indexes exceeds remaining buffer/i);
 });
 
+test('R4: fails closed on non-string input', () => {
+    const r = verifySwapTransaction(null, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_unparseable/);
+});
+
+test('R4: fails closed on empty string', () => {
+    const r = verifySwapTransaction('', base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_unparseable/);
+});
+
+test('R4: fails closed on invalid base64 characters', () => {
+    const r = verifySwapTransaction('***not-base64-at-all***', base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_unparseable.*invalid base64/i);
+});
+
+test('R4: fails closed on base64 with wrong length (not divisible by 4)', () => {
+    const r = verifySwapTransaction('AAA', base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_unparseable/);
+});
+
+test('R4: fails closed on signature bytes truncated (claims 100 sigs, only has 10)', () => {
+    const parts = [];
+    parts.push(compactU16(100)); // claim 100 signatures
+    parts.push(Buffer.alloc(10)); // only have 10 bytes
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /Signature bytes truncated/);
+});
+
+test('R4: fails closed on legacy tx with mid-varint truncation (instruction count)', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([1, 0, 0]));
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(Buffer.from([0x80])); // continuation byte with no terminator
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /truncated mid-varint/);
+});
+
+test('R4: fails closed on v0 tx with mid-varint truncation (instruction count)', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80]));
+    parts.push(Buffer.from([1, 0, 0]));
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(Buffer.from([0x80])); // continuation byte with no terminator
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /truncated mid-varint/);
+});
+
 test('fails closed: fee payer mismatch on legacy tx', () => {
     const txB64 = buildLegacyTx({
         accountKeys: [PAYER, PROGRAM],

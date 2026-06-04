@@ -624,11 +624,22 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
 // Returns: { valid: boolean, error?: string, programs: string[] }
 function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const { skipPayerCheck = false } = options;
+    // Strict base64 validation (Copilot PR #397 R4 mirrored): Buffer.from
+    // silently strips invalid chars and decodes partial input.
+    if (typeof txBase64 !== 'string' || txBase64.length === 0) {
+        return { valid: false, error: 'tx_unparseable: empty or non-string input', programs: [] };
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
+    }
     let txBuf;
     try {
         txBuf = Buffer.from(txBase64, 'base64');
     } catch (e) {
         return { valid: false, error: `tx_unparseable: ${e.message}`, programs: [] };
+    }
+    if (txBuf.length === 0) {
+        return { valid: false, error: 'tx_unparseable: decoded buffer is empty', programs: [] };
     }
 
     const programs = [];
@@ -649,6 +660,11 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     let offset = 0;
     const numSigs = readCompactU16(txBuf, offset);
     offset = numSigs.offset;
+    // Buffer-bounds guard (Copilot PR #397 R4 mirrored): claimed sig count
+    // must fit in the remaining buffer.
+    if (offset + numSigs.value * 64 > txBuf.length) {
+        return { valid: false, error: `Signature bytes truncated: declared ${numSigs.value} sigs needs ${numSigs.value * 64} bytes, only ${txBuf.length - offset} remain.`, programs };
+    }
     offset += numSigs.value * 64;
 
     // Detect v0 vs legacy (v0 prefix = 0x80).
@@ -698,12 +714,16 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         offset += 32;
 
         // Walk instructions to collect programs[] labels (no gating).
-        // readCompactU16 returns {value:0, offset} silently past end-of-buffer;
-        // verify the varint actually consumed bytes (PR #397 R3).
+        // readCompactU16 returns {value:0, offset} silently past end-of-buffer
+        // (R3 case), and partial value with `terminated:false` mid-varint
+        // (R4 case — e.g. `[0x80]` byte at end). BOTH must fail closed.
         const legacyInstOffsetBefore = offset;
         const legacyNumInstructions = readCompactU16(txBuf, offset);
         if (legacyNumInstructions.offset === legacyInstOffsetBefore) {
             return { valid: false, error: 'Legacy: instruction count truncated.', programs };
+        }
+        if (!legacyNumInstructions.terminated) {
+            return { valid: false, error: 'Legacy: instruction count truncated mid-varint.', programs };
         }
         offset = legacyNumInstructions.offset;
         for (let i = 0; i < legacyNumInstructions.value; i++) {
@@ -790,12 +810,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Without this, a structurally malformed tx with no ALTs declared but
     // `programIdIdx >> accountKeys.length` was silently accepted (Copilot
     // PR #397 finding).
-    // PR #397 R3: verify readCompactU16 actually consumed bytes (silent
-    // {value:0} past end would treat as 0 instructions and pass).
+    // PR #397 R3 + R4: verify varint actually consumed bytes AND was
+    // properly terminated (last byte high bit clear).
     const v0InstOffsetBefore = offset;
     const numInstructions = readCompactU16(txBuf, offset);
     if (numInstructions.offset === v0InstOffsetBefore) {
         return { valid: false, error: 'v0: instruction count truncated.', programs };
+    }
+    if (!numInstructions.terminated) {
+        return { valid: false, error: 'v0: instruction count truncated mid-varint.', programs };
     }
     offset = numInstructions.offset;
     const altProgramIndexes = [];
@@ -871,18 +894,22 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     return { valid: true, programs };
 }
 
-// Read Solana compact-u16 encoding
+// Read Solana compact-u16 encoding.
+// Returns { value, offset, terminated } — `terminated: false` indicates
+// buffer ran out mid-varint (last byte read had high bit set). Callers
+// MUST check `terminated` for fail-closed parsing (Copilot PR #397 R4).
 function readCompactU16(buf, offset) {
     let value = 0;
     let shift = 0;
     let pos = offset;
+    let terminated = false;
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
         value |= (byte & 0x7F) << shift;
-        if ((byte & 0x80) === 0) break;
+        if ((byte & 0x80) === 0) { terminated = true; break; }
         shift += 7;
     }
-    return { value, offset: pos };
+    return { value, offset: pos, terminated };
 }
 
 // Jupiter Ultra API — get order (quote + unsigned tx in one call, gasless)
