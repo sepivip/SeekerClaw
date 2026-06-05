@@ -179,7 +179,11 @@ function readCompactU16(buf, offset) {
         shift += 7;
         count++;
         if (count > 2) {
-            throw new TxParseError('compact_u16_overflow', pos, 'more than 3 continuation bytes');
+            // compact-u16 wire format: max 3 bytes total = 2 continuation
+            // bytes (with high bit set) + 1 terminator byte (high bit clear).
+            // count > 2 means we already read 3 bytes with continuation bits
+            // still set on the previous bytes — the varint exceeds 3 bytes total.
+            throw new TxParseError('compact_u16_overflow', pos, 'varint exceeds 3-byte maximum (more than 2 continuation bytes seen)');
         }
     }
     throw new TxParseError('truncated', pos, 'unterminated compact-u16');

@@ -796,7 +796,7 @@ The burner policy gate (`wallet/burner-policy.js validateBurnerTx`) runs BEFORE 
 
 ### Security class — refuse, surface reason verbatim, do NOT suggest MWA bypass
 
-The same security rule applies on the MWA path; recommending MWA as a workaround for a suspicious transaction is unsafe.
+The same security rule applies on the MWA path; recommending MWA as a workaround for a suspicious transaction is unsafe. **One documented exception:** `token_2022_send_unsupported` is a known FAIL-CLOSED LIMITATION (not a suspicious-tx signal) — for that code only, MWA fallback IS the correct guidance until autonomous per-mint Token-2022 fee declaration lands. Every OTHER security-class code: refuse + surface, never suggest MWA.
 
 | Code | What happened | Agent action |
 |---|---|---|
@@ -837,7 +837,7 @@ These are infrastructure / RPC failures, not security failures. User can legitim
 | Code | What happened | Agent action |
 |---|---|---|
 | `simulation_failed` | Simulator (RPC) call threw — timeout, network error, rate-limited beyond shaper backoff | Tell user. Offer: retry burner OR fall back to MWA. |
-| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). **Translation rules** (do NOT quote raw JSON): (a) `InsufficientFundsForFee` → "The burner wallet doesn't have enough SOL to pay transaction fees. Please send at least ~0.005 SOL to the burner address and retry." (b) `AccountLoadedTwice` → "The transaction references the same account as both sender and recipient — sending to yourself is not supported. Pick a different recipient address. (If you wanted to fund the burner FROM main, ask: `send X SOL from main to burner`.)" | Surface translated reason. Same options (retry burner once OR fall back to MWA). For `AccountLoadedTwice`: do NOT offer MWA retry (same self-send error would occur); ask the user to clarify recipient. |
+| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). **Translation rules** (do NOT quote raw JSON): (a) `InsufficientFundsForFee` → "The burner wallet doesn't have enough SOL to pay transaction fees. Please send at least ~0.005 SOL to the burner address and retry." (b) `AccountLoadedTwice` → "The transaction references the same account as both sender and recipient — sending to yourself is not supported. Pick a different recipient address. (If you wanted to fund the burner FROM main, ask: `send X SOL from main to burner`.)" | **For `AccountLoadedTwice`:** surface the translated reason and ask the user to clarify the recipient — do NOT offer MWA retry (the same self-send error would occur on MWA). **For all other `simulation_returned_error` reasons** (including `InsufficientFundsForFee`): surface translated reason, then offer "retry burner once OR fall back to MWA". |
 | `simulation_metadata_missing` | `value.accounts[i]` was null for a required address, or `getMultipleAccounts` pre-snapshot missing | Same. Often caused by public RPC dropping data under load. |
 | `tx_unparseable` | The tx bytes couldn't be parsed as legacy or v0 — likely a malformed Jupiter response | Surface. Offer retry. |
 | `alt_unresolved` | An instruction references an ALT-resolved program ID that simulation didn't surface | Same. Common when Helius cache misses. |
