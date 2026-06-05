@@ -278,12 +278,24 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'transaction truncated before message header' };
     }
 
-    // v0 prefix (0x80) means versioned message; otherwise legacy. We accept
-    // both — auth memos are typically legacy.
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 (0x80) exists; future versions (v1, v2,
+    // ...) would cause === 0x80 to be false and the prefix byte would corrupt
+    // the header parse. Copilot PR #398 R13 same-class sweep: fail closed on
+    // unknown versions instead of silently mis-parsing.
+    // Legacy memos are still supported: a legacy first byte (e.g. 0x01 for
+    // numRequiredSignatures) has high bit clear so isVersioned=false.
     let messageOffset = offset;
     const versionByte = txBuf[messageOffset];
-    if (versionByte === 0x80) {
-        messageOffset += 1; // skip v0 byte
+    const isVersioned = (versionByte & 0x80) !== 0;
+    if (isVersioned) {
+        const version = versionByte & 0x7F;
+        if (version !== 0) {
+            return { ok: false, error: 'auth_tx_invalid',
+                     reason: `unsupported_tx_version: v${version} (only v0 is supported)` };
+        }
+        messageOffset += 1; // consume v0 prefix byte
     }
 
     // Message header: 3 bytes

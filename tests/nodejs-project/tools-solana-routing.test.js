@@ -603,6 +603,57 @@ function _burnerOff() {
         void result;
     });
 
+    // ── Copilot PR #398 R13 regression: _extractFeePayerBase58 version guard ─
+    // Strict `=== 0x80` check would silently treat future versioned-message
+    // prefixes (0x81 = v1, 0x82 = v2, ...) as legacy, returning the wrong
+    // fee payer with no error signal. The bitmask + version-guard fix throws
+    // unsupported_tx_version instead.
+    function buildMinimalFeePayerTx(versionPrefix, sigCount) {
+        const FEE_PAYER_BYTE = 0xAB;
+        const parts = [];
+        parts.push(Buffer.from([sigCount])); // compact-u16 sig count (single byte for 0/1)
+        parts.push(Buffer.alloc(sigCount * 64, 0x00)); // sig slots
+        if (versionPrefix !== undefined) parts.push(Buffer.from([versionPrefix]));
+        parts.push(Buffer.from([0x01, 0x00, 0x01])); // 3-byte header
+        parts.push(Buffer.from([0x01])); // 1 account
+        parts.push(Buffer.alloc(32, FEE_PAYER_BYTE));
+        return Buffer.concat(parts).toString('base64');
+    }
+
+    await check('R13: _extractFeePayerBase58 — legacy tx returns fee payer', async () => {
+        const tx = buildMinimalFeePayerTx(undefined, 0);
+        const r = tools._extractFeePayerBase58(tx);
+        assert.ok(typeof r === 'string' && r.length > 0, 'legacy tx must return non-empty fee payer');
+    });
+
+    await check('R13: _extractFeePayerBase58 — v0 tx (0x80) returns fee payer', async () => {
+        const tx = buildMinimalFeePayerTx(0x80, 1);
+        const r = tools._extractFeePayerBase58(tx);
+        assert.ok(typeof r === 'string' && r.length > 0, 'v0 tx must return non-empty fee payer');
+    });
+
+    await check('R13: _extractFeePayerBase58 — v1 tx (0x81) throws unsupported_tx_version', async () => {
+        const tx = buildMinimalFeePayerTx(0x81, 1);
+        try {
+            tools._extractFeePayerBase58(tx);
+            assert.fail('expected throw on v1 prefix');
+        } catch (e) {
+            assert.match(e.message, /unsupported_tx_version.*v1/, `expected v1 error, got: ${e.message}`);
+        }
+    });
+
+    await check('R13: _extractFeePayerBase58 — v2 tx (0x82) throws unsupported_tx_version', async () => {
+        const tx = buildMinimalFeePayerTx(0x82, 1);
+        try { tools._extractFeePayerBase58(tx); assert.fail(); }
+        catch (e) { assert.match(e.message, /unsupported_tx_version.*v2/); }
+    });
+
+    await check('R13: _extractFeePayerBase58 — v127 tx (0xFF) throws unsupported_tx_version', async () => {
+        const tx = buildMinimalFeePayerTx(0xFF, 1);
+        try { tools._extractFeePayerBase58(tx); assert.fail(); }
+        catch (e) { assert.match(e.message, /unsupported_tx_version.*v127/); }
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);

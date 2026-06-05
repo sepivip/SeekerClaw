@@ -88,8 +88,23 @@ function _extractFeePayerBase58(txBase64) {
     }
     off += numSigs.value * 64;
     if (off >= buf.length) throw new Error('message truncated');
-    // v0 prefix?
-    if (buf[off] === 0x80) off++;
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 (prefix = 0x80) exists; future versions
+    // (v1, v2, ...) would set prefix = 0x81, 0x82, etc. Copilot PR #398 R13:
+    // do NOT strict-equal 0x80 — a future v1 (0x81) would silently skip
+    // nothing and parse the version number as numRequiredSignatures, yielding
+    // the wrong fee-payer with no error signal. Fail closed on any version
+    // we don't understand.
+    const versionPrefix = buf[off];
+    const isVersioned = (versionPrefix & 0x80) !== 0;
+    if (isVersioned) {
+        const version = versionPrefix & 0x7F;
+        if (version !== 0) {
+            throw new Error(`unsupported_tx_version: v${version} (only v0 is supported)`);
+        }
+        off++; // consume v0 prefix byte
+    }
     // 3-byte header
     if (off + 3 > buf.length) throw new Error('header truncated');
     off += 3;
@@ -1779,6 +1794,15 @@ const handlers = {
                 unsignedTxBase64: order.transaction,
                 broadcastVia: ULTRA_RPC_HINT,
                 flowName: 'solana_swap',
+                // Copilot PR #398 R13: thread routingHint through forceRouting.
+                // The fee-payer introspection block (~line 1696) and the
+                // expectedDelta-build catch (~line 1772) BOTH mutate
+                // routingHint.routingDecision = 'main' to force MWA fallback.
+                // Without forceRouting, dispatch.js re-calls routeFor() from
+                // the unmodified toolArgs and proceeds on burner with
+                // expectedDelta=null — bypassing validateBurnerTx entirely
+                // (the security hole PR #398 R2 was meant to close).
+                forceRouting: routingHint,
                 expectedDelta,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
@@ -3260,4 +3284,4 @@ const handlers = {
     },
 };
 
-module.exports = { tools, handlers, _setNumberToDecimalString, _inferTriggerMint };
+module.exports = { tools, handlers, _setNumberToDecimalString, _inferTriggerMint, _extractFeePayerBase58 };
