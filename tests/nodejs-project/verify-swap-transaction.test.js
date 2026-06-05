@@ -146,7 +146,9 @@ test('fails closed: tx with zero account keys (legacy)', () => {
     const txB64 = buildLegacyTx({ accountKeys: [] });
     const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
     assert.strictEqual(r.valid, false);
-    assert.match(r.error, /no account keys/i);
+    // R10: legacy zero-account triggers the new numRequiredSignatures-
+    // vs-account-key-count invariant first. Same fail-closed outcome.
+    assert.match(r.error, /no account keys|invalid_header/i);
 });
 
 test('fails closed: legacy tx with declared accounts exceeding buffer', () => {
@@ -539,6 +541,22 @@ test('Copilot R9: fails closed when sig section count != numRequiredSignatures (
     const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)), { skipPayerCheck: true });
     assert.strictEqual(r.valid, false);
     assert.match(r.error, /numRequiredSignatures=3 does not match signature-section count=1/);
+});
+
+test('Copilot R10: fails closed when legacy numRequiredSignatures > numAccounts (symmetric to v0 check)', () => {
+    const parts = [];
+    parts.push(compactU16(2));            // 2 signatures supplied
+    parts.push(SIG_BYTES);
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([2, 0, 0])); // numRequired=2
+    parts.push(compactU16(1));            // only 1 account in section
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(0));
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /numRequiredSignatures=2 exceeds account key count=1/);
 });
 
 test('Copilot R9: fails closed when v0 numRequiredSignatures > numStaticAccounts (signers must be static, not ALT)', () => {

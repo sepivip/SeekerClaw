@@ -716,6 +716,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
+        // Copilot R10: legacy signers must also fit within account keys
+        // (symmetric to the v0 check below). Without this, a tx claiming
+        // N signatures with fewer than N account keys passes the wire-
+        // format invariants but trusts a logical impossibility.
+        if (legacyNumRequired > numAccounts.value) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} exceeds account key count=${numAccounts.value}.`, programs };
+        }
 
         // Buffer-bounds guard (Copilot PR #397 R3): a malformed/truncated
         // tx can claim a huge numAccounts; if we don't verify the bytes
