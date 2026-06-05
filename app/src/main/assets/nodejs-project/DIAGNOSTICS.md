@@ -837,7 +837,7 @@ These are infrastructure / RPC failures, not security failures. User can legitim
 | Code | What happened | Agent action |
 |---|---|---|
 | `simulation_failed` | Simulator (RPC) call threw — timeout, network error, rate-limited beyond shaper backoff | Tell user. Offer: retry burner OR fall back to MWA. |
-| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError) | Surface the error. Same options. |
+| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). If `reason` contains `InsufficientFundsForFee`, translate to plain language: "The burner wallet doesn't have enough SOL to pay transaction fees. Please send a small amount of SOL (at least ~0.005 SOL) to the burner address and retry." Do NOT quote the raw JSON. | Surface translated reason. Same options (retry burner once OR fall back to MWA). |
 | `simulation_metadata_missing` | `value.accounts[i]` was null for a required address, or `getMultipleAccounts` pre-snapshot missing | Same. Often caused by public RPC dropping data under load. |
 | `tx_unparseable` | The tx bytes couldn't be parsed as legacy or v0 — likely a malformed Jupiter response | Surface. Offer retry. |
 | `alt_unresolved` | An instruction references an ALT-resolved program ID that simulation didn't surface | Same. Common when Helius cache misses. |
