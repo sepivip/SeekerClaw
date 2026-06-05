@@ -632,6 +632,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
         return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
     }
+    // R-next-10: pre-decode size guard (DoS mitigation). 1232 bytes encode
+    // to at most ceil(1232/3)*4 = 1644 chars in base64; anything longer is
+    // guaranteed oversized and we should reject BEFORE allocating a buffer.
+    // Mirrors wallet/tx-parser.js + jupiter/trigger-v2.js + tools/solana.js.
+    if (txBase64.length > 1644) {
+        return { valid: false, error: `tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
     let txBuf;
     try {
         txBuf = Buffer.from(txBase64, 'base64');
@@ -641,10 +648,9 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (txBuf.length === 0) {
         return { valid: false, error: 'tx_unparseable: decoded buffer is empty', programs: [] };
     }
-    // C1 (BAT-1013-followup): enforce Solana's 1232-byte packet cap upfront.
-    // A tx larger than this can NEVER land on-chain — failing here surfaces a
-    // structured 'tx_oversize' rejection instead of letting a malformed
-    // oversized blob walk the parser.
+    // C1 (BAT-1013-followup): exact post-decode 1232-byte packet cap check
+    // — catches padded base64 strings under 1644 chars that decode just
+    // over 1232 bytes (padding edge case).
     if (txBuf.length > 1232) {
         return { valid: false, error: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
     }
@@ -667,6 +673,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     let offset = 0;
     const numSigs = readCompactU16(txBuf, offset);
     offset = numSigs.offset;
+    // R-next-10: readCompactU16 returns sentinels (value=0xFFFFFFFF) on
+    // truncation/overflow. Without an explicit check here, the bounds
+    // guard below would compute `0xFFFFFFFF * 64` and surface a noisy
+    // error message with the sentinel value. Fail-closed cleanly with
+    // a specific error instead. Mirrors the per-call-site checks already
+    // in place for numInstructions / numAlts (lines ~907, ~953).
+    if (!numSigs.terminated || numSigs.overflowed) {
+        return { valid: false, error: 'tx_unparseable: signature count varint truncated or overflowed.', programs };
+    }
     // Buffer-bounds guard (Copilot PR #397 R4 mirrored): claimed sig count
     // must fit in the remaining buffer.
     if (offset + numSigs.value * 64 > txBuf.length) {
@@ -737,6 +752,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
+        // R-next-10 same-class sweep: explicit terminated/overflowed check
+        // produces a clean error message instead of letting the sentinel
+        // value (0xFFFFFFFF) leak into downstream invariant or bounds
+        // checks. Mirrors numSigs + numInstructions + numAlts patterns.
+        if (!numAccounts.terminated || numAccounts.overflowed) {
+            return { valid: false, error: 'tx_unparseable: legacy account count varint truncated or overflowed.', programs };
+        }
         if (legacyNumRequired > numAccounts.value) {
             return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} exceeds account key count=${numAccounts.value}.`, programs };
         }
@@ -842,6 +864,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);
     offset = numStaticAccounts.offset;
+    // R-next-10 same-class sweep: explicit terminated/overflowed check.
+    if (!numStaticAccounts.terminated || numStaticAccounts.overflowed) {
+        return { valid: false, error: 'tx_unparseable: v0 static account count varint truncated or overflowed.', programs };
+    }
     if (numRequired > numStaticAccounts.value) {
         return { valid: false, error: `invalid_header: numRequiredSignatures=${numRequired} exceeds static account key count=${numStaticAccounts.value}.`, programs };
     }

@@ -507,6 +507,31 @@ test('C1: fails closed on tx > 1232-byte Solana packet cap', () => {
     assert.match(r.error, /tx_oversize/);
 });
 
+test('R-next-10: pre-decode guard fires on base64 > 1644 chars (before Buffer.from)', () => {
+    // Specifically exercises the PRE-decode oversize guard (not the
+    // post-decode one). 1648 chars is well over 1644; the pre-decode
+    // path uses '~' to indicate estimated bytes, distinguishing it
+    // from the exact post-decode message. If the pre-decode guard were
+    // accidentally removed, the post-decode check would still catch
+    // the oversize but the error format would differ (no '~').
+    const longBase64 = 'A'.repeat(1648);
+    const r = verifySwapTransaction(longBase64, 'anything');
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_oversize/);
+    assert.match(r.error, /~/, 'pre-decode message contains ~ estimate');
+});
+
+test('R-next-10: numSigs varint truncated → tx_unparseable: signature count varint', () => {
+    // A single 0x80 byte = continuation bit set with no terminator =
+    // truncated varint (terminated: false). Exercises the new explicit
+    // guard at solana.js line 682 specifically (not the downstream
+    // sentinel-passthrough bounds check).
+    const truncated = Buffer.from([0x80]).toString('base64');
+    const r = verifySwapTransaction(truncated, 'anything');
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /signature count varint truncated/);
+});
+
 test('C10: fails closed on legacy tx with numRequiredSignatures=0', () => {
     const parts = [];
     parts.push(compactU16(1));

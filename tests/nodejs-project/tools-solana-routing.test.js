@@ -106,15 +106,27 @@ require.cache[solanaPath] = {
         },
         verifySwapTransaction: () => ({ valid: true }),
         jupiterRequest: async () => ({ status: 200, data: '{}' }),
-        // BAT-1013-followup: lightweight base58 + length check so the C2
-        // base58-validation tests can flex on bogus Jupiter response fields
-        // (e.g. data.order='not_a_pubkey' must return false). This stub
-        // checks the base58 charset and 32..44 char length range only — it
-        // does NOT decode the 32-byte payload like production's
-        // isValidSolanaAddress in solana.js does. Sufficient for routing
-        // tests since the bogus values they pass fail the charset check
-        // before any decode would matter.
-        isValidSolanaAddress: (s) => typeof s === 'string' && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s),
+        // R-next-10: match production's isValidSolanaAddress more closely.
+        // Production checks charset+length AND base58-decodes + asserts the
+        // decoded payload is exactly 32 bytes. The previous lightweight stub
+        // (charset + 32..44 length only) gave false confidence because a
+        // string like '1'.repeat(32) passes charset+length but decodes to a
+        // different byte count and would be rejected by production. Reusing
+        // wallet/tx-parser.js's base58Decode keeps the tests hermetic
+        // (no network, no production solana.js loaded) while matching the
+        // real validation contract.
+        isValidSolanaAddress: (s) => {
+            if (typeof s !== 'string') return false;
+            const trimmed = s.trim();
+            if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed)) return false;
+            try {
+                const txParserPath = path.resolve(BUNDLE, 'wallet', 'tx-parser.js');
+                const { base58Decode } = require(txParserPath);
+                return base58Decode(trimmed).length === 32;
+            } catch (_) {
+                return false;
+            }
+        },
         parseInputAmountToLamports: (amount, decimals) => {
             const [intPart, fracPart = ''] = String(amount).split('.');
             const padded = fracPart.padEnd(decimals, '0').slice(0, decimals);
