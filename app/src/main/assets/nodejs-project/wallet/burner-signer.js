@@ -66,8 +66,37 @@ function _lazySolanaInternals() {
     if (_solanaRpc === null) {
         // eslint-disable-next-line global-require
         const solana = require('../solana');
-        _solanaRpc = solana.solanaRpc || (async () => ({ value: null }));
-        _getSolanaRpcUrl = solana.getSolanaRpcUrl || (() => 'public');
+        // R-next-15 same-class sweep: every lazy-bound solana export now
+        // uses an explicit typeof check + fail-closed fallback + ERROR log.
+        // The previous `X || lax_default` shape silently masked
+        // bundling-error / export-missing conditions — for _solanaRpc the
+        // lax default returned `{ value: null }` which the simulateTransaction
+        // path accepted as a successful sim with zero account changes
+        // (silent acceptance), and for _getSolanaRpcUrl the lax default
+        // returned the literal string `'public'` which then threw
+        // synchronously in `new URL('public')` inside solanaRpcOnce's
+        // Promise executor (Copilot R-next-15 finding).
+        if (typeof solana.solanaRpc === 'function') {
+            _solanaRpc = solana.solanaRpc;
+        } else {
+            _log('[BurnerSigner] solana.solanaRpc export missing — failing closed on all RPC calls (simulation/policy will reject as simulation_failed)', 'ERROR');
+            _solanaRpc = async () => { throw new Error('solana_rpc_unavailable: solana.solanaRpc export missing'); };
+        }
+        if (typeof solana.getSolanaRpcUrl === 'function') {
+            _getSolanaRpcUrl = solana.getSolanaRpcUrl;
+        } else {
+            // null override → solanaRpcOnce uses its canonical live URL
+            // selection (see solana.js:57 `rpcUrlOverride || getSolanaRpcUrl()`).
+            // The drift-check below short-circuits on null via its
+            // `typeof === 'string'` guard, so this degrade avoids the prior
+            // crash. Caveat: in the partial export-missing case (this export
+            // gone, but solana.solanaRpc still present), the R-next-12
+            // same-RPC pinning contract is degraded — solanaRpcOnce will
+            // independently re-read live config on each call rather than
+            // honoring the pinned URL we'd normally pass through.
+            _log('[BurnerSigner] solana.getSolanaRpcUrl export missing — drift detection + backing hint degraded; _solanaRpc(..., null) will fall through to canonical live URL selection', 'ERROR');
+            _getSolanaRpcUrl = () => null;
+        }
         // R-next-13: use production isValidSolanaAddress contract (charset +
         // 32..44 length + base58Decode + 32-byte payload) for the bridge
         // pubkey check below. Lightweight 'string + length >= 32' was too
