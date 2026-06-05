@@ -240,6 +240,24 @@ function _buildTransferTx(payerB58) {
         const r = triggerV2._validateAuthTransaction('', FIXTURE_PUBKEY);
         assert.strictEqual(r.ok, false);
     });
+    // R-next-9: strict base64 charset+length-mod-4 check (matches the
+    // other tx-decoding entrypoints). These cases exercise the new guard
+    // specifically — the previous 'rejects non-base64 input' label was
+    // misleading because '' hits an earlier empty-string check, not the
+    // regex.
+    await check('R-next-9: rejects base64 with invalid chars', async () => {
+        const r = triggerV2._validateAuthTransaction('not!valid@base64', FIXTURE_PUBKEY);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.match(r.reason, /invalid base64/i);
+    });
+    await check('R-next-9: rejects base64 with bad length-mod-4', async () => {
+        // Valid charset but length % 4 !== 0 ('YQ==x' is 5 chars).
+        const r = triggerV2._validateAuthTransaction('YQ==x', FIXTURE_PUBKEY);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.match(r.reason, /invalid base64/i);
+    });
     await check('rejects truncated payload', async () => {
         const r = triggerV2._validateAuthTransaction(Buffer.from([0, 0, 0]).toString('base64'), FIXTURE_PUBKEY);
         assert.strictEqual(r.ok, false);
@@ -847,13 +865,20 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(triggerV2._readCompactU16(Buffer.from([0xFF, 0xFF, 0x01]), 0), null);
         assert.strictEqual(triggerV2._readCompactU16(Buffer.from([0x80, 0x80, 0x00]), 0), null);
     });
-    await check('parser handles a tx with a multi-byte account count (130 accounts)', async () => {
-        // 130 accounts: payer + memo + 128 filler. instruction targets memo (idx 1).
+    await check('R-next-6: 130-account tx rejected as tx_oversize (structurally impossible on-chain)', async () => {
+        // 130 accounts × 32 bytes = 4096 bytes of account keys alone, way
+        // over Solana's 1232-byte packet cap. Pre-R-next-6 this synthetic
+        // payload was accepted by the parser (and used to exercise multi-
+        // byte compact-u16 reads); the tx_oversize DoS guard now correctly
+        // rejects it. The compact-u16 multi-byte parser is exercised
+        // separately by '_readCompactU16 multi-byte values' at line ~850.
         const accounts = [PAYER_BUF, MEMO_BYTES];
         for (let i = 0; i < 128; i++) accounts.push(key32(50 + i));
         const tx = buildTxBytes({ accounts, instrProgramIdx: 1 });
         const r = triggerV2._validateAuthTransaction(tx, PAYER_B58);
-        assert.strictEqual(r.ok, true, `expected accept with 130 accounts, got: ${JSON.stringify(r)}`);
+        assert.strictEqual(r.ok, false, `expected tx_oversize reject for 130-account tx, got: ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.match(r.reason, /tx_oversize|1232/);
     });
 
     // ── recovery hardening (real-API row shape, verified live 2026-05-30) ──

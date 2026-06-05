@@ -258,6 +258,16 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'empty transaction payload' };
     }
+    // R-next-9 same-class sweep: Buffer.from(str, 'base64') silently ignores
+    // non-base64 chars and decodes partial input. For a security-sensitive
+    // tx entrypoint we must validate charset + length-mod-4 up front so a
+    // malformed Jupiter auth-tx payload fails closed at the entry, not
+    // halfway through parsing. Matches solana.js verifySwapTransaction +
+    // wallet/tx-parser.js parseTransaction + tools/solana.js
+    // _extractFeePayerBase58 contracts.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        return { ok: false, error: 'auth_tx_invalid', reason: 'invalid base64 characters or length' };
+    }
     // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes —
     // pre-decode reject so a malicious Jupiter auth-tx response can't
     // force us to materialize a huge buffer (DoS guard). 1232 bytes
