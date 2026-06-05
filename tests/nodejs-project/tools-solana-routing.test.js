@@ -109,12 +109,13 @@ require.cache[solanaPath] = {
         // R-next-10: match production's isValidSolanaAddress more closely.
         // Production checks charset+length AND base58-decodes + asserts the
         // decoded payload is exactly 32 bytes. The previous lightweight stub
-        // (charset + 32..44 length only) gave false confidence because a
-        // string like '1'.repeat(32) passes charset+length but decodes to a
-        // different byte count and would be rejected by production. Reusing
-        // wallet/tx-parser.js's base58Decode keeps the tests hermetic
-        // (no network, no production solana.js loaded) while matching the
-        // real validation contract.
+        // (charset + 32..44 length only) gave false confidence: e.g.
+        // '1'.repeat(33) is 33 base58 chars (passes 32..44 length check),
+        // decodes to 33 zero bytes (FAILS production's length === 32 check),
+        // but the old stub would accept it. The new stub rejects via the
+        // tx-parser base58Decode. Reusing wallet/tx-parser.js's base58Decode
+        // keeps the tests hermetic (no network, no production solana.js
+        // loaded) while matching the real validation contract.
         isValidSolanaAddress: (s) => {
             if (typeof s !== 'string') return false;
             const trimmed = s.trim();
