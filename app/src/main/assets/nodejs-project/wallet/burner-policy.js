@@ -457,7 +457,7 @@ function resolveSubjectAccount(parsed, instr, subjectIdx, instrIdx, opcodeName) 
     return { acct };
 }
 
-function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta) {
+function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta, burnerPubkey) {
     const ownedSet = new Set(burnerOwnedAccounts);
     const wsolExemption = (expectedDelta && expectedDelta.kind === 'jupiter_swap_immediate'
         && expectedDelta.wsolAtaExemption
@@ -529,15 +529,32 @@ function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta) {
             } else if (ix === TOKEN_IX.BURN || ix === TOKEN_IX.BURN_CHECKED) {
                 // B2 (BAT-1013-followup): SPL Burn / BurnChecked on a burner-
                 // owned ATA destroys tokens — equivalent to a drain from the
-                // burner's perspective. No current autonomous flow uses Burn
-                // legitimately; if a future flow needs it, it must declare
-                // expected zero balances for the burned account and use a
-                // dedicated kind (zero_value_burn).
+                // burner's perspective.
+                //
+                // Codex v8.4 amendment 2: cancel flows legitimately burn the
+                // protocol order/position marker token. Accept only when:
+                //   (a) expectedDelta.kind === 'zero_value_cancel', AND
+                //   (b) target account is in expectedDelta.allowedBurnAccounts
+                //       (caller MUST declare the specific order/position
+                //       marker accounts that may be burned).
+                // Burns on arbitrary burner-owned trade ATAs still reject
+                // even in zero_value_cancel. Burns on ownership-uncertain
+                // accounts reject via resolveSubjectAccount (C5 fix).
                 const sub = resolveSubjectAccount(parsed, instr, 0, i, 'Burn');
                 if (sub.err) return sub.err;
                 if (ownedSet.has(sub.acct)) {
+                    const allowedBurnAccounts = (expectedDelta.kind === 'zero_value_cancel'
+                        && Array.isArray(expectedDelta.allowedBurnAccounts))
+                        ? expectedDelta.allowedBurnAccounts.filter(isNonEmptyBase58)
+                        : [];
+                    if (allowedBurnAccounts.includes(sub.acct)) {
+                        continue; // declared protocol marker burn in cancel flow
+                    }
                     return reject('drainer_burn',
-                        `instruction[${i}] Burn on burner-owned account ${sub.acct}`);
+                        `instruction[${i}] Burn on burner-owned account ${sub.acct}` +
+                        (expectedDelta.kind === 'zero_value_cancel'
+                            ? ' (not in expectedDelta.allowedBurnAccounts)'
+                            : ''));
                 }
             } else if (ix === TOKEN_IX.CLOSE_ACCOUNT) {
                 // C5: fail-closed on undefined subject (was previously silent-skip).
@@ -554,10 +571,22 @@ function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta) {
                     // destination, different ATA, exemption absent) → drain.
                     if (wsolExemption && !wsolExemptionConsumed) {
                         const destIdx = instr.accountIdxs[1];
+                        const authIdx = instr.accountIdxs[2];
                         const destAcct = (typeof destIdx === 'number' && destIdx >= 0
                             && destIdx < parsed.staticAccountKeys.length)
                             ? parsed.staticAccountKeys[destIdx] : null;
-                        if (sub.acct === wsolExemption.ata && destAcct === wsolExemption.destination) {
+                        // Codex v8.4 amendment 1: close authority MUST be the
+                        // burner (the wSOL ATA was created by the burner; only
+                        // the burner can legitimately close it). Without this
+                        // check, a tx could declare a wsolExemption with the
+                        // right ata + destination but a different authority,
+                        // potentially allowing a relayer to redirect rent.
+                        const authAcct = (typeof authIdx === 'number' && authIdx >= 0
+                            && authIdx < parsed.staticAccountKeys.length)
+                            ? parsed.staticAccountKeys[authIdx] : null;
+                        if (sub.acct === wsolExemption.ata
+                            && destAcct === wsolExemption.destination
+                            && authAcct === burnerPubkey) {
                             wsolExemptionConsumed = true; // single-fire
                             continue; // allowed: documented wSOL unwrap
                         }
@@ -1322,7 +1351,7 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
     const declaredOwned = Array.isArray(expectedDelta.burnerOwnedAccounts)
         ? expectedDelta.burnerOwnedAccounts.filter(isNonEmptyBase58)
         : [];
-    const drainerCheck = validateDrainerOpcodes(parsed, declaredOwned, expectedDelta);
+    const drainerCheck = validateDrainerOpcodes(parsed, declaredOwned, expectedDelta, options.burnerPubkey);
     if (!drainerCheck.ok) return drainerCheck;
 
     // ── 5. Structural-only short-circuit (test mode only) ──
@@ -1427,7 +1456,7 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
         numRequiredSignatures: parsed.numRequiredSignatures,
         instructions: parsed.instructions,
     };
-    const drainerCheck2 = validateDrainerOpcodes(combinedParsed, ownedUnion, expectedDelta);
+    const drainerCheck2 = validateDrainerOpcodes(combinedParsed, ownedUnion, expectedDelta, options.burnerPubkey);
     if (!drainerCheck2.ok) return drainerCheck2;
 
     // ── 12. Per-shape delta validation (v8.1 dual-source) ──

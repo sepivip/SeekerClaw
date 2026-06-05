@@ -705,8 +705,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         const legacyNumRequired = txBuf[offset]; offset++;
         const legacyNumReadonlySigned = txBuf[offset]; offset++;
         const legacyNumReadonlyUnsigned = txBuf[offset]; offset++;
-        if (legacyNumRequired < 1 || legacyNumRequired > 16) {
-            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} must be in [1, 16].`, programs };
+        // Copilot R9: drop arbitrary 16-cap (Solana's actual limit is
+        // packet-size-based). Use protocol invariants instead.
+        if (legacyNumRequired < 1) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
+        }
+        if (legacyNumRequired !== numSigs.value) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} does not match signature-section count=${numSigs.value}.`, programs };
         }
         if (legacyNumReadonlySigned > legacyNumRequired) {
             return { valid: false, error: `invalid_header: numReadonlySigned=${legacyNumReadonlySigned} exceeds numRequired=${legacyNumRequired}.`, programs };
@@ -804,8 +809,11 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const numRequired = txBuf[offset]; offset++;
     const numReadonlySigned = txBuf[offset]; offset++;
     const numReadonlyUnsigned = txBuf[offset]; offset++;
-    if (numRequired < 1 || numRequired > 16) {
-        return { valid: false, error: `invalid_header: numRequiredSignatures=${numRequired} must be in [1, 16].`, programs };
+    if (numRequired < 1) {
+        return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
+    }
+    if (numRequired !== numSigs.value) {
+        return { valid: false, error: `invalid_header: numRequiredSignatures=${numRequired} does not match signature-section count=${numSigs.value}.`, programs };
     }
     if (numReadonlySigned > numRequired) {
         return { valid: false, error: `invalid_header: numReadonlySigned=${numReadonlySigned} exceeds numRequired=${numRequired}.`, programs };

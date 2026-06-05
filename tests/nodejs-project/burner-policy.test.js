@@ -1117,6 +1117,44 @@ async function runAsync(name, fn) {
         const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
         assert.strictEqual(r.ok, true);
     });
+    check('Codex v8.4 amendment 2: Burn on burner trade ATA in zero_value_cancel STILL REJECTS (no allowedBurnAccounts)', () => {
+        // Without explicit allowedBurnAccounts declaration, even cancel
+        // flows reject Burn on burner-owned trade ATAs.
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, USDC, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 3,
+                accountIdxs: [1, 2, 0],
+                dataBytes: Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'zero_value_cancel',
+            allowedInstructionClasses: ['token_close', 'memo'],
+            // NO allowedBurnAccounts → reject
+        });
+        assert.strictEqual(r.error, 'drainer_burn');
+        assert.match(r.reason, /not in expectedDelta\.allowedBurnAccounts/);
+    });
+    check('Codex v8.4 amendment 2: Burn on DECLARED order/position marker in zero_value_cancel ACCEPTED', () => {
+        const ORDER_MARKER = 'orderMarKerPdaXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, ORDER_MARKER, USDC, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 3,
+                accountIdxs: [1, 2, 0],
+                dataBytes: Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [ORDER_MARKER], {
+            kind: 'zero_value_cancel',
+            allowedInstructionClasses: ['token_close', 'memo'],
+            allowedBurnAccounts: [ORDER_MARKER], // explicit caller declaration
+        });
+        assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
+    });
 
     console.log();
     console.log('BAT-1013-followup B3: Token-2022 extension drainer rejection');
@@ -1357,6 +1395,43 @@ async function runAsync(name, fn) {
 
     console.log();
     console.log('BAT-1013-followup C4: cosigned mode invariant — burner not in feePayerAllowlist');
+    check('Codex v8.4 amendment 3: cosigned happy path — fee payer in feePayerAllowlist accepts', () => {
+        const x402Delta = {
+            kind: 'agent_pay_x402',
+            x402Version: 2,
+            signerMode: 'cosigned',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            feePayerAllowlist: [FACILITATOR],
+            cosignerAllowlist: [FACILITATOR],
+        };
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [FACILITATOR, BURNER], numRequiredSignatures: 2 },
+            BURNER, x402Delta);
+        assert.strictEqual(r.ok, true, `expected ok, got ${JSON.stringify(r)}`);
+    });
+
+    check('Codex v8.4 amendment 3: cosigned fee payer NOT in feePayerAllowlist REJECTS even if cosignerAllowlist contains it', () => {
+        // The "fee payer in either allowlist" loosening is rejected by Codex
+        // when feePayerAllowlist is present — it MUST be authoritative.
+        const ALT_FACILITATOR = 'AltFaciLitatorXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const x402Delta = {
+            kind: 'agent_pay_x402',
+            x402Version: 2,
+            signerMode: 'cosigned',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            feePayerAllowlist: [FACILITATOR],         // only FACILITATOR allowed as fee payer
+            cosignerAllowlist: [FACILITATOR, ALT_FACILITATOR], // ALT_FACILITATOR in cosigner list
+        };
+        // Tx places ALT_FACILITATOR at slot 0 (fee payer). cosigner list
+        // contains it, but feePayerAllowlist is authoritative → REJECT.
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [ALT_FACILITATOR, BURNER], numRequiredSignatures: 2 },
+            BURNER, x402Delta);
+        assert.strictEqual(r.error, 'fee_payer_not_in_allowlist');
+    });
+
     check('cosigned: burner in feePayerAllowlist rejected (cross-allowlist invariant)', () => {
         const x402Delta = {
             kind: 'agent_pay_x402',
@@ -1450,7 +1525,7 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.ok, true);
     });
     // Drainer-walk: CloseAccount with declared exemption accepted
-    check('drainer-walk: wSOL ATA CloseAccount (target=ata, dest=burner) ACCEPTED with exemption', () => {
+    check('drainer-walk: wSOL ATA CloseAccount (target=ata, dest=burner, auth=burner) ACCEPTED with exemption', () => {
         const WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
         const parsed = {
             staticAccountKeys: [BURNER, WSOL_ATA, TOKEN_PROGRAM],
@@ -1464,7 +1539,7 @@ async function runAsync(name, fn) {
         const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
             kind: 'jupiter_swap_immediate',
             wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER },
-        });
+        }, BURNER);
         assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
     });
     check('drainer-walk: wSOL ATA CloseAccount to ATTACKER (not burner) REJECTED even with exemption', () => {
@@ -1482,9 +1557,52 @@ async function runAsync(name, fn) {
         const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
             kind: 'jupiter_swap_immediate',
             wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER },
-        });
+        }, BURNER);
         assert.strictEqual(r.error, 'drainer_close_account');
     });
+    check('Codex v8.4 amendment 1: wSOL CloseAccount with wrong close-authority REJECTED even with exemption', () => {
+        // Without the authority check, an authority hijacked to a relayer
+        // could redirect rent. Authority MUST be the burner.
+        const WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const RELAYER = 'ReLayerXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, WSOL_ATA, TOKEN_PROGRAM, RELAYER],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0, 3], // target=WSOL_ATA, dest=BURNER, authority=RELAYER (wrong!)
+                dataBytes: Buffer.from([9]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
+            kind: 'jupiter_swap_immediate',
+            wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER },
+        }, BURNER);
+        assert.strictEqual(r.error, 'drainer_close_account');
+    });
+
+    check('Codex v8.4 amendment 1: wSOL exemption declared on SPL→SPL swap (no native SOL) still rejects unrelated CloseAccount', () => {
+        // Exemption declared on a swap that has no native-SOL wrap/unwrap
+        // intent. A CloseAccount on a DIFFERENT burner-owned ATA must still
+        // reject — the exemption only matches the declared ata+dest+authority.
+        const REAL_WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const VICTIM_ATA = 'VictiMSpLAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, VICTIM_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0, 0], // close VICTIM_ATA (not the declared wsol ATA)
+                dataBytes: Buffer.from([9]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [VICTIM_ATA], {
+            kind: 'jupiter_swap_immediate',
+            wsolAtaExemption: { ata: REAL_WSOL_ATA, destination: BURNER },
+        }, BURNER);
+        assert.strictEqual(r.error, 'drainer_close_account');
+    });
+
     check('drainer-walk: wSOL exemption is SINGLE-FIRE — second matching CloseAccount REJECTED (B1 replay defense)', () => {
         // A malicious tx attaching TWO CloseAccount(WSOL_ATA, dest=BURNER)
         // instructions would otherwise both fall through the exemption
@@ -1502,7 +1620,7 @@ async function runAsync(name, fn) {
         const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
             kind: 'jupiter_swap_immediate',
             wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER },
-        });
+        }, BURNER);
         assert.strictEqual(r.error, 'drainer_close_account');
     });
     check('drainer-walk: wSOL ATA CloseAccount on DIFFERENT ATA (not declared) REJECTED', () => {
@@ -1520,7 +1638,7 @@ async function runAsync(name, fn) {
         const r = policy._validateDrainerOpcodes(parsed, [OTHER_ATA], {
             kind: 'jupiter_swap_immediate',
             wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER }, // declared for different ATA
-        });
+        }, BURNER);
         assert.strictEqual(r.error, 'drainer_close_account');
     });
     check('drainer-walk: CloseAccount without exemption declared still REJECTED in jupiter_swap_immediate', () => {
