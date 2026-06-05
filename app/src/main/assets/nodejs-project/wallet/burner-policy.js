@@ -11,10 +11,22 @@
 // defense against drainer-instruction injection, supply-chain-tampered
 // upstream responses, and unexpected on-chain mutations.
 //
-// This module is the policy gate. Every burner sign goes through
+// This module is the policy gate. Burner signs go through
 // `BurnerSigner.signTransaction()` / `signAndSend()`, which call
-// `validateBurnerTx()` before any bridge HTTP call. If policy rejects,
-// no signature ever leaves the device.
+// `validateBurnerTx()` before any bridge HTTP call when the caller
+// supplies `opts.expectedDelta`. If policy rejects, no signature ever
+// leaves the device.
+//
+// TRANSITIONAL: `wallet/burner-signer.js` retains a warn-pass-through
+// path for callers that have NOT yet been migrated to pass
+// `expectedDelta`. When the bypass fires, a console warning is logged
+// and the tx proceeds without policy gating (this is the v1 behavior
+// preserved for backward-compat during the BAT-582 → BAT-1013 caller
+// migration). The bypass MUST be removed once every caller in the
+// codebase wires `expectedDelta` — tracking this in a follow-up. As of
+// BAT-1013 ship, every production caller (solana_swap, solana_send,
+// agent_pay, jupiter_trigger_*, jupiter_dca_*) IS migrated; the bypass
+// remains only as a defense against an unknown future caller.
 //
 // ARCHITECTURE (per BAT-1013 contract v1.1 + Codex sign-off 2026-06-04)
 // --------------------------------------------------------------------
