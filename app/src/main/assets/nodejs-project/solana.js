@@ -638,6 +638,12 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (txBuf.length === 0) {
         return { valid: false, error: 'tx_unparseable: decoded buffer is empty', programs: [] };
     }
+    // C1 (BAT-1013-followup): Solana caps tx packets at 1232 bytes. A tx
+    // larger than this can NEVER land on-chain — fail closed up-front
+    // instead of letting an oversized blob walk the parser.
+    if (txBuf.length > 1232) {
+        return { valid: false, error: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
 
     const programs = [];
     const labelProgram = (id) => {
@@ -689,9 +695,17 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         if (offset + 3 > txBuf.length) {
             return { valid: false, error: 'Legacy: 3-byte message header truncated.', programs };
         }
-        offset++; // numRequired
-        offset++; // numReadonlySigned
+        // C10 + Q2 (BAT-1013-followup): enforce header invariants. Solana
+        // caps signers at 16/tx; numReadonlySigned must not exceed numRequired.
+        const legacyNumRequired = txBuf[offset]; offset++;
+        const legacyNumReadonlySigned = txBuf[offset]; offset++;
         offset++; // numReadonlyUnsigned
+        if (legacyNumRequired < 1 || legacyNumRequired > 16) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} must be in [1, 16].`, programs };
+        }
+        if (legacyNumReadonlySigned > legacyNumRequired) {
+            return { valid: false, error: `invalid_header: numReadonlySigned=${legacyNumReadonlySigned} exceeds numRequired=${legacyNumRequired}.`, programs };
+        }
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
 
@@ -786,9 +800,19 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (offset + 3 > txBuf.length) {
         return { valid: false, error: 'v0: 3-byte message header truncated.', programs };
     }
+    // C10 + Q2 (BAT-1013-followup): enforce header invariants up-front.
+    // Solana caps signers at 16/tx; numReadonlySigned must not exceed
+    // numRequired. The previous Math.min clamp in skipPayerCheck silently
+    // truncated nonsensical numRequired values.
     const numRequired = txBuf[offset]; offset++;
-    offset++; // numReadonlySigned
+    const numReadonlySigned = txBuf[offset]; offset++;
     offset++; // numReadonlyUnsigned
+    if (numRequired < 1 || numRequired > 16) {
+        return { valid: false, error: `invalid_header: numRequiredSignatures=${numRequired} must be in [1, 16].`, programs };
+    }
+    if (numReadonlySigned > numRequired) {
+        return { valid: false, error: `invalid_header: numReadonlySigned=${numReadonlySigned} exceeds numRequired=${numRequired}.`, programs };
+    }
 
     // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);

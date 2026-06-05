@@ -495,6 +495,65 @@ test('R7: skipPayerCheck=true rejects legacy tx (Ultra requires v0)', () => {
     assert.match(r.error, /Expected v0 transaction for Ultra/);
 });
 
+test('C1: fails closed on tx > 1232-byte Solana packet cap', () => {
+    // Build a base64 string that decodes to > 1232 bytes — pad arbitrary
+    // bytes (well-formed base64 of length divisible by 4).
+    const oversized = Buffer.alloc(1300).toString('base64');
+    const r = verifySwapTransaction(oversized, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_oversize/);
+});
+
+test('C10: fails closed on legacy tx with numRequiredSignatures=0', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0, 0, 0])); // numRequired=0
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(0));
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /invalid_header.*numRequiredSignatures=0/);
+});
+
+test('C10: fails closed on v0 tx with numRequiredSignatures=17 (>16 cap)', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80])); // v0
+    parts.push(Buffer.from([17, 0, 0])); // numRequired=17
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(0));
+    parts.push(compactU16(0)); // numAlts
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)), { skipPayerCheck: true });
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /invalid_header.*numRequiredSignatures=17/);
+});
+
+test('Q2: fails closed when numReadonlySigned exceeds numRequiredSignatures', () => {
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80])); // v0
+    parts.push(Buffer.from([1, 5, 0])); // numRequired=1 but numReadonlySigned=5
+    parts.push(compactU16(2));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(pubkeyBytes(PROGRAM));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(0));
+    parts.push(compactU16(0));
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /invalid_header.*numReadonlySigned=5 exceeds numRequired=1/);
+});
+
 test('fails closed: fee payer mismatch on legacy tx', () => {
     const txB64 = buildLegacyTx({
         accountKeys: [PAYER, PROGRAM],
