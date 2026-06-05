@@ -544,6 +544,22 @@ test('Copilot R9: fails closed when sig section count != numRequiredSignatures (
     assert.match(r.error, /numRequiredSignatures=3 does not match signature-section count=1/);
 });
 
+test('Copilot R10: fails closed when legacy numRequiredSignatures > numAccounts (symmetric to v0 check)', () => {
+    const parts = [];
+    parts.push(compactU16(2));
+    parts.push(SIG_BYTES);
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([2, 0, 0]));
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(0));
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /numRequiredSignatures=2 exceeds account key count=1/);
+});
+
 test('Copilot R9: fails closed when v0 numRequiredSignatures > numStaticAccounts (signers must be static, not ALT)', () => {
     // Header claims 2 required signers but static-key section has only 1.
     // Required signers must come from the static key section.
