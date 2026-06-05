@@ -265,16 +265,20 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
     // halfway through parsing. Matches solana.js verifySwapTransaction +
     // wallet/tx-parser.js parseTransaction + tools/solana.js
     // _extractFeePayerBase58 contracts.
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
-        return { ok: false, error: 'auth_tx_invalid', reason: 'invalid base64 characters or length' };
-    }
     // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes —
     // pre-decode reject so a malicious Jupiter auth-tx response can't
     // force us to materialize a huge buffer (DoS guard). 1232 bytes
     // encodes to at most ceil(1232/3)*4 = 1644 chars in base64.
+    //
+    // R-next-16: length cap MUST run before the charset regex — otherwise
+    // a malicious multi-MB string of valid base64 chars forces the regex
+    // to scan the full buffer before rejection, defeating the DoS guard.
     if (txBase64.length > 1644) {
         return { ok: false, error: 'auth_tx_invalid',
                  reason: `tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap` };
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        return { ok: false, error: 'auth_tx_invalid', reason: 'invalid base64 characters or length' };
     }
     let txBuf;
     try {

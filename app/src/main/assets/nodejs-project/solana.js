@@ -635,15 +635,19 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
         return { valid: false, error: 'tx_unparseable: empty or non-string input', programs: [] };
     }
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
-        return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
-    }
     // R-next-10: pre-decode size guard (DoS mitigation). 1232 bytes encode
     // to at most ceil(1232/3)*4 = 1644 chars in base64; anything longer is
     // guaranteed oversized and we should reject BEFORE allocating a buffer.
     // Mirrors wallet/tx-parser.js + jupiter/trigger-v2.js + tools/solana.js.
+    //
+    // R-next-16: length cap MUST run before the charset regex — otherwise
+    // a malicious multi-MB string of valid base64 chars forces the regex
+    // to scan the full buffer before rejection, defeating the DoS guard.
     if (txBase64.length > 1644) {
         return { valid: false, error: `tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
     }
     let txBuf;
     try {

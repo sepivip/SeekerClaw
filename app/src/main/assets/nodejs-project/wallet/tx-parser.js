@@ -250,20 +250,26 @@ function parseTransaction(txBase64) {
     if (typeof txBase64 !== 'string') {
         throw new TxParseError('invalid_base64', 0, 'tx must be a non-empty base64 string');
     }
-    // Charset + length-mod-4 (R11): a single regex covers empty-string, invalid
-    // chars, and bad length in one fail-closed check.
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
-        throw new TxParseError('invalid_base64', 0, 'invalid base64 characters or length');
-    }
     // R-next-6 (DoS mitigation): Solana caps tx packets at 1232 bytes — a tx
     // larger than this can NEVER land on-chain. Fail closed BEFORE the base64
     // decode so we never materialize an oversized buffer in memory. base64
     // expands 3 bytes → 4 chars, so 1232 bytes encodes to at most
     // ceil(1232/3) * 4 = 1644 chars. Anything longer is guaranteed oversized.
     // Mirrors the solana.js verifySwapTransaction R12 fix.
+    //
+    // R-next-16: length cap MUST run before the charset regex. A malicious
+    // multi-MB string of valid base64 chars would otherwise force the regex
+    // to scan the entire buffer before we reject — exact opposite of the
+    // intended DoS mitigation. The cap is O(1); regex is O(n).
     if (txBase64.length > 1644) {
         const estBytes = Math.floor(txBase64.length * 3 / 4);
         throw new TxParseError('tx_oversize', 0, `~${estBytes} bytes exceeds Solana's 1232-byte packet cap`);
+    }
+    // Charset + length-mod-4 (R11): a single regex covers empty-string, invalid
+    // chars, and bad length in one fail-closed check. Only runs on inputs
+    // already bounded by the cap above, so the regex scan is O(1644) worst case.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        throw new TxParseError('invalid_base64', 0, 'invalid base64 characters or length');
     }
     let txBuf;
     try {

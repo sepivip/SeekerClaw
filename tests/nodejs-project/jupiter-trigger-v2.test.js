@@ -880,6 +880,21 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(r.error, 'auth_tx_invalid');
         assert.match(r.reason, /tx_oversize|1232/);
     });
+    await check('R-next-16 ordering: oversized + invalid-charset → tx_oversize (cap fires before regex)', async () => {
+        // Discriminating input: '@' is NOT a valid base64 char, and the
+        // string is also > 1644 chars (over the cap). If the charset regex
+        // runs BEFORE the length cap (the pre-R-next-16 bug), this rejects
+        // as 'invalid base64 characters or length'. If the length cap runs
+        // FIRST (the R-next-16 fix), this rejects as 'tx_oversize'. Pinning
+        // 'tx_oversize' here makes a future regression of the ordering
+        // caught by this test.
+        const oversizedInvalid = '@'.repeat(2000);
+        const r = triggerV2._validateAuthTransaction(oversizedInvalid, PAYER_B58);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'auth_tx_invalid');
+        assert.match(r.reason, /tx_oversize/,
+            `R-next-16 ordering regression: length cap MUST run before charset regex; got reason=${r.reason}`);
+    });
 
     // ── recovery hardening (real-API row shape, verified live 2026-05-30) ──
     // History rows use orderState/initialInputAmount/events[]; NO status,

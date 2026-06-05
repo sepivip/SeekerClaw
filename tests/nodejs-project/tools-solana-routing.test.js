@@ -667,6 +667,23 @@ function _burnerOff() {
         catch (e) { assert.match(e.message, /unsupported_tx_version.*v127/); }
     });
 
+    await check('R-next-16 ordering: oversized + invalid-charset → tx_oversize (cap fires before regex)', async () => {
+        // Discriminating input: '@' is NOT a valid base64 char, and the
+        // string is also > 1644 chars (over the cap). If the charset regex
+        // runs BEFORE the length cap (the pre-R-next-16 bug), this throws
+        // 'invalid base64'. If the length cap runs FIRST (the R-next-16
+        // fix), this throws 'tx_oversize'. Pinning 'tx_oversize' here makes
+        // a future regression of the ordering caught by this test.
+        const oversizedInvalid = '@'.repeat(2000);
+        try {
+            tools._extractFeePayerBase58(oversizedInvalid);
+            assert.fail('expected throw');
+        } catch (e) {
+            assert.match(e.message, /tx_oversize/,
+                `R-next-16 ordering regression: length cap MUST run before charset regex; got message=${e.message}`);
+        }
+    });
+
     // ── BAT-1013 foundation patch: solana_send source param + self-send + pre-flight ──
     await check('foundation: source="main" forces main routing even when burner ON + under cap', async () => {
         _burnerOn();

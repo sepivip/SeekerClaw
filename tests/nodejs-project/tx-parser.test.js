@@ -323,6 +323,21 @@ check('throws tx_oversize on 1644-char unpadded base64 (post-decode path, decode
         assert.strictEqual(e.reason, 'tx_oversize');
     }
 });
+check('R-next-16 ordering: oversized + invalid-charset → tx_oversize (cap fires before regex)', () => {
+    // Discriminating input: '@' is NOT a valid base64 char, and the string is
+    // also > 1644 chars (over the cap). If the charset regex runs BEFORE the
+    // length cap (the pre-R-next-16 bug), this rejects as `invalid_base64`.
+    // If the length cap runs FIRST (the R-next-16 fix), this rejects as
+    // `tx_oversize`. Pinning `tx_oversize` here makes a future regression of
+    // the ordering caught by this test.
+    const oversizedInvalid = '@'.repeat(2000);
+    try { parseTransaction(oversizedInvalid); assert.fail('expected throw'); }
+    catch (e) {
+        assert.ok(e instanceof TxParseError);
+        assert.strictEqual(e.reason, 'tx_oversize',
+            `R-next-16 ordering regression: length cap MUST run before charset regex; got reason=${e.reason}`);
+    }
+});
 check('admits 1232-byte tx at exact cap (size guard must NOT over-reject)', () => {
     // A real 1232-byte tx: 1232 % 3 == 2, so it encodes to 1644 chars with
     // one '=' pad. Both size guards must pass; the parser will then fail

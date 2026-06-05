@@ -33,7 +33,7 @@
 // Safety:
 //   - Reads BURNER_SECRET_KEY from .env.test ONLY (never echoes).
 //   - Logs pubkeys as `aaaa…zzzz` prefix/suffix only.
-//   - Run with: `cd tests/jupiter-ultra && node ../../tests/jupiter-ultra/live-burner-policy-helius.js`
+//   - Run from inside tests/jupiter-ultra: `node live-burner-policy-helius.js`
 //     (must run from jupiter-ultra dir so dotenv + bs58 resolve via local node_modules).
 
 'use strict';

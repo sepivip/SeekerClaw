@@ -521,6 +521,21 @@ test('R-next-10: pre-decode guard fires on base64 > 1644 chars (before Buffer.fr
     assert.match(r.error, /~/, 'pre-decode message contains ~ estimate');
 });
 
+test('R-next-16 ordering: oversized + invalid-charset → tx_oversize (cap fires before regex)', () => {
+    // Discriminating input: '@' is NOT a valid base64 char, and the string
+    // is also > 1644 chars (over the cap). If the charset regex runs BEFORE
+    // the length cap (the pre-R-next-16 bug), this rejects as
+    // `tx_unparseable: invalid base64 characters or length`. If the length
+    // cap runs FIRST (the R-next-16 fix), this rejects as `tx_oversize`.
+    // Pinning `tx_oversize` here makes a future regression of the ordering
+    // caught by this test.
+    const oversizedInvalid = '@'.repeat(2000);
+    const r = verifySwapTransaction(oversizedInvalid, 'anything');
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_oversize/,
+        `R-next-16 ordering regression: length cap MUST run before charset regex; got error=${r.error}`);
+});
+
 test('R-next-10: numSigs varint truncated → tx_unparseable: signature count varint', () => {
     // A single 0x80 byte = continuation bit set with no terminator =
     // truncated varint (terminated: false). Exercises the new explicit

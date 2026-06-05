@@ -307,8 +307,10 @@ function _lazyDefaultSimulator() {
         // for two same-RPC reads in the same event-loop tick. Throw so the
         // policy wraps it as `simulation_failed` (availability-class —
         // caller may retry once RPC settles). Skip the check when either
-        // slot is missing (older RPC responses) or when only one address
-        // was requested (no GMA → no preSlot).
+        // slot is missing: preSlot is null when no addresses were requested
+        // (GMA path skipped entirely) OR when the GMA response lacked a
+        // numeric `context.slot` (older RPC); simSlot is null when the
+        // simulateTransaction response lacked one for the same reason.
         if (preSlot !== null && simSlot !== null) {
             const drift = Math.abs(simSlot - preSlot);
             if (drift > 8) {

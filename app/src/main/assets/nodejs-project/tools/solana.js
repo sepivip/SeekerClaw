@@ -61,14 +61,18 @@ function _extractFeePayerBase58(txBase64) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
         throw new Error('empty or non-string tx');
     }
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
-        throw new Error('invalid base64');
-    }
     // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes. Pre-
     // decode reject so we never materialize an oversized buffer (DoS guard).
     // 1232 bytes encodes to at most ceil(1232/3)*4 = 1644 chars in base64.
+    //
+    // R-next-16: length cap MUST run before the charset regex — otherwise
+    // a malicious multi-MB string of valid base64 chars forces the regex
+    // to scan the full buffer before rejection, defeating the DoS guard.
     if (txBase64.length > 1644) {
         throw new Error(`tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap`);
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        throw new Error('invalid base64');
     }
     const buf = Buffer.from(txBase64, 'base64');
     if (buf.length === 0) throw new Error('empty decoded buffer');
