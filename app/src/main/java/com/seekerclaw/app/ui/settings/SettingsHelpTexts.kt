@@ -192,5 +192,20 @@ object SettingsHelpTexts {
         "Get a free key at helius.dev (free tier: 50k requests/day). " +
         "Without it the app falls back to Solana's public mainnet RPC, " +
         "which is rate-limited and frequently times out — wallet reads " +
-        "may silently return empty results."
+        "may silently return empty results. " +
+        // BAT-1013 v8.1 amendment #3 (Codex 2026-06-04): wording precision
+        // for the burner-policy interaction. Helius is recommended for
+        // reliability; without it, autonomous burner signing may fail
+        // closed under public RPC rate-limit pressure (safe — the policy
+        // refuses rather than signing without verification — but the UX
+        // is friction).
+        "Recommended for reliable autonomous trading (burner wallet). " +
+        "Without it, autonomous signing may fail closed at the " +
+        "simulation validation step under public RPC rate-limit " +
+        "pressure. The policy fails closed rather than signing without " +
+        "verification. Specifically, when account snapshots and " +
+        "simulation slots drift apart (a public-RPC consistency " +
+        "failure), the policy surfaces it as `simulation_failed` in " +
+        "the availability bucket — adding a Helius key removes most " +
+        "slot-drift triggers."
 }

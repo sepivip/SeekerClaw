@@ -66,6 +66,7 @@ jobs:
             agent-pay-preflight-balance \
             burner-cancel-zero-amount \
             burner-signer \
+            burner-signer-simulator \
             caps-preflight \
             confirmation-policy \
             confirmation-policy-burner \
@@ -77,7 +78,13 @@ jobs:
             internal-control-server \
             internal-control-server-token-rotation \
             internal-control-server-proxy-passthrough \
-            bridge-token-reload
+            bridge-token-reload \
+            verify-swap-transaction \
+            burner-policy \
+            tools-solana-routing \
+            tx-parser \
+            public-rpc-shaper \
+            ci-coverage-manifest
           do
             echo "── $t ──"
             node "tests/nodejs-project/${t}.test.js"

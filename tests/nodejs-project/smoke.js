@@ -93,6 +93,14 @@ const LOAD_TARGETS = [
     // calls to localhost:8765 happen later when androidBridgeCall() runs.
     'wallet/signer.js',
     'wallet/wallet.js',
+    // BAT-1013: pure modules — no top-level IO, no config dependency.
+    // tx-parser.js is a hand-rolled binary parser + base58 helpers.
+    // burner-policy.js depends only on tx-parser.js for parser primitives.
+    'wallet/tx-parser.js',
+    'wallet/burner-policy.js',
+    'wallet/spl-token-layout.js',
+    'wallet/public-rpc-shaper.js',
+    'wallet/ata.js',
     'payment/protocol.js',
     'payment/x402.js',
     'payment/index.js',

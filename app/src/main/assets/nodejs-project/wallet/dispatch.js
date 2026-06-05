@@ -71,6 +71,24 @@ const { log } = require('../config');
  *                                            - signed: true when txBase64 is the signed bytes (burner
  *                                              path); false when caller must sign first (main path)
  * @param {string} [args.flowName]          - log tag for diagnostics
+ * @param {Object|null} [args.forceRouting] - { routingDecision, underCap, principalAtomic, capName }
+ *                                            Pre-decided routing the caller observed a runtime
+ *                                            constraint for (e.g., burner under-cap but pubkey
+ *                                            unreachable → force main). Bypasses routeFor().
+ * @param {Object|null} [args.expectedDelta] - BAT-1013 burner-policy expectedDelta envelope:
+ *                                            { kind: 'jupiter_swap_immediate' | 'jupiter_trigger_create_deposit'
+ *                                              | 'jupiter_dca_create_deposit' | 'solana_send'
+ *                                              | 'agent_pay_x402' | 'zero_value_cancel'
+ *                                              | 'zero_value_auth',
+ *                                              ... per-kind required + optional fields }.
+ *                                            Forwarded into BurnerSigner.signTransaction() (or
+ *                                            signAndSend() on the atomic path) for the
+ *                                            validateBurnerTx chokepoint. REQUIRED when
+ *                                            routingDecision === 'burner'; ignored on main path.
+ * @param {boolean} [args.allowPartiallySigned] - When true, the tx is allowed to already carry
+ *                                            cosigner signatures (x402 v2 partially-signed flow)
+ *                                            and burner-policy permits the cosigned signer mode
+ *                                            with caller-declared feePayerAllowlist. Default false.
  *
  * @returns {Promise<{
  *     ok: boolean,
@@ -87,7 +105,7 @@ const { log } = require('../config');
  * here as belt-and-suspenders — if routing says under-cap=false at this
  * point, something raced or the gate was bypassed; we return an error.
  */
-async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null }) {
+async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null, expectedDelta = null, allowPartiallySigned = false }) {
     // 1. Decide routing.
     let route;
     if (forceRouting && (forceRouting.routingDecision === 'burner' || forceRouting.routingDecision === 'main')) {
@@ -178,9 +196,21 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
     // 4b. Sign-only via burner. The Phase 4 stub of /burner/sign-and-send
     // returns 501; we explicitly use sign-transaction + Node-side broadcast
     // until that endpoint is finished (see file header).
+    //
+    // BAT-1013 Phase 3: pass `expectedDelta` (when provided by the caller)
+    // through to BurnerSigner. The policy gate runs BEFORE the bridge call
+    // and rejects the sign if simulation reveals a delta mismatch / drainer
+    // opcode / signer-mode violation. Existing callers that haven't migrated
+    // yet pass `expectedDelta = null` and hit the transitional WARN-pass-
+    // through (will become fail-closed after all 5 callers migrate; see
+    // BurnerSigner._runPolicyGate). `allowPartiallySigned` is passed through
+    // for x402 v2 cosigned-facilitator flows.
     let signedTxBase64;
     try {
-        const signed = await burner.signer().signTransaction(unsignedTxBase64, { reservationId });
+        const signOpts = { reservationId };
+        if (expectedDelta) signOpts.expectedDelta = expectedDelta;
+        if (allowPartiallySigned === true) signOpts.allowPartiallySigned = true;
+        const signed = await burner.signer().signTransaction(unsignedTxBase64, signOpts);
         if (!signed || signed.error) {
             await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');
             return {
@@ -188,6 +218,7 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
                 wallet: 'burner',
                 error: signed && signed.error ? signed.error : 'sign_failed',
                 reason: signed && signed.reason ? signed.reason : 'signing failed',
+                policyClass: signed && signed.policyClass,
             };
         }
         signedTxBase64 = signed.signedTxBase64;
@@ -265,7 +296,7 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
  * An "unknown" creator (order created on another device) defaults to the
  * main path with a confirmation popup AND a diagnostic.
  */
-async function signCancelViaBurner({ unsignedTxBase64, broadcast, flowName = 'cancel' }) {
+async function signCancelViaBurner({ unsignedTxBase64, broadcast, flowName = 'cancel', expectedDelta = null }) {
     const burner = getWallet('burner');
     if (!burner) {
         return { ok: false, wallet: 'burner', error: 'no_burner_wallet', reason: 'getWallet("burner") returned null' };
@@ -289,9 +320,26 @@ async function signCancelViaBurner({ unsignedTxBase64, broadcast, flowName = 'ca
     const reservationId = reserveRes.reservationId;
 
     // Sign.
+    //
+    // BAT-1013 Phase 3: pass an `expectedDelta` of kind `zero_value_cancel`
+    // by default. Cancels return SOL rent to the burner (net SOL delta
+    // ≥ -ZERO_VALUE_SOL_HEADROOM_LAMPORTS) and have no expected token
+    // movement on burner-owned accounts beyond what the drainer-opcode
+    // walk allows. Callers can override with a more specific
+    // `expectedDelta` (e.g. a Jupiter cancel that returns a known refund
+    // amount); when omitted, the default zero-value contract applies.
+    const effectiveExpectedDelta = expectedDelta || {
+        kind: 'zero_value_cancel',
+        signerMode: 'burner_only',
+        allowedInstructionClasses: ['token_close', 'memo', 'compute_budget', 'system_create_account_for_ata'],
+        burnerOwnedAccounts: [],
+    };
     let signedTxBase64;
     try {
-        const signed = await burner.signer().signTransaction(unsignedTxBase64, { reservationId });
+        const signed = await burner.signer().signTransaction(unsignedTxBase64, {
+            reservationId,
+            expectedDelta: effectiveExpectedDelta,
+        });
         if (!signed || signed.error) {
             await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');
             return {
@@ -299,6 +347,7 @@ async function signCancelViaBurner({ unsignedTxBase64, broadcast, flowName = 'ca
                 wallet: 'burner',
                 error: signed && signed.error ? signed.error : 'sign_failed',
                 reason: signed && signed.reason ? signed.reason : 'signing failed',
+                policyClass: signed && signed.policyClass,
             };
         }
         signedTxBase64 = signed.signedTxBase64;
@@ -442,7 +491,7 @@ async function _zeroCapReserveAny() {
     };
 }
 
-async function signZeroCapTxViaBurner({ unsignedTxBase64, flowName = 'zero-cap-sign' }) {
+async function signZeroCapTxViaBurner({ unsignedTxBase64, flowName = 'zero-cap-sign', expectedDelta = null }) {
     const burner = getWallet('burner');
     if (!burner) {
         return { ok: false, error: 'no_burner_wallet', reason: 'getWallet("burner") returned null' };
@@ -453,15 +502,28 @@ async function signZeroCapTxViaBurner({ unsignedTxBase64, flowName = 'zero-cap-s
     }
     const reservationId = reserveRes.reservationId;
 
+    // BAT-1013 Phase 3: zero-cap signs (V2 auth challenges, V2 cancel
+    // step-2, ambiguous-recovery deposit signs) declare `zero_value_auth`
+    // by default. Callers can override with a tighter `expectedDelta`.
+    const effectiveExpectedDelta = expectedDelta || {
+        kind: 'zero_value_auth',
+        signerMode: 'burner_only',
+        allowedInstructionClasses: ['memo', 'compute_budget'],
+        burnerOwnedAccounts: [],
+    };
     let signedTxBase64;
     try {
-        const signed = await burner.signer().signTransaction(unsignedTxBase64, { reservationId });
+        const signed = await burner.signer().signTransaction(unsignedTxBase64, {
+            reservationId,
+            expectedDelta: effectiveExpectedDelta,
+        });
         if (!signed || signed.error) {
             await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');
             return {
                 ok: false,
                 error: signed && signed.error ? signed.error : 'sign_failed',
                 reason: signed && signed.reason ? signed.reason : 'signing failed',
+                policyClass: signed && signed.policyClass,
             };
         }
         signedTxBase64 = signed.signedTxBase64;
