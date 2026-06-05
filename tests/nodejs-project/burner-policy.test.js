@@ -2148,6 +2148,173 @@ async function runAsync(name, fn) {
         assert.match(r.reason, /self-send/i);
     });
 
+    // ── R-next-7: SPL-decode-fail-closed in validateSimDelta ────────
+    // Pre-fix: when a required SPL-token account EXISTS but the data
+    // can't be decoded (e.g. Token-2022 with extensions our decoder
+    // doesn't recognize), tokenDelta() returned 0 / create / close
+    // semantics silently. The policy then accepted a state we couldn't
+    // actually verify. Post-fix: reject as simulation_metadata_missing
+    // (availability class) so the agent can offer MWA fallback.
+    function nonDecodableSplAccountInfo({ lamports = 2_039_280 }) {
+        // Account exists, has SPL Token Program as owner, but data buffer
+        // is too short (< 72 bytes) to decode as SPL Token account.
+        return {
+            lamports,
+            owner: TOKEN_PROGRAM,
+            data: [Buffer.alloc(40).toString('base64'), 'base64'], // 40 bytes, decoder needs ≥72
+            executable: false,
+            rentEpoch: 0,
+        };
+    }
+
+    await runAsync('R-next-7: SPL account exists but PRE not decodable → simulation_metadata_missing', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER_USDC_ATA]: {
+                    pre: nonDecodableSplAccountInfo({}), // exists, undecodable
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 2_000_995_000 }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER, mint: 'native_sol', atomicAmount: '500000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, false, `expected reject, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'simulation_metadata_missing');
+        assert.match(r.reason, /pre.*not decodable as SPL Token/i);
+        assert.strictEqual(r.class, 'availability');
+    });
+
+    await runAsync('R-next-7: SPL account exists but POST not decodable → simulation_metadata_missing', async () => {
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: nonDecodableSplAccountInfo({}), // exists, undecodable
+                },
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 2_000_995_000 }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER, mint: 'native_sol', atomicAmount: '500000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, false, `expected reject, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'simulation_metadata_missing');
+        assert.match(r.reason, /post.*not decodable as SPL Token/i);
+    });
+
+    await runAsync('R-next-7: happy-path with BOTH pre/post decodable → NOT over-rejected', async () => {
+        // Regression guard #1: the new guard must NOT over-reject the
+        // standard happy path where both pre and post are fully decodable.
+        // Confirms the guard's condition (`exists && !splToken`) doesn't
+        // misfire when splToken IS present.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 2_000_995_000 }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER, mint: 'native_sol', atomicAmount: '500000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `decode guard must NOT over-reject legitimate happy path, got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('R-next-7: pre=null (legitimate ATA-create) → NOT triggered by decode guard', async () => {
+        // Regression guard #2: when pre.exists=false (legit ATA create
+        // before the swap), the new guard's `preAI.exists && !preAI.splToken`
+        // short-circuits on the `exists` check — never reaches the
+        // !splToken branch. Uses jupiter_trigger_create_deposit which
+        // declares allowCreate on the depositVault so pre=null is
+        // legitimate, and the only burner-debit account has a normal
+        // pre to satisfy the burnerDebit mustExistBefore policy.
+        const VAULT_ATA = 'VauLtAtA111111111111111111111111111111111111';
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_LIMIT_ORDER_V2, BURNER_USDC_ATA, VAULT_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                [VAULT_ATA]: {
+                    // pre = null = ATA didn't exist — this is the case the
+                    // decode guard must NOT mis-trigger on.
+                    pre: null,
+                    post: splTokenAccountInfo({ mint: USDC, owner: JUPITER_LIMIT_ORDER_V2, amountAtomic: '1000000' }),
+                },
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: { pubkey: VAULT_ATA, expectedOwner: JUPITER_LIMIT_ORDER_V2, mint: USDC, atomicAmount: '1000000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        // The test accepts EITHER r.ok===true (full validation passed) OR a
+        // reject reason that is NOT 'simulation_metadata_missing' caused by
+        // our new guard. Any "not decodable" mention in the reason fails
+        // this test — the guard fired on a pre=null account.
+        if (!r.ok) {
+            assert.ok(
+                !/not decodable as SPL Token/i.test(r.reason || ''),
+                `decode guard should not fire on pre=null; got reason: ${r.reason}`,
+            );
+        }
+    });
+
     console.log();
     console.log(`Result: ${pass} passed, ${fail} failed`);
     if (fail > 0) process.exit(1);

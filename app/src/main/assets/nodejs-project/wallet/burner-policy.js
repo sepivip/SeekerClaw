@@ -1302,9 +1302,30 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
         if (check.mint === 'native_sol') {
             primaryDelta = lamportsDelta(preAI, postAI).delta;
         } else {
-            // SPL token: both pre and post must decode as SPL Token accounts.
+            // SPL token: both pre and post must decode as SPL Token accounts
+            // WHEN THEY EXIST. R-next-7 fix: previously the path silently
+            // accepted accounts that existed but couldn't be decoded as SPL
+            // Token (splToken undefined) — e.g. a Token-2022 account with
+            // extensions our decoder doesn't recognize. tokenDelta() would
+            // then return a zero/create/close result that doesn't reflect
+            // reality, letting an attacker craft a state change we can't see.
+            // Fail closed: when account exists but isn't SPL-decodable, we
+            // cannot verify the delta — reject as simulation_metadata_missing
+            // (availability class) so the agent can offer MWA fallback.
+            // This guard runs even for SPL_MINT_AGNOSTIC checks because the
+            // amount-delta computation itself needs splToken.amountAtomic.
+            if (preAI.exists && !preAI.splToken) {
+                return reject('simulation_metadata_missing',
+                    `pre ${check.address} (role=${check.role}) exists but is not decodable as SPL Token (declared mint: ${check.mint})`);
+            }
+            if (postAI.exists && !postAI.splToken) {
+                return reject('simulation_metadata_missing',
+                    `post ${check.address} (role=${check.role}) exists but is not decodable as SPL Token (declared mint: ${check.mint})`);
+            }
             // If pre is missing data but post has it (allowCreate), pre side
-            // contributes 0 to the delta.
+            // contributes 0 to the delta — this is fine because pre.exists=false
+            // is a legitimate ATA-creation case caught by the existence-policy
+            // gate above, not a decode failure.
             const td = tokenDelta(preAI, postAI);
             primaryDelta = td.delta;
             // Optional sanity: declared mint should match the decoded mint
