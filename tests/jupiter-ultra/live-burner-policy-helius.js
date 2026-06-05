@@ -157,7 +157,25 @@ function makeLiveSimulator(rpcUrl) {
                 addresses,
                 { commitment: 'processed', encoding: 'base64' },
             ]);
-            preSnapshot = (gma && Array.isArray(gma.value)) ? gma.value : addresses.map(() => null);
+            // Copilot PR #398 R12: fail loudly on shape regressions so
+            // infrastructure problems (Helius API version change, partial
+            // response, length mismatch) are NEVER silently treated as
+            // all-null pre-state. This test is load-bearing for the
+            // BAT-1013 dual-source contract — masking infra regressions
+            // here can produce a misleading PASS. solanaRpc() already
+            // throws on res.error (line ~110); these guards cover the
+            // remaining cases: missing .value and length mismatches.
+            if (!gma || !Array.isArray(gma.value)) {
+                throw new Error(
+                    `live-test infra: getMultipleAccounts returned no \`value\` array — RPC shape regression or partial response (got: ${JSON.stringify(gma).slice(0, 200)})`
+                );
+            }
+            if (gma.value.length !== addresses.length) {
+                throw new Error(
+                    `live-test infra: getMultipleAccounts returned ${gma.value.length} entries for ${addresses.length} requested addresses — length mismatch`
+                );
+            }
+            preSnapshot = gma.value;
         }
         // 2. simulateTransaction with `accounts` config for the same addresses.
         const sim = await solanaRpc(rpcUrl, 'simulateTransaction', [

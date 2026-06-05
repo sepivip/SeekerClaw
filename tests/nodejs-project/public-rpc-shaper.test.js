@@ -217,6 +217,89 @@ function check(name, fn) {
         assert.strictEqual(r4.error, 'rate_exhausted');
     });
 
+    // ── R11/R12 regression (Copilot PR #398, lines 115 + 120) ──────────────
+    // A submission that has already consumed its window slot must NOT be
+    // aborted by a post-backoff window re-check that counts the submission's
+    // own slot. The buggy code re-pruned the window after each 429 backoff
+    // and rejected when attempts.length >= maxPerWindow — which is true by
+    // definition if (a) the submission is alone in the window OR (b) two
+    // other submissions filled the remaining slots during the sleep.
+    // The R12 fix removes the post-backoff re-check entirely.
+    console.log();
+    console.log('R11/R12 regression — submission owns its slot through all retries');
+
+    await runAsync('R11: single submission with maxPerWindow=1 exhausts full backoff before giving up', async () => {
+        let t = 1000;
+        const slept = [];
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async (ms) => { slept.push(ms); t += ms; },
+            maxPerWindow: 1,
+        });
+        const fn = async () => { throw new Error('429'); };
+        const r = await s.tryRun(fn);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'rate_exhausted');
+        // Buggy code: slept == [1000] (aborted after 1st backoff re-check).
+        // Fixed code: slept == [1000, 2000, 4000] (all 3 backoffs exhausted).
+        assert.deepStrictEqual(slept, [1000, 2000, 4000],
+            `R11/R12 bug: post-backoff re-check aborted submission after ${slept.length} backoff(s) instead of 3`);
+    });
+
+    await runAsync('R11: single submission with maxPerWindow=1 succeeds on 2nd attempt', async () => {
+        let t = 1000;
+        const slept = [];
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async (ms) => { slept.push(ms); t += ms; },
+            maxPerWindow: 1,
+        });
+        let calls = 0;
+        const fn = async () => {
+            calls++;
+            if (calls === 1) throw new Error('429');
+            return 'resolved';
+        };
+        const r = await s.tryRun(fn);
+        assert.strictEqual(r.ok, true,
+            `R11/R12 bug: submission aborted during backoff even though retry was available; error=${r.error}`);
+        assert.strictEqual(r.value, 'resolved');
+        assert.strictEqual(calls, 2);
+        assert.deepStrictEqual(slept, [1000]);
+    });
+
+    await runAsync('R12: submission keeps slot even when 2 concurrent slots arrive during backoff sleep', async () => {
+        let t = 1000;
+        const slept = [];
+        let sRef = null;
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async (ms) => {
+                slept.push(ms);
+                t += ms;
+                // Simulate B and C being admitted during A's sleep by
+                // pushing their timestamps directly into the shared
+                // attempts array.
+                sRef._attempts.push(t - 300);
+                sRef._attempts.push(t - 100);
+            },
+            maxPerWindow: 3,
+        });
+        sRef = s;
+        let calls = 0;
+        const fn = async () => {
+            calls++;
+            if (calls === 1) throw new Error('HTTP 429');
+            return 'after_concurrent_fill';
+        };
+        const r = await s.tryRun(fn);
+        assert.strictEqual(r.ok, true,
+            `R12 bug: submission evicted mid-retry because concurrent slots filled window; error=${r.error}`);
+        assert.strictEqual(r.value, 'after_concurrent_fill');
+        assert.strictEqual(calls, 2, 'fn should have been called exactly twice (initial + 1 retry)');
+        assert.deepStrictEqual(slept, [1000]);
+    });
+
     console.log();
     console.log(`Result: ${pass} passed, ${fail} failed`);
     if (fail > 0) process.exit(1);

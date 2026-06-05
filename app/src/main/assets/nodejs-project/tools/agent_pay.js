@@ -858,7 +858,17 @@ async function _handle(input /* , chatId */) {
         const ataMod = require('../wallet/ata');
         const burnerUsdcAta = ataMod.deriveAtaBase58(status.pubkey, USDC_MINT);
         const recipientPubkey = (paymentMeta.requirement && paymentMeta.requirement.payTo) || paymentMeta.recipient;
-        const recipientUsdcAta = recipientPubkey ? ataMod.deriveAtaBase58(recipientPubkey, USDC_MINT) : null;
+        // Copilot PR #398 R11 Thread E: fail-closed earlier on missing
+        // recipientPubkey. Without this throw, recipientUsdcAta and
+        // recipient.account both become null, which the burner-policy
+        // gate then rejects as `expected_delta_invalid_shape`. The
+        // policy reject is correct, but surfacing the failure here gives
+        // a clearer error message AND avoids spending the reservation
+        // round-trip on a tx that was always doomed.
+        if (!recipientPubkey) {
+            throw new Error('x402 payment requirement missing payTo / recipient pubkey');
+        }
+        const recipientUsdcAta = ataMod.deriveAtaBase58(recipientPubkey, USDC_MINT);
         const facilitatorPubkey = isV2 && paymentMeta.requirement && paymentMeta.requirement.extra
             ? paymentMeta.requirement.extra.feePayer
             : null;

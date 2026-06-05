@@ -47,9 +47,11 @@
 // -----------------------------
 // (A1) Parser: uses `wallet/tx-parser.js` (extracted, tested). No
 //      reference to a nonexistent `_decodeVersionedMessage`.
-// (A2) Simulation: deferred to follow-up commit; uses `loadedAddresses`
-//      from the simulation response when it lands (NOT
-//      `value.accountKeys`, which doesn't exist).
+// (A2) Simulation: IMPLEMENTED. Uses `loadedAddresses` from the
+//      simulation response (NOT `value.accountKeys`, which doesn't
+//      exist). See `_lazyDefaultSimulator` in `wallet/burner-signer.js`
+//      for the dual-source contract (accounts config +
+//      getMultipleAccounts pre-snapshot, both same-RPC same-commitment).
 // (A3) Burner pubkey is REQUIRED as a parameter to `validateBurnerTx`.
 //      Missing → reject `payer_missing` before any other check. The
 //      caller (`BurnerSigner`) is responsible for fetching it from

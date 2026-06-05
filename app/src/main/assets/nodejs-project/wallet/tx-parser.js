@@ -262,9 +262,24 @@ function parseTransaction(txBase64) {
         throw new TxParseError('truncated', offset, 'signature section overruns buffer');
     }
 
-    // ── Detect v0 vs legacy ──
+    // ── Detect versioned vs legacy ──
+    // Solana versioned-message prefix has the high bit set:
+    // (prefix & 0x80) !== 0; the lower 7 bits encode the version number.
+    // Today only v0 exists; future versions (v1, v2, ...) would set
+    // prefix = 0x81, 0x82, etc. Copilot PR #397 R12: do NOT strict-equal
+    // 0x80 — a future v1 (0x81) would silently fall into the legacy
+    // parsing path and produce misleading errors. Fail closed on any
+    // non-zero version we don't yet understand.
     const prefix = readU8(txBuf, offset);
-    const isV0 = prefix === 0x80;
+    const isVersioned = (prefix & 0x80) !== 0;
+    if (isVersioned) {
+        const version = prefix & 0x7F;
+        if (version !== 0) {
+            throw new TxParseError('unsupported_tx_version', offset,
+                `tx claims version v${version}, only v0 is supported`);
+        }
+    }
+    const isV0 = isVersioned; // version is guaranteed 0 if we got here
     const kind = isV0 ? 'v0' : 'legacy';
     if (isV0) offset++;
 

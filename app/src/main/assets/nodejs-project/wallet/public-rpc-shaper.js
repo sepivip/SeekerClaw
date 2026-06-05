@@ -106,18 +106,16 @@ function createPublicRpcShaper(opts) {
                 if (is429(msg) && attempt < backoffMs.length) {
                     await sleep(backoffMs[attempt]);
                     attempt++;
-                    // Re-check window after sleep — other concurrent
-                    // callers may have filled the window during our sleep.
-                    pruneWindow(now());
-                    // Copilot PR #398 R4: must be `>=`, not `>`. At exactly
-                    // maxPerWindow we are AT cap, no more attempts allowed.
-                    if (attempts.length >= maxPerWindow) {
-                        return {
-                            ok: false,
-                            error: 'rate_exhausted',
-                            reason: `public-rpc shaper: window cap reached during backoff (attempt ${attempt})`,
-                        };
-                    }
+                    // Copilot PR #398 R12: do NOT re-check window cap after
+                    // backoff. Our submission already consumed its slot at
+                    // line 96 — re-checking attempts.length would treat our
+                    // own slot as evidence the window is full and abort a
+                    // submission that has every right to keep retrying.
+                    // The only window enforcement that matters is the
+                    // pre-submission gate above (lines ~80-88). Once a
+                    // submission owns its slot, it must be allowed to
+                    // exhaust its full backoff schedule regardless of
+                    // concurrent window activity.
                     continue;
                 }
                 return {

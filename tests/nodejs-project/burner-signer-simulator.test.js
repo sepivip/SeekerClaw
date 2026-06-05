@@ -317,6 +317,31 @@ const ADDR_B = 'BbBb1111111111111111111111111111111111111111';
         assert.ok(r.preSnapshot[1] !== null);
     });
 
+    // ── R12 regression (Copilot PR #398, live test mirror) ──────────────
+    // solanaRpc() returns {error: string} on failure (it does NOT throw).
+    // _lazyDefaultSimulator must detect this and throw so the burner-policy
+    // gate classifies it as availability-class simulation_failed instead
+    // of silently treating the RPC failure as "all accounts null" pre-state.
+    await check('R12: GMA returns {error} field → throw with error info', async () => {
+        stub.nextGma = () => ({ error: 'getMultipleAccounts: connection timeout' });
+        const sim = _lazyDefaultSimulator();
+        let threw = null;
+        try { await sim('TX', { addresses: [ADDR_A] }); }
+        catch (e) { threw = e; }
+        assert.ok(threw, 'expected throw when GMA returns {error}');
+        assert.match(threw.message, /getMultipleAccounts/, `got: ${threw && threw.message}`);
+    });
+
+    await check('R12: GMA returns null entirely → simulation_metadata_missing throw', async () => {
+        stub.nextGma = () => null;
+        const sim = _lazyDefaultSimulator();
+        let threw = null;
+        try { await sim('TX', { addresses: [ADDR_A] }); }
+        catch (e) { threw = e; }
+        assert.ok(threw, 'expected throw when GMA returns null');
+        assert.match(threw.message, /simulation_metadata_missing/);
+    });
+
     // ── C8: _burnerPubkeyCache invalidation ─────────────────────────────
     console.log();
     console.log('C8 burner-pubkey cache');

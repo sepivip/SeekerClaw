@@ -254,6 +254,49 @@ check('throws on truncated v0 ALT section', () => {
     assert.throws(() => parseTransaction(buf.toString('base64')), TxParseError);
 });
 
+// ── Copilot PR #397 R12 regression: future versioned messages ────────────
+// Solana versioned-message prefix has the high bit set (0x80) with the
+// lower 7 bits encoding the version. Today only v0 exists. A future v1
+// would have prefix 0x81. The strict `=== 0x80` check would silently fall
+// into the legacy parsing path; the bitmask check + version-guard rejects
+// the unsupported version explicitly.
+console.log();
+console.log('parseTransaction: future versioned (R12)');
+check('throws unsupported_tx_version on v1 prefix (0x81)', () => {
+    const buf = Buffer.concat([
+        compactU16(1), Buffer.alloc(64),
+        Buffer.from([0x81]),            // v1 prefix (high bit set + version=1)
+        Buffer.from([1, 0, 0]),
+        compactU16(1),
+        Buffer.alloc(32),
+        Buffer.alloc(32),
+        compactU16(0),
+        compactU16(0),
+    ]);
+    try {
+        parseTransaction(buf.toString('base64'));
+        assert.fail('expected throw on v1 prefix');
+    } catch (e) {
+        assert.ok(e instanceof TxParseError, `expected TxParseError, got ${e.constructor.name}`);
+        assert.strictEqual(e.reason, 'unsupported_tx_version');
+        assert.match(e.message, /v1/);
+    }
+});
+check('throws unsupported_tx_version on v2 prefix (0x82)', () => {
+    const buf = Buffer.concat([
+        compactU16(1), Buffer.alloc(64),
+        Buffer.from([0x82]),
+        Buffer.from([1, 0, 0]),
+        compactU16(1), Buffer.alloc(32), Buffer.alloc(32),
+        compactU16(0), compactU16(0),
+    ]);
+    try { parseTransaction(buf.toString('base64')); assert.fail(); }
+    catch (e) {
+        assert.strictEqual(e.reason, 'unsupported_tx_version');
+        assert.match(e.message, /v2/);
+    }
+});
+
 console.log();
 console.log(`Result: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

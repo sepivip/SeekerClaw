@@ -674,15 +674,28 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     }
     offset += numSigs.value * 64;
 
-    // Detect v0 vs legacy (v0 prefix = 0x80). Bounds-check first
-    // (Copilot PR #397 R7 mirrored): a tx truncated immediately after
-    // the signature section makes txBuf[offset] return undefined,
-    // falling into the legacy parsing path with misleading errors.
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 exists; future versions (v1, v2, ...)
+    // would set prefix = 0x81, 0x82, etc. Copilot PR #397 R12: do NOT
+    // strict-equal 0x80 — a future v1 (0x81) would silently fall into the
+    // legacy parsing path and produce misleading errors. Fail closed on
+    // any non-zero version we don't yet understand.
+    // Bounds-check first (Copilot PR #397 R7 mirrored): a tx truncated
+    // immediately after the signature section makes txBuf[offset] return
+    // undefined, falling into the legacy parsing path with misleading errors.
     if (offset >= txBuf.length) {
         return { valid: false, error: 'Message section truncated (no bytes after signatures).', programs };
     }
     const prefix = txBuf[offset];
-    const isV0 = prefix === 0x80;
+    const isVersioned = (prefix & 0x80) !== 0;
+    if (isVersioned) {
+        const version = prefix & 0x7F;
+        if (version !== 0) {
+            return { valid: false, error: `unsupported_tx_version: v${version} (only v0 is supported)`, programs };
+        }
+    }
+    const isV0 = isVersioned; // version is guaranteed 0 if we got here
 
     if (!isV0) {
         // Legacy transaction. Ultra always uses v0, so reject legacy under
