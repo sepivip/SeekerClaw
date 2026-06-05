@@ -25,6 +25,7 @@
 require('dotenv').config({ path: __dirname + '/.env.test' });
 
 const https = require('https');
+const http = require('http');
 
 const SOLANA_RPC = process.env.SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 const LOADER = 'BPFLoaderUpgradeab1e11111111111111111111111';
@@ -38,9 +39,16 @@ const PROGRAMS = [
 function jsonRpcRequest(rpcUrl, body, timeoutMs = 15_000) {
     return new Promise((resolve, reject) => {
         const url = new URL(rpcUrl);
+        // Copilot R-next-3: pick transport based on url.protocol so SOLANA_RPC
+        // works for both hosted https endpoints AND local dev RPCs like
+        // http://127.0.0.1:8899. Previously hardcoded https.request silently
+        // failed for any non-443 / non-https endpoint despite the env-var
+        // advertising configurability.
+        const transport = url.protocol === 'http:' ? http : https;
         const payload = JSON.stringify(body);
-        const req = https.request({
+        const req = transport.request({
             hostname: url.hostname,
+            port: url.port || (url.protocol === 'http:' ? 80 : 443),
             path: url.pathname + (url.search || ''),
             method: 'POST',
             headers: {
