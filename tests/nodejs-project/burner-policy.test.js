@@ -146,6 +146,52 @@ async function runAsync(name, fn) {
             assert.ok(policy.REJECT_CODES.includes(code), `${code} missing from REJECT_CODES`);
         }
     });
+    // ── Copilot PR #398 R15 finding #1 regression: isNonEmptyBase58 upper bound ──
+    // Pre-fix: only s.length >= 32 was enforced. A long base58-alphabet string
+    // (e.g. 88 chars = ed25519 signature length, or arbitrary attacker input)
+    // would pass the validator and propagate into account ownership checks.
+    // Fix: cap at 44 (Solana pubkey max length).
+    check('R15: isNonEmptyBase58 rejects 45-char base58-alphabet string (just past pubkey max)', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: 'A'.repeat(45), mint: 'native_sol', atomicAmount: '1000' },
+            recipient: { account: BURNER_USDC_ATA, mint: 'native_sol' },
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /burnerDebit\.account/);
+    });
+    check('R15: isNonEmptyBase58 rejects 88-char base58 (ed25519 signature length)', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: '1'.repeat(88), mint: 'native_sol', atomicAmount: '1000' },
+            recipient: { account: BURNER_USDC_ATA, mint: 'native_sol' },
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+    });
+    check('R15: isNonEmptyBase58 still accepts 32-char pubkey (System Program)', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: '11111111111111111111111111111111', mint: 'native_sol', atomicAmount: '1000' },
+            recipient: { account: BURNER_USDC_ATA, mint: 'native_sol' },
+        });
+        assert.strictEqual(r.ok, true);
+    });
+    check('R15: isNonEmptyBase58 still accepts 44-char pubkey (USDC mint)', () => {
+        assert.strictEqual(USDC.length, 44, 'precondition: USDC must be 44 chars');
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: USDC, mint: 'native_sol', atomicAmount: '1000' },
+            recipient: { account: BURNER_USDC_ATA, mint: 'native_sol' },
+        });
+        assert.strictEqual(r.ok, true);
+    });
+
     check('REJECT_CODES has no duplicates', () => {
         assert.strictEqual(new Set(policy.REJECT_CODES).size, policy.REJECT_CODES.length);
     });
@@ -879,6 +925,28 @@ async function runAsync(name, fn) {
         }, { burnerPubkey: BURNER, allowStructuralOnly: true });
         assert.strictEqual(r.ok, true);
         assert.strictEqual(r.structuralOnly, true);
+    });
+
+    // ── Copilot PR #398 R15 finding #3: programs[] returns base58 strings ──
+    // Pre-fix: programs[] contained raw programIdIdx integers (e.g. [0, 1, 4])
+    // which were misleading — the field name implies program IDs/names, and
+    // verifySwapTransaction returns base58 strings. Fix: resolve via
+    // staticAccountKeys (structural-only) or combinedAccountKeys (simulated).
+    await runAsync('R15: programs[] contains base58 strings, not programIdIdx integers', async () => {
+        const r = await policy.validateBurnerTx(memoOnlyTx(), {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+        }, { burnerPubkey: BURNER, allowStructuralOnly: true });
+        assert.strictEqual(r.ok, true);
+        assert.ok(Array.isArray(r.programs), 'programs must be an array');
+        assert.ok(r.programs.length > 0, 'memo tx must have at least one program entry');
+        for (const p of r.programs) {
+            assert.strictEqual(typeof p, 'string', `expected string, got ${typeof p}: ${p}`);
+            // Must NOT be a pure integer-as-string (e.g. "0", "1") — that
+            // would suggest a regression to the pre-fix integer behavior.
+            assert.ok(!/^\d+$/.test(p), `programs entry "${p}" looks like a raw integer index`);
+        }
     });
 
     await runAsync('ALT-unresolved program → alt_unresolved', async () => {

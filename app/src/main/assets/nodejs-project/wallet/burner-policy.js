@@ -670,7 +670,14 @@ function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta, burn
 // ─── expectedDelta shape validators ───────────────────────────────────────
 
 function isNonEmptyBase58(s) {
-    return typeof s === 'string' && s.length >= 32 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
+    // Solana pubkeys are exactly 32 bytes; base58 encoding produces strings
+    // of length 32–44 (typical 43–44). Copilot PR #398 R15: every call site
+    // of this helper expects a Solana pubkey or SPL mint address (both
+    // 32-byte values); without the upper bound, arbitrarily long base58-
+    // alphabet strings (e.g. 88-char ed25519 signatures, or longer attacker
+    // injections) would pass the predicate and propagate into account
+    // ownership checks. Cap at 44.
+    return typeof s === 'string' && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
 }
 
 function isBigintAtomicString(s) {
@@ -1357,7 +1364,14 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
  *   (`BurnerSigner`) this option is hard-disabled — unit tests opt in.
  * @returns {Promise<{ ok: boolean, error?: string, reason?: string,
  *   class?: 'security'|'availability'|'contract_gap',
- *   programs?: number[], structuralOnly?: boolean, simulated?: boolean }>}
+ *   programs?: string[], structuralOnly?: boolean, simulated?: boolean }>}
+ *
+ *   `programs` contains the resolved program-ID base58 strings for each
+ *   instruction's programIdIdx (one entry per instruction). Mirrors the
+ *   shape of solana.js verifySwapTransaction's `programs` field for
+ *   forensic-log compatibility. Copilot PR #398 R15: previously contained
+ *   raw programIdIdx integers (misleading — they're positional indices,
+ *   not program identities).
  */
 async function validateBurnerTx(txBase64, expectedDelta, options) {
     options = options || {};
@@ -1398,9 +1412,15 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
     // ── 5. Structural-only short-circuit (test mode only) ──
     if (typeof options.simulator !== 'function') {
         if (options.allowStructuralOnly === true) {
+            // Copilot PR #398 R15: resolve programIdIdx → base58 string so
+            // programs[] contains program identities (matching solana.js
+            // verifySwapTransaction shape) instead of opaque positional
+            // indices. The structural-only path uses staticAccountKeys
+            // (ALT-resolved keys aren't available without simulation).
             return accept({
                 structuralOnly: true,
-                programs: parsed.instructions.map(i => i.programIdIdx),
+                programs: parsed.instructions.map(i =>
+                    parsed.staticAccountKeys[i.programIdIdx] || `idx:${i.programIdIdx}`),
             });
         }
         // Production default: missing simulator is fail-closed (Codex amendment
@@ -1504,9 +1524,14 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
     const deltaResult = validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountKeys, options.burnerPubkey, expectedDelta);
     if (!deltaResult.ok) return deltaResult;
 
+    // Copilot PR #398 R15: resolve programIdIdx → base58 string using the
+    // ALT-resolved combinedAccountKeys (which includes loadedAddresses from
+    // the simulation response). Matches verifySwapTransaction's shape;
+    // forensic logs now show actual program identities, not opaque indices.
     return accept({
         simulated: true,
-        programs: parsed.instructions.map(i => i.programIdIdx),
+        programs: parsed.instructions.map(i =>
+            combinedAccountKeys[i.programIdIdx] || `idx:${i.programIdIdx}`),
     });
 }
 

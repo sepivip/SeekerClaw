@@ -81,7 +81,8 @@ const { log } = require('../config');
  *                                              | 'agent_pay_x402' | 'zero_value_cancel'
  *                                              | 'zero_value_auth',
  *                                              ... per-kind required + optional fields }.
- *                                            Forwarded into BurnerSigner.signAndBroadcast for the
+ *                                            Forwarded into BurnerSigner.signTransaction() (or
+ *                                            signAndSend() on the atomic path) for the
  *                                            validateBurnerTx chokepoint. REQUIRED when
  *                                            routingDecision === 'burner'; ignored on main path.
  * @param {boolean} [args.allowPartiallySigned] - When true, the tx is allowed to already carry
