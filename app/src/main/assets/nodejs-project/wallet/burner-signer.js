@@ -125,17 +125,27 @@ function _lazyDefaultSimulator() {
             // Q6: surface the failure in logs so production drift checks can
             // see when the accessor threw vs returned null. Drift detection
             // remains best-effort but is no longer silent.
-            _log(`[BurnerSigner] _getSolanaRpcUrl threw before getMultipleAccounts: ${e && e.message ? e.message : String(e)} — drift check degraded`, 'WARN');
+            _log(`[BurnerSigner] _getSolanaRpcUrl threw before getMultipleAccounts: ${e && e.message ? e.message : String(e)} — BOTH drift check AND URL pinning degraded (R-next-12): both RPC calls will re-read live config, restoring the original race window. Operations should still succeed via the live config; this WARN exists so production can detect when getSolanaRpcUrl is unhealthy.`, 'WARN');
         }
 
         // 1. Pre-snapshot — same-RPC getMultipleAccounts.
+        // R-next-12: pin urlAtStart as an explicit override on both RPC
+        // calls so we are GUARANTEED that getMultipleAccounts and
+        // simulateTransaction hit the same backing, even if the user
+        // toggles the Helius key between line 122 and the first RPC call
+        // here. Previously each solanaRpc internally re-read
+        // getSolanaRpcUrl() per call, so a flip between sample + first call
+        // would silently land both RPCs on the new URL without detection.
+        // With urlAtStart pinned, the drift check at line ~223 becomes a
+        // strict "user reconfigured during validation" warning rather than
+        // a structural correctness guard — defense-in-depth.
         let preSnapshot = [];
         let preSlot = null;
         if (addresses.length > 0) {
             const gma = await _solanaRpc('getMultipleAccounts', [
                 addresses,
                 { commitment: 'processed', encoding: 'base64' },
-            ]);
+            ], urlAtStart);
             // Copilot PR #398 R4: `solanaRpc()` returns `{ error: '...' }`
             // on RPC failure / timeout instead of throwing. The previous
             // fallback `addresses.map(() => null)` silently treated a
@@ -191,7 +201,10 @@ function _lazyDefaultSimulator() {
         // an HTTP 429 returned as `{ error: '... 429 ...' }` was treated
         // as a successful response carrying garbage payload.
         const callSim = async () => {
-            const r = await _solanaRpc('simulateTransaction', simParams);
+            // R-next-12: pin urlAtStart so simulateTransaction is guaranteed
+            // to hit the same backing as the pre-snapshot getMultipleAccounts
+            // above. See comment at line ~131.
+            const r = await _solanaRpc('simulateTransaction', simParams, urlAtStart);
             if (r && r.error) {
                 throw new Error(String(r.error));
             }

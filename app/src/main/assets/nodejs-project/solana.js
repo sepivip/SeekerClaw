@@ -36,7 +36,7 @@ function getSolanaRpcUrl() {
 }
 
 // Single-shot RPC call (no retry)
-async function solanaRpcOnce(method, params = []) {
+async function solanaRpcOnce(method, params = [], rpcUrlOverride = null) {
     return new Promise((resolve) => {
         const postData = JSON.stringify({
             jsonrpc: '2.0',
@@ -48,7 +48,13 @@ async function solanaRpcOnce(method, params = []) {
         // BAT-1000 (Codex #1): preserve the query string. `url.pathname` alone
         // drops `?api-key=…` and would silently call Helius unauthenticated.
         // Pin via unit test in tests/nodejs-project/solana-rpc-url.test.js.
-        const url = new URL(getSolanaRpcUrl());
+        //
+        // R-next-12: optional rpcUrlOverride lets callers pin a specific URL
+        // for the duration of a multi-call sequence (e.g. burner-signer
+        // simulator's pre-snapshot + simulateTransaction must hit the SAME
+        // RPC backing). Falls back to live config read when not supplied
+        // (preserves all existing call sites).
+        const url = new URL(rpcUrlOverride || getSolanaRpcUrl());
         const options = {
             hostname: url.hostname,
             port: 443,
@@ -91,12 +97,12 @@ async function solanaRpcOnce(method, params = []) {
 // application errors like "account not found") fast-fail immediately.
 const RPC_TRANSIENT_PATTERNS = ['timeout', 'econnreset', 'econnrefused', 'etimedout', 'socket hang up', 'fetch failed', 'eai_again'];
 
-async function solanaRpc(method, params = []) {
+async function solanaRpc(method, params = [], rpcUrlOverride = null) {
     const MAX_ATTEMPTS = 2;
     const BASE_DELAY_MS = 1500;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const result = await solanaRpcOnce(method, params);
+        const result = await solanaRpcOnce(method, params, rpcUrlOverride);
 
         // Success or non-retriable RPC application error → return immediately
         if (!result.error) return result;

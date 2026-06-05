@@ -5,8 +5,9 @@
 // WHY THIS EXISTS
 // ---------------
 // The app's nodejs-mobile runtime has NO `@solana/web3.js` dependency
-// (verified 2026-06-04: `nodejs-project/package.json` lists only `ws`
-// for Discord; zero `@solana/*` requires anywhere in the bundle). Every
+// (verified: `nodejs-project/package.json` declares NO dependencies at
+// all; `ws` for Discord is vendored separately at `node_modules/ws/`;
+// zero `@solana/*` requires anywhere in the bundle). Every
 // piece of code that touches serialized transactions hand-rolls its own
 // binary parsing — `solana.js verifySwapTransaction()` for the structural
 // payer/signer check, `payment/x402.js` for the legacy + v2 USDC transfer

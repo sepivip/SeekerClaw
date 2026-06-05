@@ -81,6 +81,8 @@ const stub = {
     urlAtPost: 'https://api.mainnet-beta.solana.com',
     urlThrowsPre: false,
     urlThrowsPost: false,
+    // R-next-12: per-call capture of rpcUrlOverride for URL-pinning contract test.
+    urlOverrides: [],
     urlCallCount: 0,
 };
 
@@ -90,7 +92,12 @@ require.cache[solanaPath] = {
     filename: solanaPath,
     loaded: true,
     exports: {
-        solanaRpc: async (method, params) => {
+        solanaRpc: async (method, params, rpcUrlOverride) => {
+            // R-next-12: capture the third arg so the URL-pinning contract
+            // can be machine-verified. Each call gets pushed; tests can
+            // inspect stub.urlOverrides to assert both GMA + sim received
+            // the same pinned URL.
+            stub.urlOverrides.push({ method, rpcUrlOverride: rpcUrlOverride ?? null });
             if (method === 'getMultipleAccounts') return stub.nextGma(params);
             if (method === 'simulateTransaction') return stub.nextSim(params);
             return { error: 'unhandled method ' + method };
@@ -124,6 +131,7 @@ async function check(label, fn) {
     stub.urlAtPost = 'https://api.mainnet-beta.solana.com';
     stub.urlThrowsPre = false;
     stub.urlThrowsPost = false;
+    stub.urlOverrides = [];
     stub.nextGma = () => ({ value: [], context: { slot: 100 } });
     stub.nextSim = () => ({ value: { err: null, logs: [], accounts: [], loadedAddresses: { writable: [], readonly: [] } }, context: { slot: 100 } });
     try { await fn(); console.log(`  ✓ ${label}`); }
@@ -172,6 +180,46 @@ const ADDR_B = 'BbBb1111111111111111111111111111111111111111';
         const r = await sim('TX', { addresses: [ADDR_A] });
         assert.strictEqual(r.simulatorBacking, 'public');
         assert.deepStrictEqual(r.preSnapshot, [null]);
+    });
+
+    await check('R-next-12: urlAtStart pinned as rpcUrlOverride on BOTH RPC calls', async () => {
+        // Contract test: both getMultipleAccounts and simulateTransaction
+        // must receive the SAME urlAtStart sample (captured at line 122 in
+        // burner-signer.js) as their third arg, so a config flip mid-
+        // validation cannot send the two calls to different backings.
+        // Without pinning, both internal solanaRpc calls would re-read live
+        // config and could land on different URLs without detection.
+        const PINNED = 'https://mainnet.helius-rpc.com/?api-key=PINNED-TEST-KEY';
+        stub.urlAtPre = PINNED;
+        stub.urlAtPost = PINNED;
+        stub.nextGma = () => ({ value: [null], context: { slot: 100 } });
+        const sim = _lazyDefaultSimulator();
+        await sim('TX', { addresses: [ADDR_A] });
+        const gmaCall = stub.urlOverrides.find(c => c.method === 'getMultipleAccounts');
+        const simCall = stub.urlOverrides.find(c => c.method === 'simulateTransaction');
+        assert.ok(gmaCall, 'expected getMultipleAccounts call captured');
+        assert.ok(simCall, 'expected simulateTransaction call captured');
+        assert.strictEqual(gmaCall.rpcUrlOverride, PINNED,
+            `getMultipleAccounts must receive urlAtStart as override, got ${JSON.stringify(gmaCall)}`);
+        assert.strictEqual(simCall.rpcUrlOverride, PINNED,
+            `simulateTransaction must receive urlAtStart as override, got ${JSON.stringify(simCall)}`);
+    });
+
+    await check('R-next-12: when _getSolanaRpcUrl throws PRE, both RPCs receive null override (degraded path)', async () => {
+        // When urlAtStart capture fails, the pinning degrades to null. Both
+        // RPCs then re-read live config independently (restoring the original
+        // race window, but this is the explicit fallback the WARN log calls
+        // out). This test pins that degraded behavior.
+        stub.urlThrowsPre = true;
+        stub.nextGma = () => ({ value: [null], context: { slot: 100 } });
+        const sim = _lazyDefaultSimulator();
+        await sim('TX', { addresses: [ADDR_A] });
+        const gmaCall = stub.urlOverrides.find(c => c.method === 'getMultipleAccounts');
+        const simCall = stub.urlOverrides.find(c => c.method === 'simulateTransaction');
+        assert.strictEqual(gmaCall.rpcUrlOverride, null, 'GMA receives null override on degraded path');
+        assert.strictEqual(simCall.rpcUrlOverride, null, 'sim receives null override on degraded path');
+        const warnLogs = capturedLogs.filter(l => l.level === 'WARN' && /BOTH drift check AND URL pinning degraded/i.test(l.msg));
+        assert.ok(warnLogs.length >= 1, 'expected the extended WARN message that calls out degraded pinning');
     });
 
     await check('Q6: _getSolanaRpcUrl throws on PRE-read → drift check degraded, log emitted, no throw', async () => {
