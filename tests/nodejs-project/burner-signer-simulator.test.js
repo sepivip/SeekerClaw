@@ -112,6 +112,22 @@ require.cache[solanaPath] = {
             if (stub.urlThrowsPost) throw new Error('boom-post');
             return stub.urlAtPost;
         },
+        // R-next-13: stub matches production's isValidSolanaAddress contract
+        // (charset + 32..44 length + 32-byte base58 payload decode). This
+        // lets us exercise the new cache-poisoning guard in _getBurnerPubkey.
+        // Reuses wallet/tx-parser.js's base58Decode (same hermetic strategy
+        // as tools-solana-routing.test.js).
+        isValidSolanaAddress: (s) => {
+            if (typeof s !== 'string') return false;
+            const trimmed = s.trim();
+            if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed)) return false;
+            try {
+                const { base58Decode } = require(path.join(BUNDLE, 'wallet', 'tx-parser.js'));
+                return base58Decode(trimmed).length === 32;
+            } catch (_) {
+                return false;
+            }
+        },
     },
 };
 
@@ -396,9 +412,9 @@ const ADDR_B = 'BbBb1111111111111111111111111111111111111111';
 
     await check('first call populates cache from /burner/status', async () => {
         _resetBurnerPubkeyCache();
-        bridgeResponse = { configured: true, pubkey: 'BURNER111111111111111111111111111111111111' };
+        bridgeResponse = { configured: true, pubkey: 'BURNER11111111111111111111111111111111111111' };
         const pk = await _getBurnerPubkey();
-        assert.strictEqual(pk, 'BURNER111111111111111111111111111111111111');
+        assert.strictEqual(pk, 'BURNER11111111111111111111111111111111111111');
         assert.strictEqual(bridgeCalls.length, 1);
         assert.strictEqual(bridgeCalls[0].endpoint, '/burner/status');
     });
@@ -442,6 +458,68 @@ const ADDR_B = 'BbBb1111111111111111111111111111111111111111';
         // Per current contract we fall back to the cached pubkey rather than
         // returning null — production sees this only on transient mismatches.
         assert.strictEqual(r, 'DDDD1111111111111111111111111111111111111111');
+    });
+
+    // R-next-13: cache-poisoning resistance — invalid pubkey from bridge
+    // must be IGNORED + cache preserved + WARN logged. Without this, a
+    // malformed bridge response (compromise, schema drift) could replace a
+    // valid cached pubkey with garbage and break every subsequent policy gate.
+    await check('R-next-13: bridge returns invalid pubkey → cache preserved + WARN logged', async () => {
+        _resetBurnerPubkeyCache();
+        capturedLogs.length = 0;
+        // First, prime the cache with a VALID pubkey.
+        const VALID = 'DDDD1111111111111111111111111111111111111111';
+        bridgeResponse = { configured: true, pubkey: VALID };
+        const r1 = await _getBurnerPubkey();
+        assert.strictEqual(r1, VALID);
+
+        // Now bridge returns a structurally-bogus pubkey (too short).
+        // isValidSolanaAddress must reject it; the prior cache must persist.
+        bridgeResponse = { configured: true, pubkey: 'short' };
+        const r2 = await _getBurnerPubkey();
+        assert.strictEqual(r2, VALID, 'cache must preserve VALID across malformed bridge response');
+
+        // Bridge returns base58 chars but wrong decoded length (33 chars =
+        // 33-byte decode; must fail solana 32-byte contract).
+        bridgeResponse = { configured: true, pubkey: '1'.repeat(33) };
+        const r3 = await _getBurnerPubkey();
+        assert.strictEqual(r3, VALID, 'cache must preserve VALID across 33-byte bridge pubkey');
+
+        // Bridge returns non-base58 chars (contains underscore).
+        bridgeResponse = { configured: true, pubkey: 'not_a_valid_base58_address_xxxxxxxxx' };
+        const r4 = await _getBurnerPubkey();
+        assert.strictEqual(r4, VALID, 'cache must preserve VALID across non-base58 pubkey');
+
+        // R-next-14: schema-drift non-string responses MUST also surface
+        // as WARN, not silently fall through. A `configured:true` with
+        // pubkey=null/undefined/number/empty-string is exactly the
+        // bridge-corruption signal we want to detect — the original WARN
+        // gated on `typeof === 'string'` and missed all of these.
+        bridgeResponse = { configured: true, pubkey: null };
+        const r5 = await _getBurnerPubkey();
+        assert.strictEqual(r5, VALID, 'cache must preserve VALID across pubkey=null');
+
+        bridgeResponse = { configured: true, pubkey: undefined };
+        const r6 = await _getBurnerPubkey();
+        assert.strictEqual(r6, VALID, 'cache must preserve VALID across pubkey=undefined');
+
+        bridgeResponse = { configured: true, pubkey: 123 };
+        const r7 = await _getBurnerPubkey();
+        assert.strictEqual(r7, VALID, 'cache must preserve VALID across pubkey=number');
+
+        bridgeResponse = { configured: true, pubkey: '' };
+        const r8 = await _getBurnerPubkey();
+        assert.strictEqual(r8, VALID, 'cache must preserve VALID across pubkey=empty-string');
+
+        const warns = capturedLogs.filter(l => l.level === 'WARN' && /failed isValidSolanaAddress/i.test(l.msg));
+        assert.ok(warns.length >= 7, `expected ≥7 WARN logs for 3 string + 4 non-string malformed responses, got ${warns.length}`);
+
+        // Sanity: each non-string case logs its type tag so triage knows it
+        // wasn't a string-corruption case.
+        const nullWarn = capturedLogs.find(l => /type=object/i.test(l.msg) && /first8=null/i.test(l.msg));
+        assert.ok(nullWarn, 'expected WARN for pubkey=null to log type=object + first8=null');
+        const numWarn = capturedLogs.find(l => /type=number/i.test(l.msg) && /first8=123/i.test(l.msg));
+        assert.ok(numWarn, 'expected WARN for pubkey=123 to log type=number + first8=123');
     });
 
     // ── Result summary ──────────────────────────────────────────────────

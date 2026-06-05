@@ -61,12 +61,30 @@ const { createPublicRpcShaper } = require('./public-rpc-shaper');
 // signTransaction/signAndSend WITHOUT passing their own simulator.
 let _solanaRpc = null;
 let _getSolanaRpcUrl = null;
+let _isValidSolanaAddress = null;
 function _lazySolanaInternals() {
     if (_solanaRpc === null) {
         // eslint-disable-next-line global-require
         const solana = require('../solana');
         _solanaRpc = solana.solanaRpc || (async () => ({ value: null }));
         _getSolanaRpcUrl = solana.getSolanaRpcUrl || (() => 'public');
+        // R-next-13: use production isValidSolanaAddress contract (charset +
+        // 32..44 length + base58Decode + 32-byte payload) for the bridge
+        // pubkey check below. Lightweight 'string + length >= 32' was too
+        // lax — a malformed pubkey from the bridge could poison the cache.
+        //
+        // R-next-14 hardening: if solana.isValidSolanaAddress is somehow
+        // absent (asset bundling bug, future refactor, partial deploy), do
+        // NOT silently fall back to the lax check — that would re-enable
+        // the exact cache-poisoning vector R-next-13 closed. Fail closed:
+        // reject every bridge pubkey, force fallback to the existing cache,
+        // and log ERROR so production can detect the export-missing state.
+        if (typeof solana.isValidSolanaAddress === 'function') {
+            _isValidSolanaAddress = solana.isValidSolanaAddress;
+        } else {
+            _log('[BurnerSigner] solana.isValidSolanaAddress export missing — R-next-13 cache-poisoning guard inactive; failing closed on all bridge pubkeys (will return last-known cache)', 'ERROR');
+            _isValidSolanaAddress = () => false;
+        }
     }
 }
 
@@ -287,14 +305,36 @@ async function _getBurnerPubkey() {
     // (network glitch, Android service paused), fall back to the cached
     // value — this preserves the prior behavior for the common case and
     // only hardens the wipe-then-re-setup edge.
+    //
+    // R-next-13: validate the bridge pubkey using the SAME production
+    // contract as solana.isValidSolanaAddress (charset + length + 32-byte
+    // decode), not just `string && length >= 32`. A malformed bridge
+    // response (compromise, schema drift, accidental string corruption)
+    // previously could poison the cache and deterministically break every
+    // subsequent policy gate until process restart. Now we ignore an
+    // invalid pubkey response and fall back to the last-known cached
+    // value instead.
+    _lazySolanaInternals();
     try {
         const s = await androidBridgeCall('/burner/status', {}, 5000);
-        if (s && !s.error && s.configured && typeof s.pubkey === 'string' && s.pubkey.length >= 32) {
+        if (s && !s.error && s.configured && _isValidSolanaAddress(s.pubkey)) {
             if (_burnerPubkeyCache !== null && _burnerPubkeyCache !== s.pubkey) {
                 _log(`[BurnerSigner] burner pubkey changed under cache (cached=${_burnerPubkeyCache.slice(0, 8)}… new=${s.pubkey.slice(0, 8)}…) — invalidating`, 'WARN');
             }
             _burnerPubkeyCache = s.pubkey;
             return s.pubkey;
+        }
+        // Bridge said configured but the pubkey didn't pass the contract.
+        // Log so production can detect bridge-response corruption /
+        // schema drift instead of silently falling back. R-next-14: fire
+        // for ANY non-passing pubkey type (null/undefined/number/empty
+        // string), not just strings — a `configured:true` response with
+        // pubkey=null is exactly the schema-drift signal we want to surface.
+        if (s && !s.error && s.configured && !_isValidSolanaAddress(s.pubkey)) {
+            const t = typeof s.pubkey;
+            const len = t === 'string' ? s.pubkey.length : 'n/a';
+            const first8 = t === 'string' ? s.pubkey.slice(0, 8) : String(s.pubkey);
+            _log(`[BurnerSigner] /burner/status returned a pubkey that failed isValidSolanaAddress (type=${t}, length=${len}, first8=${first8}…) — ignoring response, falling back to cache`, 'WARN');
         }
     } catch (_) {}
     return _burnerPubkeyCache;
