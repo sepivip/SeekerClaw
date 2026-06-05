@@ -626,17 +626,18 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
         return { valid: false, error: 'tx_unparseable: empty or non-string input', programs: [] };
     }
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
-        return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
-    }
-    // C1 (BAT-1013-followup + R11): Solana caps tx packets at 1232 bytes. A
-    // tx larger than this can NEVER land on-chain — fail closed BEFORE the
-    // base64 decode so we never materialize an oversized buffer in memory.
-    // base64 expands 3 bytes → 4 chars, so 1232 bytes encodes to at most
-    // ceil(1232/3) * 4 = 1644 chars. Anything longer is guaranteed oversized.
+    // C1 (BAT-1013-followup + R11 + R12): Solana caps tx packets at 1232 bytes.
+    // A tx larger than this can NEVER land on-chain — fail closed BEFORE the
+    // O(n) regex scan AND base64 decode so we never spend time validating or
+    // materializing an oversized blob. base64 expands 3 bytes → 4 chars, so
+    // 1232 bytes encodes to at most ceil(1232/3) * 4 = 1644 chars. Anything
+    // longer is guaranteed oversized.
     if (txBase64.length > 1644) {
         const estBytes = Math.floor(txBase64.length * 3 / 4);
         return { valid: false, error: `tx_oversize: ~${estBytes} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
     }
     let txBuf;
     try {
@@ -682,15 +683,28 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     }
     offset += numSigs.value * 64;
 
-    // Detect v0 vs legacy (v0 prefix = 0x80). Bounds-check first
-    // (Copilot PR #397 R7): a tx truncated immediately after the signature
-    // section makes txBuf[offset] return undefined, which falls into the
-    // legacy parsing path and produces misleading downstream errors.
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 exists; future versions (v1, v2, ...)
+    // would set prefix = 0x81, 0x82, etc. Copilot PR #397 R12: do NOT
+    // strict-equal 0x80 — a future v1 (0x81) would silently fall into the
+    // legacy parsing path and produce misleading errors. Fail closed on
+    // any non-zero version we don't yet understand.
+    // Bounds-check first (Copilot PR #397 R7): a tx truncated immediately
+    // after the signature section makes txBuf[offset] return undefined,
+    // which falls into the legacy parsing path with misleading errors.
     if (offset >= txBuf.length) {
         return { valid: false, error: 'Message section truncated (no bytes after signatures).', programs };
     }
     const prefix = txBuf[offset];
-    const isV0 = prefix === 0x80;
+    const isVersioned = (prefix & 0x80) !== 0;
+    if (isVersioned) {
+        const version = prefix & 0x7F;
+        if (version !== 0) {
+            return { valid: false, error: `unsupported_tx_version: v${version} (only v0 is supported)`, programs };
+        }
+    }
+    const isV0 = isVersioned;
 
     if (!isV0) {
         // Legacy transaction. Ultra always uses v0, so reject legacy under

@@ -608,6 +608,57 @@ test('fails closed: fee payer mismatch on legacy tx', () => {
     assert.match(r.error, /Fee payer mismatch/);
 });
 
+// ── Copilot PR #397 R12 regression: future versioned messages ────────────
+// Solana versioned-message prefix has the high bit set (0x80) with the lower
+// 7 bits encoding the version. Today only v0 exists. A future v1 would have
+// prefix 0x81. The strict `=== 0x80` check would silently fall into the
+// legacy parsing path; the bitmask check + version-guard rejects the
+// unsupported version explicitly.
+test('Copilot R12: fails closed on v1 prefix (0x81) — future versioned tx unsupported', () => {
+    // Hand-build a tx with v1 prefix: 1 sig + 0x81 + header + 1 acct + blockhash
+    const parts = [];
+    parts.push(compactU16(1));
+    parts.push(Buffer.alloc(64));
+    parts.push(Buffer.from([0x81])); // v1 prefix — high bit set, version=1
+    parts.push(Buffer.from([1, 0, 0])); // header: 1 sig, 0 readonly-signed, 0 readonly-unsigned
+    parts.push(compactU16(1));
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(pubkeyBytes('Blockhash'));
+    parts.push(compactU16(0)); // 0 instructions
+    parts.push(compactU16(0)); // 0 ALTs
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /unsupported_tx_version.*v1/);
+});
+
+test('Copilot R12: fails closed on v2 prefix (0x82)', () => {
+    const parts = [];
+    parts.push(compactU16(1)); parts.push(Buffer.alloc(64));
+    parts.push(Buffer.from([0x82]));
+    parts.push(Buffer.from([1, 0, 0]));
+    parts.push(compactU16(1)); parts.push(pubkeyBytes(PAYER)); parts.push(pubkeyBytes('Blockhash'));
+    parts.push(compactU16(0)); parts.push(compactU16(0));
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /unsupported_tx_version.*v2/);
+});
+
+// ── Copilot PR #397 R12 regression: oversize-before-regex ────────────────
+// The 1232-byte packet cap must be checked BEFORE the O(n) base64 regex
+// scan so we never spend time validating an oversized blob.
+test('Copilot R12: oversize input rejected before regex scan', () => {
+    // Build a base64 string longer than 1644 chars (decoded > 1232 bytes).
+    // Use only valid base64 chars so we can verify the rejection cites
+    // oversize, not invalid characters.
+    const oversize = 'A'.repeat(2000);
+    const r = verifySwapTransaction(oversize, base58Encode(pubkeyBytes(PAYER)));
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_oversize/);
+    assert.match(r.error, /1232/);
+});
+
 console.log();
 console.log(`Result: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
