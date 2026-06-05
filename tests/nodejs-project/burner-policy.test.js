@@ -402,9 +402,72 @@ async function runAsync(name, fn) {
                 dataBytes: Buffer.from([0x01, 0x00, 0x00, 0x00, ...Buffer.alloc(32)]),
             }],
         };
-        const r = policy._validateDrainerOpcodes(parsed, [BURNER], { kind: 'jupiter_swap_immediate' });
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER], { kind: 'jupiter_swap_immediate' }, BURNER);
         assert.strictEqual(r.error, 'drainer_assign');
     });
+
+    // ── Copilot PR #398 R14 regression: burnerPubkey implicitly in ownedSet ──
+    // Pre-fix bug: System::Assign on burnerPubkey escaped drainer-walk because
+    // burnerPubkey was NOT in ownedSet (ownedSet only contained SPL-ATA
+    // burnerOwnedAccounts). The production caller passes only the SPL-ATA
+    // list, so a real attack could land an Assign on the burner's system
+    // account silently. Fix: ownedSet implicitly includes burnerPubkey.
+    check('R14: System::Assign on burnerPubkey REJECTED when burnerPubkey NOT in burnerOwnedAccounts', () => {
+        // Exact bug path — burnerOwnedAccounts is the typical SPL-ATA list
+        // and does NOT include BURNER itself. Pre-fix this passed silently.
+        const parsed = {
+            staticAccountKeys: [BURNER, SYSTEM_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 1,
+                accountIdxs: [0], // subject = BURNER (the system account)
+                dataBytes: Buffer.from([0x01, 0x00, 0x00, 0x00, ...Buffer.alloc(32)]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'jupiter_swap_immediate',
+        }, BURNER);
+        assert.strictEqual(r.error, 'drainer_assign', `expected drainer_assign reject, got ${JSON.stringify(r)}`);
+    });
+
+    check('R14: System::Assign on burnerPubkey REJECTED in zero_value_auth (empty ownedAccounts)', () => {
+        // Another real caller pattern: zero_value_auth with empty
+        // burnerOwnedAccounts. Without the fix, the empty Set has no entry
+        // for BURNER and the Assign passes.
+        const parsed = {
+            staticAccountKeys: [BURNER, SYSTEM_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 1,
+                accountIdxs: [0],
+                dataBytes: Buffer.from([0x01, 0x00, 0x00, 0x00, ...Buffer.alloc(32)]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [], {
+            kind: 'zero_value_auth',
+        }, BURNER);
+        assert.strictEqual(r.error, 'drainer_assign');
+    });
+
+    check('R14: System::Assign on NON-burner account (not in ownedAccounts) is ACCEPTED', () => {
+        // Sanity: an Assign on a third-party account the burner doesn't own
+        // must NOT be rejected — the burner doesn't own it, so it's not a drain.
+        const THIRD_PARTY = '3rd3ParTyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, THIRD_PARTY, SYSTEM_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1], // subject = THIRD_PARTY
+                dataBytes: Buffer.from([0x01, 0x00, 0x00, 0x00, ...Buffer.alloc(32)]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [], {
+            kind: 'jupiter_swap_immediate',
+        }, BURNER);
+        assert.strictEqual(r.ok, true, `expected accept for non-owned account, got ${JSON.stringify(r)}`);
+    });
+
     check('rejects AdvanceNonceAccount as instruction 0', () => {
         const parsed = {
             staticAccountKeys: [BURNER, SYSTEM_PROGRAM],

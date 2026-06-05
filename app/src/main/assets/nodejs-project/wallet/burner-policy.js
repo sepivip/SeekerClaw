@@ -465,6 +465,19 @@ function resolveSubjectAccount(parsed, instr, subjectIdx, instrIdx, opcodeName) 
 
 function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta, burnerPubkey) {
     const ownedSet = new Set(burnerOwnedAccounts);
+    // Copilot PR #398 R14 finding #1: burnerPubkey is always implicitly
+    // "burner-owned" — it's the system account that holds the burner's
+    // native SOL. Without this addition, a System::Assign (or SetAuthority/
+    // Approve/CloseAccount/Burn) targeting burnerPubkey directly would
+    // escape the drainer-walk because burnerOwnedAccounts only contains
+    // SPL-token ATAs supplied by the caller. The most dangerous case is
+    // System::Assign(subject=burnerPubkey, new_program_owner=attacker_program):
+    // it doesn't move lamports so the delta validator's SOL floor check
+    // doesn't catch it, but on-chain the burner's account ownership is
+    // reassigned to an attacker-controlled program. Defensive `if (burnerPubkey)`
+    // guard so the function is also safe when called directly from tests
+    // without the fourth argument.
+    if (burnerPubkey) ownedSet.add(burnerPubkey);
     const wsolExemption = (expectedDelta && expectedDelta.kind === 'jupiter_swap_immediate'
         && expectedDelta.wsolAtaExemption
         && isNonEmptyBase58(expectedDelta.wsolAtaExemption.ata)

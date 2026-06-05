@@ -2,7 +2,7 @@
   "name": "jupiter-ultra-test-harness",
   "version": "0.0.0",
   "private": true,
-  "description": "Host-only test harness for live Jupiter/Solana integration tests. Runs on developer machines + CI (Node >=20.18), NOT on the nodejs-mobile (Node 18 LTS) on-device runtime. Uses BURNER_SECRET_KEY from .env.test against real Jupiter mainnet. NEVER commit secrets.",
+  "description": "Host-only test harness for live Jupiter/Solana integration tests. Runs on developer machines ONLY — requires Node >=20.18 (incompatible with CI's Node 18 pin) and BURNER_SECRET_KEY (which is never a CI secret). NOT on the nodejs-mobile (Node 18 LTS) on-device runtime. Uses BURNER_SECRET_KEY from .env.test against real Jupiter mainnet. NEVER commit secrets.",
   "engines": {
     "node": ">=20.18.0"
   },
