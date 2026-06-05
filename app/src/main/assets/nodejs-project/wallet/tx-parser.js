@@ -26,14 +26,17 @@
 //     altLookups[]|null, instructions[], recentBlockhash }`.
 //   - `readCompactU16(buf, offset)`: low-level helper. Kept exported so
 //     other modules don't re-roll their own.
-//   - `base58Encode(bytes)` / `base58Decode(str)`: re-exported from
-//     ./internal/base58 (hand-rolled in the codebase already).
+//   - `base58Encode(bytes)` / `base58Decode(str)`: implemented inline in
+//     this file (hand-rolled — same algorithm used elsewhere in the
+//     codebase; intentionally not factored out to keep this module
+//     dependency-free for the burner-policy hot path).
 //
 // CONTRACT (deterministic; fail-closed)
 // -------------------------------------
 //   - Empty / non-base64 input → TxParseError('invalid_base64')
 //   - Truncated bytes (read past end) → TxParseError('truncated', position)
-//   - Compact-u16 with > 3 continuation bytes → TxParseError('compact_u16_overflow')
+//   - Compact-u16 exceeding 3-byte wire-format max (> 2 continuation bytes
+//     seen) → TxParseError('compact_u16_overflow')
 //   - Account-index out of range in instruction.accountIdxs is NOT a
 //     parser concern — the parser surfaces the raw indices. Callers
 //     decide whether to fail closed on out-of-range (verifySwapTransaction
