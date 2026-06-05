@@ -122,8 +122,27 @@ async function runAsync(name, fn) {
     console.log();
 
     console.log('REJECT_CODES drift guard');
-    check('REJECT_CODES.length === 26', () => {
-        assert.strictEqual(policy.REJECT_CODES.length, 26);
+    check('REJECT_CODES.length === 29 (BAT-1013-followup contract amendment)', () => {
+        // Locked length bumped 26 → 29 by BAT-1013-followup, adding the
+        // three new codes that ship with producers in this PR:
+        //   drainer_burn, token_2022_extension_unsupported,
+        //   token_2022_send_unsupported.
+        // Five additional aspirational codes (slot_drift,
+        // alt_account_unresolved, tx_oversize, invalid_header,
+        // priority_fee_drain) are DEFERRED to a separate Codex amendment
+        // that will land alongside producers — keeping length pinned to
+        // 29 here so this drift guard catches premature code-only
+        // additions.
+        assert.strictEqual(policy.REJECT_CODES.length, 29);
+    });
+    check('REJECT_CODES includes BAT-1013-followup additions (with producers)', () => {
+        for (const code of [
+            'drainer_burn',
+            'token_2022_extension_unsupported',
+            'token_2022_send_unsupported',
+        ]) {
+            assert.ok(policy.REJECT_CODES.includes(code), `${code} missing from REJECT_CODES`);
+        }
     });
     check('REJECT_CODES has no duplicates', () => {
         assert.strictEqual(new Set(policy.REJECT_CODES).size, policy.REJECT_CODES.length);
@@ -1023,6 +1042,14 @@ async function runAsync(name, fn) {
         });
         const simulator = mockSimulator({
             accounts: {
+                // C7 (BAT-1013-followup): SPL-input deposits now require a
+                // burner native-SOL fee-headroom check. Supply the BURNER
+                // native account so the policy can verify fees are within
+                // headroom.
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
                 [BURNER_USDC_ATA]: {
                     pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
                     post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
@@ -1039,6 +1066,718 @@ async function runAsync(name, fn) {
             signerMode: 'burner_only',
             burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
             depositVault: { pubkey: JUPITER_V2_VAULT, expectedOwner: JUP_V2_PROGRAM },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected ok, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.simulated, true);
+    });
+
+    // ─── BAT-1013-followup: B1 / B2 / B3 / C3..C7 / C11 / C14 / C15 / Q3 / Q9 ───
+
+    console.log();
+    console.log('BAT-1013-followup B2: SPL Burn / BurnChecked drainer rejection');
+    check('rejects SPL Burn (ix=8) on burner-owned account', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, USDC, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 3, // TOKEN_PROGRAM
+                accountIdxs: [1, 2, 0], // source=BURNER_USDC_ATA, mint=USDC, authority=BURNER
+                dataBytes: Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]), // Burn discriminator + u64 amount
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.error, 'drainer_burn');
+        assert.strictEqual(r.class, 'security');
+    });
+    check('rejects SPL BurnChecked (ix=15) on burner-owned account', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, USDC, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 3,
+                accountIdxs: [1, 2, 0],
+                dataBytes: Buffer.from([15, 0, 0, 0, 0, 0, 0, 0, 0, 6]), // BurnChecked + amount + decimals
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.error, 'drainer_burn');
+    });
+    check('allows SPL Burn when target is NOT burner-owned', () => {
+        const ATTACKER_OWNED = 'AttacKerOwnedAtaXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, ATTACKER_OWNED, USDC, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 3,
+                accountIdxs: [1, 2, 0],
+                dataBytes: Buffer.from([8, 0, 0, 0, 0, 0, 0, 0, 0]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.ok, true);
+    });
+
+    console.log();
+    console.log('BAT-1013-followup B3: Token-2022 extension drainer rejection');
+    check('rejects Token-2022 PermanentDelegate (0x22) when tokenStandard declared', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, TOKEN_2022_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0],
+                dataBytes: Buffer.from([0x22, 0x00]), // PermanentDelegate discriminator
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'jupiter_swap_immediate',
+            tokenStandard: 'token_2022',
+        });
+        assert.strictEqual(r.error, 'token_2022_extension_unsupported');
+        assert.match(r.reason, /PermanentDelegate/);
+    });
+    check('rejects Token-2022 TransferHook (0x2b)', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, TOKEN_2022_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0],
+                dataBytes: Buffer.from([0x2b, 0x00]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'jupiter_swap_immediate',
+            tokenStandard: 'token_2022',
+        });
+        assert.strictEqual(r.error, 'token_2022_extension_unsupported');
+        assert.match(r.reason, /TransferHook/);
+    });
+    check('rejects Token-2022 ConfidentialTransfer (0x32)', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, TOKEN_2022_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0],
+                dataBytes: Buffer.from([0x32, 0x00]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'jupiter_swap_immediate',
+            tokenStandard: 'token_2022',
+        });
+        assert.strictEqual(r.error, 'token_2022_extension_unsupported');
+    });
+    check('rejects unknown Token-2022 extension opcode (>= 0x20)', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, TOKEN_2022_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0],
+                dataBytes: Buffer.from([0x3f, 0x00]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'jupiter_swap_immediate',
+            tokenStandard: 'token_2022',
+        });
+        assert.strictEqual(r.error, 'token_2022_extension_unsupported');
+        assert.match(r.reason, /0x3f/);
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C6: Token-2022 solana_send / agent_pay_x402 fail-closed');
+    check('rejects Token-2022 solana_send without tokenStandardConfig', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            tokenStandard: 'token_2022',
+            // tokenStandardConfig: missing
+        });
+        assert.strictEqual(r.error, 'token_2022_send_unsupported');
+        assert.strictEqual(r.class, 'security');
+        assert.match(r.reason, /transferFeeBps/);
+    });
+    check('rejects Token-2022 solana_send with invalid transferFeeBps (>10000)', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            tokenStandard: 'token_2022',
+            tokenStandardConfig: { transferFeeBps: 20000 },
+        });
+        assert.strictEqual(r.error, 'token_2022_send_unsupported');
+    });
+    check('accepts Token-2022 solana_send with valid tokenStandardConfig', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            tokenStandard: 'token_2022',
+            tokenStandardConfig: { transferFeeBps: 100 },
+        });
+        assert.strictEqual(r.ok, true);
+    });
+    check('rejects Token-2022 agent_pay_x402 v1 without tokenStandardConfig', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'agent_pay_x402',
+            x402Version: 1,
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            tokenStandard: 'token_2022',
+        });
+        assert.strictEqual(r.error, 'token_2022_send_unsupported');
+    });
+    check('legacy SPL solana_send (no tokenStandard) still accepted', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+        });
+        assert.strictEqual(r.ok, true);
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C5 + Q3: drainer-walk fail-closed on out-of-range subject');
+    check('SetAuthority with missing accountIdxs[0] → account_ownership_uncertain', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [], // no subject
+                dataBytes: Buffer.from([6, 0]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.error, 'account_ownership_uncertain');
+    });
+    check('Approve with out-of-range accountIdxs[0] (255) → account_ownership_uncertain (C5 fix)', () => {
+        // Pre-fix this slipped through silently (truthy guard); now fails closed.
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [255], // out of range
+                dataBytes: Buffer.from([4, 0]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.error, 'account_ownership_uncertain');
+    });
+    check('CloseAccount with out-of-range accountIdxs[0] → account_ownership_uncertain (C5 fix)', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [99],
+                dataBytes: Buffer.from([9]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.error, 'account_ownership_uncertain');
+    });
+    check('System::Assign with out-of-range accountIdxs[0] → account_ownership_uncertain (C5 fix)', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, SYSTEM_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 1,
+                accountIdxs: [42],
+                dataBytes: Buffer.from([0x01, 0x00, 0x00, 0x00, ...Buffer.alloc(32)]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.error, 'account_ownership_uncertain');
+    });
+    check('Q3: drainer re-walk respects combinedAccountKeys length', () => {
+        // Re-walk pass uses combinedAccountKeys as `parsed.staticAccountKeys`.
+        // An index beyond combined-keys length must reject as
+        // account_ownership_uncertain, not silently continue.
+        const combinedKeys = [BURNER, BURNER_USDC_ATA, TOKEN_PROGRAM]; // length 3
+        const parsedRewalk = {
+            staticAccountKeys: combinedKeys,
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [10], // out of range for combined keys (only 3 entries)
+                dataBytes: Buffer.from([6, 0]), // SetAuthority
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsedRewalk, [BURNER_USDC_ATA], { kind: 'jupiter_swap_immediate' });
+        assert.strictEqual(r.error, 'account_ownership_uncertain');
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C3: sponsored mode signer-count bounds');
+    check('sponsored: numRequiredSignatures=0 rejected', () => {
+        const sponsoredDelta = {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'sponsored',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: 'native_sol', atomicAmount: '5000000' },
+            toleranceBps: 100,
+            feePayerAllowlist: [FACILITATOR],
+            cosignerAllowlist: [],
+        };
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [FACILITATOR], numRequiredSignatures: 0 },
+            BURNER, sponsoredDelta);
+        assert.strictEqual(r.error, 'signer_count_mismatch');
+    });
+    check('sponsored: numRequiredSignatures=17 rejected (above Solana cap of 16)', () => {
+        const sponsoredDelta = {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'sponsored',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: 'native_sol', atomicAmount: '5000000' },
+            toleranceBps: 100,
+            feePayerAllowlist: [FACILITATOR],
+            cosignerAllowlist: [],
+        };
+        const keys = [FACILITATOR, BURNER];
+        for (let i = 0; i < 15; i++) keys.push(`KEY${i.toString().padStart(2, '0')}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz`);
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: keys.slice(0, 17), numRequiredSignatures: 17 },
+            BURNER, sponsoredDelta);
+        assert.strictEqual(r.error, 'signer_count_mismatch');
+        assert.match(r.reason, /16|cap/);
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C4: cosigned mode invariant — burner not in feePayerAllowlist');
+    check('cosigned: burner in feePayerAllowlist rejected (cross-allowlist invariant)', () => {
+        const x402Delta = {
+            kind: 'agent_pay_x402',
+            x402Version: 2,
+            signerMode: 'cosigned',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
+            // BURNER incorrectly listed in feePayerAllowlist — should reject.
+            feePayerAllowlist: [FACILITATOR, BURNER],
+            cosignerAllowlist: [FACILITATOR],
+        };
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [FACILITATOR, BURNER], numRequiredSignatures: 2 },
+            BURNER, x402Delta);
+        assert.strictEqual(r.error, 'fee_payer_not_in_allowlist');
+        assert.match(r.reason, /burner.*must NOT appear in feePayerAllowlist|invariant/i);
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C11: sponsored mode happy + reject paths');
+    const sponsoredHappyDelta = {
+        kind: 'jupiter_swap_immediate',
+        signerMode: 'sponsored',
+        burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+        burnerCreditMin: { account: BURNER_USDC_ATA, mint: 'native_sol', atomicAmount: '5000000' },
+        toleranceBps: 100,
+        feePayerAllowlist: [FACILITATOR],
+        cosignerAllowlist: [],
+    };
+    check('sponsored happy path: facilitator pays fees, burner co-signs', () => {
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [FACILITATOR, BURNER], numRequiredSignatures: 2 },
+            BURNER, sponsoredHappyDelta);
+        assert.strictEqual(r.ok, true, `expected ok, got ${JSON.stringify(r)}`);
+    });
+    check('sponsored reject: fee_payer not in allowlist', () => {
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [ALT_PUBKEY, BURNER], numRequiredSignatures: 2 },
+            BURNER, sponsoredHappyDelta);
+        assert.strictEqual(r.error, 'fee_payer_not_in_allowlist');
+    });
+    check('sponsored reject: burner not in required-signer set', () => {
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [FACILITATOR, ALT_PUBKEY], numRequiredSignatures: 2 },
+            BURNER, sponsoredHappyDelta);
+        assert.strictEqual(r.error, 'burner_not_signer');
+    });
+    check('sponsored reject: unknown additional signer', () => {
+        const r = policy._validateSignerMode(
+            { staticAccountKeys: [FACILITATOR, BURNER, ALT_PUBKEY], numRequiredSignatures: 3 },
+            BURNER, sponsoredHappyDelta);
+        assert.strictEqual(r.error, 'cosigner_not_in_allowlist');
+    });
+
+    console.log();
+    console.log('BAT-1013-followup B1: Jupiter Ultra wSOL ATA close exemption');
+    // wSOL ATA exemption shape validation
+    check('wsolAtaExemption shape: missing ata rejected', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER, mint: 'native_sol', atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '5000000' },
+            toleranceBps: 100,
+            wsolAtaExemption: { destination: BURNER }, // missing ata
+        });
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /wsolAtaExemption\.ata/);
+    });
+    check('wsolAtaExemption shape: missing destination rejected', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER, mint: 'native_sol', atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '5000000' },
+            toleranceBps: 100,
+            wsolAtaExemption: { ata: BURNER_USDC_ATA },
+        });
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /wsolAtaExemption\.destination/);
+    });
+    check('wsolAtaExemption shape: well-formed accepted', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER, mint: 'native_sol', atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '5000000' },
+            toleranceBps: 100,
+            wsolAtaExemption: { ata: BURNER_USDC_ATA, destination: BURNER },
+        });
+        assert.strictEqual(r.ok, true);
+    });
+    // Drainer-walk: CloseAccount with declared exemption accepted
+    check('drainer-walk: wSOL ATA CloseAccount (target=ata, dest=burner) ACCEPTED with exemption', () => {
+        const WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, WSOL_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0, 0], // target=WSOL_ATA, destination=BURNER, authority=BURNER
+                dataBytes: Buffer.from([9]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
+            kind: 'jupiter_swap_immediate',
+            wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER },
+        });
+        assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
+    });
+    check('drainer-walk: wSOL ATA CloseAccount to ATTACKER (not burner) REJECTED even with exemption', () => {
+        const WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const ATTACKER = 'AttacKerXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, WSOL_ATA, TOKEN_PROGRAM, ATTACKER],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 3, 0], // destination=ATTACKER, not BURNER
+                dataBytes: Buffer.from([9]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
+            kind: 'jupiter_swap_immediate',
+            wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER },
+        });
+        assert.strictEqual(r.error, 'drainer_close_account');
+    });
+    check('drainer-walk: wSOL exemption is SINGLE-FIRE — second matching CloseAccount REJECTED (B1 replay defense)', () => {
+        // A malicious tx attaching TWO CloseAccount(WSOL_ATA, dest=BURNER)
+        // instructions would otherwise both fall through the exemption
+        // continue branch. The exemption is documented as covering exactly
+        // ONE legitimate Jupiter Ultra unwrap; second use is replay.
+        const WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, WSOL_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [
+                { programIdIdx: 2, accountIdxs: [1, 0, 0], dataBytes: Buffer.from([9]) },
+                { programIdIdx: 2, accountIdxs: [1, 0, 0], dataBytes: Buffer.from([9]) }, // replay
+            ],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
+            kind: 'jupiter_swap_immediate',
+            wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER },
+        });
+        assert.strictEqual(r.error, 'drainer_close_account');
+    });
+    check('drainer-walk: wSOL ATA CloseAccount on DIFFERENT ATA (not declared) REJECTED', () => {
+        const WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const OTHER_ATA = 'OtherBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, OTHER_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0, 0],
+                dataBytes: Buffer.from([9]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [OTHER_ATA], {
+            kind: 'jupiter_swap_immediate',
+            wsolAtaExemption: { ata: WSOL_ATA, destination: BURNER }, // declared for different ATA
+        });
+        assert.strictEqual(r.error, 'drainer_close_account');
+    });
+    check('drainer-walk: CloseAccount without exemption declared still REJECTED in jupiter_swap_immediate', () => {
+        const WSOL_ATA = 'WSoBurNerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const parsed = {
+            staticAccountKeys: [BURNER, WSOL_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 2,
+                accountIdxs: [1, 0, 0],
+                dataBytes: Buffer.from([9]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [WSOL_ATA], {
+            kind: 'jupiter_swap_immediate',
+            // no wsolAtaExemption declared
+        });
+        assert.strictEqual(r.error, 'drainer_close_account');
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C15: toleranceBps boundary');
+    check('toleranceBps=200 (max) accepted', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: 'native_sol', atomicAmount: '5000000' },
+            toleranceBps: 200,
+        });
+        assert.strictEqual(r.ok, true);
+    });
+    check('toleranceBps=201 (above max) rejected', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: 'native_sol', atomicAmount: '5000000' },
+            toleranceBps: 201,
+        });
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /toleranceBps|200|maximum/i);
+    });
+    check('toleranceBps=10000 (100%) rejected — would create zero floor', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER_USDC_ATA, mint: 'native_sol', atomicAmount: '5000000' },
+            toleranceBps: 10000,
+        });
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+    });
+    // Internal applyTolerance boundary tests
+    check('applyTolerance: gte_min_minus_bps observed=floor accepted', () => {
+        // minRequired=1000, bps=100 → floor = 1000 * 9900/10000 = 990
+        // observed=990 must accept (>= floor)
+        const r = policy._applyTolerance(990n, 1000n,
+            { mode: 'gte_min_minus_bps', minRequired: 1000n, bps: 100n }, USDC);
+        assert.strictEqual(r, null);
+    });
+    check('applyTolerance: gte_min_minus_bps observed=floor-1 (1 atomic below) REJECTED', () => {
+        // minRequired=1000, bps=100 → floor = 990; observed=989 rejects.
+        const r = policy._applyTolerance(989n, 1000n,
+            { mode: 'gte_min_minus_bps', minRequired: 1000n, bps: 100n }, USDC);
+        assert.notStrictEqual(r, null);
+        assert.match(r.reason, /below floor/);
+    });
+    check('applyTolerance: 51bps tolerance accepts 50bps shortfall', () => {
+        // minRequired=1_000_000, observed=995_000 (50bps shortfall).
+        // With tolerance bps=51, floor = 1000000 * 9949/10000 = 994900 → 995000 accepted.
+        const r = policy._applyTolerance(995_000n, 1_000_000n,
+            { mode: 'gte_min_minus_bps', minRequired: 1_000_000n, bps: 51n }, USDC);
+        assert.strictEqual(r, null);
+    });
+    check('applyTolerance: 49bps tolerance rejects 50bps shortfall', () => {
+        // Tolerance bps=49, floor = 1000000 * 9951/10000 = 995100 → 995000 rejects.
+        const r = policy._applyTolerance(995_000n, 1_000_000n,
+            { mode: 'gte_min_minus_bps', minRequired: 1_000_000n, bps: 49n }, USDC);
+        assert.notStrictEqual(r, null);
+        assert.match(r.reason, /below floor/);
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C14: SPL_MINT_AGNOSTIC behavior');
+    await runAsync('C14: zero_value_auth with both pre/post splToken metadata + zero delta → ACCEPT', async () => {
+        const BURNER_ALT_ATA = 'BurNerAuxAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_ALT_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
+                // Burner-owned token account whose AMOUNT is unchanged.
+                // Mint can be ANYTHING (SPL_MINT_AGNOSTIC skips the mint
+                // match check); amount delta=0 satisfies "exact" tolerance.
+                [BURNER_ALT_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '500' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '500' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+            burnerOwnedAccounts: [BURNER_ALT_ATA],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
+    });
+    await runAsync('C14: zero_value_auth with SPL_MINT_AGNOSTIC + non-zero delta → REJECT', async () => {
+        const BURNER_ALT_ATA = 'BurNerAuxAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_ALT_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
+                [BURNER_ALT_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '500' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '100' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'zero_value_auth',
+            signerMode: 'burner_only',
+            allowedInstructionClasses: ['memo'],
+            burnerOwnedAccounts: [BURNER_ALT_ATA],
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+    });
+
+    console.log();
+    console.log('BAT-1013-followup C7: burner-native-SOL floor on SPL-input flows');
+    await runAsync('C7: SPL-input swap with hidden SOL drain → simulation_delta_mismatch', async () => {
+        // Burner SPL debit/credit look correct, but tx drains 50M lamports of
+        // native SOL (way past 10M fee headroom). Pre-fix this would have
+        // passed because there was no burner-native-SOL check on SPL-input
+        // swaps. With C7 in place, the burnerSolFloor check rejects.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER]: {
+                    // 50M lamport drain — way above 10M headroom
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_950_000_000 }),
+                },
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                // burnerCreditMin uses a different ATA so the SPL credit
+                // check doesn't collide with the burner-system check.
+                [RECIPIENT_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '5000000' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: RECIPIENT_USDC_ATA, mint: USDC, atomicAmount: '5000000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA, RECIPIENT_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+        assert.strictEqual(r.class, 'security');
+    });
+    await runAsync('C7: SPL-input swap within fee headroom → ACCEPT', async () => {
+        // 5000 lamport drain (typical Solana base fee) — within 10M headroom.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                [RECIPIENT_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '5000000' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: RECIPIENT_USDC_ATA, mint: USDC, atomicAmount: '5000000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA, RECIPIENT_USDC_ATA],
+            toleranceBps: 100,
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
+    });
+
+    console.log();
+    console.log('BAT-1013-followup Q9: x402 v1 happy path end-to-end');
+    await runAsync('Q9: x402 v1 burner-only USDC payment → ACCEPT', async () => {
+        // v1 x402 is a single-signer USDC transfer from burner ATA to
+        // recipient ATA. signerMode=burner_only; legacy SPL (no
+        // tokenStandard). This is the happy path baseline that confirms
+        // the new C6 / C7 checks don't break legacy x402 v1 flows.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, TOKEN_PROGRAM, BURNER_USDC_ATA, RECIPIENT_USDC_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 1, // TOKEN_PROGRAM
+                accountIdxs: [2, 3, 0], // source=BURNER_USDC_ATA, dest=RECIPIENT_USDC_ATA, authority=BURNER
+                dataBytes: Buffer.from([3, 16, 39, 0, 0, 0, 0, 0, 0]), // Transfer + amount=10000
+            }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '20000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '10000' }),
+                },
+                [RECIPIENT_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: FACILITATOR, amountAtomic: '0' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: FACILITATOR, amountAtomic: '10000' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'agent_pay_x402',
+            x402Version: 1,
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000' },
+            recipient: { account: RECIPIENT_USDC_ATA, mint: USDC },
             burnerOwnedAccounts: [BURNER_USDC_ATA],
         }, { burnerPubkey: BURNER, simulator });
         assert.strictEqual(r.ok, true, `expected ok, got ${JSON.stringify(r)}`);

@@ -641,6 +641,13 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (txBuf.length === 0) {
         return { valid: false, error: 'tx_unparseable: decoded buffer is empty', programs: [] };
     }
+    // C1 (BAT-1013-followup): enforce Solana's 1232-byte packet cap upfront.
+    // A tx larger than this can NEVER land on-chain — failing here surfaces a
+    // structured 'tx_oversize' rejection instead of letting a malformed
+    // oversized blob walk the parser.
+    if (txBuf.length > 1232) {
+        return { valid: false, error: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
 
     const programs = [];
     const labelProgram = (id) => {
@@ -688,11 +695,30 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         if (offset + 3 > txBuf.length) {
             return { valid: false, error: 'Legacy: 3-byte message header truncated.', programs };
         }
-        offset++; // numRequired
-        offset++; // numReadonlySigned
-        offset++; // numReadonlyUnsigned
+        // C10 + Q2 (BAT-1013-followup): enforce header invariants. The Solana
+        // protocol caps signers at 16 per tx; numReadonlySigned must not
+        // exceed numRequiredSignatures; the readonly-signed+readonly-unsigned
+        // sum must fit inside the static account key count. Previously the v0
+        // path silently truncated numRequired via Math.min(numRequired,
+        // accountKeys.length) — letting a tx claiming numRequired > accounts
+        // slip past with no signer check.
+        const legacyNumRequired = txBuf[offset]; offset++;
+        const legacyNumReadonlySigned = txBuf[offset]; offset++;
+        const legacyNumReadonlyUnsigned = txBuf[offset]; offset++;
+        if (legacyNumRequired < 1 || legacyNumRequired > 16) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} must be in [1, 16].`, programs };
+        }
+        if (legacyNumReadonlySigned > legacyNumRequired) {
+            return { valid: false, error: `invalid_header: numReadonlySigned=${legacyNumReadonlySigned} exceeds numRequired=${legacyNumRequired}.`, programs };
+        }
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
+        if (legacyNumRequired > numAccounts.value) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} exceeds account key count=${numAccounts.value}.`, programs };
+        }
+        if (legacyNumReadonlySigned + legacyNumReadonlyUnsigned > numAccounts.value) {
+            return { valid: false, error: `invalid_header: readonly sum (${legacyNumReadonlySigned}+${legacyNumReadonlyUnsigned}) exceeds account key count=${numAccounts.value}.`, programs };
+        }
 
         // Buffer-bounds guard (Copilot PR #397 R3 same-class fix mirrored here):
         // a malformed tx claiming a huge numAccounts walks past end-of-buffer
@@ -770,13 +796,30 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (offset + 3 > txBuf.length) {
         return { valid: false, error: 'v0: 3-byte message header truncated.', programs };
     }
+    // C10 + Q2 (BAT-1013-followup): enforce header invariants up-front. The
+    // Math.min(numRequired, accountKeys.length) clamp further down used to
+    // silently truncate a tx whose numRequired exceeded its accounts — letting
+    // structurally invalid messages slip through signer-set verification.
+    // 16 = Solana per-tx signer cap.
     const numRequired = txBuf[offset]; offset++;
-    offset++; // numReadonlySigned
-    offset++; // numReadonlyUnsigned
+    const numReadonlySigned = txBuf[offset]; offset++;
+    const numReadonlyUnsigned = txBuf[offset]; offset++;
+    if (numRequired < 1 || numRequired > 16) {
+        return { valid: false, error: `invalid_header: numRequiredSignatures=${numRequired} must be in [1, 16].`, programs };
+    }
+    if (numReadonlySigned > numRequired) {
+        return { valid: false, error: `invalid_header: numReadonlySigned=${numReadonlySigned} exceeds numRequired=${numRequired}.`, programs };
+    }
 
     // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);
     offset = numStaticAccounts.offset;
+    if (numRequired > numStaticAccounts.value) {
+        return { valid: false, error: `invalid_header: numRequiredSignatures=${numRequired} exceeds static account key count=${numStaticAccounts.value}.`, programs };
+    }
+    if (numReadonlySigned + numReadonlyUnsigned > numStaticAccounts.value) {
+        return { valid: false, error: `invalid_header: readonly sum (${numReadonlySigned}+${numReadonlyUnsigned}) exceeds static account key count=${numStaticAccounts.value}.`, programs };
+    }
     // Buffer-bounds guard (Copilot PR #397 R3): fail closed if declared
     // count exceeds remaining buffer.
     if (offset + numStaticAccounts.value * 32 > txBuf.length) {
@@ -799,8 +842,12 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
     } else {
         // Ultra gasless mode: Jupiter pays fees, wallet must still be a required signer.
-        const requiredSignerCount = Math.min(numRequired, accountKeys.length);
-        const requiredSigners = accountKeys.slice(0, requiredSignerCount);
+        // C10 (BAT-1013-followup): the prior Math.min(numRequired, accountKeys.length)
+        // clamp silently truncated a malformed tx claiming more signers than it
+        // had accounts. The invariant check above (numRequired ≤
+        // numStaticAccounts.value) now rejects that shape upfront, so the
+        // slice here is structurally safe — no clamp needed.
+        const requiredSigners = accountKeys.slice(0, numRequired);
         if (!requiredSigners.includes(expectedPayerBase58)) {
             return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers`, programs };
         }

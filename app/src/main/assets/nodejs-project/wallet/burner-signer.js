@@ -36,11 +36,18 @@
 //     reject. The warn-log fires every transitional-mode call so we
 //     can spot unmigrated callers in production logs.
 //   - `burnerPubkey` is fetched lazily from `/burner/status` on first
-//     policy invocation per Node lifetime, then cached for the process.
-//     A new mid-process burner setup invalidates the cache via the
-//     `_resetBurnerPubkeyCache()` test hook (production never invalidates
-//     — burner pubkey is immutable until wipe, which destroys the Node
-//     process via service restart anyway).
+//     policy invocation per Node lifetime. The cached value is verified
+//     against the latest `/burner/status` pubkey on every fetch — if the
+//     bridge reports a different pubkey (mid-process burner re-setup or
+//     wipe + new generation), the cache is invalidated and the fresh
+//     value is adopted before the policy gate runs.
+//     The `_resetBurnerPubkeyCache()` test hook also exists for unit
+//     tests. (Previously this comment claimed wipe destroys the Node
+//     process via service restart — that is NOT true today: wipe is a
+//     bridge endpoint and Node continues running. The cache-vs-bridge
+//     compare on every call is what makes mid-life wipes safe; the
+//     follow-up to push KeyVault.wipe → InternalControlServer →
+//     `_resetBurnerPubkeyCache()` proactively is tracked separately.)
 
 'use strict';
 
@@ -70,6 +77,13 @@ let _publicShaper = null;
 function _getPublicShaper() {
     if (_publicShaper === null) _publicShaper = createPublicRpcShaper();
     return _publicShaper;
+}
+
+// Test hook — resets the shared shaper between cases so independent unit
+// tests don't bleed window state into one another. Production never calls
+// this; the shaper is intentionally process-scoped.
+function _resetPublicShaper() {
+    _publicShaper = null;
 }
 
 /**
@@ -107,10 +121,16 @@ function _lazyDefaultSimulator() {
         try {
             urlAtStart = _getSolanaRpcUrl();
             if (typeof urlAtStart === 'string' && /helius/i.test(urlAtStart)) backing = 'helius';
-        } catch (_) {}
+        } catch (e) {
+            // Q6: surface the failure in logs so production drift checks can
+            // see when the accessor threw vs returned null. Drift detection
+            // remains best-effort but is no longer silent.
+            _log(`[BurnerSigner] _getSolanaRpcUrl threw before getMultipleAccounts: ${e && e.message ? e.message : String(e)} — drift check degraded`, 'WARN');
+        }
 
         // 1. Pre-snapshot — same-RPC getMultipleAccounts.
         let preSnapshot = [];
+        let preSlot = null;
         if (addresses.length > 0) {
             const gma = await _solanaRpc('getMultipleAccounts', [
                 addresses,
@@ -125,10 +145,27 @@ function _lazyDefaultSimulator() {
             if (gma && gma.error) {
                 throw new Error(`getMultipleAccounts: ${gma.error}`);
             }
-            // solanaRpc returns the JSON body; gma.value is the array of
-            // accountInfo|null, in the same order as the requested
-            // addresses.
-            preSnapshot = (gma && Array.isArray(gma.value)) ? gma.value : addresses.map(() => null);
+            // C9: tighten the response shape — `gma.value` must be present
+            // and must be an array of the same length as the requested
+            // addresses. Anything shorter or missing is treated as a
+            // metadata gap so the policy wraps it as
+            // `simulation_metadata_missing` rather than proceeding with a
+            // bogus pre-state. Per-entry nulls inside the array are still
+            // legitimate (e.g. an ATA not yet created) and are passed
+            // through to the policy, which has its own `mustExistBefore`
+            // gating per declared account.
+            if (!gma || !Array.isArray(gma.value)) {
+                throw new Error('simulation_metadata_missing: getMultipleAccounts returned no `value` array');
+            }
+            if (gma.value.length !== addresses.length) {
+                throw new Error(`simulation_metadata_missing: getMultipleAccounts returned ${gma.value.length} entries for ${addresses.length} requested addresses`);
+            }
+            preSnapshot = gma.value;
+            // Q4 slot-drift detection: capture the pre-snapshot slot so we
+            // can compare against the simulation slot below.
+            if (gma.context && typeof gma.context.slot === 'number') {
+                preSlot = gma.context.slot;
+            }
         }
 
         // 2. simulateTransaction — accounts-config returns the post-state
@@ -180,14 +217,18 @@ function _lazyDefaultSimulator() {
         // come from different chain views. Fail closed so the caller does
         // not bridge-sign on inconsistent data. The policy wraps the throw
         // as `simulation_failed` (availability-class).
+        let urlAtEnd = null;
         try {
-            const urlAtEnd = _getSolanaRpcUrl();
+            urlAtEnd = _getSolanaRpcUrl();
             if (typeof urlAtStart === 'string' && typeof urlAtEnd === 'string' && urlAtStart !== urlAtEnd) {
                 throw new Error('rpc_url_drift: active RPC URL changed between getMultipleAccounts and simulateTransaction');
             }
         } catch (e) {
             if (e && typeof e.message === 'string' && e.message.startsWith('rpc_url_drift')) throw e;
-            // _getSolanaRpcUrl() itself threw — ignore, drift check is best-effort.
+            // Q6: _getSolanaRpcUrl() itself threw — log so we can see the
+            // degraded-drift-check case in production, instead of silently
+            // skipping.
+            _log(`[BurnerSigner] _getSolanaRpcUrl threw after simulateTransaction: ${e && e.message ? e.message : String(e)} — drift check degraded`, 'WARN');
         }
 
         // solanaRpc returns the parsed JSON body; policy expects `{ value:
@@ -195,10 +236,31 @@ function _lazyDefaultSimulator() {
         // through. Otherwise wrap.
         const normalized = (sim && sim.value) ? sim : { value: sim };
 
+        const simSlot = (normalized.context && typeof normalized.context.slot === 'number') ? normalized.context.slot : null;
+
+        // Q4: same-URL slot drift detection. Even when the URL did not
+        // change, a load-balanced public RPC may serve `getMultipleAccounts`
+        // from one replica at slot N and `simulateTransaction` from
+        // another replica at slot N - K. When K is large enough, pre-state
+        // and post-state describe different chain views. Solana finality
+        // lands new slots every ~400ms; 8 slots ≈ 3.2s is a generous bound
+        // for two same-RPC reads in the same event-loop tick. Throw so the
+        // policy wraps it as `simulation_failed` (availability-class —
+        // caller may retry once RPC settles). Skip the check when either
+        // slot is missing (older RPC responses) or when only one address
+        // was requested (no GMA → no preSlot).
+        if (preSlot !== null && simSlot !== null) {
+            const drift = Math.abs(simSlot - preSlot);
+            if (drift > 8) {
+                throw new Error(`slot_drift: getMultipleAccounts slot ${preSlot} vs simulateTransaction slot ${simSlot} (delta ${drift} > 8) — same-RPC replicas inconsistent`);
+            }
+        }
+
         return {
             sim: normalized,
             preSnapshot,
-            slot: (normalized.context && normalized.context.slot) || 0,
+            slot: simSlot || 0,
+            preSlot,
             simulatorBacking: backing,
         };
     };
@@ -206,15 +268,23 @@ function _lazyDefaultSimulator() {
 
 let _burnerPubkeyCache = null;
 async function _getBurnerPubkey() {
-    if (_burnerPubkeyCache) return _burnerPubkeyCache;
+    // C8 fix: always cross-check the cached value with /burner/status. The
+    // bridge round-trip is ~milliseconds and avoids a long-lived stale
+    // pubkey across a mid-process wipe + re-setup. If the bridge call fails
+    // (network glitch, Android service paused), fall back to the cached
+    // value — this preserves the prior behavior for the common case and
+    // only hardens the wipe-then-re-setup edge.
     try {
         const s = await androidBridgeCall('/burner/status', {}, 5000);
         if (s && !s.error && s.configured && typeof s.pubkey === 'string' && s.pubkey.length >= 32) {
+            if (_burnerPubkeyCache !== null && _burnerPubkeyCache !== s.pubkey) {
+                _log(`[BurnerSigner] burner pubkey changed under cache (cached=${_burnerPubkeyCache.slice(0, 8)}… new=${s.pubkey.slice(0, 8)}…) — invalidating`, 'WARN');
+            }
             _burnerPubkeyCache = s.pubkey;
             return s.pubkey;
         }
     } catch (_) {}
-    return null;
+    return _burnerPubkeyCache;
 }
 
 function _resetBurnerPubkeyCache() {
@@ -340,4 +410,7 @@ module.exports = {
     BurnerSigner,
     // Test hooks
     _resetBurnerPubkeyCache,
+    _resetPublicShaper,
+    _lazyDefaultSimulator,
+    _getBurnerPubkey,
 };

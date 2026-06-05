@@ -132,6 +132,91 @@ function check(name, fn) {
         assert.deepStrictEqual(slept, []); // no backoff for non-429
     });
 
+    // C13: Concurrency invariant. Two distinct properties matter under
+    // overlapping caller submissions:
+    //   (a) Four concurrent submissions to the SAME shaper instance must
+    //       share the per-window cap — only 3 succeed, the 4th hits
+    //       rate_exhausted up front. The window slot is claimed BEFORE
+    //       the inner fn runs.
+    //   (b) A single submission whose inner fn retries internally must
+    //       NOT push a second window slot for the retry (the cap is on
+    //       caller submissions, not RPC attempts).
+    console.log();
+    console.log('C13 concurrency');
+
+    await runAsync('4 concurrent tryRun submissions share the window cap (only 3 succeed)', async () => {
+        let t = 1000;
+        // Inner fn resolves after a Promise barrier so all four are mid-flight
+        // when the shaper makes its admission decision.
+        let release;
+        const barrier = new Promise(r => { release = r; });
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async () => {},
+        });
+
+        const fn = async () => {
+            await barrier;
+            return 'OK';
+        };
+
+        // Fire all four submissions at once, BEFORE awaiting any.
+        const promises = [s.tryRun(fn), s.tryRun(fn), s.tryRun(fn), s.tryRun(fn)];
+        // Let the gate decisions land (push timestamps into `attempts`) before
+        // we release the inner fns. Two microtask ticks is enough — the
+        // window gate is sync, only the `await fn()` is async.
+        await Promise.resolve();
+        await Promise.resolve();
+        // Release the barrier so the 3 admitted fns can resolve.
+        release();
+
+        const results = await Promise.all(promises);
+        const ok = results.filter(r => r.ok);
+        const rejected = results.filter(r => !r.ok);
+        assert.strictEqual(ok.length, 3, `expected 3 ok results, got ${ok.length}: ${JSON.stringify(results)}`);
+        assert.strictEqual(rejected.length, 1, `expected 1 rejection, got ${rejected.length}`);
+        assert.strictEqual(rejected[0].error, 'rate_exhausted');
+        assert.match(rejected[0].reason, /attempts already in last/);
+    });
+
+    await runAsync('retry inside a single submission does NOT consume a second window slot', async () => {
+        let t = 1000;
+        const slept = [];
+        const s = createPublicRpcShaper({
+            now: () => t,
+            sleep: async (ms) => { slept.push(ms); t += ms; },
+        });
+
+        let calls = 0;
+        const fn = async () => {
+            calls++;
+            if (calls < 3) throw new Error('HTTP 429');
+            return 'OK';
+        };
+        const r = await s.tryRun(fn);
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.value, 'OK');
+        assert.strictEqual(calls, 3);
+        // Internal attempts log must show ONE slot for the single caller
+        // submission, NOT three (one per RPC attempt).
+        assert.strictEqual(s._attempts.length, 1, `expected 1 slot for 1 caller submission; got ${s._attempts.length}`);
+        // Backoffs follow the 1s, 2s, 4s schedule for the two retries.
+        assert.deepStrictEqual(slept, [1000, 2000]);
+    });
+
+    await runAsync('three sequential successful calls each push exactly one slot', async () => {
+        let t = 1000;
+        const s = createPublicRpcShaper({ now: () => t, sleep: async () => {} });
+        await s.tryRun(async () => 'A'); t += 1;
+        await s.tryRun(async () => 'B'); t += 1;
+        await s.tryRun(async () => 'C');
+        assert.strictEqual(s._attempts.length, 3,
+            `expected 3 slots after 3 successful submissions, got ${s._attempts.length}`);
+        const r4 = await s.tryRun(async () => 'D');
+        assert.strictEqual(r4.ok, false);
+        assert.strictEqual(r4.error, 'rate_exhausted');
+    });
+
     console.log();
     console.log(`Result: ${pass} passed, ${fail} failed`);
     if (fail > 0) process.exit(1);

@@ -871,6 +871,19 @@ async function _handle(input /* , chatId */) {
         if (isV2 && !facilitatorPubkey) {
             throw new Error('x402 v2 requires facilitator feePayer in requirement.extra; got null');
         }
+        // C2 (BAT-1013-followup): tighten facilitator pubkey validation. The
+        // null-check above catches missing; but a string like 'undefined' or
+        // 'pending' from a malformed facilitator response would pass and
+        // then be tunneled into feePayerAllowlist/cosignerAllowlist, where
+        // burner-policy's signer-mode check would either silently accept a
+        // mismatched fee-payer (under cosigned rules) or reject with a
+        // confusing shape error. Validate as a real base58 Solana pubkey.
+        if (isV2 && facilitatorPubkey) {
+            const { isValidSolanaAddress } = require('../solana');
+            if (!isValidSolanaAddress(facilitatorPubkey)) {
+                throw new Error(`x402 v2 facilitator feePayer is not a valid Solana base58 address: ${JSON.stringify(facilitatorPubkey)}`);
+            }
+        }
         payExpectedDelta = {
             kind: 'agent_pay_x402',
             x402Version: isV2 ? 2 : 1,
