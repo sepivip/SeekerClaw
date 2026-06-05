@@ -519,21 +519,46 @@ test('C10: fails closed on legacy tx with numRequiredSignatures=0', () => {
     assert.match(r.error, /invalid_header.*numRequiredSignatures=0/);
 });
 
-test('C10: fails closed on v0 tx with numRequiredSignatures=17 (>16 cap)', () => {
+test('Copilot R9: fails closed when sig section count != numRequiredSignatures (header lies)', () => {
+    // tx claims numRequiredSignatures=3 in the header but the signature
+    // section only contains 1 signature. Wire format requires exactly
+    // numRequired signatures.
     const parts = [];
-    parts.push(compactU16(1));
+    parts.push(compactU16(1));            // sig section says 1 signature
     parts.push(SIG_BYTES);
-    parts.push(Buffer.from([0x80])); // v0
-    parts.push(Buffer.from([17, 0, 0])); // numRequired=17
-    parts.push(compactU16(1));
+    parts.push(Buffer.from([0x80]));     // v0
+    parts.push(Buffer.from([3, 0, 0])); // header lies: numRequired=3
+    parts.push(compactU16(3));
     parts.push(pubkeyBytes(PAYER));
+    parts.push(pubkeyBytes('Signer2X'));
+    parts.push(pubkeyBytes('Signer3X'));
     parts.push(BLOCKHASH);
     parts.push(compactU16(0));
-    parts.push(compactU16(0)); // numAlts
+    parts.push(compactU16(0));
     const txB64 = Buffer.concat(parts).toString('base64');
     const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)), { skipPayerCheck: true });
     assert.strictEqual(r.valid, false);
-    assert.match(r.error, /invalid_header.*numRequiredSignatures=17/);
+    assert.match(r.error, /numRequiredSignatures=3 does not match signature-section count=1/);
+});
+
+test('Copilot R9: fails closed when v0 numRequiredSignatures > numStaticAccounts (signers must be static, not ALT)', () => {
+    // Header claims 2 required signers but static-key section has only 1.
+    // Required signers must come from the static key section.
+    const parts = [];
+    parts.push(compactU16(2));
+    parts.push(SIG_BYTES);
+    parts.push(SIG_BYTES);
+    parts.push(Buffer.from([0x80]));     // v0
+    parts.push(Buffer.from([2, 0, 0])); // numRequired=2
+    parts.push(compactU16(1));            // only 1 static account
+    parts.push(pubkeyBytes(PAYER));
+    parts.push(BLOCKHASH);
+    parts.push(compactU16(0));
+    parts.push(compactU16(0));
+    const txB64 = Buffer.concat(parts).toString('base64');
+    const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)), { skipPayerCheck: true });
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /v0 numRequiredSignatures=2 exceeds numStaticAccounts=1/);
 });
 
 test('Q2: fails closed when numReadonlySigned exceeds numRequiredSignatures', () => {
