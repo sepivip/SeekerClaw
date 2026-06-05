@@ -629,6 +629,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
         return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
     }
+    // C1 (BAT-1013-followup + R11): Solana caps tx packets at 1232 bytes. A
+    // tx larger than this can NEVER land on-chain — fail closed BEFORE the
+    // base64 decode so we never materialize an oversized buffer in memory.
+    // base64 expands 3 bytes → 4 chars, so 1232 bytes encodes to at most
+    // ceil(1232/3) * 4 = 1644 chars. Anything longer is guaranteed oversized.
+    if (txBase64.length > 1644) {
+        const estBytes = Math.floor(txBase64.length * 3 / 4);
+        return { valid: false, error: `tx_oversize: ~${estBytes} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
     let txBuf;
     try {
         txBuf = Buffer.from(txBase64, 'base64');
@@ -638,9 +647,9 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (txBuf.length === 0) {
         return { valid: false, error: 'tx_unparseable: decoded buffer is empty', programs: [] };
     }
-    // C1 (BAT-1013-followup): Solana caps tx packets at 1232 bytes. A tx
-    // larger than this can NEVER land on-chain — fail closed up-front
-    // instead of letting an oversized blob walk the parser.
+    // Exact byte-length check (post-decode): catches any tx whose base64 was
+    // under 1644 chars but whose decoded length still exceeds 1232 (padding
+    // edge cases).
     if (txBuf.length > 1232) {
         return { valid: false, error: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
     }
@@ -649,9 +658,11 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const labelProgram = (id) => {
         const name = KNOWN_PROGRAM_NAMES.get(id);
         if (name) {
-            // Snake-case for log greppability ("jupiter_aggregator_v6" not
-            // "Jupiter Aggregator v6"). Lowercase + replace whitespace.
-            programs.push(name.toLowerCase().replace(/\s+/g, '_'));
+            // Snake-case for log greppability (R11): "Serum / OpenBook V1"
+            // → "serum_openbook_v1", not "serum_/_openbook_v1". Lowercase,
+            // collapse every run of non-[a-z0-9] to a single underscore,
+            // trim leading/trailing underscores.
+            programs.push(name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''));
         } else {
             // Truncated base58 + (unlabeled) suffix so forensics can still
             // find the program ID without dumping the full 44-char string.
@@ -695,16 +706,17 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         if (offset + 3 > txBuf.length) {
             return { valid: false, error: 'Legacy: 3-byte message header truncated.', programs };
         }
-        // C10 + Q2 (BAT-1013-followup): enforce header invariants. Solana
-        // caps signers at 16/tx; numReadonlySigned must not exceed numRequired.
+        // C10 + Q2 (BAT-1013-followup) + R9: enforce header invariants.
+        // Solana's signer limit is size-based (1232-byte packet cap), not a
+        // fixed numeric cap. Use protocol invariants instead:
+        // (a) numRequired >= 1 (fee payer is always a signer), and
+        // (b) sig section count must match header's numRequired (the tx
+        //     wire format requires exactly numRequired signatures), and
+        // (c) numReadonlySigned must not exceed numRequired, and
+        // (d) numRequired must fit within numAccounts (checked further down).
         const legacyNumRequired = txBuf[offset]; offset++;
         const legacyNumReadonlySigned = txBuf[offset]; offset++;
         offset++; // numReadonlyUnsigned
-        // Copilot R9: drop the arbitrary 16-cap (Solana's actual limit is
-        // size-based, not a numeric cap). Use protocol invariants instead:
-        // (a) numRequired >= 1 (fee payer is always a signer), and
-        // (b) sig section count must match header's numRequired (the tx
-        //     wire format requires exactly numRequired signatures).
         if (legacyNumRequired < 1) {
             return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
         }
@@ -815,14 +827,18 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (offset + 3 > txBuf.length) {
         return { valid: false, error: 'v0: 3-byte message header truncated.', programs };
     }
-    // C10 + Q2 (BAT-1013-followup): enforce header invariants up-front.
-    // Solana caps signers at 16/tx; numReadonlySigned must not exceed
-    // numRequired. The previous Math.min clamp in skipPayerCheck silently
-    // truncated nonsensical numRequired values.
+    // C10 + Q2 (BAT-1013-followup) + R9: enforce header invariants up-front.
+    // Solana's signer limit is size-based (1232-byte packet cap), not a fixed
+    // numeric cap. The previous Math.min clamp in skipPayerCheck silently
+    // truncated nonsensical numRequired values and let bogus headers through.
     const numRequired = txBuf[offset]; offset++;
     const numReadonlySigned = txBuf[offset]; offset++;
     offset++; // numReadonlyUnsigned
-    // Copilot R9: protocol invariants (not arbitrary numeric cap).
+    // Protocol invariants (not arbitrary numeric cap):
+    //   (a) numRequired >= 1 (fee payer is always a signer)
+    //   (b) numRequired === sig section count (wire-format invariant)
+    //   (c) numReadonlySigned <= numRequired
+    //   (d) numRequired <= numAccounts (signer set fits in account keys)
     if (numRequired < 1) {
         return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
     }
