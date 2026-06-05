@@ -211,11 +211,15 @@ const WELL_KNOWN_TOKENS = {
     'usdt': { address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6, symbol: 'USDT', name: 'USDT' },
 };
 
-// Known program names for swap transaction verification.
-// Maps program ID → human-readable label. Used for:
-//   1. TRUSTED_PROGRAMS whitelist (derived from map keys)
-//   2. Labeling unknown programs in error messages
-// Initialized with hardcoded fallback, updated dynamically from Jupiter API on startup.
+// Known program names for swap transaction logging.
+// Maps program ID → human-readable label. BAT-1013: used for log readability
+// ONLY — the prior program-ID allowlist enforcement was removed because
+// (1) it DoS'd legitimate swaps when Jupiter routed through programs we
+// hadn't labeled yet, and (2) industry consensus (Phantom/Backpack/Solflare/
+// MWA spec) is blocklist+simulation, not integrator-side allowlist. See
+// verifySwapTransaction() for the structural primitive. Tier 2 (PR #398)
+// will add wallet/burner-policy.js for autonomous-burner-signing checks.
+// Initialized with hardcoded fallback, refreshed from Jupiter API on startup.
 const KNOWN_PROGRAM_NAMES = new Map([
     // === System Programs ===
     ['11111111111111111111111111111111',           'System Program'],
@@ -310,8 +314,16 @@ const KNOWN_PROGRAM_NAMES = new Map([
     ['ALPHAQmeA7bjrVuccPsYPiCvsi428SNwte66Srvs4pHA', 'AlphaQ'],
 ]);
 
-// Derive trusted programs set from the map (single source of truth)
-let TRUSTED_PROGRAMS = new Set(KNOWN_PROGRAM_NAMES.keys());
+// KNOWN_PROGRAM_NAMES is used for log readability only (BAT-1013).
+// Program-ID allowlist enforcement was removed because (1) Jupiter ships new
+// routing programs faster than they label them in their public API, which
+// silently DoS'd legitimate swaps (2026-06-03 device incident), and
+// (2) Phantom/Backpack/Solflare all use simulation+blocklist patterns rather
+// than integrator-side program allowlists — Solana Cookbook + audit firm
+// consensus (workflow `wx2c95307`). Structural fee-payer/signer check stays
+// in verifySwapTransaction(); drainer-opcode blocklist + simulate-vs-quote
+// will live in wallet/burner-policy.js (Tier 2 / PR #398) for autonomous
+// burner signing.
 
 // Fetch latest program labels from Jupiter API on startup, merge into KNOWN_PROGRAM_NAMES.
 // Falls back to the hardcoded list above if the fetch fails.
@@ -334,9 +346,7 @@ async function refreshJupiterProgramLabels() {
                 added++;
             }
         }
-        // Rebuild TRUSTED_PROGRAMS from updated map
-        TRUSTED_PROGRAMS = new Set(KNOWN_PROGRAM_NAMES.keys());
-        log(`[Jupiter] Program labels refreshed: ${KNOWN_PROGRAM_NAMES.size} total (${added} new from API)`, 'INFO');
+        log(`[Jupiter] Program labels refreshed: ${KNOWN_PROGRAM_NAMES.size} total (${added} new from API, log labels only — no policy effect)`, 'INFO');
     } catch (err) {
         log(`[Jupiter] Program label fetch error (using hardcoded fallback): ${err.message}`, 'WARN');
     }
@@ -586,191 +596,463 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
     return res.data;
 }
 
-// Verify a Jupiter swap transaction before sending to wallet
-// Decodes the versioned transaction and checks:
-// 1. Fee payer matches user's public key (unless skipPayerCheck is set)
-// 2. Only known/trusted programs are referenced
-// Options: { skipPayerCheck: true } for Jupiter Ultra (Jupiter pays fees)
+// Verify a Jupiter swap transaction before sending to wallet.
+//
+// Structural + signer check ONLY (BAT-1013, replaces program-ID allowlist):
+//   1. Fee payer matches user's pubkey (default) OR user is among required
+//      signers (Ultra gasless mode via `skipPayerCheck: true`).
+//   2. Walks instructions to collect a labeled `programs` list FOR LOG
+//      READABILITY ONLY — an unlabeled or new program NEVER fails verification.
+//
+// What this function intentionally does NOT do anymore:
+//   - No program-ID allowlist (`TRUSTED_PROGRAMS` removed; Jupiter ships
+//     routing programs faster than they label them, and Phantom/Backpack
+//     /Solflare all use simulation+blocklist instead of integrator allowlists).
+//   - No Address Lookup Table rejection (ALT-resolved programs are part of
+//     Jupiter's normal routing for V2 trigger and Ultra flows).
+//
+// Drainer-opcode blocking + simulate-vs-quote enforcement will live in
+// `wallet/burner-policy.js` (Tier 2 / PR #398) for autonomous (burner)
+// signing flows. MWA flows still get the final user click-through
+// inside the wallet UI.
+//
+// Options: { skipPayerCheck: true } for Jupiter Ultra (Jupiter pays fees).
+// Returns: { valid: boolean, error?: string, programs: string[] }
 function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     const { skipPayerCheck = false } = options;
-    const txBuf = Buffer.from(txBase64, 'base64');
+    // Strict base64 validation (Copilot PR #397 R4): Buffer.from(str, 'base64')
+    // silently ignores invalid chars and decodes partial input — `tx_unparseable`
+    // would never trigger. Validate input is a proper base64 string first.
+    if (typeof txBase64 !== 'string' || txBase64.length === 0) {
+        return { valid: false, error: 'tx_unparseable: empty or non-string input', programs: [] };
+    }
+    // C1 (BAT-1013-followup + R11 + R12): Solana caps tx packets at 1232 bytes.
+    // A tx larger than this can NEVER land on-chain — fail closed BEFORE the
+    // O(n) regex scan AND base64 decode so we never spend time validating or
+    // materializing an oversized blob. base64 expands 3 bytes → 4 chars, so
+    // 1232 bytes encodes to at most ceil(1232/3) * 4 = 1644 chars. Anything
+    // longer is guaranteed oversized.
+    if (txBase64.length > 1644) {
+        const estBytes = Math.floor(txBase64.length * 3 / 4);
+        return { valid: false, error: `tx_oversize: ~${estBytes} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        return { valid: false, error: 'tx_unparseable: invalid base64 characters or length', programs: [] };
+    }
+    let txBuf;
+    try {
+        txBuf = Buffer.from(txBase64, 'base64');
+    } catch (e) {
+        return { valid: false, error: `tx_unparseable: ${e.message}`, programs: [] };
+    }
+    if (txBuf.length === 0) {
+        return { valid: false, error: 'tx_unparseable: decoded buffer is empty', programs: [] };
+    }
+    // Exact byte-length check (post-decode): catches any tx whose base64 was
+    // under 1644 chars but whose decoded length still exceeds 1232 (padding
+    // edge cases).
+    if (txBuf.length > 1232) {
+        return { valid: false, error: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
+    }
 
-    // TRUSTED_PROGRAMS is module-level (KNOWN_PROGRAM_NAMES-derived, refreshed from Jupiter API)
+    const programs = [];
+    const labelProgram = (id) => {
+        const name = KNOWN_PROGRAM_NAMES.get(id);
+        if (name) {
+            // Snake-case for log greppability (R11): "Serum / OpenBook V1"
+            // → "serum_openbook_v1", not "serum_/_openbook_v1". Lowercase,
+            // collapse every run of non-[a-z0-9] to a single underscore,
+            // trim leading/trailing underscores.
+            programs.push(name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''));
+        } else {
+            // Truncated base58 + (unlabeled) suffix so forensics can still
+            // find the program ID without dumping the full 44-char string.
+            programs.push(`${id.slice(0, 4)}…${id.slice(-4)}(unlabeled)`);
+        }
+    };
 
-    // Full serialized transaction: [sig_count] [signatures...] [message]
-    // Skip signature section to reach the message
+    // Skip signature section to reach the message.
     let offset = 0;
     const numSigs = readCompactU16(txBuf, offset);
     offset = numSigs.offset;
-    offset += numSigs.value * 64; // skip signature slots
+    // Buffer-bounds guard (Copilot PR #397 R4): a tx claiming N signatures
+    // without N * 64 bytes of signature data would push offset past the
+    // buffer and then all subsequent reads silently slip past.
+    if (offset + numSigs.value * 64 > txBuf.length) {
+        return { valid: false, error: `Signature bytes truncated: declared ${numSigs.value} sigs needs ${numSigs.value * 64} bytes, only ${txBuf.length - offset} remain.`, programs };
+    }
+    offset += numSigs.value * 64;
 
-    // Message starts here — check for v0 prefix (0x80)
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 exists; future versions (v1, v2, ...)
+    // would set prefix = 0x81, 0x82, etc. Copilot PR #397 R12: do NOT
+    // strict-equal 0x80 — a future v1 (0x81) would silently fall into the
+    // legacy parsing path and produce misleading errors. Fail closed on
+    // any non-zero version we don't yet understand.
+    // Bounds-check first (Copilot PR #397 R7): a tx truncated immediately
+    // after the signature section makes txBuf[offset] return undefined,
+    // which falls into the legacy parsing path with misleading errors.
+    if (offset >= txBuf.length) {
+        return { valid: false, error: 'Message section truncated (no bytes after signatures).', programs };
+    }
     const prefix = txBuf[offset];
-    const isV0 = prefix === 0x80;
+    const isVersioned = (prefix & 0x80) !== 0;
+    if (isVersioned) {
+        const version = prefix & 0x7F;
+        if (version !== 0) {
+            return { valid: false, error: `unsupported_tx_version: v${version} (only v0 is supported)`, programs };
+        }
+    }
+    const isV0 = isVersioned;
 
     if (!isV0) {
-        // Legacy transaction — Ultra always uses v0, so reject legacy in gasless mode
+        // Legacy transaction. Ultra always uses v0, so reject legacy under
+        // Ultra mode — that's a structural mismatch, not a program check.
         if (skipPayerCheck) {
-            return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format' };
+            return { valid: false, error: 'Expected v0 transaction for Ultra gasless flow, got legacy format', programs };
         }
 
-        // Legacy message: header (3 bytes) + account keys + blockhash + instructions
-        const numRequired = txBuf[offset]; offset++;
-        const numReadonlySigned = txBuf[offset]; offset++;
-        const numReadonlyUnsigned = txBuf[offset]; offset++;
+        // Legacy message: header (3 bytes) + account keys + blockhash + instructions.
+        // Bounds-check the 3-byte header before skipping it (Copilot PR #397 R7):
+        // without this, a truncated tx pushes offset past txBuf.length and
+        // downstream readCompactU16/account-key reads produce misleading errors.
+        if (offset + 3 > txBuf.length) {
+            return { valid: false, error: 'Legacy: 3-byte message header truncated.', programs };
+        }
+        // C10 + Q2 (BAT-1013-followup) + R9: enforce header invariants.
+        // Solana's signer limit is size-based (1232-byte packet cap), not a
+        // fixed numeric cap. Use protocol invariants instead:
+        // (a) numRequired >= 1 (fee payer is always a signer), and
+        // (b) sig section count must match header's numRequired (the tx
+        //     wire format requires exactly numRequired signatures), and
+        // (c) numReadonlySigned must not exceed numRequired, and
+        // (d) numRequired must fit within numAccounts (checked further down).
+        const legacyNumRequired = txBuf[offset]; offset++;
+        const legacyNumReadonlySigned = txBuf[offset]; offset++;
+        offset++; // numReadonlyUnsigned
+        if (legacyNumRequired < 1) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
+        }
+        if (legacyNumRequired !== numSigs.value) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} does not match signature-section count=${numSigs.value}.`, programs };
+        }
+        if (legacyNumReadonlySigned > legacyNumRequired) {
+            return { valid: false, error: `invalid_header: numReadonlySigned=${legacyNumReadonlySigned} exceeds numRequired=${legacyNumRequired}.`, programs };
+        }
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
+        // Copilot R10: legacy signers must also fit within account keys
+        // (symmetric to the v0 check below). Without this, a tx claiming
+        // N signatures with fewer than N account keys passes the wire-
+        // format invariants but trusts a logical impossibility.
+        if (legacyNumRequired > numAccounts.value) {
+            return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} exceeds account key count=${numAccounts.value}.`, programs };
+        }
 
-        // Read all account keys
+        // Buffer-bounds guard (Copilot PR #397 R3): a malformed/truncated
+        // tx can claim a huge numAccounts; if we don't verify the bytes
+        // exist, the loop reads past end-of-buffer (txBuf.slice returns
+        // short buffer / empty), produces bogus base58 keys, and combined
+        // with later reads that silently return 0 (compact-u16 past end)
+        // the whole verification slips through. Fail closed.
+        if (offset + numAccounts.value * 32 > txBuf.length) {
+            return { valid: false, error: `Legacy: declared ${numAccounts.value} account keys exceeds remaining buffer (${txBuf.length - offset} bytes; need ${numAccounts.value * 32}).`, programs };
+        }
+
         const legacyAccountKeys = [];
         for (let i = 0; i < numAccounts.value; i++) {
             legacyAccountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
             offset += 32;
         }
 
-        // First account is fee payer
-        if (legacyAccountKeys.length > 0 && legacyAccountKeys[0] !== expectedPayerBase58) {
-            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${legacyAccountKeys[0]}` };
+        // Reject zero-account tx. The original allowlist-based code guarded the
+        // payer check with `if (length > 0)` and silently accepted txs with no
+        // accounts. Now that the program-ID allowlist is gone, the structural
+        // payer check is the last line of defence, so an unverifiable
+        // zero-account tx must fail closed.
+        if (legacyAccountKeys.length === 0) {
+            return { valid: false, error: 'Transaction has no account keys (cannot verify fee payer)', programs };
+        }
+        // First account is fee payer.
+        if (legacyAccountKeys[0] !== expectedPayerBase58) {
+            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${legacyAccountKeys[0]}`, programs };
         }
 
-        // BAT-255: Skip blockhash (32 bytes) and verify program whitelist (matches v0 path)
+        // Skip recent blockhash (32 bytes). Bounds-check first: without it,
+        // a tx truncated right after the account keys would push offset past
+        // the buffer end. readCompactU16 then returns {value: 0} and the
+        // instruction walk is silently skipped — verifier returns valid.
+        if (offset + 32 > txBuf.length) {
+            return { valid: false, error: `Legacy: blockhash truncated (offset ${offset} + 32 > length ${txBuf.length}).`, programs };
+        }
         offset += 32;
 
+        // Walk instructions to collect programs[] labels (no gating).
+        // Bounds checks (Copilot R3 + R4): readCompactU16 returns {value:0,
+        // offset} when called past buffer end (R3 case), AND can return
+        // partial value with `terminated:false` when buffer ran out mid-
+        // varint (R4 case — e.g. `[0x80]` byte at end). BOTH must fail closed.
+        const legacyInstOffsetBefore = offset;
         const legacyNumInstructions = readCompactU16(txBuf, offset);
+        if (legacyNumInstructions.offset === legacyInstOffsetBefore) {
+            return { valid: false, error: 'Legacy: instruction count truncated (no varint bytes available).', programs };
+        }
+        if (!legacyNumInstructions.terminated) {
+            return { valid: false, error: 'Legacy: instruction count truncated mid-varint (high bit set on last byte).', programs };
+        }
         offset = legacyNumInstructions.offset;
-
-        const legacyUntrusted = [];
         for (let i = 0; i < legacyNumInstructions.value; i++) {
+            // Truncated-buffer guard (Copilot PR #397 R2): txBuf[offset]
+            // beyond end returns undefined, which compares as NaN in any
+            // bounds check and silently slips past. Fail closed instead.
+            if (offset >= txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: truncated tx (offset ${offset} >= length ${txBuf.length}).`, programs };
+            }
             const programIdIdx = txBuf[offset]; offset++;
             if (programIdIdx >= legacyAccountKeys.length) {
-                return { valid: false, error: `Instruction ${i} references invalid account index ${programIdIdx} (only ${legacyAccountKeys.length} accounts). Transaction rejected for safety.` };
+                return { valid: false, error: `Instruction ${i} references invalid account index ${programIdIdx} (only ${legacyAccountKeys.length} accounts).`, programs };
             }
-            const programId = legacyAccountKeys[programIdIdx];
-            if (!TRUSTED_PROGRAMS.has(programId)) {
-                legacyUntrusted.push(programId);
-            }
-            // Skip accounts
+            labelProgram(legacyAccountKeys[programIdIdx]);
             const numAcctIdx = readCompactU16(txBuf, offset);
             offset = numAcctIdx.offset;
+            if (offset + numAcctIdx.value > txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: account indexes truncated.`, programs };
+            }
             offset += numAcctIdx.value;
-            // Skip data
             const dataLen = readCompactU16(txBuf, offset);
             offset = dataLen.offset;
+            if (offset + dataLen.value > txBuf.length) {
+                return { valid: false, error: `Instruction ${i}: data bytes truncated.`, programs };
+            }
             offset += dataLen.value;
         }
 
-        if (legacyUntrusted.length > 0) {
-            const unique = [...new Set(legacyUntrusted)];
-            const labeled = unique.map(id => {
-                const name = KNOWN_PROGRAM_NAMES.get(id);
-                return name ? `${id} (${name})` : id;
-            });
-            return {
-                valid: false,
-                error: `Transaction contains unwhitelisted program(s): ${labeled.join(', ')}. ` +
-                       `This may be a new routing program not yet in the trusted list.`
-            };
-        }
-
-        return { valid: true }; // Legacy tx passed payer + program whitelist check
+        return { valid: true, programs };
     }
 
-    // V0 transaction format — skip prefix byte
+    // V0 transaction — skip prefix byte.
     offset++;
 
-    // Message header: num_required_signatures (1), num_readonly_signed (1), num_readonly_unsigned (1)
+    // Message header: numRequired, numReadonlySigned, numReadonlyUnsigned.
+    // Bounds-check the 3-byte header before reading (Copilot PR #397 R7):
+    // on truncated v0 tx, txBuf[offset] returns undefined which silently
+    // sets numRequired=undefined and poisons the signer-check below.
+    if (offset + 3 > txBuf.length) {
+        return { valid: false, error: 'v0: 3-byte message header truncated.', programs };
+    }
+    // C10 + Q2 (BAT-1013-followup) + R9: enforce header invariants up-front.
+    // Solana's signer limit is size-based (1232-byte packet cap), not a fixed
+    // numeric cap. The previous Math.min clamp in skipPayerCheck silently
+    // truncated nonsensical numRequired values and let bogus headers through.
     const numRequired = txBuf[offset]; offset++;
     const numReadonlySigned = txBuf[offset]; offset++;
-    const numReadonlyUnsigned = txBuf[offset]; offset++;
+    offset++; // numReadonlyUnsigned
+    // Protocol invariants (not arbitrary numeric cap):
+    //   (a) numRequired >= 1 (fee payer is always a signer)
+    //   (b) numRequired === sig section count (wire-format invariant)
+    //   (c) numReadonlySigned <= numRequired
+    //   (d) numRequired <= numAccounts (signer set fits in account keys)
+    if (numRequired < 1) {
+        return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
+    }
+    if (numRequired !== numSigs.value) {
+        return { valid: false, error: `invalid_header: numRequiredSignatures=${numRequired} does not match signature-section count=${numSigs.value}.`, programs };
+    }
+    if (numReadonlySigned > numRequired) {
+        return { valid: false, error: `invalid_header: numReadonlySigned=${numReadonlySigned} exceeds numRequired=${numRequired}.`, programs };
+    }
+    // Copilot R9 finding #3: v0 messages require signers to be a SUBSET of
+    // static account keys (ALT-resolved accounts cannot be signers). The
+    // signature-count check above catches mismatched counts; this catches
+    // the case where the static-key section is too small.
+    // numStaticAccounts is read just below; we hoist the check after it.
 
-    // Static account keys
+    // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);
     offset = numStaticAccounts.offset;
-
+    // Buffer-bounds guard (Copilot PR #397 R3): see legacy path comment above.
+    if (offset + numStaticAccounts.value * 32 > txBuf.length) {
+        return { valid: false, error: `v0: declared ${numStaticAccounts.value} static account keys exceeds remaining buffer (${txBuf.length - offset} bytes; need ${numStaticAccounts.value * 32}).`, programs };
+    }
     const accountKeys = [];
     for (let i = 0; i < numStaticAccounts.value; i++) {
         accountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
         offset += 32;
     }
 
-    if (accountKeys.length > 0) {
-        if (!skipPayerCheck) {
-            // Standard mode: ensure connected wallet is the fee payer
-            if (accountKeys[0] !== expectedPayerBase58) {
-                return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}` };
-            }
-        } else {
-            // Ultra gasless mode: Jupiter pays fees, but wallet must still be a required signer
-            const requiredSignerCount = Math.min(numRequired, accountKeys.length);
-            const requiredSigners = accountKeys.slice(0, requiredSignerCount);
-            if (!requiredSigners.includes(expectedPayerBase58)) {
-                return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers` };
-            }
+    // Copilot R9 finding #3: v0 signers MUST be in the static account key
+    // section (ALT-resolved accounts cannot be signers per the protocol).
+    if (numRequired > numStaticAccounts.value) {
+        return { valid: false, error: `invalid_header: v0 numRequiredSignatures=${numRequired} exceeds numStaticAccounts=${numStaticAccounts.value} (signers must be in static-key section, not ALT).`, programs };
+    }
+
+    // Reject zero-account tx (same rationale as the legacy path above).
+    if (accountKeys.length === 0) {
+        return { valid: false, error: 'Transaction has no account keys (cannot verify fee payer)', programs };
+    }
+    if (!skipPayerCheck) {
+        // Default mode: connected wallet is fee payer.
+        if (accountKeys[0] !== expectedPayerBase58) {
+            return { valid: false, error: `Fee payer mismatch: expected ${expectedPayerBase58}, got ${accountKeys[0]}`, programs };
+        }
+    } else {
+        // Ultra gasless mode: Jupiter pays fees, wallet must still be a required signer.
+        const requiredSignerCount = Math.min(numRequired, accountKeys.length);
+        const requiredSigners = accountKeys.slice(0, requiredSignerCount);
+        if (!requiredSigners.includes(expectedPayerBase58)) {
+            return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers`, programs };
         }
     }
 
-    // Check that program IDs in instructions are trusted
-    // Recent blockhash (32 bytes)
+    // Skip recent blockhash (32 bytes). Bounds-check first (PR #397 R3):
+    // a tx truncated right after static account keys would push offset past
+    // the buffer end; readCompactU16 returns {value:0} silently and the
+    // instruction walk is skipped, returning valid:true on a malformed tx.
+    if (offset + 32 > txBuf.length) {
+        return { valid: false, error: `v0: blockhash truncated (offset ${offset} + 32 > length ${txBuf.length}).`, programs };
+    }
     offset += 32;
 
-    // Instructions
+    // Walk instructions to collect programs[] labels. ALT-resolved programs
+    // (programIdIdx >= numStaticAccounts) are part of Jupiter's normal v0
+    // routing and are NOT rejected as program-id mismatches here — strict
+    // ALT program-id resolution will live in wallet/burner-policy.js
+    // (Tier 2 / PR #398) where we have access to simulation metadata.
+    // BUT we still verify that any ALT
+    // index actually CAN be satisfied: the message's ALT section (after the
+    // instructions) must contribute enough lookup keys to cover the index.
+    // Without this, a structurally malformed tx with no ALTs declared but
+    // `programIdIdx >> accountKeys.length` was silently accepted (Copilot
+    // PR #397 finding).
+    // Bounds checks (Copilot R3 + R4): verify varint actually consumed
+    // bytes AND was properly terminated (last byte high bit clear).
+    const v0InstOffsetBefore = offset;
     const numInstructions = readCompactU16(txBuf, offset);
+    if (numInstructions.offset === v0InstOffsetBefore) {
+        return { valid: false, error: 'v0: instruction count truncated (no varint bytes available).', programs };
+    }
+    if (!numInstructions.terminated) {
+        return { valid: false, error: 'v0: instruction count truncated mid-varint (high bit set on last byte).', programs };
+    }
     offset = numInstructions.offset;
-
-    const untrustedPrograms = [];
+    const altProgramIndexes = [];
     for (let i = 0; i < numInstructions.value; i++) {
+        // Truncated-buffer guard (Copilot PR #397 R2): see legacy walk above.
+        if (offset >= txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: truncated tx (offset ${offset} >= length ${txBuf.length}).`, programs };
+        }
         const programIdIdx = txBuf[offset]; offset++;
-        if (programIdIdx >= accountKeys.length) {
-            // Program referenced via Address Lookup Table — cannot verify identity.
-            // Reject for safety (Jupiter Ultra uses static keys anyway).
-            return {
-                valid: false,
-                error: `Instruction ${i} references program via Address Lookup Table (index ${programIdIdx}, ` +
-                       `only ${accountKeys.length} static keys). Cannot verify program identity. Transaction rejected for safety.`
-            };
+        if (programIdIdx < accountKeys.length) {
+            labelProgram(accountKeys[programIdIdx]);
+        } else {
+            // Capture for post-ALT-parse verification below.
+            altProgramIndexes.push(programIdIdx);
+            programs.push('alt_resolved(unlabeled)');
         }
-        const programId = accountKeys[programIdIdx];
-        if (!TRUSTED_PROGRAMS.has(programId)) {
-            untrustedPrograms.push(programId);
-        }
-        // Skip accounts
         const numAcctIdx = readCompactU16(txBuf, offset);
         offset = numAcctIdx.offset;
+        if (offset + numAcctIdx.value > txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: account indexes truncated.`, programs };
+        }
         offset += numAcctIdx.value;
-        // Skip data
         const dataLen = readCompactU16(txBuf, offset);
         offset = dataLen.offset;
+        if (offset + dataLen.value > txBuf.length) {
+            return { valid: false, error: `v0 instruction ${i}: data bytes truncated.`, programs };
+        }
         offset += dataLen.value;
     }
 
-    if (untrustedPrograms.length > 0) {
-        const unique = [...new Set(untrustedPrograms)];
-        const labeled = unique.map(id => {
-            const name = KNOWN_PROGRAM_NAMES.get(id);
-            return name ? `${id} (${name})` : id;
-        });
-        return {
-            valid: false,
-            error: `Transaction contains unwhitelisted program(s): ${labeled.join(', ')}. ` +
-                   `This may be a new Jupiter routing program not yet in the trusted list.`
-        };
+    // Parse Address Lookup Table section to compute total available keys.
+    // Format: compactU16 numAlts, then per ALT:
+    //   tableAddress(32) + compactU16 numWritable + writable[] + compactU16 numReadonly + readonly[]
+    //
+    // Buffer-bounds guards (Copilot PR #397 R2): a malformed tx that
+    // claims an arbitrarily large numWritable/numReadonly without actually
+    // carrying those index bytes would silently inflate altKeyCount and
+    // let an out-of-range programIdIdx slip past totalKeys check. Verify
+    // each declared count fits within the remaining buffer before trusting it.
+    // v0 messages REQUIRE the ALT section to be present — even if zero
+    // tables are declared, the numAlts compact-u16 byte (`0x00`) must
+    // exist (Copilot PR #397 R5). A v0 tx truncated immediately after
+    // the last instruction's data is malformed and must fail closed.
+    if (offset >= txBuf.length) {
+        return { valid: false, error: 'v0: ALT section truncated (numAlts byte missing — v0 messages require an ALT section).', programs };
+    }
+    let altKeyCount = 0;
+    {
+        const numAlts = readCompactU16(txBuf, offset);
+        if (!numAlts.terminated || numAlts.overflowed) {
+            return { valid: false, error: 'v0: numAlts varint truncated or overflowed.', programs };
+        }
+        offset = numAlts.offset;
+        for (let a = 0; a < numAlts.value; a++) {
+            if (offset + 32 > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: table address truncated.`, programs };
+            }
+            offset += 32; // table address
+            const numWritable = readCompactU16(txBuf, offset);
+            offset = numWritable.offset;
+            if (offset + numWritable.value > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: declared ${numWritable.value} writable indexes exceeds remaining buffer (${txBuf.length - offset} bytes).`, programs };
+            }
+            offset += numWritable.value;
+            altKeyCount += numWritable.value;
+            const numReadonly = readCompactU16(txBuf, offset);
+            offset = numReadonly.offset;
+            if (offset + numReadonly.value > txBuf.length) {
+                return { valid: false, error: `ALT ${a}: declared ${numReadonly.value} readonly indexes exceeds remaining buffer (${txBuf.length - offset} bytes).`, programs };
+            }
+            offset += numReadonly.value;
+            altKeyCount += numReadonly.value;
+        }
     }
 
-    return { valid: true };
+    const totalKeys = accountKeys.length + altKeyCount;
+    for (const idx of altProgramIndexes) {
+        if (idx >= totalKeys) {
+            return {
+                valid: false,
+                error: `Instruction program index ${idx} exceeds static+ALT key count (${accountKeys.length} static + ${altKeyCount} ALT = ${totalKeys}).`,
+                programs,
+            };
+        }
+    }
+
+    return { valid: true, programs };
 }
 
-// Read Solana compact-u16 encoding
+// Read Solana compact-u16 encoding.
+// Returns { value, offset, terminated, overflowed }.
+//   - `terminated: false` → buffer ran out mid-varint.
+//   - `overflowed: true` → > 0xFFFF OR > 3 bytes (Solana compact-u16 max).
+// On either invalid case, `value` is forced to a sentinel (0xFFFFFFFF) so
+// downstream bounds checks of the shape `offset + value * N > buf.length`
+// reject naturally without per-call-site checking (Copilot PR #397 R6:
+// callers were repeatedly missing the explicit overflowed/terminated
+// check; fail-closed at the function level is the durable fix).
 function readCompactU16(buf, offset) {
     let value = 0;
     let shift = 0;
     let pos = offset;
+    let terminated = false;
+    let overflowed = false;
     while (pos < buf.length) {
         const byte = buf[pos]; pos++;
-        value |= (byte & 0x7F) << shift;
-        if ((byte & 0x80) === 0) break;
+        value = (value | ((byte & 0x7F) << shift)) >>> 0;
+        if ((byte & 0x80) === 0) { terminated = true; break; }
         shift += 7;
+        if (shift > 14) { overflowed = true; break; }
     }
-    return { value, offset: pos };
+    if (value > 0xFFFF) overflowed = true;
+    if (!terminated || overflowed) {
+        // Sentinel: any downstream `offset + value * N > buf.length` check
+        // becomes vacuously true; for-loops `for (let i=0; i<value; i++)`
+        // immediately hit the per-iteration bounds guard.
+        return { value: 0xFFFFFFFF, offset: pos, terminated, overflowed };
+    }
+    return { value, offset: pos, terminated, overflowed };
 }
 
 // Jupiter Ultra API — get order (quote + unsigned tx in one call, gasless)
