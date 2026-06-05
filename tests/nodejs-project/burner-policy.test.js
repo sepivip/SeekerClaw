@@ -1288,7 +1288,9 @@ async function runAsync(name, fn) {
             allowedInstructionClasses: ['memo'],
         }, BURNER);
         assert.strictEqual(r.error, 'drainer_approve');
-        assert.match(r.reason, /SPL Transfer on burner-owned account/);
+        // R-next-8 hardening updated the reason format to mention both
+        // possible triggers (authority OR source-in-burnerOwnedAccounts).
+        assert.match(r.reason, /SPL Transfer.*(burner.*authority|burnerOwnedAccounts)/i);
     });
 
     check('Copilot R11: TransferChecked also caught in zero_value_cancel without allowedTransferAccounts', () => {
@@ -2146,6 +2148,82 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.ok, false);
         assert.strictEqual(r.error, 'expected_delta_invalid_shape');
         assert.match(r.reason, /self-send/i);
+    });
+
+    // ── R-next-8: SPL Transfer authority-based drainer check ───────────
+    // Pre-fix: zero_value Transfer/TransferChecked guard only fired when the
+    // source account was in burnerOwnedAccounts. A caller who forgot to
+    // include their burner ATA in the list could let a malicious zero-value
+    // tx drain tokens. Post-fix: guard ALSO fires when the burner is the
+    // Transfer's authority (chain-enforced semantic; cannot be forgotten).
+    check('R-next-8: zero_value_auth SPL Transfer rejected via AUTHORITY check even when burnerOwnedAccounts is EMPTY', () => {
+        // TRANSFER opcode = 3, accountIdxs = [source, dest, authority]
+        // Source: a token account NOT in burnerOwnedAccounts (caller forgot)
+        // Authority: BURNER pubkey (chain enforces — this is what catches it)
+        const SOURCE_FORGOTTEN_ATA = 'F0rg0ttenAtA111111111111111111111111111111';
+        const DEST = 'AttackerDest111111111111111111111111111111';
+        const parsed = {
+            staticAccountKeys: [BURNER, TOKEN_PROGRAM, SOURCE_FORGOTTEN_ATA, DEST],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 1, // TOKEN_PROGRAM
+                accountIdxs: [2, 3, 0], // [source, dest, authority=BURNER]
+                dataBytes: Buffer.from([0x03, ...Buffer.alloc(8)]), // Transfer opcode + amount
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [/* CALLER FORGOT */], {
+            kind: 'zero_value_auth',
+        }, BURNER);
+        assert.strictEqual(r.ok, false,
+            `expected reject via authority check even with empty burnerOwnedAccounts, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'drainer_approve');
+        assert.match(r.reason, /transfer authority/i);
+    });
+
+    check('R-next-8: zero_value_cancel SPL TransferChecked still allowed when source is in allowedTransferAccounts', () => {
+        // Regression: the allowlist semantic for cancel flows must continue
+        // to work post-fix. burner is authority, source is whitelisted.
+        const SOURCE = 'SourceAtA1111111111111111111111111111111111';
+        const DEST = 'OrderVault11111111111111111111111111111111';
+        const parsed = {
+            staticAccountKeys: [BURNER, TOKEN_PROGRAM, SOURCE, USDC, DEST],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 1,
+                accountIdxs: [2, 3, 4, 0], // [source, mint, dest, authority=BURNER]
+                // TransferChecked opcode = 12 (0x0c) + u64 amount + u8 decimals
+                dataBytes: Buffer.from([0x0c, ...Buffer.alloc(8), 6]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [], {
+            kind: 'zero_value_cancel',
+            allowedTransferAccounts: [SOURCE], // explicitly declared by caller
+        }, BURNER);
+        assert.strictEqual(r.ok, true,
+            `allowedTransferAccounts must still permit declared sources, got ${JSON.stringify(r)}`);
+    });
+
+    check('R-next-8: zero_value_auth SPL Transfer where burner is NOT authority is NOT rejected', () => {
+        // Regression: when burner is not the authority (someone else's wallet
+        // is doing the transfer), the guard must NOT fire — that transfer is
+        // not the burner's concern.
+        const OTHER_WALLET = '0thrWa11et1111111111111111111111111111111111';
+        const SOURCE = 'OtherSourc31111111111111111111111111111111';
+        const DEST = 'OtherDest1111111111111111111111111111111111';
+        const parsed = {
+            staticAccountKeys: [BURNER, TOKEN_PROGRAM, SOURCE, DEST, OTHER_WALLET],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 1,
+                accountIdxs: [2, 3, 4], // [source, dest, authority=OTHER_WALLET]
+                dataBytes: Buffer.from([0x03, ...Buffer.alloc(8)]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [], {
+            kind: 'zero_value_auth',
+        }, BURNER);
+        assert.strictEqual(r.ok, true,
+            `non-burner-authority transfers must not be rejected, got ${JSON.stringify(r)}`);
     });
 
     // ── R-next-7: SPL-decode-fail-closed in validateSimDelta ────────

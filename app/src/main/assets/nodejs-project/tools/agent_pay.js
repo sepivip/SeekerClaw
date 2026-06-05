@@ -904,7 +904,11 @@ async function _handle(input /* , chatId */) {
                 atomicAmount: String(paymentMeta.amountAtomic),
             },
             recipient: {
-                account: recipientUsdcAta || recipientPubkey,
+                // R-next-8: deriveAtaBase58 either returns a non-empty string
+                // or throws (caught by the surrounding try/catch which sets
+                // payExpectedDelta=null and routes to the catch-handler bypass).
+                // The previous `|| recipientPubkey` fallback was dead code.
+                account: recipientUsdcAta,
                 mint: USDC_MINT,
             },
             burnerOwnedAccounts: [burnerUsdcAta],

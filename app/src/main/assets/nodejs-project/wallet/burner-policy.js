@@ -541,25 +541,55 @@ function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta, burn
             }
 
             // Drainer instructions on burner-owned accounts:
-            // Copilot R11 finding #2: SPL Token Transfer / TransferChecked is
-            // not generally a drainer (it's the WHOLE POINT of swap/send/pay),
+            // Copilot R11 finding #2 + R-next-8: SPL Token Transfer / TransferChecked
+            // is not generally a drainer (it's the WHOLE POINT of swap/send/pay),
             // BUT for zero_value_auth / zero_value_cancel — kinds that mean
-            // "no value moves" — a Transfer on a burner-owned SOURCE drains
+            // "no value moves" — a Transfer authorized by the burner drains
             // tokens without being caught by Auth/Close/Approve/Assign/Burn
-            // checks. Reject unless the caller declares the specific source
-            // accounts via allowedTransferAccounts (parallel to allowedBurnAccounts).
+            // checks.
+            //
+            // R-next-8 hardening: key the check off the TRANSFER AUTHORITY
+            // (chain-enforced semantic) in ADDITION to ownedSet membership
+            // (caller-supplied list). The old code only checked
+            // ownedSet.has(source) — if a caller forgot to populate
+            // burnerOwnedAccounts with the source ATA, a malicious tx
+            // could slip through. Authority is at accountIdxs[2] (TRANSFER)
+            // or accountIdxs[3] (TRANSFER_CHECKED). Reject unless the
+            // caller declares the specific source account via
+            // allowedTransferAccounts (parallel to allowedBurnAccounts).
             if ((ix === TOKEN_IX.TRANSFER || ix === TOKEN_IX.TRANSFER_CHECKED)
                 && (expectedDelta.kind === 'zero_value_auth' || expectedDelta.kind === 'zero_value_cancel')) {
                 const sub = resolveSubjectAccount(parsed, instr, 0, i, 'Transfer');
                 if (sub.err) return sub.err;
-                if (ownedSet.has(sub.acct)) {
+                const authIdx = (ix === TOKEN_IX.TRANSFER) ? 2 : 3;
+                const authority = resolveSubjectAccount(parsed, instr, authIdx, i, 'Transfer.authority');
+                if (authority.err) return authority.err;
+                const burnerAuthorizes = (burnerPubkey && authority.acct === burnerPubkey);
+                const sourceIsBurnerOwned = ownedSet.has(sub.acct);
+                if (burnerAuthorizes || sourceIsBurnerOwned) {
+                    // Note: burner-as-DELEGATE on a third-party account in a
+                    // zero_value flow also lands here (authority=burner but
+                    // source not owned). That's the right call — zero_value
+                    // kinds mean "no value moves", so a delegate-authorized
+                    // transfer is also disallowed. allowedTransferAccounts
+                    // is the escape hatch if a legitimate future flow needs it.
+                    //
+                    // Asymmetry: only zero_value_CANCEL has the allowlist.
+                    // zero_value_AUTH (memo-only auth challenges) has no
+                    // legitimate token-movement use case so we don't expose
+                    // an escape hatch there. This is by design; if a future
+                    // auth flow legitimately needs Transfer, add it here AND
+                    // file a Codex contract amendment.
                     const allowed = (expectedDelta.kind === 'zero_value_cancel'
                         && Array.isArray(expectedDelta.allowedTransferAccounts))
                         ? expectedDelta.allowedTransferAccounts.filter(isNonEmptyBase58)
                         : [];
                     if (!allowed.includes(sub.acct)) {
+                        const reason = burnerAuthorizes
+                            ? `burner ${burnerPubkey} is transfer authority`
+                            : `source ${sub.acct} is in burnerOwnedAccounts`;
                         return reject('drainer_approve',
-                            `instruction[${i}] SPL Transfer on burner-owned account ${sub.acct} (zero_value_* kind disallows token movement unless allowedTransferAccounts declares it)`);
+                            `instruction[${i}] SPL Transfer in ${expectedDelta.kind}: ${reason}; allowedTransferAccounts does not whitelist source ${sub.acct}`);
                     }
                 }
             }

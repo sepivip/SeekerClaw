@@ -244,14 +244,20 @@ function makeLiveSimulator(rpcUrl) {
         console.error(`  Jupiter Ultra returned no transaction: ${JSON.stringify(order).slice(0, 300)}`);
         process.exit(1);
     }
-    console.log(`  Got order: requestId=${order.requestId}, outAmount=${order.outAmount || order.otherAmountThreshold || '?'}`);
+    // R-next-8: nullish-coalesce + explicit String() so a legitimate 0
+    // (or numeric/string drift from Jupiter) is preserved instead of
+    // falling back to '?'.
+    console.log(`  Got order: requestId=${order.requestId}, outAmount=${String(order.outAmount ?? order.otherAmountThreshold ?? '?')}`);
     console.log(`  Tx length: ${order.transaction.length} base64 chars`);
 
     // ── 3. Build expectedDelta (same logic as tools/solana.js solana_swap) ──
     console.log('\n── 3. Build expectedDelta (jupiter_swap_immediate) ──');
     const debitAccount = deriveAtaBase58(burnerPubkey, USDC_MINT);
     const creditAccount = burnerPubkey; // output is native SOL
-    const minOut = String(order.otherAmountThreshold || order.outAmount || '0');
+    // R-next-8: nullish-coalesce so otherAmountThreshold=0 (a legit value
+    // for some Jupiter routes) is preserved, not replaced by outAmount.
+    // Normalize via String() to handle numeric/string drift from API.
+    const minOut = String(order.otherAmountThreshold ?? order.outAmount ?? '0');
     const expectedDelta = {
         kind: 'jupiter_swap_immediate',
         signerMode: 'burner_only',
@@ -266,7 +272,9 @@ function makeLiveSimulator(rpcUrl) {
             atomicAmount: minOut,
         },
         burnerOwnedAccounts: [debitAccount],
-        toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
+        // R-next-8: Number(order.slippageBps) so a string slippage value
+        // (e.g. "100") doesn't string-concat with + 25 to "10025".
+        toleranceBps: Math.min(Number(order.slippageBps ?? 100) + 25, 200),
     };
     console.log(`  burnerDebit: USDC ${ORDER_AMOUNT_USDC_ATOMIC} from ${redactPubkey(debitAccount)}`);
     console.log(`  burnerCreditMin: SOL ${minOut} to ${redactPubkey(creditAccount)}`);
