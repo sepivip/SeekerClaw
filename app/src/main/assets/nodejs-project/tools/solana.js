@@ -64,8 +64,17 @@ function _extractFeePayerBase58(txBase64) {
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
         throw new Error('invalid base64');
     }
+    // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes. Pre-
+    // decode reject so we never materialize an oversized buffer (DoS guard).
+    // 1232 bytes encodes to at most ceil(1232/3)*4 = 1644 chars in base64.
+    if (txBase64.length > 1644) {
+        throw new Error(`tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap`);
+    }
     const buf = Buffer.from(txBase64, 'base64');
     if (buf.length === 0) throw new Error('empty decoded buffer');
+    if (buf.length > 1232) {
+        throw new Error(`tx_oversize: ${buf.length} bytes exceeds Solana's 1232-byte packet cap`);
+    }
     // Decode compact-u16 inline (small helper — solana.js's readCompactU16
     // is not exported through tools/solana.js's import surface).
     let off = 0;

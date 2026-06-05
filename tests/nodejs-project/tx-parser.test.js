@@ -297,6 +297,47 @@ check('throws unsupported_tx_version on v2 prefix (0x82)', () => {
     }
 });
 
+// ── R-next-6 regression: tx_oversize fail-closed (DoS mitigation) ────────
+// parseTransaction must reject base64 inputs longer than ~1644 chars
+// (decoded > 1232 bytes = Solana packet cap) BEFORE allocating a buffer.
+// Mirrors the same two-stage check in solana.js verifySwapTransaction (R12).
+console.log();
+console.log('parseTransaction: tx_oversize (R-next-6)');
+check('throws tx_oversize on 2000-char base64 (pre-decode estimate)', () => {
+    const oversized = 'A'.repeat(2000);
+    try { parseTransaction(oversized); assert.fail('expected throw on oversized input'); }
+    catch (e) {
+        assert.ok(e instanceof TxParseError);
+        assert.strictEqual(e.reason, 'tx_oversize');
+        assert.match(e.message, /1232/);
+    }
+});
+check('throws tx_oversize on 1644-char unpadded base64 (post-decode path, decodes to 1233 bytes)', () => {
+    // 'A'.repeat(1644) passes the pre-decode length check (1644 is not > 1644)
+    // but decodes to ceil(1644/4)*3 = 1233 bytes — one byte over the 1232 cap.
+    // Tests the post-decode guard in isolation.
+    const boundary = 'A'.repeat(1644);
+    try { parseTransaction(boundary); assert.fail('expected throw'); }
+    catch (e) {
+        assert.ok(e instanceof TxParseError);
+        assert.strictEqual(e.reason, 'tx_oversize');
+    }
+});
+check('admits 1232-byte tx at exact cap (size guard must NOT over-reject)', () => {
+    // A real 1232-byte tx: 1232 % 3 == 2, so it encodes to 1644 chars with
+    // one '=' pad. Both size guards must pass; the parser will then fail
+    // later on content (random zeros are not a valid tx), which is fine —
+    // proves the size guards do not over-reject at the exact cap.
+    const exactly1232 = Buffer.alloc(1232).toString('base64');
+    assert.strictEqual(exactly1232.length, 1644, 'precondition: 1232 bytes → 1644 chars');
+    try { parseTransaction(exactly1232); }
+    catch (e) {
+        assert.ok(e instanceof TxParseError);
+        assert.notStrictEqual(e.reason, 'tx_oversize',
+            `size guard must NOT fire on exact 1232-byte tx; got reason=${e.reason}`);
+    }
+});
+
 console.log();
 console.log(`Result: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

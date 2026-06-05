@@ -34,9 +34,13 @@
 // CONTRACT (deterministic; fail-closed)
 // -------------------------------------
 //   - Empty / non-base64 input → TxParseError('invalid_base64')
+//   - Tx > 1232 bytes (Solana packet cap, two-stage check pre- and post-
+//     base64 decode) → TxParseError('tx_oversize')
 //   - Truncated bytes (read past end) → TxParseError('truncated', position)
 //   - Compact-u16 exceeding 3-byte wire-format max (> 2 continuation bytes
 //     seen) → TxParseError('compact_u16_overflow')
+//   - Versioned message with unsupported version (not v0) →
+//     TxParseError('unsupported_tx_version', offset)
 //   - Account-index out of range in instruction.accountIdxs is NOT a
 //     parser concern — the parser surfaces the raw indices. Callers
 //     decide whether to fail closed on out-of-range (verifySwapTransaction
@@ -250,6 +254,16 @@ function parseTransaction(txBase64) {
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
         throw new TxParseError('invalid_base64', 0, 'invalid base64 characters or length');
     }
+    // R-next-6 (DoS mitigation): Solana caps tx packets at 1232 bytes — a tx
+    // larger than this can NEVER land on-chain. Fail closed BEFORE the base64
+    // decode so we never materialize an oversized buffer in memory. base64
+    // expands 3 bytes → 4 chars, so 1232 bytes encodes to at most
+    // ceil(1232/3) * 4 = 1644 chars. Anything longer is guaranteed oversized.
+    // Mirrors the solana.js verifySwapTransaction R12 fix.
+    if (txBase64.length > 1644) {
+        const estBytes = Math.floor(txBase64.length * 3 / 4);
+        throw new TxParseError('tx_oversize', 0, `~${estBytes} bytes exceeds Solana's 1232-byte packet cap`);
+    }
     let txBuf;
     try {
         txBuf = Buffer.from(txBase64, 'base64');
@@ -258,6 +272,11 @@ function parseTransaction(txBase64) {
     }
     if (txBuf.length < 1) {
         throw new TxParseError('truncated', 0, 'empty buffer after base64 decode');
+    }
+    // Exact byte-length check (post-decode): catches any tx whose base64 was
+    // under 1644 chars but decoded length still exceeds 1232 (padding edge cases).
+    if (txBuf.length > 1232) {
+        throw new TxParseError('tx_oversize', 0, `${txBuf.length} bytes exceeds Solana's 1232-byte packet cap`);
     }
 
     // ── Signature section ──

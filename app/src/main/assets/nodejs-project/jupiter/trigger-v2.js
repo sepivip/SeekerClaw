@@ -258,11 +258,23 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'empty transaction payload' };
     }
+    // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes —
+    // pre-decode reject so a malicious Jupiter auth-tx response can't
+    // force us to materialize a huge buffer (DoS guard). 1232 bytes
+    // encodes to at most ceil(1232/3)*4 = 1644 chars in base64.
+    if (txBase64.length > 1644) {
+        return { ok: false, error: 'auth_tx_invalid',
+                 reason: `tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap` };
+    }
     let txBuf;
     try {
         txBuf = Buffer.from(txBase64, 'base64');
     } catch (_) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'transaction is not valid base64' };
+    }
+    if (txBuf.length > 1232) {
+        return { ok: false, error: 'auth_tx_invalid',
+                 reason: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap` };
     }
     if (txBuf.length < 64) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'transaction shorter than one signature slot' };
