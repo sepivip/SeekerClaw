@@ -837,7 +837,7 @@ These are infrastructure / RPC failures, not security failures. User can legitim
 | Code | What happened | Agent action |
 |---|---|---|
 | `simulation_failed` | Simulator (RPC) call threw — timeout, network error, rate-limited beyond shaper backoff | Tell user. Offer: retry burner OR fall back to MWA. |
-| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). If `reason` contains `InsufficientFundsForFee`, translate to plain language: "The burner wallet doesn't have enough SOL to pay transaction fees. Please send a small amount of SOL (at least ~0.005 SOL) to the burner address and retry." Do NOT quote the raw JSON. | Surface translated reason. Same options (retry burner once OR fall back to MWA). |
+| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). **Translation rules** (do NOT quote raw JSON): (a) `InsufficientFundsForFee` → "The burner wallet doesn't have enough SOL to pay transaction fees. Please send at least ~0.005 SOL to the burner address and retry." (b) `AccountLoadedTwice` → "The transaction references the same account as both sender and recipient — sending to yourself is not supported. Pick a different recipient address. (If you wanted to fund the burner FROM main, ask: `send X SOL from main to burner`.)" | Surface translated reason. Same options (retry burner once OR fall back to MWA). For `AccountLoadedTwice`: do NOT offer MWA retry (same self-send error would occur); ask the user to clarify recipient. |
 | `simulation_metadata_missing` | `value.accounts[i]` was null for a required address, or `getMultipleAccounts` pre-snapshot missing | Same. Often caused by public RPC dropping data under load. |
 | `tx_unparseable` | The tx bytes couldn't be parsed as legacy or v0 — likely a malformed Jupiter response | Surface. Offer retry. |
 | `alt_unresolved` | An instruction references an ALT-resolved program ID that simulation didn't surface | Same. Common when Helius cache misses. |
@@ -863,6 +863,16 @@ For users who want to halt autonomous signing immediately:
 3. **Wipe burner** — Settings → Burner Wallet → Wipe Burner. Destroys sealed key. Funds remain on-chain but unreachable until a new key is generated and the user transfers them.
 
 The agent SHOULD walk users through option 1 first when they ask "how do I stop the agent from signing" — it's the least destructive and fully reversible.
+
+### Tool-handler errors (distinct from burner-policy rejects)
+
+These errors fire at the **tool-handler layer** BEFORE any burner-policy validation. They are NOT in the `REJECT_CODES` array (which is exclusively for `validateBurnerTx` rejects). The agent should distinguish them clearly when surfacing to the user.
+
+| Error code | Tool | Fires when | Agent translation + guidance |
+|---|---|---|---|
+| `main_wallet_not_connected` | `solana_send`, `solana_swap` | User said `source="main"` (explicit) OR main is not connected AND no burner is configured | "Your main wallet isn't connected. Tap the Wallet button in Settings → Solana Wallet to authorize MWA, or configure a Burner wallet for autonomous signing." Do NOT retry until user connects. |
+| `self_send_rejected` | `solana_send` | Resolved source address equals the `to` address (would produce on-chain `AccountLoadedTwice`) | "Cannot send to the same address that pays the transaction (`<addr>`). Pick a different recipient. If you wanted to fund the burner FROM main, retry with `source=\"main\"` — the burner address you targeted will be the recipient." Do NOT retry as-is. |
+| `over_burner_cap` | `solana_send` (when `source="burner"` explicitly) | Amount exceeds burner per-tx or daily cap and `source="burner"` was forced | "Amount exceeds your burner per-tx or daily cap. Lower the amount, raise caps in Settings → Burner Wallet → Caps, or omit `source` to use main wallet for over-cap." |
 
 ### Live test (Codex amendment #7 v8.1)
 

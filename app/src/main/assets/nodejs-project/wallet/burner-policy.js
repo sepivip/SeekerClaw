@@ -776,6 +776,17 @@ function validateExpectedDeltaShape(expectedDelta) {
             if (!r || typeof r !== 'object') return reject('expected_delta_invalid_shape', 'recipient required');
             if (!isNonEmptyBase58(r.account)) return reject('expected_delta_invalid_shape', 'recipient.account required');
             if (!validateMint(r.mint)) return reject('expected_delta_invalid_shape', 'recipient.mint required');
+            // BAT-1013 foundation patch: defense-in-depth self-send guard.
+            // The solana_send tool handler now has its own self-send check
+            // (clean error before any RPC call), but if a caller bypasses
+            // the handler and builds expectedDelta directly with
+            // burnerDebit.account === recipient.account, the burner-policy
+            // gate must still reject. Without this, simulation would return
+            // AccountLoadedTwice — a cryptic on-chain error.
+            if (expectedDelta.burnerDebit.account === r.account) {
+                return reject('expected_delta_invalid_shape',
+                    'self-send rejected: burnerDebit.account equals recipient.account (same address)');
+            }
             // C6 (BAT-1013-followup): Token-2022 send fail-closed until
             // per-mint transfer-fee validation lands. Without
             // tokenStandardConfig.transferFeeBps declared by the caller,
@@ -801,6 +812,13 @@ function validateExpectedDeltaShape(expectedDelta) {
             if (!r || typeof r !== 'object') return reject('expected_delta_invalid_shape', 'recipient required');
             if (!isNonEmptyBase58(r.account)) return reject('expected_delta_invalid_shape', 'recipient.account required');
             if (!validateMint(r.mint)) return reject('expected_delta_invalid_shape', 'recipient.mint required');
+            // BAT-1013 foundation patch: mirror the solana_send self-send
+            // guard for x402. A facilitator-constructed tx with burnerDebit
+            // == recipient would also produce AccountLoadedTwice on-chain.
+            if (expectedDelta.burnerDebit.account === r.account) {
+                return reject('expected_delta_invalid_shape',
+                    'self-send rejected: burnerDebit.account equals recipient.account in agent_pay_x402');
+            }
             if (expectedDelta.x402Version !== 1 && expectedDelta.x402Version !== 2) {
                 return reject('expected_delta_invalid_shape', 'x402Version must be 1 or 2');
             }

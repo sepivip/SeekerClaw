@@ -654,6 +654,59 @@ function _burnerOff() {
         catch (e) { assert.match(e.message, /unsupported_tx_version.*v127/); }
     });
 
+    // ── BAT-1013 foundation patch: solana_send source param + self-send + pre-flight ──
+    await check('foundation: source="main" forces main routing even when burner ON + under cap', async () => {
+        _burnerOn();
+        bridgeResponses['/solana/sign'] = { signature: Buffer.from('FAKESIG-MAIN-FORCED').toString('base64') };
+        const result = await tools.handlers.solana_send({ to: 'RECIPIENT-DIFFERENT-FROM-MAIN', amount: 0.001, source: 'main' });
+        assert.ok(result.success || result.signature, `expected MWA path success, got ${JSON.stringify(result)}`);
+        assert.strictEqual(result.wallet, 'main', 'source="main" must produce wallet=main even when burner has capacity');
+        const signCall = bridgeCalls.find(c => c.endpoint === '/solana/sign');
+        assert.ok(signCall, 'expected /solana/sign call for main-forced routing');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'burner must NOT reserve when source="main"');
+    });
+
+    await check('foundation: source="auto" (default) routes by cap as before', async () => {
+        _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-source-auto' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-BURNER-AUTO' };
+        bridgeResponses['/burner/commit'] = { ok: true };
+        const result = await tools.handlers.solana_send({ to: 'RECIPIENT-DIFFERENT', amount: 0.001, source: 'auto' });
+        assert.ok(result.success || result.signature, `expected burner success, got ${JSON.stringify(result)}`);
+        assert.strictEqual(result.wallet, 'burner', 'source="auto" under cap must route to burner');
+        const reserveCall = bridgeCalls.find(c => c.endpoint === '/burner/reserve');
+        assert.ok(reserveCall, 'expected /burner/reserve call for auto-routed burner path');
+    });
+
+    await check('foundation: self-send REJECTED with clean error (no bridge calls)', async () => {
+        _burnerOn();
+        // Read the burner pubkey the test rigs into _burnerOn (matches BURNER_USDC_ATA fixture pattern).
+        const burnerPub = bridgeResponses['/burner/status'].pubkey;
+        const result = await tools.handlers.solana_send({ to: burnerPub, amount: 0.001 });
+        assert.ok(result.error, `expected error for self-send, got ${JSON.stringify(result)}`);
+        assert.strictEqual(result.error, 'self_send_rejected', `expected self_send_rejected, got ${result.error}`);
+        assert.match(result.reason, /same address|self|recipient/i);
+        // Critical: NO bridge calls (no reserve, no sign)
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'self-send must not reserve');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'self-send must not sign');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/solana/sign'), 'self-send must not MWA-sign');
+    });
+
+    // Note: a test that fully exercises the "main not connected" pre-flight
+    // requires swapping the getConnectedWalletAddress stub at module-cache
+    // level AFTER tools/solana.js has already destructured it at load time
+    // (the destructuring captures the original reference; runtime stub
+    // swaps don't apply). That refactor (call via namespace `solana.getX()`
+    // instead of destructure) is a separate quality cleanup. For now, the
+    // pre-flight behavior is verified via:
+    //  - burner-policy self-send REJECT test (covers the policy-gate side
+    //    of the same defense — see burner-policy.test.js)
+    //  - the source="main" routing test above (verifies forceRouting works)
+    //  - device test (real "main not connected" scenario hits the pre-flight)
+    // TODO(BAT-1013-followup): refactor tools/solana.js to call
+    // solana.getConnectedWalletAddress() via namespace, enabling cleaner
+    // stub-based test of this pre-flight path.
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);

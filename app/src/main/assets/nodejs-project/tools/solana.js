@@ -149,12 +149,13 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
-                to: { type: 'string', description: 'Recipient Solana address (base58)' },
-                amount: { type: 'number', description: 'Amount of SOL to send' }
+                to: { type: 'string', description: 'Recipient Solana address (base58). Must NOT equal the source wallet — self-sends are rejected.' },
+                amount: { type: 'number', description: 'Amount of SOL to send' },
+                source: { type: 'string', enum: ['burner', 'main', 'auto'], description: 'Which wallet to send from. "main" forces MWA popup (use when user says "from main"). "burner" forces burner. "auto" (default) routes by cap. Default: "auto".' }
             },
             required: ['to', 'amount']
         }
@@ -1242,28 +1243,52 @@ const handlers = {
         // main MWA flow stays the fallback for over-cap or uncapped assets.
         // Behavior when burner is unconfigured matches v1.0 exactly: MWA
         // popup via /solana/sign.
+        //
+        // BAT-1013 foundation patch: added `source` param so the agent can
+        // explicitly route to main (user said "from main") or burner. When
+        // omitted, behavior is exactly the previous cap-based routing.
         let from;
         try {
             from = getConnectedWalletAddress();
         } catch (e) {
-            // Main wallet not connected — burner can still sign on its own
-            // pubkey if configured, but the existing tool semantics are
-            // "send FROM the connected wallet". Burner-as-source is a
-            // future-Phase change (Phase 5 keeps the MWA-from semantics
-            // even on the burner path: agent signs as the burner, but the
-            // tx pays from the burner's address — the burner pubkey IS
-            // the from address in that case).
-            //
-            // For Phase 5: if main wallet isn't connected and burner is
-            // configured, surface the clearer error from the bridge after
-            // routeAndSign returns. Don't pre-fail here.
             from = null;
         }
         const to = input.to;
         const amount = input.amount;
+        const sourcePref = (input.source === 'main' || input.source === 'burner') ? input.source : 'auto';
 
         if (!to || !amount || amount <= 0) {
             return { error: 'Both "to" address and a positive "amount" are required.' };
+        }
+
+        // BAT-1013 pre-flight: when the user explicitly said "from main"
+        // (source='main') but main wallet isn't connected, fail fast with
+        // a clear actionable message. Without this, the handler would fall
+        // through to the burner path and surface AccountLoadedTwice on a
+        // burner→burner self-send.
+        if (sourcePref === 'main' && from === null) {
+            return {
+                error: 'main_wallet_not_connected',
+                reason: 'Main wallet is not connected. Tap the Wallet button in the SeekerClaw app to authorize MWA, then retry.',
+            };
+        }
+
+        // BAT-1013 pre-flight: when no source preference is given AND main
+        // isn't connected, check if a burner is available — if neither is
+        // available, return the clear error instead of letting the handler
+        // tunnel into a broken tx build.
+        if (sourcePref === 'auto' && from === null) {
+            let burnerAvailable = false;
+            try {
+                const bs = await androidBridgeCall('/burner/status', {}, 3000);
+                burnerAvailable = !!(bs && !bs.error && bs.configured && bs.pubkey);
+            } catch (_) { /* treat as unavailable */ }
+            if (!burnerAvailable) {
+                return {
+                    error: 'main_wallet_not_connected',
+                    reason: 'Main wallet is not connected and no burner is configured. Tap the Wallet button to authorize MWA, or set up a burner in Settings > Burner Wallet.',
+                };
+            }
         }
 
         // Step 1: Get latest blockhash (shared by both wallets — RPC call,
@@ -1273,15 +1298,33 @@ const handlers = {
         const recentBlockhash = blockhashResult.blockhash || (blockhashResult.value && blockhashResult.value.blockhash);
         if (!recentBlockhash) return { error: 'No blockhash returned from RPC' };
 
-        // Step 2: Determine the source address. Burner pubkey if routing
-        // says burner; otherwise the connected MWA wallet.
+        // Step 2: Determine the source address. BAT-1013: respect explicit
+        // `source` preference; otherwise fall back to cap-based routing.
+        // Burner pubkey if routing says burner; otherwise the connected MWA wallet.
         // We need the source BEFORE building the tx because Solana
         // transactions encode the fee payer in the message.
-        // routeFor decides routing based on amount + caps; we read it once
-        // here and reuse the decision for the broadcast path so the source
-        // matches the signer.
         const { routeFor } = require('../caps/preflight');
-        const routingHint = await routeFor('solana_send', input);
+        let routingHint;
+        if (sourcePref === 'main') {
+            // User explicitly said "from main" — force MWA routing regardless
+            // of caps. forceRouting is the same plumbing PR #398 R13 fixed
+            // for the Ultra-swap path; routeAndSign will skip routeFor() and
+            // use this decision directly.
+            routingHint = { routingDecision: 'main', underCap: true };
+        } else if (sourcePref === 'burner') {
+            // Explicit burner — still subject to cap math (over-cap → reject).
+            routingHint = await routeFor('solana_send', input);
+            if (routingHint.routingDecision !== 'burner') {
+                return {
+                    error: 'over_burner_cap',
+                    reason: 'source="burner" requested but amount exceeds burner per-tx or daily cap. Either lower the amount or use source="main".',
+                };
+            }
+        } else {
+            // 'auto' (default): existing behavior — cap-based routing.
+            routingHint = await routeFor('solana_send', input);
+        }
+
         let sourceAddress = from;
         if (routingHint.routingDecision === 'burner') {
             // Pull the burner pubkey from /burner/status. If burner is
@@ -1295,6 +1338,20 @@ const handlers = {
         }
         if (!sourceAddress) {
             return { error: 'No source wallet available — connect a wallet (Settings > Solana Wallet) or configure a burner (Settings > Burner Wallet).' };
+        }
+
+        // BAT-1013 self-send guard: reject burner→burner (or main→main)
+        // transfers BEFORE building the tx. Without this the simulator returns
+        // AccountLoadedTwice — a cryptic error the user can't act on. This
+        // handler-level check complements the defense-in-depth shape check
+        // in burner-policy.validateExpectedDeltaShape so the main-wallet
+        // path also gets the friendly error (the policy gate runs only on
+        // burner signs).
+        if (sourceAddress === to) {
+            return {
+                error: 'self_send_rejected',
+                reason: `Cannot send to the same address that pays the transaction (${sourceAddress.slice(0, 4)}…${sourceAddress.slice(-4)}). Pick a different recipient, or use source="main" to send from your main wallet to the burner.`,
+            };
         }
 
         // Step 3: Build unsigned transaction.
@@ -1336,6 +1393,11 @@ const handlers = {
             unsignedTxBase64: txBase64,
             broadcastVia: 'rpc',
             flowName: 'solana_send',
+            // BAT-1013: thread routingHint via forceRouting so dispatch.js
+            // honors the explicit source preference (especially source='main')
+            // instead of re-calling routeFor(toolArgs) which would ignore the
+            // 'source' field. Same plumbing as PR #398 R13 fixed for solana_swap.
+            forceRouting: routingHint,
             expectedDelta: sendExpectedDelta,
             broadcast: async (txBase64, _signer, ctx) => {
                 // ctx.signed === false for main path (unsigned tx → sign+broadcast via MWA)

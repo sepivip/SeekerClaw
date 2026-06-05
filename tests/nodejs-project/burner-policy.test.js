@@ -2104,6 +2104,50 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.class, 'availability');
     });
 
+    // ── BAT-1013 foundation patch: solana_send self-send guard ──────────
+    // Pre-fix: shape validator passed self-send through to simulation,
+    // which returned cryptic AccountLoadedTwice. Post-fix: rejects at
+    // shape validation with expected_delta_invalid_shape (contract_gap).
+    console.log();
+    console.log('Foundation patch: self-send guards (PR #398)');
+
+    check('solana_send self-send REJECTED when burnerDebit.account === recipient.account', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER, mint: 'native_sol', atomicAmount: '1000000' },
+            recipient: { account: BURNER, mint: 'native_sol' },
+        });
+        assert.strictEqual(r.ok, false, `expected reject, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /self-send/i);
+    });
+
+    check('solana_send distinct addresses ACCEPTED (regression guard)', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER, mint: 'native_sol', atomicAmount: '1000000' },
+            recipient: { account: BURNER_USDC_ATA, mint: 'native_sol' },
+        });
+        assert.strictEqual(r.ok, true, `expected accept for distinct addresses, got ${JSON.stringify(r)}`);
+    });
+
+    check('agent_pay_x402 self-send REJECTED (mirrored guard for x402)', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'agent_pay_x402',
+            x402Version: 1,
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000' },
+            recipient: { account: BURNER_USDC_ATA, mint: USDC },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            allowMemo: true,
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /self-send/i);
+    });
+
     console.log();
     console.log(`Result: ${pass} passed, ${fail} failed`);
     if (fail > 0) process.exit(1);
