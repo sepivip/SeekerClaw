@@ -71,6 +71,23 @@ const { log } = require('../config');
  *                                            - signed: true when txBase64 is the signed bytes (burner
  *                                              path); false when caller must sign first (main path)
  * @param {string} [args.flowName]          - log tag for diagnostics
+ * @param {Object|null} [args.forceRouting] - { routingDecision, underCap, principalAtomic, capName }
+ *                                            Pre-decided routing the caller observed a runtime
+ *                                            constraint for (e.g., burner under-cap but pubkey
+ *                                            unreachable → force main). Bypasses routeFor().
+ * @param {Object|null} [args.expectedDelta] - BAT-1013 burner-policy expectedDelta envelope:
+ *                                            { kind: 'jupiter_swap_immediate' | 'jupiter_trigger_create_deposit'
+ *                                              | 'jupiter_dca_create_deposit' | 'solana_send'
+ *                                              | 'agent_pay_x402' | 'zero_value_cancel'
+ *                                              | 'zero_value_auth',
+ *                                              ... per-kind required + optional fields }.
+ *                                            Forwarded into BurnerSigner.signAndBroadcast for the
+ *                                            validateBurnerTx chokepoint. REQUIRED when
+ *                                            routingDecision === 'burner'; ignored on main path.
+ * @param {boolean} [args.allowPartiallySigned] - When true, the tx is allowed to already carry
+ *                                            cosigner signatures (x402 v2 partially-signed flow)
+ *                                            and burner-policy permits the cosigned signer mode
+ *                                            with caller-declared feePayerAllowlist. Default false.
  *
  * @returns {Promise<{
  *     ok: boolean,

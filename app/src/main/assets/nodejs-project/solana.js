@@ -695,13 +695,19 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         if (offset + 3 > txBuf.length) {
             return { valid: false, error: 'Legacy: 3-byte message header truncated.', programs };
         }
-        // C10 + Q2 (BAT-1013-followup): enforce header invariants. The Solana
-        // protocol caps signers at 16 per tx; numReadonlySigned must not
-        // exceed numRequiredSignatures; the readonly-signed+readonly-unsigned
-        // sum must fit inside the static account key count. Previously the v0
-        // path silently truncated numRequired via Math.min(numRequired,
-        // accountKeys.length) — letting a tx claiming numRequired > accounts
-        // slip past with no signer check.
+        // C10 + Q2 (BAT-1013-followup) + R9: enforce header invariants. The
+        // Solana protocol does NOT cap signers at a fixed numeric limit —
+        // the practical bound is packet-size-driven. Enforce the protocol
+        // invariants that DO hold:
+        //   - numRequiredSignatures >= 1 (fee payer is always a signer)
+        //   - numRequiredSignatures === sig section count (header matches
+        //     signature section)
+        //   - numReadonlySigned must not exceed numRequiredSignatures
+        //   - readonly-signed + readonly-unsigned sum must fit inside the
+        //     static account key count.
+        // Previously the v0 path silently truncated numRequired via
+        // Math.min(numRequired, accountKeys.length) — letting a tx claiming
+        // numRequired > accounts slip past with no signer check.
         const legacyNumRequired = txBuf[offset]; offset++;
         const legacyNumReadonlySigned = txBuf[offset]; offset++;
         const legacyNumReadonlyUnsigned = txBuf[offset]; offset++;
@@ -805,7 +811,8 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Math.min(numRequired, accountKeys.length) clamp further down used to
     // silently truncate a tx whose numRequired exceeded its accounts — letting
     // structurally invalid messages slip through signer-set verification.
-    // 16 = Solana per-tx signer cap.
+    // We enforce protocol invariants (count match + numRequired<=accounts)
+    // rather than an arbitrary numeric cap.
     const numRequired = txBuf[offset]; offset++;
     const numReadonlySigned = txBuf[offset]; offset++;
     const numReadonlyUnsigned = txBuf[offset]; offset++;

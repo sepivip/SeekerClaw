@@ -32,14 +32,16 @@
 // 4. Validate `expectedDelta` shape per kind. Seven kinds, each with
 //    its own validator — Trigger create + DCA create are DEPOSITS, not
 //    swaps, so they have no `burnerCreditMin` field.
-// 5. (Phase 2c, follow-up commit) Run `simulateTransaction` and assert
-//    burner's net delta matches `expectedDelta` within caller-provided
-//    tolerance. This commit defers the simulation step; the structural
-//    + drainer + signer-mode checks alone close the immediate failure
-//    modes from the BAT-995 device incident (whitelist DoS) and from
-//    the Crypto Copilot drainer class (extra SystemProgram::transfer
-//    instructions slipped into a swap — caught here by the per-shape
-//    instruction validator + drainer blocklist).
+// 5. (Phase 2c, IMPLEMENTED) Run `simulateTransaction` + same-RPC
+//    `getMultipleAccounts` pre-snapshot and assert burner's net delta
+//    matches `expectedDelta` within caller-provided tolerance. The
+//    structural + drainer + signer-mode checks PLUS this simulation
+//    delta validator close the immediate failure modes from the
+//    BAT-995 device incident (whitelist DoS) and from the Crypto
+//    Copilot drainer class (extra SystemProgram::transfer instructions
+//    slipped into a swap — caught here by per-shape delta validation
+//    + drainer blocklist + per-burner-owned-account zero-delta guards
+//    for zero_value kinds).
 //
 // CODEX AMENDMENTS RESPONDED TO
 // -----------------------------
@@ -195,10 +197,12 @@ const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 // handler in validateDrainerOpcodes — no new conditional branch needed
 // beyond the dispatch table.
 const TOKEN_IX = Object.freeze({
+    TRANSFER: 3,              // NEW (R11): only drainer-class in zero_value flows
     APPROVE: 4,
     SET_AUTHORITY: 6,
     BURN: 8,                  // NEW (B2): drainer Burn opcode
     CLOSE_ACCOUNT: 9,
+    TRANSFER_CHECKED: 12,     // NEW (R11): only drainer-class in zero_value flows
     APPROVE_CHECKED: 13,
     BURN_CHECKED: 15,         // NEW (B2): drainer BurnChecked opcode
 });
@@ -510,6 +514,28 @@ function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta, burn
             }
 
             // Drainer instructions on burner-owned accounts:
+            // Copilot R11 finding #2: SPL Token Transfer / TransferChecked is
+            // not generally a drainer (it's the WHOLE POINT of swap/send/pay),
+            // BUT for zero_value_auth / zero_value_cancel — kinds that mean
+            // "no value moves" — a Transfer on a burner-owned SOURCE drains
+            // tokens without being caught by Auth/Close/Approve/Assign/Burn
+            // checks. Reject unless the caller declares the specific source
+            // accounts via allowedTransferAccounts (parallel to allowedBurnAccounts).
+            if ((ix === TOKEN_IX.TRANSFER || ix === TOKEN_IX.TRANSFER_CHECKED)
+                && (expectedDelta.kind === 'zero_value_auth' || expectedDelta.kind === 'zero_value_cancel')) {
+                const sub = resolveSubjectAccount(parsed, instr, 0, i, 'Transfer');
+                if (sub.err) return sub.err;
+                if (ownedSet.has(sub.acct)) {
+                    const allowed = (expectedDelta.kind === 'zero_value_cancel'
+                        && Array.isArray(expectedDelta.allowedTransferAccounts))
+                        ? expectedDelta.allowedTransferAccounts.filter(isNonEmptyBase58)
+                        : [];
+                    if (!allowed.includes(sub.acct)) {
+                        return reject('drainer_approve',
+                            `instruction[${i}] SPL Transfer on burner-owned account ${sub.acct} (zero_value_* kind disallows token movement unless allowedTransferAccounts declares it)`);
+                    }
+                }
+            }
             if (ix === TOKEN_IX.SET_AUTHORITY) {
                 const sub = resolveSubjectAccount(parsed, instr, 0, i, 'SetAuthority');
                 if (sub.err) return sub.err;

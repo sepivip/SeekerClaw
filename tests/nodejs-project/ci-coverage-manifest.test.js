@@ -112,9 +112,15 @@ function parseCiAllowlist() {
     const forIdx = yml.indexOf('for t in \\');
     assert.ok(forIdx !== -1,
         'build.yml has no `for t in \\` block — CI allowlist parser needs updating');
-    const doIdx = yml.indexOf('do', forIdx);
-    assert.ok(doIdx !== -1,
-        'build.yml `for t in \\` block has no matching `do` — CI allowlist parser needs updating');
+    // R11: anchor on the `do` keyword at line-start (with optional leading
+    // whitespace), not a bare substring — a literal "do" inside a test-file
+    // name like "do_something.test.js" would match first and truncate the
+    // block. Search slice + add forIdx to convert relative back to absolute.
+    const tail = yml.slice(forIdx);
+    const doMatch = /(^|\n)\s*do(\s|$)/.exec(tail);
+    assert.ok(doMatch,
+        'build.yml `for t in \\` block has no matching `do` keyword on its own line — CI allowlist parser needs updating');
+    const doIdx = forIdx + doMatch.index + doMatch[1].length;
 
     const block = yml.slice(forIdx, doIdx);
     const lines = block.split('\n').slice(1); // skip `for t in \` line

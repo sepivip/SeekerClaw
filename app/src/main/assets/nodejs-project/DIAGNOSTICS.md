@@ -816,6 +816,19 @@ The same security rule applies on the MWA path; recommending MWA as a workaround
 | `simulation_recipient_mismatch` | Recipient credit observed in simulation doesn't match declared atomicAmount | Same. |
 | `account_ownership_uncertain` | Drainer-opcode walk found an instruction whose target account ownership can't be resolved | Same. |
 | `token_2022_undeclared` | Tx uses Token-2022 program but `expectedDelta.tokenStandard !== 'token_2022'` | Same. |
+| `drainer_burn` | SPL `Burn` / `BurnChecked` opcode on a burner-owned ATA — would destroy the burner's tokens. Legitimate protocol marker burns (e.g., zero-value cancel flows) are accepted only when the target account is listed in policy `allowedBurnAccounts`. | Surface reason verbatim. Refuse. Suggest the user investigate the calling instruction or report. Do NOT retry on MWA — same security rule applies. |
+| `token_2022_extension_unsupported` | Token-2022 extension opcode detected (`PermanentDelegate`, `TransferHook`, etc.) — extensions are not yet autonomously supported by the burner policy. | Refuse. Explain to the user that Token-2022 extensions require manual approval via MWA; do NOT retry autonomously on burner. |
+| `token_2022_send_unsupported` | `solana_send` or `agent_pay_x402` targeting a Token-2022 mint without caller-declared `tokenStandardConfig.transferFeeBps`. Previous 50% tolerance was a known skim window — now refused. | Refuse autonomous burner path. Tell the user to retry the send via main wallet (MWA) for Token-2022 mints; do NOT retry autonomously until per-mint declaration is supported. |
+
+### Policy-internal fields (do not surface to users)
+
+The policy reason log may include these forensic context fields. They are diagnostic-only — never quote raw field names to the end user; explain the underlying meaning in plain language instead.
+
+| Field | Purpose | Agent guidance |
+|---|---|---|
+| `wsolAtaExemption: { ata, destination }` | Records that a `CloseAccount` was accepted because it targets the user's wSOL ATA as part of a Jupiter Ultra wrap/unwrap flow (not a drainer). | If a CloseAccount-related reject reason references it, it is informational context — do not mention `wsolAtaExemption` to the user. |
+| `allowedBurnAccounts: [base58]` | Whitelist of accounts where a zero-value marker `Burn` is accepted (declared by the calling protocol response). | If a burn-related reject references it, treat as informational context — do not surface the field name. |
+| `tokenStandardConfig.transferFeeBps` | Caller-declared per-mint Token-2022 transfer-fee declaration (required to allow autonomous Token-2022 send). | If `token_2022_send_unsupported` cites a missing value, tell the user "autonomous Token-2022 sends aren't supported yet — use main wallet" rather than naming the config field. |
 
 ### Availability class — surface reason, ask user to retry burner once OR fall back to MWA
 
@@ -854,3 +867,12 @@ The agent SHOULD walk users through option 1 first when they ask "how do I stop 
 ### Live test (Codex amendment #7 v8.1)
 
 The dual-source contract (accounts-config + getMultipleAccounts) has a load-bearing live test at `tests/jupiter-ultra/live-burner-policy-helius.js`. It exercises the real Solana RPC against a real Jupiter Ultra order and asserts the policy accepts. Run via `cd tests/jupiter-ultra && node live-burner-policy-helius.js` — requires `BURNER_SECRET_KEY` + `JUPITER_API_KEY` + `SOLANA_RPC` in `.env.test`. See file header for safety notes (no signing, no broadcast).
+
+### BAT-1013-followup limitations
+
+Known fail-closed paths and behavioral notes that ship with the BAT-1013 burner-policy surface. None are bugs — they are intentional safety defaults until a follow-up unlocks them.
+
+1. **Token-2022 send/pay is fail-closed.** Autonomous `solana_send` and `agent_pay_x402` are refused (`token_2022_send_unsupported`) for any Token-2022 mint. The previous behavior used a 50% transfer-fee tolerance, which was a known skim window. Until caller-declared per-mint `tokenStandardConfig.transferFeeBps` lands, the only path for Token-2022 sends is the user's main wallet (MWA). **User-visible fix:** retry the send via main wallet.
+2. **DCA `create` routes to main wallet, not burner.** `jupiter_dca_create` currently surfaces an MWA popup rather than signing autonomously. Burner DCA is unsupported pending DCA-vault account discovery; the policy cannot verify the destination owner without it. **User-visible fix:** approve the MWA popup as usual; DCA list/cancel still work.
+3. **Slot-drift surfaces as `simulation_failed`.** When account snapshots and simulation slots drift apart (a public-RPC consistency failure), the availability bucket wraps the case as `simulation_failed`. There is no separate `slot_drift` user-visible code today. **User-visible fix:** add a Helius API key in Settings — the dedicated RPC removes most slot-drift triggers.
+4. **Burner pubkey cache invalidation.** The burner pubkey is verified against `/burner/status` on every autonomous sign (not cached after first call). After wipe + reimport (or any pubkey change), the next sign picks up the new pubkey automatically — no app restart required. The agent can confidently tell users "your new burner is live on the next autonomous action" after a wipe + reimport flow.

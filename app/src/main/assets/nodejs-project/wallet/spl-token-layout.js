@@ -36,6 +36,13 @@ const SPL_TOKEN_ACCOUNT_MIN_BYTES = 72;
  */
 function decodeSplTokenAccount(base64Data) {
     if (typeof base64Data !== 'string' || base64Data.length === 0) return null;
+    // Copilot R11: Buffer.from('base64') silently ignores invalid chars and
+    // returns garbage. For a security-sensitive decoder this is fail-open.
+    // Validate the input is well-formed base64 (charset + length-mod-4)
+    // BEFORE decoding so malformed RPC responses fail closed.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64Data) || base64Data.length % 4 !== 0) {
+        return null;
+    }
     let buf;
     try {
         buf = Buffer.from(base64Data, 'base64');

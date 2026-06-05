@@ -231,12 +231,15 @@ function readU8(buf, offset) {
  * `Transaction rejected: ...` in verifySwapTransaction()).
  */
 function parseTransaction(txBase64) {
-    // Strict base64 validation (Copilot PR #398 R6 + R7): Buffer.from(str, 'base64')
+    // Strict base64 validation (Copilot PR #398 R6 + R7 + R11): Buffer.from(str, 'base64')
     // silently strips invalid chars and decodes partial input. For a security-
-    // sensitive parser the input shape must be validated up front.
-    if (typeof txBase64 !== 'string' || txBase64.length === 0) {
+    // sensitive parser the input shape must be validated up front. Type check
+    // before regex test (a non-string passed to .test() coerces to a string).
+    if (typeof txBase64 !== 'string') {
         throw new TxParseError('invalid_base64', 0, 'tx must be a non-empty base64 string');
     }
+    // Charset + length-mod-4 (R11): a single regex covers empty-string, invalid
+    // chars, and bad length in one fail-closed check.
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
         throw new TxParseError('invalid_base64', 0, 'invalid base64 characters or length');
     }

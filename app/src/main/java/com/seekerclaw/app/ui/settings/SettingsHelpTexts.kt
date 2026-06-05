@@ -203,5 +203,9 @@ object SettingsHelpTexts {
         "Without it, autonomous signing may fail closed at the " +
         "simulation validation step under public RPC rate-limit " +
         "pressure. The policy fails closed rather than signing without " +
-        "verification."
+        "verification. Specifically, when account snapshots and " +
+        "simulation slots drift apart (a public-RPC consistency " +
+        "failure), the policy surfaces it as `simulation_failed` in " +
+        "the availability bucket — adding a Helius key removes most " +
+        "slot-drift triggers."
 }

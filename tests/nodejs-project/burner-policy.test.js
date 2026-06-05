@@ -8,7 +8,9 @@
 //   - Token-2022 declaration enforcement
 //   - Per-shape `expectedDelta` validation (7 kinds)
 //   - Missing burnerPubkey → fail closed before any other check
-//   - `REJECT_CODES.length === 26` drift guard
+//   - `REJECT_CODES.length === 29` drift guard (was 26 before
+//     BAT-1013-followup; +3 for drainer_burn, token_2022_extension_unsupported,
+//     token_2022_send_unsupported; -5 dead aspirational codes pruned R11)
 //
 // Uses the parser's internal hand-rolled binary format to construct
 // synthetic txs end-to-end through `validateBurnerTx`. Helper builders
@@ -1137,6 +1139,63 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.error, 'drainer_burn');
         assert.match(r.reason, /not in expectedDelta\.allowedBurnAccounts/);
     });
+    check('Copilot R11 finding #2: SPL Transfer on burner-owned source in zero_value_auth REJECTED', () => {
+        // Drainer-walk previously covered Auth/Close/Approve/Assign/Burn but
+        // NOT Transfer. A zero_value_auth tx could include a Transfer
+        // instruction draining the burner's SPL tokens. Now rejects.
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, RECIPIENT_USDC_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 3, // TOKEN_PROGRAM
+                accountIdxs: [1, 2, 0], // source=BURNER_USDC_ATA, dest=RECIPIENT, authority=BURNER
+                dataBytes: Buffer.from([3, 0, 0, 0, 0, 0, 0, 0, 0]), // Transfer + u64 amount
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'zero_value_auth',
+            allowedInstructionClasses: ['memo'],
+        }, BURNER);
+        assert.strictEqual(r.error, 'drainer_approve');
+        assert.match(r.reason, /SPL Transfer on burner-owned account/);
+    });
+
+    check('Copilot R11: TransferChecked also caught in zero_value_cancel without allowedTransferAccounts', () => {
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, RECIPIENT_USDC_ATA, USDC, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 4,
+                accountIdxs: [1, 3, 2, 0], // source, mint, dest, authority
+                dataBytes: Buffer.from([12, 0, 0, 0, 0, 0, 0, 0, 0, 6]), // TransferChecked
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'zero_value_cancel',
+            allowedInstructionClasses: ['token_close', 'memo'],
+            // NO allowedTransferAccounts → reject
+        });
+        assert.strictEqual(r.error, 'drainer_approve');
+    });
+
+    check('Copilot R11: SPL Transfer in jupiter_swap_immediate (legitimate swap) NOT rejected by new Transfer guard', () => {
+        // Confirms the guard only fires for zero_value_* kinds; swaps still flow.
+        const parsed = {
+            staticAccountKeys: [BURNER, BURNER_USDC_ATA, RECIPIENT_USDC_ATA, TOKEN_PROGRAM],
+            numRequiredSignatures: 1,
+            instructions: [{
+                programIdIdx: 3,
+                accountIdxs: [1, 2, 0],
+                dataBytes: Buffer.from([3, 0, 0, 0, 0, 0, 0, 0, 0]),
+            }],
+        };
+        const r = policy._validateDrainerOpcodes(parsed, [BURNER_USDC_ATA], {
+            kind: 'jupiter_swap_immediate',
+        });
+        // No drainer reject — swap kinds allow Transfer.
+        assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
+    });
+
     check('Codex v8.4 amendment 2: Burn on DECLARED order/position marker in zero_value_cancel ACCEPTED', () => {
         const ORDER_MARKER = 'orderMarKerPdaXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
         const parsed = {

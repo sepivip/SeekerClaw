@@ -106,11 +106,14 @@ require.cache[solanaPath] = {
         },
         verifySwapTransaction: () => ({ valid: true }),
         jupiterRequest: async () => ({ status: 200, data: '{}' }),
-        // BAT-1013-followup: realistic base58 + length check so the C2
+        // BAT-1013-followup: lightweight base58 + length check so the C2
         // base58-validation tests can flex on bogus Jupiter response fields
-        // (e.g. data.order='not_a_pubkey' must return false). Production's
-        // isValidSolanaAddress lives in solana.js and applies the same
-        // base58 charset + 32..44 length range; mirror that here.
+        // (e.g. data.order='not_a_pubkey' must return false). This stub
+        // checks the base58 charset and 32..44 char length range only — it
+        // does NOT decode the 32-byte payload like production's
+        // isValidSolanaAddress in solana.js does. Sufficient for routing
+        // tests since the bogus values they pass fail the charset check
+        // before any decode would matter.
         isValidSolanaAddress: (s) => typeof s === 'string' && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s),
         parseInputAmountToLamports: (amount, decimals) => {
             const [intPart, fracPart = ''] = String(amount).split('.');
@@ -204,13 +207,14 @@ tools._setNumberToDecimalString((n) => String(n));
 
 // ── Test harness ────────────────────────────────────────────────────────────
 let failures = 0;
+let passes = 0;
 async function check(label, fn) {
     bridgeCalls = [];
     jupiterTriggerExecuteCalls = [];
     jupiterRecurringExecuteCalls = [];
     jupiterUltraExecuteCalls = [];
     bridgeResponses = {};
-    try { await fn(); console.log(`  ✓ ${label}`); }
+    try { await fn(); passes++; console.log(`  ✓ ${label}`); }
     catch (e) { failures++; console.error(`  ✗ ${label}\n    ${e.stack || e.message}`); }
 }
 
@@ -603,5 +607,5 @@ function _burnerOff() {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);
     }
-    console.log(`\nPASS: tools-solana-routing.test.js (${5 + 6 + 3} routing scenarios verified).`);
+    console.log(`\nPASS: tools-solana-routing.test.js (${passes} routing scenarios verified).`);
 })();
