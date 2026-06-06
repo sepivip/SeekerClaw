@@ -378,14 +378,15 @@ object SolanaWalletManager {
     /**
      * Centralized stale-auth detection. Two paths:
      *
-     *  1. Typed exception: walks [TransactionResult.Failure.e] and up to
-     *     two `cause` links looking for a
+     *  1. Typed exception: walks [TransactionResult.Failure.e] (depth 0)
+     *     plus up to three `cause` links (depths 1–3) looking for a
      *     [JsonRpc20Client.JsonRpc20RemoteException] with
      *     `code == [ProtocolContract.ERROR_AUTHORIZATION_FAILED]` (-1).
      *     This is the canonical path — the SDK puts the
-     *     `JsonRpc20RemoteException` directly in [TransactionResult.Failure.e],
-     *     but we walk the cause chain defensively in case a wrapper is
-     *     introduced upstream.
+     *     `JsonRpc20RemoteException` directly in [TransactionResult.Failure.e]
+     *     (depth 0), but we walk the cause chain defensively in case an
+     *     upstream wrapper is introduced. The loop condition is
+     *     `depth < 4`, matching the implementation.
      *
      *  2. Message fallback: case-insensitive match against known stale-
      *     auth phrases the SDK pre-translates into the message field.
