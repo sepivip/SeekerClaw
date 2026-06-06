@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.Looper
 import android.util.Log
 import androidx.annotation.VisibleForTesting
+import java.util.Locale
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import com.solana.mobilewalletadapter.clientlib.AdapterOperations
 import com.solana.mobilewalletadapter.clientlib.ConnectionIdentity
@@ -261,7 +262,18 @@ object SolanaWalletManager {
         } else {
             Log.i(TAG, "MWA call: fresh authorize path (no cached token; SDK handles)")
         }
-        return core.transact(sender, signInPayload = null, block = block)
+        return try {
+            core.transact(sender, signInPayload = null, block = block)
+        } catch (e: Exception) {
+            // Preserve the original error-contract: any throw from the SDK
+            // (or RealMwaCore.requireNotNull(sender), or main-thread
+            // registration failure, etc.) must surface as a
+            // TransactionResult.Failure so the downstream handlers can
+            // route it through stale-auth detection + the retry wrapper,
+            // instead of crashing the caller and bypassing the contract.
+            Log.e(TAG, "MWA transact threw; converting to Failure for unified handling", e)
+            TransactionResult.Failure(e.message ?: e.javaClass.simpleName, e)
+        }
     }
 
     /**
@@ -345,7 +357,7 @@ object SolanaWalletManager {
             }
         }
         is TransactionResult.NoWalletFound -> {
-            Result.failure(Exception("No MWA-compatible wallet found"))
+            Result.failure(Exception("No MWA-compatible wallet found. Install Phantom or Solflare."))
         }
         is TransactionResult.Failure -> {
             if (isStaleAuthError(result)) {
@@ -394,8 +406,11 @@ object SolanaWalletManager {
             t = t.cause
             depth++
         }
-        // Path 2: known SDK-translated messages
-        val msg = failure.message.lowercase()
+        // Path 2: known SDK-translated messages. Use locale-invariant
+        // lowercase so a device set to Turkish (where lowercase('I') is
+        // 'ı', not 'i') doesn't break the contains check on
+        // "auth token invalid" / "authorization failed".
+        val msg = failure.message.lowercase(Locale.ROOT)
         return STALE_AUTH_MESSAGE_HINTS.any { msg.contains(it) }
     }
 

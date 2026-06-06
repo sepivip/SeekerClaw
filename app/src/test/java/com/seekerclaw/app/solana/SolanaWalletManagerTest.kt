@@ -18,6 +18,7 @@ import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import java.util.ArrayDeque
+import java.util.Locale
 
 /**
  * Unit tests for [SolanaWalletManager]. Follow the project's no-mocking
@@ -244,13 +245,111 @@ class SolanaWalletManagerTest {
         // so diagnostics can still see what went wrong.
         assertTrue(
             "caller-facing exception should mention 'after retry'",
-            (errNonNull.message ?: "").lowercase().contains("after retry"),
+            (errNonNull.message ?: "").lowercase(Locale.ROOT).contains("after retry"),
         )
         // Exactly TWO transact calls: original + one retry (no recursion):
         assertEquals(2, fake.transactCalls - baseline)
         // Both caches cleared by the retry path:
         assertNull(SolanaWalletManager.peekCachedAuthToken())
         assertNull(fake.authToken)
+    }
+
+    @Test
+    fun `Copilot R-next-1 — transact throwing is converted to Failure not crash`() = runBlocking {
+        // Regression-catcher for Copilot R1 finding #3367435964:
+        // primeAndTransact used to call core.transact(...) without a try/catch,
+        // so any throw from the MWA SDK (or RealMwaCore's requireNotNull(sender),
+        // or main-thread registration failure) would bypass Result.failure AND
+        // the stale-retry wrapper. The fix wraps the call in try/catch and
+        // surfaces the throw as TransactionResult.Failure for uniform handling.
+        val throwingFake = object : SolanaWalletManager.MwaCore {
+            override var authToken: String? = null
+            override suspend fun <T> transact(
+                sender: ActivityResultSender?,
+                signInPayload: SignInWithSolana.Payload?,
+                block: suspend AdapterOperations.(authResult: AuthorizationResult) -> T,
+            ): TransactionResult<T> {
+                throw IllegalStateException("MWA SDK exploded")
+            }
+        }
+        SolanaWalletManager.core = throwingFake
+
+        val result = SolanaWalletManager.signAndSendTransactionInternal(
+            sender = null,
+            unsignedTransaction = ByteArray(10),
+        )
+
+        // Must surface as a clean Result.failure, NOT a crash:
+        assertTrue("throwing transact must surface as failure", result.isFailure)
+        val err = result.exceptionOrNull()
+        assertNotNull(err)
+        assertTrue(
+            "error should preserve the original throw message",
+            (err!!.message ?: "").contains("MWA SDK exploded"),
+        )
+    }
+
+    @Test
+    fun `Copilot R-next-1 — signAndSend NoWalletFound message mentions Phantom-or-Solflare`() = runBlocking {
+        // Regression-catcher for Copilot R1 finding #3367435980:
+        // handleByteArrayResult used to surface "No MWA-compatible wallet found"
+        // while handlePubKeyResult said "...Install Phantom or Solflare." The
+        // user-facing strings are now aligned across all three entry points.
+        val noWalletFake = object : SolanaWalletManager.MwaCore {
+            override var authToken: String? = null
+            override suspend fun <T> transact(
+                sender: ActivityResultSender?,
+                signInPayload: SignInWithSolana.Payload?,
+                block: suspend AdapterOperations.(authResult: AuthorizationResult) -> T,
+            ): TransactionResult<T> = TransactionResult.NoWalletFound("none")
+        }
+        SolanaWalletManager.core = noWalletFake
+
+        val sendResult = SolanaWalletManager.signAndSendTransactionInternal(
+            sender = null,
+            unsignedTransaction = ByteArray(10),
+        )
+        assertTrue(sendResult.isFailure)
+        val sendMsg = sendResult.exceptionOrNull()?.message ?: ""
+        assertTrue(
+            "signAndSend NoWalletFound must mention Phantom/Solflare like authorize does; got: $sendMsg",
+            sendMsg.contains("Phantom") || sendMsg.contains("Solflare"),
+        )
+
+        val signResult = SolanaWalletManager.signTransactionInternal(
+            sender = null,
+            unsignedTransaction = ByteArray(10),
+        )
+        assertTrue(signResult.isFailure)
+        val signMsg = signResult.exceptionOrNull()?.message ?: ""
+        assertTrue(
+            "signTransaction NoWalletFound must mention Phantom/Solflare; got: $signMsg",
+            signMsg.contains("Phantom") || signMsg.contains("Solflare"),
+        )
+    }
+
+    @Test
+    fun `Copilot R-next-1 — isStaleAuthError uses Locale ROOT for Turkish-safe lowercase`() {
+        // Regression-catcher for Copilot R1 finding #3367435983:
+        // String.lowercase() is locale-dependent — in Turkish, lowercase('I')
+        // is 'ı' (dotless), so "AUTH TOKEN INVALID".lowercase() would
+        // produce "auth token ınvalıd" and miss the contains check. The fix
+        // pins lowercase(Locale.ROOT). Verify by temporarily setting the
+        // default locale to Turkish and confirming the helper still matches.
+        val savedLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale("tr", "TR"))
+            val failure = TransactionResult.Failure<Unit>(
+                "Wallet returned: AUTH TOKEN INVALID",
+                Exception("generic"),
+            )
+            assertTrue(
+                "isStaleAuthError must still detect stale-auth under Turkish locale",
+                SolanaWalletManager.isStaleAuthError(failure),
+            )
+        } finally {
+            Locale.setDefault(savedLocale)
+        }
     }
 
     @Test
