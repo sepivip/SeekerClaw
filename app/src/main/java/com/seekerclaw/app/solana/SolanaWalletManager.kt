@@ -157,6 +157,7 @@ object SolanaWalletManager {
      * concurrently with an in-flight transact on another thread.
      */
     fun clearAuthToken() {
+        assertMainThread()
         val hadCached = cachedAuthToken != null
         cachedAuthToken = null
         core.authToken = null
@@ -303,15 +304,26 @@ object SolanaWalletManager {
             // Double-stale: the retry itself was rejected. The sentinel must
             // not leak — convert to a public-facing exception. This is the
             // user-revoked-during-retry / wallet-uninstalled scenario.
+            // Preserve the underlying root cause (typically the original
+            // JsonRpc20RemoteException) so crash reports + logs still see
+            // the real failure source.
             Log.e(TAG, "$op: stale auth retry also failed; surfacing caller-facing failure")
-            Result.failure(Exception("Authorization failed after retry (${retryError.message})"))
+            Result.failure(
+                Exception("Authorization failed after retry (${retryError.message})", retryError.cause)
+            )
         } else {
             retry
         }
     }
 
-    /** Sentinel exception used internally to flag "this failure was stale-auth, retry it". */
-    private class StaleAuthSignal(message: String) : Exception(message)
+    /**
+     * Sentinel exception used internally to flag "this failure was
+     * stale-auth, retry it". Carries the original wallet/SDK cause so
+     * diagnostics survive across the retry boundary if the retry also
+     * fails. The sentinel itself NEVER escapes to callers — see
+     * [runWithStaleRetry].
+     */
+    private class StaleAuthSignal(message: String, cause: Throwable?) : Exception(message, cause)
 
     private fun handlePubKeyResult(
         result: TransactionResult<Pair<String?, ByteArray?>>,
@@ -333,7 +345,7 @@ object SolanaWalletManager {
         }
         is TransactionResult.Failure -> {
             if (isStaleAuthError(result)) {
-                Result.failure(StaleAuthSignal(result.message))
+                Result.failure(StaleAuthSignal(result.message, result.e))
             } else {
                 Log.e(TAG, "MWA $op failed: ${result.message}")
                 Result.failure(Exception(result.message, result.e))
@@ -361,7 +373,7 @@ object SolanaWalletManager {
         }
         is TransactionResult.Failure -> {
             if (isStaleAuthError(result)) {
-                Result.failure(StaleAuthSignal(result.message))
+                Result.failure(StaleAuthSignal(result.message, result.e))
             } else {
                 Log.e(TAG, "MWA $op failed: ${result.message}")
                 Result.failure(Exception(result.message, result.e))

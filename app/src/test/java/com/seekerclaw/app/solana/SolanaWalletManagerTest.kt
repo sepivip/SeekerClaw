@@ -255,6 +255,56 @@ class SolanaWalletManagerTest {
     }
 
     @Test
+    fun `Copilot R-next-3 — double-stale preserves original JsonRpc cause through retry`() = runBlocking {
+        // Regression-catcher for Copilot R3 findings #3367468687/693/697/706:
+        // StaleAuthSignal used to drop the original cause (TransactionResult.Failure.e),
+        // and the double-stale conversion at runWithStaleRetry then surfaced a
+        // public Exception with NO cause attached. Crash reports / diagnostics
+        // lost the real JsonRpc20RemoteException. The fix carries the cause
+        // through the sentinel and reattaches it at the public-exception layer.
+        fake.queueSuccess(token = "T1", payload = ByteArray(32))
+        SolanaWalletManager.authorizeInternal(sender = null)
+        val baseline = fake.transactCalls
+
+        val staleA = JsonRpc20Client.JsonRpc20RemoteException(
+            ProtocolContract.ERROR_AUTHORIZATION_FAILED,
+            "Auth token invalid (A)",
+            null,
+        )
+        val rootCauseB = JsonRpc20Client.JsonRpc20RemoteException(
+            ProtocolContract.ERROR_AUTHORIZATION_FAILED,
+            "Auth token invalid (B)",
+            "root-cause-B-data",
+        )
+        fake.queueFailure(message = "Auth token invalid (A)", e = staleA)
+        fake.queueFailure(message = "Auth token invalid (B)", e = rootCauseB)
+
+        val result = SolanaWalletManager.signAndSendTransactionInternal(
+            sender = null,
+            unsignedTransaction = ByteArray(10),
+        )
+
+        assertTrue(result.isFailure)
+        val err = result.exceptionOrNull()
+        assertNotNull(err)
+        val errNonNull = err!!
+        // Public exception type — NOT the private sentinel:
+        assertFalse(
+            "must not leak StaleAuthSignal type",
+            errNonNull::class.java.simpleName == "StaleAuthSignal",
+        )
+        // The whole point of this fix: the JsonRpc20RemoteException from the
+        // retry attempt must be reachable via the cause chain so logs / crash
+        // reports see the real failure source.
+        assertEquals(
+            "public exception must carry the retry's underlying JsonRpc cause",
+            rootCauseB,
+            errNonNull.cause,
+        )
+        assertEquals(2, fake.transactCalls - baseline)
+    }
+
+    @Test
     fun `Copilot R-next-1 — transact throwing is converted to Failure not crash`() = runBlocking {
         // Regression-catcher for Copilot R1 finding #3367435964:
         // primeAndTransact used to call core.transact(...) without a try/catch,
@@ -567,10 +617,12 @@ class SolanaWalletManagerTest {
         val result = SolanaWalletManager.authorizeInternal(sender = null)
 
         assertTrue(result.isFailure)
-        val msg = result.exceptionOrNull()?.message ?: fail("expected error message")
+        val msg = result.exceptionOrNull()?.message
+        assertNotNull("expected error message", msg)
+        val msgNonNull = msg!!
         assertTrue(
-            "should mention installing a wallet, got: $msg",
-            (msg as String).contains("Phantom") || msg.contains("wallet"),
+            "should mention installing a wallet, got: $msgNonNull",
+            msgNonNull.contains("Phantom") || msgNonNull.contains("wallet"),
         )
     }
 }
