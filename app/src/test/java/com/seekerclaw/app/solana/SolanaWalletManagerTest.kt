@@ -163,7 +163,7 @@ class SolanaWalletManagerTest {
         )
         fake.queueFailure(message = "Auth token invalid", e = staleExc)
         // Retry: Success with fresh token T2 and a signature payload
-        val sigPayload = ByteArray(64) { 0x7F }
+        val sigPayload = ByteArray(64) { 0x7F.toByte() }
         fake.queueSuccess(token = "T2", payload = sigPayload)
 
         val result = SolanaWalletManager.signAndSendTransactionInternal(
