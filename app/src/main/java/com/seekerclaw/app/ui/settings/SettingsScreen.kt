@@ -94,6 +94,7 @@ import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
+import com.seekerclaw.app.solana.SolanaWalletManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
@@ -700,6 +701,12 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedButton(
                         onClick = {
+                            // BAT-1021: clear the process-local MWA auth-token cache in
+                            // lockstep with the persisted wallet address so the next
+                            // connect attempt reliably triggers a fresh consent popup
+                            // (instead of silently reusing a stale token against a
+                            // wallet the user just disconnected from).
+                            SolanaWalletManager.clearAuthToken()
                             ConfigManager.clearWalletAddress(context)
                             walletAddress = null
                             walletError = null
@@ -1191,6 +1198,11 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    // BAT-1021 same-class sweep: clearConfig clears the wallet
+                    // address as a side effect of clearing all prefs, so the
+                    // MWA auth-token cache must be cleared in lockstep — same
+                    // invariant as the Disconnect Wallet button.
+                    SolanaWalletManager.clearAuthToken()
                     SeekerClawService.stop(context)
                     ConfigManager.clearConfig(context)
                     Analytics.featureUsed("config_reset")
