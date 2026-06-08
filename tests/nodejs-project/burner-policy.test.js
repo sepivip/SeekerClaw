@@ -1300,20 +1300,19 @@ async function runAsync(name, fn) {
             depositVault: { pubkey: INPUT_TOKEN_ACCOUNT, expectedTokenOwner: RECEIVER_ADDRESS },
             burnerOwnedAccounts: [],
         }, { burnerPubkey: BURNER, simulator });
-        // Two acceptable rejection classes prove the bypass is closed:
-        // (a) the R4 fail-closed (simulation_recipient_mismatch), or
-        // (b) any earlier delta-class check that happens to fire first
-        // for the same fixture. The point is: with R4 in place, this
-        // shape CANNOT silently sign. Without R4, postAI.splToken is
-        // undefined → the existing owner-slot check no-ops → the policy
-        // could accept. The assertion below proves rejection regardless
-        // of which gate fires first.
+        // Copilot R7: pin the assertion to the R4 owner-slot fail-closed
+        // path specifically. The fixture sets the destination's lamports
+        // delta exactly to burnerDebit.atomicAmount (5_000_000), so the
+        // delta band passes — the only remaining gate is R4's
+        // postAI.splToken-undecodable check, which MUST be the one that
+        // fires for this regression to be a genuine R4 regression.
+        // Without R4, postAI.splToken is undefined → the existing
+        // owner-slot check no-ops → the policy would silently sign.
         assert.strictEqual(r.ok, false, `expected reject of non-SPL destination with expectedTokenOwner set, got ${JSON.stringify(r)}`);
-        assert.ok(
-            r.error === 'simulation_recipient_mismatch' || r.error === 'simulation_delta_mismatch',
-            `expected a security-class reject (R4 owner-slot OR delta band), got error=${r.error} reason=${r.reason}`
-        );
+        assert.strictEqual(r.error, 'simulation_recipient_mismatch',
+            `expected R4 owner-slot fail-closed (simulation_recipient_mismatch), got error=${r.error} reason=${r.reason}`);
         assert.strictEqual(r.class, 'security');
+        assert.match(r.reason, /not SPL-decodable|no splToken metadata/);
     });
 
     check('BAT-1025 v9.1 R4: shape validator rejects malformed expectedOwner when provided (Copilot R4 contract drift)', () => {

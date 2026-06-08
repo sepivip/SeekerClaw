@@ -1018,7 +1018,16 @@ function validateExpectedDeltaShape(expectedDelta) {
             if (dErr) return reject('expected_delta_invalid_shape', dErr);
             const v = expectedDelta.depositVault;
             if (!v || typeof v !== 'object') return reject('expected_delta_invalid_shape', 'depositVault required');
-            if (!isNonEmptyBase58(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required');
+            // Copilot R7: depositVault.pubkey IS the on-chain destination
+            // the policy binds to. Tighten to the strict 32-byte predicate
+            // for consistency with expectedOwner / expectedTokenOwner
+            // (both fixed in R5). A 31/33-byte-decoded base58 string would
+            // otherwise slip through and produce a confusing RPC reject
+            // or simulation_metadata_missing later. Scope-discipline:
+            // ONLY tightening this deposit-kind path; the 11+ other
+            // isNonEmptyBase58 sites in burner-policy.js stay on the
+            // legacy predicate (independent refactor scope).
+            if (!_isStrictPubkey(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required (32-byte base58 pubkey)');
             // BAT-1025 v9.1: producers can supply either expectedOwner (the
             // accountInfo.owner program id — V1 trigger pattern) OR
             // expectedTokenOwner (the SPL token-account owner-slot value —
