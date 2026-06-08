@@ -981,6 +981,23 @@ function validateExpectedDeltaShape(expectedDelta) {
             // Call sites that cannot supply a verified depositVault MUST
             // route the tx to the main wallet (forceRouting='main') and
             // not invoke autonomous burner signing for this kind.
+            //
+            // Process lesson (BAT-1025 v9.1, 2026-06-08): five rounds of
+            // contract iteration (v8.5–v8.9) over-engineered a problem
+            // that 30 seconds of live capture would have collapsed into
+            // one. The premise driving the iteration — "the V2 vault PDA
+            // is the on-chain destination and is owned by the Jupiter
+            // Trigger V2 program" — was falsified by the C1 capture in
+            // tests/jupiter-ultra/live-capture-sim-fixture.js. In reality
+            // the destination is craft.inputTokenAccount, an ephemeral
+            // classic SPL Token Account whose splToken.owner-slot is the
+            // Privy vault PDA. For any future burner-policy contract
+            // touching a third-party-managed destination account
+            // (custodial wallet, MPC, Anchor program), CAPTURE FIRST:
+            // run an equivalent of live-capture-sim-fixture.js against a
+            // funded test wallet BEFORE drafting a contract addendum. Docs
+            // are useful but a contract anchored on docs alone cascades
+            // wrong premises across the entire policy architecture.
             const dErr = requireBurnerDebit(expectedDelta.burnerDebit);
             if (dErr) return reject('expected_delta_invalid_shape', dErr);
             const v = expectedDelta.depositVault;
