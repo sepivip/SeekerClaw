@@ -44,11 +44,19 @@
 
 const { httpRequest } = require('../http');
 const { log, config } = require('../config');
+const { base58Decode } = require('../wallet/tx-parser');
 
-// Solana pubkey base58 validator. Mirrors wallet/burner-policy.js:892 — kept
-// local to avoid cross-module import churn for a 1-line predicate.
+// Solana pubkey strict validator. Copilot PR #401 R2 (2026-06-08): the
+// charset+length-only predicate this replaces let through base58 strings
+// that decode to 31/33 bytes — Solana RPC would reject them later in a
+// harder-to-diagnose way. Mirrors `solana.isValidSolanaAddress` semantics
+// using the wallet/tx-parser base58 decoder (lighter require than pulling
+// in the whole tools/solana module from a jupiter/ adapter).
 function _isBase58Pubkey(s) {
-    return typeof s === 'string' && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
+    if (typeof s !== 'string') return false;
+    if (s.length < 32 || s.length > 44) return false;
+    if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(s)) return false;
+    try { return base58Decode(s).length === 32; } catch { return false; }
 }
 
 // ── Module-level state ──────────────────────────────────────────────────────

@@ -364,10 +364,17 @@ function writeFixture(payload) {
             const conn = new Connection(rpcUrl, 'processed');
 
             // Public Solana RPC caps simulateTransaction accounts.addresses at 13.
-            // Prioritize the 4 we strictly need (burner, vault, both ATAs) and
-            // fill remaining slots with static keys for richer fixture coverage.
+            // Copilot PR #401 R2: prioritize `inputTokenAccount` because the
+            // pinned fixture's `postAI.splToken.owner === receiverAddress`
+            // replay assertion is on THIS address — if it gets bumped past
+            // slot 13 by static-key padding, the fixture loses post-state
+            // for the very account the replay test needs. Order: the 4
+            // strictly-needed pubkeys (burner, vault, burner ATA, vault
+            // USDC ATA derived) + inputTokenAccount when present, then
+            // pad with staticKeys for richer fixture coverage.
             const RPC_ACCOUNT_CAP = 13;
             const priority = [burnerPubkey, vaultPubkey, burnerUsdcAta, vaultUsdcAta];
+            if (inputTokenAccount) priority.push(inputTokenAccount);
             const requestedAddresses = new Set(priority);
             for (const k of staticKeys) {
                 if (requestedAddresses.size >= RPC_ACCOUNT_CAP) break;
