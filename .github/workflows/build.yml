@@ -77,7 +77,8 @@ jobs:
             internal-control-server \
             internal-control-server-token-rotation \
             internal-control-server-proxy-passthrough \
-            bridge-token-reload
+            bridge-token-reload \
+            verify-swap-transaction
           do
             echo "── $t ──"
             node "tests/nodejs-project/${t}.test.js"
