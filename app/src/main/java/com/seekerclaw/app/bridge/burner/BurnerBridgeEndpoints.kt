@@ -62,6 +62,14 @@ class BurnerBridgeEndpoints internal constructor(
     // values. Production secondary constructor below instantiates the
     // real fetcher with the Helius-aware URL provider from BAT-1000.
     private val balanceFetcher: SolanaBalanceFetcher? = null,
+    // BAT-1013 foundation patch (BAT-1000 follow-up): lambda that returns
+    // true when a Helius API key is configured. Defaults to { false } so
+    // the internal constructor / test seams that don't wire it remain
+    // backward-compatible. Production secondary constructor wires
+    // ConfigManager.getSolanaRpcUrl() URL-contains-"helius" check.
+    // Surfaced in /burner/status response so the Node-side agent system
+    // prompt can conditionalize Helius recommendations.
+    private val isHeliusConfigured: () -> Boolean = { false },
 ) {
 
     /**
@@ -80,6 +88,13 @@ class BurnerBridgeEndpoints internal constructor(
         balanceFetcher = SolanaBalanceFetcher(
             rpcUrlProvider = { ConfigManager.getSolanaRpcUrl(context.applicationContext) },
         ),
+        // BAT-1013 foundation patch: same Keystore-backed read as the
+        // balance fetcher, but extracts "is helius URL" boolean for the
+        // agent self-awareness surface.
+        isHeliusConfigured = {
+            ConfigManager.getSolanaRpcUrl(context.applicationContext)
+                .contains("helius", ignoreCase = true)
+        },
     )
 
     /**
@@ -141,6 +156,12 @@ class BurnerBridgeEndpoints internal constructor(
         "signature",
         // BAT-582 Phase 5: /jupiter/order-owner/get response shape.
         "creatorWalletRole",
+        // BAT-1013 foundation patch (BAT-1000 follow-up): Helius
+        // self-awareness fields for the Node-side agent system prompt.
+        // Without these in the allowlist they would be silently scrubbed
+        // by filterResponse() even if handleStatus() populates them.
+        "heliusConfigured",
+        "activeRpc",
     )
 
     /**
@@ -286,6 +307,15 @@ class BurnerBridgeEndpoints internal constructor(
             body["spentTodaySol"] = status?.spentTodaySol ?: "0"
             body["spentTodayUsdc"] = status?.spentTodayUsdc ?: "0"
             body["network"] = "mainnet"
+            // BAT-1013 foundation patch (BAT-1000 follow-up): surface whether
+            // Helius is the active RPC so the Node-side system prompt can tell
+            // the agent "Helius is configured" vs "public RPC — recommend
+            // adding a Helius key". isHeliusConfigured() delegates to
+            // ConfigManager.getSolanaRpcUrl() which reads from Keystore, so
+            // this reflects live settings without a full loadConfig() round-trip.
+            val heliusOn = isHeliusConfigured()
+            body["heliusConfigured"] = heliusOn
+            body["activeRpc"] = if (heliusOn) "helius" else "public"
             EndpointResult(200, body)
         }
     }

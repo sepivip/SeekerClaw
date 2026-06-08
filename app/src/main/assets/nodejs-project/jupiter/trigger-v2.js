@@ -258,11 +258,37 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'empty transaction payload' };
     }
+    // R-next-9 same-class sweep: Buffer.from(str, 'base64') silently ignores
+    // non-base64 chars and decodes partial input. For a security-sensitive
+    // tx entrypoint we must validate charset + length-mod-4 up front so a
+    // malformed Jupiter auth-tx payload fails closed at the entry, not
+    // halfway through parsing. Matches solana.js verifySwapTransaction +
+    // wallet/tx-parser.js parseTransaction + tools/solana.js
+    // _extractFeePayerBase58 contracts.
+    // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes —
+    // pre-decode reject so a malicious Jupiter auth-tx response can't
+    // force us to materialize a huge buffer (DoS guard). 1232 bytes
+    // encodes to at most ceil(1232/3)*4 = 1644 chars in base64.
+    //
+    // R-next-16: length cap MUST run before the charset regex — otherwise
+    // a malicious multi-MB string of valid base64 chars forces the regex
+    // to scan the full buffer before rejection, defeating the DoS guard.
+    if (txBase64.length > 1644) {
+        return { ok: false, error: 'auth_tx_invalid',
+                 reason: `tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap` };
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        return { ok: false, error: 'auth_tx_invalid', reason: 'invalid base64 characters or length' };
+    }
     let txBuf;
     try {
         txBuf = Buffer.from(txBase64, 'base64');
     } catch (_) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'transaction is not valid base64' };
+    }
+    if (txBuf.length > 1232) {
+        return { ok: false, error: 'auth_tx_invalid',
+                 reason: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap` };
     }
     if (txBuf.length < 64) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'transaction shorter than one signature slot' };
@@ -278,12 +304,24 @@ function _validateAuthTransaction(txBase64, expectedPubkey) {
         return { ok: false, error: 'auth_tx_invalid', reason: 'transaction truncated before message header' };
     }
 
-    // v0 prefix (0x80) means versioned message; otherwise legacy. We accept
-    // both — auth memos are typically legacy.
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 (0x80) exists; future versions (v1, v2,
+    // ...) would cause === 0x80 to be false and the prefix byte would corrupt
+    // the header parse. Copilot PR #398 R13 same-class sweep: fail closed on
+    // unknown versions instead of silently mis-parsing.
+    // Legacy memos are still supported: a legacy first byte (e.g. 0x01 for
+    // numRequiredSignatures) has high bit clear so isVersioned=false.
     let messageOffset = offset;
     const versionByte = txBuf[messageOffset];
-    if (versionByte === 0x80) {
-        messageOffset += 1; // skip v0 byte
+    const isVersioned = (versionByte & 0x80) !== 0;
+    if (isVersioned) {
+        const version = versionByte & 0x7F;
+        if (version !== 0) {
+            return { ok: false, error: 'auth_tx_invalid',
+                     reason: `unsupported_tx_version: v${version} (only v0 is supported)` };
+        }
+        messageOffset += 1; // consume v0 prefix byte
     }
 
     // Message header: 3 bytes

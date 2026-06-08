@@ -789,3 +789,133 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 2. If the live probe confirms the catalog is stale, tell the user "the recorded price ($0.01) is out of date — actual is $0.02. I'll flag this for the maintainer." Don't refuse the call retroactively (it already settled).
 3. Maintainer-side fix: update `catalog.json` `entries[].endpoint.cost_usdc` for the affected entry, bump `paysh-catalog/SKILL.md` version so devices re-seed.
 
+
+## burner policy (BAT-1013)
+
+The burner policy gate (`wallet/burner-policy.js validateBurnerTx`) runs BEFORE every `/burner/sign-transaction` and `/burner/sign-and-send` bridge call. Rejects are sorted into three classes; the agent's recovery action MUST differ per class.
+
+### Security class — refuse, surface reason verbatim, do NOT suggest MWA bypass
+
+The same security rule applies on the MWA path; recommending MWA as a workaround for a suspicious transaction is unsafe. **One documented exception:** `token_2022_send_unsupported` is a known FAIL-CLOSED LIMITATION (not a suspicious-tx signal) — for that code only, MWA fallback IS the correct guidance until autonomous per-mint Token-2022 fee declaration lands. Every OTHER security-class code: refuse + surface, never suggest MWA.
+
+| Code | What happened | Agent action |
+|---|---|---|
+| `drainer_set_authority` | An instruction tries to call SPL `SetAuthority` on a burner-owned account | Surface reason. Refuse. Suggest the user investigate or report. |
+| `drainer_approve` | SPL `Approve` / `Approve2` on a burner ATA — would let a third party drain | Same. |
+| `drainer_close_account` | SPL `CloseAccount` on a burner ATA in a non-cancel kind | Same. Cancel flows allow this via `zero_value_cancel`. |
+| `drainer_assign` | System `Assign` reassigning burner-owned account ownership | Same. |
+| `drainer_nonce_blank_check` | `AdvanceNonceAccount` as first instruction — durable-nonce blank-check signing | Same. |
+| `signer_set_unexpected` | Required signer list contains an unknown pubkey not in `feePayerAllowlist` or `cosignerAllowlist` | Surface reason with the offending pubkey. Refuse. |
+| `signer_count_mismatch` | numRequiredSignatures doesn't match the declared signer mode (e.g. cosigned expected 2, got 3) | Same. |
+| `burner_not_signer` | Burner pubkey is not in the required-signer set | Same. |
+| `payer_mismatch` | Fee payer is not the burner (default mode) | Same. |
+| `fee_payer_not_in_allowlist` | Fee payer matches no allowed pubkey (sponsored/cosigned modes) | Same. |
+| `cosigner_not_in_allowlist` | Extra required signer not declared by the protocol response | Same. |
+| `simulation_delta_mismatch` | Simulation shows burner's balance change doesn't match the declared expectedDelta within tolerance | Surface BOTH expected and observed values. Refuse. Common cause: bundled-instruction injection attack (Crypto Copilot class). |
+| `simulation_mint_mismatch` | Simulation shows the account's mint doesn't match the declared one | Same. |
+| `simulation_recipient_mismatch` | Recipient credit observed in simulation doesn't match declared atomicAmount | Same. |
+| `account_ownership_uncertain` | Drainer-opcode walk found an instruction whose target account ownership can't be resolved | Same. |
+| `token_2022_undeclared` | Tx uses Token-2022 program but `expectedDelta.tokenStandard !== 'token_2022'` | Same. |
+| `drainer_burn` | SPL `Burn` / `BurnChecked` opcode on a burner-owned ATA — would destroy the burner's tokens. Legitimate protocol marker burns (e.g., zero-value cancel flows) are accepted only when the target account is listed in policy `allowedBurnAccounts`. | Surface reason verbatim. Refuse. Suggest the user investigate the calling instruction or report. Do NOT retry on MWA — same security rule applies. |
+| `token_2022_extension_unsupported` | Token-2022 extension opcode detected (`PermanentDelegate`, `TransferHook`, etc.) — extensions are not yet autonomously supported by the burner policy. | Refuse. Explain to the user that Token-2022 extensions require manual approval via MWA; do NOT retry autonomously on burner. |
+| `token_2022_send_unsupported` | `solana_send` or `agent_pay_x402` targeting a Token-2022 mint without caller-declared `tokenStandardConfig.transferFeeBps`. Previous 50% tolerance was a known skim window — now refused. | Refuse autonomous burner path. Tell the user to retry the send via main wallet (MWA) for Token-2022 mints; do NOT retry autonomously until per-mint declaration is supported. |
+
+### Policy-internal fields (do not surface to users)
+
+The policy reason log may include these forensic context fields. They are diagnostic-only — never quote raw field names to the end user; explain the underlying meaning in plain language instead.
+
+| Field | Purpose | Agent guidance |
+|---|---|---|
+| `wsolAtaExemption: { ata, destination }` | Records that a `CloseAccount` was accepted because it targets the user's wSOL ATA as part of a Jupiter Ultra wrap/unwrap flow (not a drainer). | If a CloseAccount-related reject reason references it, it is informational context — do not mention `wsolAtaExemption` to the user. |
+| `allowedBurnAccounts: [base58]` | Whitelist of accounts where a zero-value marker `Burn` is accepted (declared by the calling protocol response). | If a burn-related reject references it, treat as informational context — do not surface the field name. |
+| `tokenStandardConfig.transferFeeBps` | Caller-declared per-mint Token-2022 transfer-fee declaration (required to allow autonomous Token-2022 send). | If `token_2022_send_unsupported` cites a missing value, tell the user "autonomous Token-2022 sends aren't supported yet — use main wallet" rather than naming the config field. |
+
+### Availability class — surface reason, ask user to retry burner once OR fall back to MWA
+
+These are infrastructure / RPC failures, not security failures. User can legitimately retry. On the first availability reject in a session when the active simulator is `public` (no Helius API key), surface a one-time hint suggesting Helius.
+
+| Code | What happened | Agent action |
+|---|---|---|
+| `simulation_failed` | Simulator (RPC) call threw — timeout, network error, rate-limited beyond shaper backoff | Tell user. Offer: retry burner OR fall back to MWA. |
+| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). **As of BAT-1024 the reason is pre-decoded** — it names the Program + error name + description + (when applicable) an actionable Layer-2 hint, plus the last 5 `Program log:` lines for forensics. **Translation rules** (do NOT quote raw JSON): (a) `InsufficientFundsForFee` → "The burner wallet doesn't have enough SOL to pay transaction fees. Please send at least ~0.005 SOL to the burner address and retry." (b) `AccountLoadedTwice` → "The transaction references the same account as both sender and recipient — sending to yourself is not supported. Pick a different recipient address. (If you wanted to fund the burner FROM main, ask: `send X SOL from main to burner`.)" (c) BAT-1024 decoded Custom:N (e.g. "SPL Token returned InsufficientFunds (code 1): ...") → surface that line in plain language; if the reason explicitly includes the hint "burner likely needs SOL top-up for rent", OFFER to top up by calling `solana_send(source="main", to=<burner_pubkey>, amount=0.02)` and retrying. | **For `AccountLoadedTwice`:** surface the translated reason and ask the user to clarify the recipient — do NOT offer MWA retry (the same self-send error would occur on MWA). **For BAT-1024 topup hint:** offer the topup; do NOT claim Jupiter is down; do NOT guess at USDC ATA initialization issues — the decoded line is the truth. **For all other `simulation_returned_error` reasons** (including `InsufficientFundsForFee`): surface translated reason, then offer "retry burner once OR fall back to MWA". |
+| `simulation_metadata_missing` | `value.accounts[i]` was null for a required address; `getMultipleAccounts` pre-snapshot missing; OR an account exists but its data cannot be decoded as an SPL Token account (e.g. Token-2022 with extensions the burner decoder doesn't recognize). | Same. Often caused by public RPC dropping data under load, or a Token-2022 account format outside the supported decoder. Suggest MWA fallback. |
+| `tx_unparseable` | The tx bytes couldn't be parsed as legacy or v0 — likely a malformed Jupiter response | Surface. Offer retry. |
+| `alt_unresolved` | An instruction references an ALT-resolved program ID that simulation didn't surface | Same. Common when Helius cache misses. |
+| `policy_parse_uncertainty` | Catch-all for unexpected parser errors | Same. Report as bug. |
+
+### Contract-gap class — internal bug, report to user, do NOT retry/bypass
+
+These mean a SeekerClaw tool failed to construct the expected per-tool contract. NOT the user's fault.
+
+| Code | What happened | Agent action |
+|---|---|---|
+| `expected_delta_required` | A caller (one of: solana_swap, jupiter_trigger_create V1+V2, jupiter_dca_create, solana_send, agent_pay) didn't pass expectedDelta | Tell user "internal error in <tool>", report as bug, do NOT retry. |
+| `expected_delta_invalid_kind` | Caller passed an unknown `kind` | Same. |
+| `expected_delta_invalid_shape` | Caller passed malformed expectedDelta (e.g. agent_pay v2 with signerMode 'burner_only') | Same. |
+| `payer_missing` | `/burner/status` returned no pubkey OR pubkey is non-base58 | Tell user "burner not configured properly". Suggest: re-create burner wallet in Settings. |
+
+### Kill switch (per Codex amendment #5)
+
+For users who want to halt autonomous signing immediately:
+
+1. **Cap-to-zero pause** — Settings → Burner Wallet → Caps → set per-tx caps to 0. Existing autonomous flows immediately fail `burner_over_cap`. Reversible.
+2. **Stop service** — notification tile → Stop. Node.js process dies; no signing possible. Restart to resume.
+3. **Wipe burner** — Settings → Burner Wallet → Wipe Burner. Destroys sealed key. Funds remain on-chain but unreachable until a new key is generated and the user transfers them.
+
+The agent SHOULD walk users through option 1 first when they ask "how do I stop the agent from signing" — it's the least destructive and fully reversible.
+
+### Burner SOL rent gotchas (BAT-1024)
+
+The most common burner-policy `simulation_returned_error` after BAT-1013 ships is **SPL Token `InsufficientFunds`** at the SOL-rent layer, which fires when:
+
+- The burner is creating a new account on-chain (Jupiter Trigger V2 Order PDA, ATA for output token, vault PDA) and the burner's SOL balance is below the rent-exempt minimum for those allocations
+- The burner has plenty of USDC but ~0 SOL — the input-token balance is fine; the SOL balance for rent is not
+- The agent (without BAT-1024) saw raw `{"InstructionError":[3,{"Custom":1}]}` and had no signal that it was a rent issue
+
+**With BAT-1024, the burner-policy reason string now decodes this case explicitly:**
+
+> SPL Token returned InsufficientFunds (code 1): Source account does not have enough tokens (or lamports for rent) to fund the transfer. — burner likely needs SOL top-up for rent (typical: ~0.01-0.02 SOL covers Order PDA + vault ATA). Suggest solana_send(source=main, to=<burner pubkey>, amount=0.02) and retry. (unitsConsumed=8421)
+>   logs[-5..]:
+>   Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]
+>   Program log: Error: insufficient funds
+>   Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1
+
+**Agent recovery flow:**
+
+1. Detect: the reason string includes the substring `"burner likely needs SOL top-up"` OR `"returned InsufficientFunds (code 1)"` (matches both SPL Token AND Token-2022 decoded reasons).
+2. Get the burner pubkey from the wallet section of your system prompt (it's already there via the snapshot cache). If for some reason it isn't visible, call `wallet_status` first.
+3. Offer to the user, in plain language: "Your burner is out of SOL for rent. Want me to send 0.02 SOL from your main wallet to the burner? After it confirms I'll retry the original order."
+4. On user confirmation: call `solana_send(source="main", to=<burner_pubkey>, amount=0.02)`. This will prompt MWA (Solflare popup). The tool result confirms BROADCAST (returned signature) — not on-chain finality. Under normal network conditions broadcast → finality is ~1-3 seconds, so retrying the original tool call right after the topup tool returns success is fine.
+5. After the topup tool result succeeds: retry the original tool call. If the retry also fails with the same rent error, tell the user "the topup may not have confirmed yet — check your wallet app for the tx status, then say 'retry' once it confirms."
+
+**What NOT to do:**
+
+- Do NOT claim Jupiter is down — the decoded line tells you it's SPL Token, not Jupiter.
+- Do NOT guess at "USDC ATA isn't initialized" — if that were the cause, you'd see `OwnerMismatch` (code 4) or `MintMismatch` (code 3), not `InsufficientFunds` (code 1).
+- Do NOT retry the original action without topping up first — the simulation is deterministic; it'll fail the same way.
+- Do NOT recommend the user manually top up via Phantom — you have the tools to do it for them via `solana_send(source="main")`.
+
+**How often this fires:** every Jupiter Trigger V2 create + cancel against a burner with < ~0.01 SOL. Most users will hit this on first burner use. The fix is one topup that lasts many orders.
+
+### Tool-handler errors (distinct from burner-policy rejects)
+
+These errors fire at the **tool-handler layer** BEFORE any burner-policy validation. They are NOT in the `REJECT_CODES` array (which is exclusively for `validateBurnerTx` rejects). The agent should distinguish them clearly when surfacing to the user.
+
+| Error code | Tool | Fires when | Agent translation + guidance |
+|---|---|---|---|
+| `main_wallet_not_connected` | `solana_send`, `solana_swap` | User said `source="main"` (explicit) OR main is not connected AND no burner is configured | "Your main wallet isn't connected. Tap the Wallet button in Settings → Solana Wallet to authorize MWA, or configure a Burner wallet for autonomous signing." Do NOT retry until user connects. |
+| `self_send_rejected` | `solana_send` | Resolved source address equals the `to` address (would produce on-chain `AccountLoadedTwice`) | "Cannot send to the same address that pays the transaction (`<addr>`). Pick a different recipient. If you wanted to fund the burner FROM main, retry with `source=\"main\"` — the burner address you targeted will be the recipient." Do NOT retry as-is. |
+| `over_burner_cap` | `solana_send` (when `source="burner"` explicitly) | Amount exceeds burner per-tx or daily cap and `source="burner"` was forced | "Amount exceeds your burner per-tx or daily cap. Lower the amount, raise caps in Settings → Burner Wallet → Caps, or omit `source` to use main wallet for over-cap." |
+
+### Live test (Codex amendment #7 v8.1)
+
+The dual-source contract (accounts-config + getMultipleAccounts) has a load-bearing live test at `tests/jupiter-ultra/live-burner-policy-helius.js`. It exercises the real Solana RPC against a real Jupiter Ultra order and asserts the policy accepts. Run via `cd tests/jupiter-ultra && node live-burner-policy-helius.js` — requires `BURNER_SECRET_KEY` + `JUPITER_API_KEY` + `SOLANA_RPC` in `.env.test`. See file header for safety notes (no signing, no broadcast).
+
+### BAT-1013-followup limitations
+
+Known fail-closed paths and behavioral notes that ship with the BAT-1013 burner-policy surface. None are bugs — they are intentional safety defaults until a follow-up unlocks them.
+
+1. **Token-2022 send/pay is fail-closed.** Autonomous `solana_send` and `agent_pay_x402` are refused (`token_2022_send_unsupported`) for any Token-2022 mint. The previous behavior used a 50% transfer-fee tolerance, which was a known skim window. Until caller-declared per-mint `tokenStandardConfig.transferFeeBps` lands, the only path for Token-2022 sends is the user's main wallet (MWA). **User-visible fix:** retry the send via main wallet.
+2. **DCA `create` routes to main wallet, not burner.** `jupiter_dca_create` currently surfaces an MWA popup rather than signing autonomously. Burner DCA is unsupported pending DCA-vault account discovery; the policy cannot verify the destination owner without it. **User-visible fix:** approve the MWA popup as usual; DCA list/cancel still work.
+3. **Slot-drift surfaces as `simulation_failed`.** When account snapshots and simulation slots drift apart (a public-RPC consistency failure), the availability bucket wraps the case as `simulation_failed`. There is no separate `slot_drift` user-visible code today. **User-visible fix:** add a Helius API key in Settings — the dedicated RPC removes most slot-drift triggers.
+4. **Burner pubkey cache invalidation.** The burner pubkey is verified against `/burner/status` on every autonomous sign (not cached after first call). After wipe + reimport (or any pubkey change), the next sign picks up the new pubkey automatically — no app restart required. The agent can confidently tell users "your new burner is live on the next autonomous action" after a wipe + reimport flow.

@@ -48,6 +48,88 @@ const triggerV2 = require('../jupiter/trigger-v2');
 let numberToDecimalString;
 function _setNumberToDecimalString(fn) { numberToDecimalString = fn; }
 
+// Q5 (BAT-1013-followup): minimal fee-payer extractor for unsigned txs. Used
+// by solana_swap to detect sponsored-fee Ultra txs where account[0] is the
+// Jupiter relayer (not the burner) — those would land a silent burner-policy
+// reject under Phase 3b's burner_only signerMode, so we route to main as a
+// defensive fallback. Parses just enough of the wire format to read message
+// account[0]; throws on malformed input so the caller can choose to proceed
+// (debug-log) or fail closed. Mirrors the strictness of solana.js
+// verifySwapTransaction's preamble (base64 charset + length check + signature
+// section skip + v0 prefix detect) without re-walking the instruction tree.
+function _extractFeePayerBase58(txBase64) {
+    if (typeof txBase64 !== 'string' || txBase64.length === 0) {
+        throw new Error('empty or non-string tx');
+    }
+    // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes. Pre-
+    // decode reject so we never materialize an oversized buffer (DoS guard).
+    // 1232 bytes encodes to at most ceil(1232/3)*4 = 1644 chars in base64.
+    //
+    // R-next-16: length cap MUST run before the charset regex — otherwise
+    // a malicious multi-MB string of valid base64 chars forces the regex
+    // to scan the full buffer before rejection, defeating the DoS guard.
+    if (txBase64.length > 1644) {
+        throw new Error(`tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap`);
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        throw new Error('invalid base64');
+    }
+    const buf = Buffer.from(txBase64, 'base64');
+    if (buf.length === 0) throw new Error('empty decoded buffer');
+    if (buf.length > 1232) {
+        throw new Error(`tx_oversize: ${buf.length} bytes exceeds Solana's 1232-byte packet cap`);
+    }
+    // Decode compact-u16 inline (small helper — solana.js's readCompactU16
+    // is not exported through tools/solana.js's import surface).
+    let off = 0;
+    function readCompactU16At(b, o) {
+        let v = 0, s = 0, end = o;
+        for (let i = 0; i < 3; i++) {
+            if (end >= b.length) throw new Error('compactu16 truncated');
+            const byte = b[end];
+            end++;
+            v |= (byte & 0x7f) << s;
+            s += 7;
+            if ((byte & 0x80) === 0) return { value: v, offset: end };
+        }
+        throw new Error('compactu16 too long');
+    }
+    const numSigs = readCompactU16At(buf, off);
+    off = numSigs.offset;
+    if (off + numSigs.value * 64 > buf.length) {
+        throw new Error('signature bytes truncated');
+    }
+    off += numSigs.value * 64;
+    if (off >= buf.length) throw new Error('message truncated');
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 (prefix = 0x80) exists; future versions
+    // (v1, v2, ...) would set prefix = 0x81, 0x82, etc. Copilot PR #398 R13:
+    // do NOT strict-equal 0x80 — a future v1 (0x81) would silently skip
+    // nothing and parse the version number as numRequiredSignatures, yielding
+    // the wrong fee-payer with no error signal. Fail closed on any version
+    // we don't understand.
+    const versionPrefix = buf[off];
+    const isVersioned = (versionPrefix & 0x80) !== 0;
+    if (isVersioned) {
+        const version = versionPrefix & 0x7F;
+        if (version !== 0) {
+            throw new Error(`unsupported_tx_version: v${version} (only v0 is supported)`);
+        }
+        off++; // consume v0 prefix byte
+    }
+    // 3-byte header
+    if (off + 3 > buf.length) throw new Error('header truncated');
+    off += 3;
+    // Account keys count
+    const numAccts = readCompactU16At(buf, off);
+    off = numAccts.offset;
+    if (numAccts.value === 0) throw new Error('zero accounts');
+    if (off + 32 > buf.length) throw new Error('account[0] truncated');
+    // account[0] = fee payer in legacy AND v0 transactions
+    return base58Encode(buf.slice(off, off + 32));
+}
+
 const tools = [
     {
         name: 'solana_balance',
@@ -80,12 +162,13 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
-                to: { type: 'string', description: 'Recipient Solana address (base58)' },
-                amount: { type: 'number', description: 'Amount of SOL to send' }
+                to: { type: 'string', description: 'Recipient Solana address (base58). Must NOT equal the source wallet — self-sends are rejected.' },
+                amount: { type: 'number', description: 'Amount of SOL to send' },
+                source: { type: 'string', enum: ['burner', 'main', 'auto'], description: 'Which wallet to send from. "main" forces MWA popup (use when user says "from main"). "burner" forces burner. "auto" (default) routes by cap. Default: "auto".' }
             },
             required: ['to', 'amount']
         }
@@ -661,6 +744,24 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             return { error: vaultResult.error, reason: vaultResult.reason };
         }
         const vaultAddress = vaultResult.vaultPubkey;
+        // C2 (BAT-1013-followup): tighten vaultPubkey validation at the call
+        // site. trigger-v2.ensureVault checks only that the field is truthy
+        // (a string like 'undefined' or 'true' from a malformed Jupiter
+        // response would pass). Validate as a real base58 Solana pubkey
+        // BEFORE building expectedDelta.depositVault.pubkey — otherwise the
+        // policy gate would either reject with a confusing
+        // expected_delta_invalid_shape OR (worse) the address could base58-
+        // decode to garbage and slip through. The V2 deposit flow depends on
+        // vaultPubkey being correct — there is no equivalent main-MWA
+        // recovery (vault is Privy-custodial), so fail closed with a clear
+        // error and let the agent surface it to the user.
+        if (!isValidSolanaAddress(vaultAddress)) {
+            log(`[Jupiter Trigger V2] ensureVault returned non-base58 vaultPubkey: ${JSON.stringify(vaultAddress)} — failing closed`, 'WARN');
+            return {
+                error: 'vault_unavailable',
+                reason: `Jupiter /vault response vaultPubkey is not a valid Solana base58 address: ${JSON.stringify(vaultAddress)}`,
+            };
+        }
 
         // 11. Craft deposit (outputMint is required by /deposit/craft).
         const craftResult = await triggerV2.depositCraft({
@@ -705,6 +806,58 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         // reach burner pubkey so flipped routingHint to 'main'), pass that
         // override into routeAndSign so it does NOT re-route to burner and
         // try to sign with a burner the deposit tx isn't paying from.
+        // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
+        // Trigger V2 deposits move `inputAmountAtomic` of `inputToken` from
+        // the burner's input ATA into the Jupiter Limit Order V2 vault. There's
+        // NO credit at deposit time (output happens at fill time in a separate
+        // tx the burner doesn't sign — see DELTA_KINDS doc).
+        let expectedDelta = null;
+        try {
+            const burnerPubkey = walletAddress;
+            const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+            const ataMod = require('../wallet/ata');
+            const debitAccount = inputIsSol ? burnerPubkey : ataMod.deriveAtaBase58(burnerPubkey, inputToken.address);
+            expectedDelta = {
+                kind: 'jupiter_trigger_create_deposit',
+                signerMode: 'burner_only',
+                burnerDebit: {
+                    account: debitAccount,
+                    mint: inputIsSol ? 'native_sol' : inputToken.address,
+                    atomicAmount: String(inputAmountAtomic),
+                },
+                // V2 vault pubkey from /vaults/ensure. expectedOwner is the
+                // Jupiter Limit Order V2 / Trigger V2 on-chain program — cross-
+                // verified against jup-ag/docs/openapi-spec/trigger/v1/trigger.yaml
+                // (programVersion field), jup-ag/platform-list, and Solscan label
+                // 'Jupiter Limit Order V2'. existencePolicy allows create since
+                // vault registration may happen in the same tx on first use.
+                depositVault: {
+                    pubkey: vaultAddress,
+                    expectedOwner: 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X',
+                },
+                // Q8 (BAT-1013-followup): burnerOwnedAccounts declares only
+                // the EXPLICIT debit ATA. Multi-hop intermediate token
+                // accounts the deposit flow may touch (e.g. wrap/unwrap
+                // wSOL, route hops) are NOT declared here — burner-policy.js
+                // step 10 derives those from the simulation pre-snapshot
+                // (declared ∪ sim-owned ∪ aux balances). If an undeclared
+                // account is burner-owned, sim-owned picks it up; if it's
+                // not burner-owned, the policy's ownership-resolver fails
+                // closed (drainer_* or account_ownership_uncertain). Keep
+                // this list minimal — declaring intermediate ATAs we don't
+                // actually control opens an attack surface.
+                burnerOwnedAccounts: [debitAccount].filter(a => a !== burnerPubkey),
+            };
+        } catch (eDelta) {
+            // Copilot PR #398 R2 finding: a falsy expectedDelta is NOT
+            // forwarded to BurnerSigner by dispatch.js, which would let
+            // the burner sign without the policy gate running. Force
+            // routing to main so the user sees an MWA popup instead.
+            log(`[Jupiter Trigger V2] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+            routingHint.routingDecision = 'main';
+            expectedDelta = null;
+        }
+
         const dispatchResult = await routeAndSign({
             toolName: 'jupiter_trigger_create',
             toolArgs: input,
@@ -712,6 +865,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             broadcastVia: 'jupiter',
             flowName: 'jupiter_trigger_create_v2',
             forceRouting: routingHint,
+            expectedDelta,
             broadcast: async (txOrUnsigned, _signer, ctx) => {
                 let signedDeposit;
                 if (ctx && ctx.signed) {
@@ -1102,28 +1256,52 @@ const handlers = {
         // main MWA flow stays the fallback for over-cap or uncapped assets.
         // Behavior when burner is unconfigured matches v1.0 exactly: MWA
         // popup via /solana/sign.
+        //
+        // BAT-1013 foundation patch: added `source` param so the agent can
+        // explicitly route to main (user said "from main") or burner. When
+        // omitted, behavior is exactly the previous cap-based routing.
         let from;
         try {
             from = getConnectedWalletAddress();
         } catch (e) {
-            // Main wallet not connected — burner can still sign on its own
-            // pubkey if configured, but the existing tool semantics are
-            // "send FROM the connected wallet". Burner-as-source is a
-            // future-Phase change (Phase 5 keeps the MWA-from semantics
-            // even on the burner path: agent signs as the burner, but the
-            // tx pays from the burner's address — the burner pubkey IS
-            // the from address in that case).
-            //
-            // For Phase 5: if main wallet isn't connected and burner is
-            // configured, surface the clearer error from the bridge after
-            // routeAndSign returns. Don't pre-fail here.
             from = null;
         }
         const to = input.to;
         const amount = input.amount;
+        const sourcePref = (input.source === 'main' || input.source === 'burner') ? input.source : 'auto';
 
         if (!to || !amount || amount <= 0) {
             return { error: 'Both "to" address and a positive "amount" are required.' };
+        }
+
+        // BAT-1013 pre-flight: when the user explicitly said "from main"
+        // (source='main') but main wallet isn't connected, fail fast with
+        // a clear actionable message. Without this, the handler would fall
+        // through to the burner path and surface AccountLoadedTwice on a
+        // burner→burner self-send.
+        if (sourcePref === 'main' && from === null) {
+            return {
+                error: 'main_wallet_not_connected',
+                reason: 'Main wallet is not connected. Tap the Wallet button in the SeekerClaw app to authorize MWA, then retry.',
+            };
+        }
+
+        // BAT-1013 pre-flight: when no source preference is given AND main
+        // isn't connected, check if a burner is available — if neither is
+        // available, return the clear error instead of letting the handler
+        // tunnel into a broken tx build.
+        if (sourcePref === 'auto' && from === null) {
+            let burnerAvailable = false;
+            try {
+                const bs = await androidBridgeCall('/burner/status', {}, 3000);
+                burnerAvailable = !!(bs && !bs.error && bs.configured && bs.pubkey);
+            } catch (_) { /* treat as unavailable */ }
+            if (!burnerAvailable) {
+                return {
+                    error: 'main_wallet_not_connected',
+                    reason: 'Main wallet is not connected and no burner is configured. Tap the Wallet button to authorize MWA, or set up a burner in Settings > Burner Wallet.',
+                };
+            }
         }
 
         // Step 1: Get latest blockhash (shared by both wallets — RPC call,
@@ -1133,15 +1311,33 @@ const handlers = {
         const recentBlockhash = blockhashResult.blockhash || (blockhashResult.value && blockhashResult.value.blockhash);
         if (!recentBlockhash) return { error: 'No blockhash returned from RPC' };
 
-        // Step 2: Determine the source address. Burner pubkey if routing
-        // says burner; otherwise the connected MWA wallet.
+        // Step 2: Determine the source address. BAT-1013: respect explicit
+        // `source` preference; otherwise fall back to cap-based routing.
+        // Burner pubkey if routing says burner; otherwise the connected MWA wallet.
         // We need the source BEFORE building the tx because Solana
         // transactions encode the fee payer in the message.
-        // routeFor decides routing based on amount + caps; we read it once
-        // here and reuse the decision for the broadcast path so the source
-        // matches the signer.
         const { routeFor } = require('../caps/preflight');
-        const routingHint = await routeFor('solana_send', input);
+        let routingHint;
+        if (sourcePref === 'main') {
+            // User explicitly said "from main" — force MWA routing regardless
+            // of caps. forceRouting is the same plumbing PR #398 R13 fixed
+            // for the Ultra-swap path; routeAndSign will skip routeFor() and
+            // use this decision directly.
+            routingHint = { routingDecision: 'main', underCap: true };
+        } else if (sourcePref === 'burner') {
+            // Explicit burner — still subject to cap math (over-cap → reject).
+            routingHint = await routeFor('solana_send', input);
+            if (routingHint.routingDecision !== 'burner') {
+                return {
+                    error: 'over_burner_cap',
+                    reason: 'source="burner" requested but amount exceeds burner per-tx or daily cap. Either lower the amount or use source="main".',
+                };
+            }
+        } else {
+            // 'auto' (default): existing behavior — cap-based routing.
+            routingHint = await routeFor('solana_send', input);
+        }
+
         let sourceAddress = from;
         if (routingHint.routingDecision === 'burner') {
             // Pull the burner pubkey from /burner/status. If burner is
@@ -1155,6 +1351,20 @@ const handlers = {
         }
         if (!sourceAddress) {
             return { error: 'No source wallet available — connect a wallet (Settings > Solana Wallet) or configure a burner (Settings > Burner Wallet).' };
+        }
+
+        // BAT-1013 self-send guard: reject burner→burner (or main→main)
+        // transfers BEFORE building the tx. Without this the simulator returns
+        // AccountLoadedTwice — a cryptic error the user can't act on. This
+        // handler-level check complements the defense-in-depth shape check
+        // in burner-policy.validateExpectedDeltaShape so the main-wallet
+        // path also gets the friendly error (the policy gate runs only on
+        // burner signs).
+        if (sourceAddress === to) {
+            return {
+                error: 'self_send_rejected',
+                reason: `Cannot send to the same address that pays the transaction (${sourceAddress.slice(0, 4)}…${sourceAddress.slice(-4)}). Pick a different recipient, or use source="main" to send from your main wallet to the burner.`,
+            };
         }
 
         // Step 3: Build unsigned transaction.
@@ -1173,12 +1383,35 @@ const handlers = {
         // atomically via /solana/sign (existing MWA behavior); burner
         // signs only, then we broadcast the signed bytes via RPC
         // sendTransaction.
+        // BAT-1013 Phase 3b: solana_send for native SOL only (this code path
+        // is the SOL transfer branch — SPL goes through a different handler).
+        const sendExpectedDelta = {
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: {
+                account: sourceAddress,
+                mint: 'native_sol',
+                atomicAmount: String(lamports),
+            },
+            recipient: {
+                account: to,
+                mint: 'native_sol',
+            },
+            burnerOwnedAccounts: [],
+        };
+
         const result = await routeAndSign({
             toolName: 'solana_send',
             toolArgs: input,
             unsignedTxBase64: txBase64,
             broadcastVia: 'rpc',
             flowName: 'solana_send',
+            // BAT-1013: thread routingHint via forceRouting so dispatch.js
+            // honors the explicit source preference (especially source='main')
+            // instead of re-calling routeFor(toolArgs) which would ignore the
+            // 'source' field. Same plumbing as PR #398 R13 fixed for solana_swap.
+            forceRouting: routingHint,
+            expectedDelta: sendExpectedDelta,
             broadcast: async (txBase64, _signer, ctx) => {
                 // ctx.signed === false for main path (unsigned tx → sign+broadcast via MWA)
                 // ctx.signed === true  for burner path (signed bytes → RPC sendTransaction)
@@ -1520,12 +1753,132 @@ const handlers = {
             // is comfortably wider.
             const ULTRA_RPC_HINT = 'jupiter';
 
+            // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
+            // Only the burner path consumes it; main path ignores the field.
+            // Ultra is a sponsored-fee flow, so signerMode is 'sponsored' when
+            // routed through Ultra's gasless mode (Jupiter pays the fee + may
+            // co-sign). The cosigner allowlist is left empty by default — the
+            // policy's `sponsored` mode allows the fee payer to be ANY signer
+            // declared in feePayerAllowlist; for Ultra the relayer pubkey is
+            // surfaced as `order.feePayer` in some responses. When the
+            // expectedDelta fields are imprecise (sponsored mode + missing
+            // relayer pubkey), the burner-policy reject is availability-class
+            // and the agent surfaces it; in v2.1 first-ship we err on the
+            // side of fail-closed for Ultra-via-burner until the live test
+            // fixtures pin the exact field shapes.
+            // Q5 (BAT-1013-followup): fee-payer introspection on the unsigned
+            // Ultra tx. Jupiter Ultra is a sponsored-fee design — the relayer
+            // typically pays the fee, so account[0] (fee payer) will NOT equal
+            // the burner pubkey in production. The Phase 3b expectedDelta below
+            // declares signerMode='burner_only', which the policy gate
+            // interprets as "burner is fee payer" — that mismatch would either
+            // (a) fail-closed at the policy gate, or (b) silently allow a
+            // sponsored tx through if signerMode is misread. As a defensive
+            // belt-and-braces fallback: when routing was 'burner' AND the
+            // unsigned tx's fee payer differs from the burner pubkey, route to
+            // main so the user sees the MWA popup instead of an opaque
+            // burner-policy reject. The full sponsored-mode wiring (with
+            // feePayerAllowlist sourced from order.feePayer when Jupiter
+            // surfaces it) is tracked in Phase 3b-follow-up; until that lands,
+            // this defensive check prevents a silent burner-policy reject.
+            try {
+                const feePayer = _extractFeePayerBase58(order.transaction);
+                if (feePayer && feePayer !== userPublicKey && routingHint.routingDecision === 'burner') {
+                    log(`[Jupiter Ultra] Unsigned tx fee payer ${feePayer} != burner ${userPublicKey} (sponsored-fee design) — Phase 3b expectedDelta declares burner_only, defensive fallback to main wallet to avoid silent policy reject`, 'WARN');
+                    routingHint.routingDecision = 'main';
+                }
+            } catch (introspectErr) {
+                log(`[Jupiter Ultra] fee-payer introspection failed: ${introspectErr.message} — proceeding with declared routing`, 'DEBUG');
+            }
+
+            let expectedDelta = null;
+            try {
+                const burnerPubkey = userPublicKey; // burner path uses burner as taker
+                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                const outputIsSol = outputToken.address === 'So11111111111111111111111111111111111111112';
+                const ata = require('../wallet/ata');
+                const debitAccount = inputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, inputToken.address);
+                const creditAccount = outputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, outputToken.address);
+                const minOut = String(order.otherAmountThreshold || order.outAmount || '0');
+                // B1 (BAT-1013-followup): when input OR output is native SOL,
+                // Jupiter Ultra's documented wrapping pattern is open-wSOL-ATA
+                // → swap → CloseAccount(wSOL-ATA, destination=burner). The
+                // burner-policy drainer-walk treats CloseAccount as drainer-
+                // class by default; without an explicit exemption the policy
+                // gate would reject every native-SOL Ultra swap. The
+                // exemption is encoded as an OPTIONAL field on
+                // jupiter_swap_immediate: { ata, destination } MUST both
+                // match the burner's wSOL ATA and the burner itself, validated
+                // structurally by burner-policy.js at expectedDelta-shape time.
+                // Any deviation (different destination, different ATA, ix not
+                // CloseAccount) is fail-closed.
+                //
+                // Q8 (BAT-1013-followup): burnerOwnedAccounts below declares
+                // the EXPLICIT debit + credit ATAs the burner debits/credits.
+                // Multi-hop intermediate ATAs Jupiter routes through are NOT
+                // declared here — burner-policy.js step 10 derives the
+                // multi-hop ownership set from the simulation pre-snapshot
+                // (declared ∪ sim-owned). If Jupiter inserts an intermediate
+                // ATA the burner owns but we didn't declare, sim-owned picks
+                // it up; if it inserts one we DON'T own, the policy's
+                // ownership-resolver fails closed (drainer_* or
+                // account_ownership_uncertain).
+                const NATIVE_MINT_BASE58 = 'So11111111111111111111111111111111111111112';
+                let wsolAtaExemption = null;
+                if (inputIsSol || outputIsSol) {
+                    try {
+                        const wsolAta = ata.deriveAtaBase58(burnerPubkey, NATIVE_MINT_BASE58);
+                        wsolAtaExemption = { ata: wsolAta, destination: burnerPubkey };
+                    } catch (wsolErr) {
+                        log(`[Jupiter Ultra] Could not derive wSOL ATA for exemption: ${wsolErr.message}`, 'WARN');
+                        // Fall through — exemption stays null. Policy gate
+                        // will reject CloseAccount, which routeAndSign treats
+                        // as a security failure; user sees the rejection.
+                    }
+                }
+                expectedDelta = {
+                    kind: 'jupiter_swap_immediate',
+                    signerMode: 'burner_only', // single-signer path; sponsored mode wires in Phase 3b-follow-up once Ultra fee-payer pubkey is plumbed
+                    burnerDebit: {
+                        account: debitAccount,
+                        mint: inputIsSol ? 'native_sol' : inputToken.address,
+                        atomicAmount: String(amountRaw),
+                    },
+                    burnerCreditMin: {
+                        account: creditAccount,
+                        mint: outputIsSol ? 'native_sol' : outputToken.address,
+                        atomicAmount: minOut,
+                    },
+                    burnerOwnedAccounts: [debitAccount, creditAccount].filter(a => a !== burnerPubkey),
+                    toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
+                    ...(wsolAtaExemption ? { wsolAtaExemption } : {}),
+                };
+            } catch (eDelta) {
+                // Copilot PR #398 R2: a null expectedDelta is silently
+                // skipped by dispatch.js -> BurnerSigner, which would let
+                // the burner sign without the policy gate. Force main
+                // routing so the user sees the MWA popup instead.
+                log(`[Jupiter Ultra] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+                routingHint.routingDecision = 'main';
+                expectedDelta = null;
+            }
+
             const result = await routeAndSign({
                 toolName: 'solana_swap',
                 toolArgs: input,
                 unsignedTxBase64: order.transaction,
                 broadcastVia: ULTRA_RPC_HINT,
                 flowName: 'solana_swap',
+                // Copilot PR #398 R13: thread routingHint through forceRouting.
+                // The fee-payer introspection block (~line 1696) and the
+                // expectedDelta-build catch (~line 1772) BOTH mutate
+                // routingHint.routingDecision = 'main' to force MWA fallback.
+                // Without forceRouting, dispatch.js re-calls routeFor() from
+                // the unmodified toolArgs and proceeds on burner with
+                // expectedDelta=null — bypassing validateBurnerTx entirely
+                // (the security hole PR #398 R2 was meant to close).
+                forceRouting: routingHint,
+                expectedDelta,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
                     // ctx.signed === false → main path  (txOrUnsigned is unsigned, sign via MWA)
@@ -1820,6 +2173,65 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
+            // BAT-1013 Phase 3b: V1 trigger create deposit shape.
+            let v1ExpectedDelta = null;
+            let v1ForceRouting = null;
+            try {
+                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                const ataMod = require('../wallet/ata');
+                const debitAccount = inputIsSol ? walletAddress : ataMod.deriveAtaBase58(walletAddress, inputToken.address);
+                // V1 createOrder response includes the order PDA in `data.order`
+                // when present. expectedOwner is Jupiter Limit Order V1 — cross-
+                // verified against jup-ag/platform-list (jupiterLimitContract),
+                // @jup-ag/limit-order-sdk@0.1.10 (PROGRAM_ID_BY_CLUSTER), and
+                // Solscan label 'Jupiter Limit Order V1'.
+                //
+                // Contract v8.3 (per Codex review): depositVault is REQUIRED
+                // for autonomous burner signing of deposit flows. If Jupiter
+                // omits `data.order` from its response (older API shape),
+                // we cannot verify the destination — fail closed by routing
+                // to main wallet (MWA popup) rather than silently signing
+                // without destination verification.
+                // C2 (BAT-1013-followup): tighten data.order validation. Pre-
+                // fix only checked truthiness — a Jupiter response with
+                // data.order='undefined' (string) or 'pending' or any other
+                // truthy non-pubkey would pass and then be tunneled into
+                // expectedDelta.depositVault.pubkey, where burner-policy would
+                // either reject with a confusing shape error or (if base58
+                // decoded to garbage) treat an arbitrary 32-byte blob as the
+                // deposit destination. Validate as a real Solana base58
+                // address and route to main if absent OR malformed.
+                if (!data.order || !isValidSolanaAddress(data.order)) {
+                    const reason = data.order
+                        ? `data.order=${JSON.stringify(data.order)} is not a valid Solana base58 address`
+                        : 'data.order missing from Jupiter response';
+                    log(`[Jupiter Trigger V1] ${reason} — autonomous burner cannot verify deposit destination; routing to main wallet`, 'WARN');
+                    v1ForceRouting = { routingDecision: 'main' };
+                } else {
+                    v1ExpectedDelta = {
+                        kind: 'jupiter_trigger_create_deposit',
+                        signerMode: 'burner_only',
+                        burnerDebit: {
+                            account: debitAccount,
+                            mint: inputIsSol ? 'native_sol' : inputToken.address,
+                            atomicAmount: String(makingAmount),
+                        },
+                        depositVault: {
+                            pubkey: data.order,
+                            expectedOwner: 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',
+                        },
+                        burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
+                    };
+                }
+            } catch (eDelta) {
+                // Copilot PR #398 R2 (same class as V2/Ultra): null
+                // expectedDelta is skipped by dispatch.js -> BurnerSigner;
+                // force main routing so policy gate isn't silently bypassed.
+                log(`[Jupiter Trigger V1] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+                v1ForceRouting = { routingDecision: 'main' };
+                v1ExpectedDelta = null;
+            }
+
             // 8 + 9. Sign + execute via wallet dispatch. Jupiter Trigger
             // broadcasts the tx itself (we never hit RPC sendTransaction);
             // the broadcast callback always calls jupiterTriggerExecute on
@@ -1830,6 +2242,8 @@ const handlers = {
                 unsignedTxBase64: data.transaction,
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_trigger_create',
+                expectedDelta: v1ExpectedDelta,
+                forceRouting: v1ForceRouting,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {
@@ -2325,6 +2739,20 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
+            // BAT-1013 contract v8.3 (per Codex review): Jupiter Recurring
+            // createOrder response does NOT include the DCA position account
+            // pubkey before sign (orderId only surfaces on execResult after
+            // broadcast). Without a verified deposit destination, autonomous
+            // burner signing cannot prove the burner's debit lands in a
+            // DCA-controlled account vs an attacker-controlled token account.
+            // Per Codex: route DCA create to main wallet (MWA popup) until
+            // the equivalent destination assertion is implemented as
+            // follow-up work (BAT-XXXX: derive DCA position account from
+            // tx instruction set or scan simulation pre-snapshot for
+            // accounts owned by DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M).
+            const dcaForceRouting = { routingDecision: 'main' };
+            log('[Jupiter DCA] Autonomous burner unsupported for DCA create until vault discovery ships — routing to main wallet', 'INFO');
+
             // 7 + 8. Sign + execute via wallet dispatch.
             const dispatchResult = await routeAndSign({
                 toolName: 'jupiter_dca_create',
@@ -2332,6 +2760,8 @@ const handlers = {
                 unsignedTxBase64: data.transaction,
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_dca_create',
+                expectedDelta: null,
+                forceRouting: dcaForceRouting,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {
@@ -2929,4 +3359,4 @@ const handlers = {
     },
 };
 
-module.exports = { tools, handlers, _setNumberToDecimalString, _inferTriggerMint };
+module.exports = { tools, handlers, _setNumberToDecimalString, _inferTriggerMint, _extractFeePayerBase58 };
