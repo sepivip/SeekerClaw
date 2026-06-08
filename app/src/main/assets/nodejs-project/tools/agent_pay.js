@@ -848,10 +848,99 @@ async function _handle(input /* , chatId */) {
     // legacy v1-shaped pay.sh services) skip the flag and use the
     // fully-signed-only path.
     const isV2 = paymentMeta && paymentMeta.x402Version === 2;
+
+    // BAT-1013 Phase 3c: build expectedDelta for x402 v1 or v2 (Codex
+    // amendment #4 — v2 cosigned mode REQUIRES both allowPartiallySigned
+    // AND signerMode 'cosigned' with facilitator pubkey from paymentMeta).
+    let payExpectedDelta = null;
+    try {
+        const USDC_MINT = paymentMeta.asset || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+        const ataMod = require('../wallet/ata');
+        const burnerUsdcAta = ataMod.deriveAtaBase58(status.pubkey, USDC_MINT);
+        const recipientPubkey = (paymentMeta.requirement && paymentMeta.requirement.payTo) || paymentMeta.recipient;
+        // Copilot PR #398 R11 Thread E: fail-closed earlier on missing
+        // recipientPubkey. Without this throw, recipientUsdcAta and
+        // recipient.account both become null, which the burner-policy
+        // gate then rejects as `expected_delta_invalid_shape`. The
+        // policy reject is correct, but surfacing the failure here gives
+        // a clearer error message AND avoids spending the reservation
+        // round-trip on a tx that was always doomed.
+        if (!recipientPubkey) {
+            throw new Error('x402 payment requirement missing payTo / recipient pubkey');
+        }
+        const recipientUsdcAta = ataMod.deriveAtaBase58(recipientPubkey, USDC_MINT);
+        const facilitatorPubkey = isV2 && paymentMeta.requirement && paymentMeta.requirement.extra
+            ? paymentMeta.requirement.extra.feePayer
+            : null;
+        // Copilot PR #398 R3: x402 v2 mandates cosigned signerMode AND a
+        // facilitator pubkey for feePayer/cosigner allowlists. If isV2 is
+        // true but Jupiter/facilitator omitted feePayer in the response,
+        // building expectedDelta with cosigned + no allowlists would land
+        // a deterministic burner-policy reject. Fail closed earlier and
+        // route through the R2 catch-handler bypass.
+        if (isV2 && !facilitatorPubkey) {
+            throw new Error('x402 v2 requires facilitator feePayer in requirement.extra; got null');
+        }
+        // C2 (BAT-1013-followup): tighten facilitator pubkey validation. The
+        // null-check above catches missing; but a string like 'undefined' or
+        // 'pending' from a malformed facilitator response would pass and
+        // then be tunneled into feePayerAllowlist/cosignerAllowlist, where
+        // burner-policy's signer-mode check would either silently accept a
+        // mismatched fee-payer (under cosigned rules) or reject with a
+        // confusing shape error. Validate as a real base58 Solana pubkey.
+        if (isV2 && facilitatorPubkey) {
+            const { isValidSolanaAddress } = require('../solana');
+            if (!isValidSolanaAddress(facilitatorPubkey)) {
+                throw new Error(`x402 v2 facilitator feePayer is not a valid Solana base58 address: ${JSON.stringify(facilitatorPubkey)}`);
+            }
+        }
+        payExpectedDelta = {
+            kind: 'agent_pay_x402',
+            x402Version: isV2 ? 2 : 1,
+            signerMode: isV2 ? 'cosigned' : 'burner_only',
+            burnerDebit: {
+                account: burnerUsdcAta,
+                mint: USDC_MINT,
+                atomicAmount: String(paymentMeta.amountAtomic),
+            },
+            recipient: {
+                // R-next-8: deriveAtaBase58 either returns a non-empty string
+                // or throws (caught by the surrounding try/catch which sets
+                // payExpectedDelta=null and routes to the catch-handler bypass).
+                // The previous `|| recipientPubkey` fallback was dead code.
+                account: recipientUsdcAta,
+                mint: USDC_MINT,
+            },
+            burnerOwnedAccounts: [burnerUsdcAta],
+            allowMemo: true,
+            ...(isV2 && facilitatorPubkey ? {
+                feePayerAllowlist: [facilitatorPubkey],
+                cosignerAllowlist: [facilitatorPubkey],
+            } : {}),
+        };
+    } catch (eDelta) {
+        log(`[agent_pay] Could not build expectedDelta: ${eDelta.message}`, 'WARN');
+    }
+
+    // Copilot PR #398 R2: a null expectedDelta is silently skipped by
+    // BurnerSigner (no policy gate), which would let the burner sign an
+    // x402 payment without destination verification. agent_pay has no
+    // MWA fallback path (x402 is autonomous-burner-only by design), so
+    // the only safe response is to release the reservation and refuse
+    // to sign. The agent reports the failure to the user.
+    if (!payExpectedDelta) {
+        await _release(reservationId, 'expected_delta_build_failed');
+        return {
+            error: 'sign_failed',
+            reason: 'Could not build expectedDelta for burner policy gate; refusing to sign without destination verification',
+        };
+    }
+
     let signedTxBase64;
     try {
         const signOpts = { reservationId };
         if (isV2) signOpts.allowPartiallySigned = true;
+        signOpts.expectedDelta = payExpectedDelta;
         const signed = await burner.signer().signTransaction(txBase64, signOpts);
         if (!signed || signed.error) {
             await _release(reservationId, signed && signed.error ? signed.error : 'sign_failed');

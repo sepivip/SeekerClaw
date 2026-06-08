@@ -146,8 +146,9 @@ test('fails closed: tx with zero account keys (legacy)', () => {
     const txB64 = buildLegacyTx({ accountKeys: [] });
     const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)));
     assert.strictEqual(r.valid, false);
-    // R10: legacy zero-account triggers the new numRequiredSignatures-
-    // vs-account-key-count invariant first. Same fail-closed outcome.
+    // R10 + BAT-1013-followup hardening: legacy zero-account triggers the
+    // new numRequiredSignatures-vs-account-key-count invariant FIRST.
+    // Same fail-closed outcome, more specific error.
     assert.match(r.error, /no account keys|invalid_header/i);
 });
 
@@ -506,6 +507,46 @@ test('C1: fails closed on tx > 1232-byte Solana packet cap', () => {
     assert.match(r.error, /tx_oversize/);
 });
 
+test('R-next-10: pre-decode guard fires on base64 > 1644 chars (before Buffer.from)', () => {
+    // Specifically exercises the PRE-decode oversize guard (not the
+    // post-decode one). 1648 chars is well over 1644; the pre-decode
+    // path uses '~' to indicate estimated bytes, distinguishing it
+    // from the exact post-decode message. If the pre-decode guard were
+    // accidentally removed, the post-decode check would still catch
+    // the oversize but the error format would differ (no '~').
+    const longBase64 = 'A'.repeat(1648);
+    const r = verifySwapTransaction(longBase64, 'anything');
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_oversize/);
+    assert.match(r.error, /~/, 'pre-decode message contains ~ estimate');
+});
+
+test('R-next-16 ordering: oversized + invalid-charset → tx_oversize (cap fires before regex)', () => {
+    // Discriminating input: '@' is NOT a valid base64 char, and the string
+    // is also > 1644 chars (over the cap). If the charset regex runs BEFORE
+    // the length cap (the pre-R-next-16 bug), this rejects as
+    // `tx_unparseable: invalid base64 characters or length`. If the length
+    // cap runs FIRST (the R-next-16 fix), this rejects as `tx_oversize`.
+    // Pinning `tx_oversize` here makes a future regression of the ordering
+    // caught by this test.
+    const oversizedInvalid = '@'.repeat(2000);
+    const r = verifySwapTransaction(oversizedInvalid, 'anything');
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /tx_oversize/,
+        `R-next-16 ordering regression: length cap MUST run before charset regex; got error=${r.error}`);
+});
+
+test('R-next-10: numSigs varint truncated → tx_unparseable: signature count varint', () => {
+    // A single 0x80 byte = continuation bit set with no terminator =
+    // truncated varint (terminated: false). Exercises the new explicit
+    // guard at solana.js line 682 specifically (not the downstream
+    // sentinel-passthrough bounds check).
+    const truncated = Buffer.from([0x80]).toString('base64');
+    const r = verifySwapTransaction(truncated, 'anything');
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error, /signature count varint truncated/);
+});
+
 test('C10: fails closed on legacy tx with numRequiredSignatures=0', () => {
     const parts = [];
     parts.push(compactU16(1));
@@ -576,7 +617,10 @@ test('Copilot R9: fails closed when v0 numRequiredSignatures > numStaticAccounts
     const txB64 = Buffer.concat(parts).toString('base64');
     const r = verifySwapTransaction(txB64, base58Encode(pubkeyBytes(PAYER)), { skipPayerCheck: true });
     assert.strictEqual(r.valid, false);
-    assert.match(r.error, /v0 numRequiredSignatures=2 exceeds numStaticAccounts=1/);
+    // Match either invariant — the early "static account key count" check
+    // (PR #398 R-next hardening) fires before the redundant R9 check
+    // (PR #397) at the same place. Either error indicates fail-closed.
+    assert.match(r.error, /numRequiredSignatures=2 exceeds (?:v0 )?(?:static account key count|numStaticAccounts)=1/);
 });
 
 test('Q2: fails closed when numReadonlySigned exceeds numRequiredSignatures', () => {
@@ -613,7 +657,8 @@ test('fails closed: fee payer mismatch on legacy tx', () => {
 // 7 bits encoding the version. Today only v0 exists. A future v1 would have
 // prefix 0x81. The strict `=== 0x80` check would silently fall into the
 // legacy parsing path; the bitmask check + version-guard rejects the
-// unsupported version explicitly.
+// unsupported version explicitly. (Same-class sweep also mirrored in PR #398
+// R-next-12 versioned-detection bitmask hardening.)
 test('Copilot R12: fails closed on v1 prefix (0x81) — future versioned tx unsupported', () => {
     // Hand-build a tx with v1 prefix: 1 sig + 0x81 + header + 1 acct + blockhash
     const parts = [];

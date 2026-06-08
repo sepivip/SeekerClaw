@@ -36,7 +36,7 @@ function getSolanaRpcUrl() {
 }
 
 // Single-shot RPC call (no retry)
-async function solanaRpcOnce(method, params = []) {
+async function solanaRpcOnce(method, params = [], rpcUrlOverride = null) {
     return new Promise((resolve) => {
         const postData = JSON.stringify({
             jsonrpc: '2.0',
@@ -48,7 +48,13 @@ async function solanaRpcOnce(method, params = []) {
         // BAT-1000 (Codex #1): preserve the query string. `url.pathname` alone
         // drops `?api-key=…` and would silently call Helius unauthenticated.
         // Pin via unit test in tests/nodejs-project/solana-rpc-url.test.js.
-        const url = new URL(getSolanaRpcUrl());
+        //
+        // R-next-12: optional rpcUrlOverride lets callers pin a specific URL
+        // for the duration of a multi-call sequence (e.g. burner-signer
+        // simulator's pre-snapshot + simulateTransaction must hit the SAME
+        // RPC backing). Falls back to live config read when not supplied
+        // (preserves all existing call sites).
+        const url = new URL(rpcUrlOverride || getSolanaRpcUrl());
         const options = {
             hostname: url.hostname,
             port: 443,
@@ -91,12 +97,12 @@ async function solanaRpcOnce(method, params = []) {
 // application errors like "account not found") fast-fail immediately.
 const RPC_TRANSIENT_PATTERNS = ['timeout', 'econnreset', 'econnrefused', 'etimedout', 'socket hang up', 'fetch failed', 'eai_again'];
 
-async function solanaRpc(method, params = []) {
+async function solanaRpc(method, params = [], rpcUrlOverride = null) {
     const MAX_ATTEMPTS = 2;
     const BASE_DELAY_MS = 1500;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const result = await solanaRpcOnce(method, params);
+        const result = await solanaRpcOnce(method, params, rpcUrlOverride);
 
         // Success or non-retriable RPC application error → return immediately
         if (!result.error) return result;
@@ -217,8 +223,9 @@ const WELL_KNOWN_TOKENS = {
 // (1) it DoS'd legitimate swaps when Jupiter routed through programs we
 // hadn't labeled yet, and (2) industry consensus (Phantom/Backpack/Solflare/
 // MWA spec) is blocklist+simulation, not integrator-side allowlist. See
-// verifySwapTransaction() for the structural primitive. Tier 2 (PR #398)
-// will add wallet/burner-policy.js for autonomous-burner-signing checks.
+// verifySwapTransaction() + wallet/burner-policy.js for the new primitives
+// (structural primitive in verifySwapTransaction; autonomous-burner-signing
+// checks live in wallet/burner-policy.js).
 // Initialized with hardcoded fallback, refreshed from Jupiter API on startup.
 const KNOWN_PROGRAM_NAMES = new Map([
     // === System Programs ===
@@ -228,11 +235,18 @@ const KNOWN_PROGRAM_NAMES = new Map([
     ['ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',  'Associated Token'],
     ['ComputeBudget111111111111111111111111111111', 'Compute Budget'],
     // === Jupiter Programs ===
+    // BAT-1013: program IDs cross-verified against jup-ag/platform-list,
+    // jup-ag/docs openapi-spec, @jup-ag/* npm SDKs, and Solscan labels.
+    // Prior `jup6SoC2JQ3...` entry removed — it appeared nowhere outside
+    // SeekerClaw and was a typo/fabricated value. Prior `jupoNjAx...`
+    // was mislabeled as 'Jupiter DCA' — it is actually Limit Order V1;
+    // real DCA is `DCA265...`.
     ['JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',  'Jupiter v6'],
     ['JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB',  'Jupiter v4'],
     ['JUP3jqKShLQUCEDeLBpihUwbcTiY7Gg3V1GAbRhhr82',  'Jupiter v3'],
-    ['jup6SoC2JQ3FWcz6aKdR6FMWbN4mk2VmC3S7sREqLhw',  'Jupiter Limit Order'],
-    ['jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',  'Jupiter DCA'],
+    ['jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',  'Jupiter Limit Order V1'],
+    ['j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X',  'Jupiter Limit Order V2 / Trigger V2'],
+    ['DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M', 'Jupiter DCA'],
     ['jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9',  'Jupiter Lend Earn'],
     // === Third-Party Aggregators (Jupiter meta-aggregation) ===
     ['DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH', 'DFlow Aggregator v4'],
@@ -322,8 +336,7 @@ const KNOWN_PROGRAM_NAMES = new Map([
 // than integrator-side program allowlists — Solana Cookbook + audit firm
 // consensus (workflow `wx2c95307`). Structural fee-payer/signer check stays
 // in verifySwapTransaction(); drainer-opcode blocklist + simulate-vs-quote
-// will live in wallet/burner-policy.js (Tier 2 / PR #398) for autonomous
-// burner signing.
+// lives in wallet/burner-policy.js for autonomous burner signing.
 
 // Fetch latest program labels from Jupiter API on startup, merge into KNOWN_PROGRAM_NAMES.
 // Falls back to the hardcoded list above if the fetch fails.
@@ -611,10 +624,9 @@ async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100)
 //   - No Address Lookup Table rejection (ALT-resolved programs are part of
 //     Jupiter's normal routing for V2 trigger and Ultra flows).
 //
-// Drainer-opcode blocking + simulate-vs-quote enforcement will live in
-// `wallet/burner-policy.js` (Tier 2 / PR #398) for autonomous (burner)
-// signing flows. MWA flows still get the final user click-through
-// inside the wallet UI.
+// Drainer-opcode blocking + simulate-vs-quote enforcement lives in
+// `wallet/burner-policy.js` for autonomous (burner) signing flows. MWA
+// flows still get the final user click-through inside the wallet UI.
 //
 // Options: { skipPayerCheck: true } for Jupiter Ultra (Jupiter pays fees).
 // Returns: { valid: boolean, error?: string, programs: string[] }
@@ -626,12 +638,17 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (typeof txBase64 !== 'string' || txBase64.length === 0) {
         return { valid: false, error: 'tx_unparseable: empty or non-string input', programs: [] };
     }
-    // C1 (BAT-1013-followup + R11 + R12): Solana caps tx packets at 1232 bytes.
-    // A tx larger than this can NEVER land on-chain — fail closed BEFORE the
-    // O(n) regex scan AND base64 decode so we never spend time validating or
-    // materializing an oversized blob. base64 expands 3 bytes → 4 chars, so
-    // 1232 bytes encodes to at most ceil(1232/3) * 4 = 1644 chars. Anything
-    // longer is guaranteed oversized.
+    // C1 (BAT-1013-followup + R11 + R12) + R-next-10/R-next-16: Solana caps
+    // tx packets at 1232 bytes. A tx larger than this can NEVER land on-chain
+    // — fail closed BEFORE the O(n) regex scan AND base64 decode so we never
+    // spend time validating or materializing an oversized blob. base64 expands
+    // 3 bytes → 4 chars, so 1232 bytes encodes to at most ceil(1232/3) * 4 =
+    // 1644 chars. Anything longer is guaranteed oversized.
+    //
+    // R-next-16: length cap MUST run before the charset regex — otherwise a
+    // malicious multi-MB string of valid base64 chars forces the regex to scan
+    // the full buffer before rejection, defeating the DoS guard. Mirrors
+    // wallet/tx-parser.js + jupiter/trigger-v2.js + tools/solana.js.
     if (txBase64.length > 1644) {
         const estBytes = Math.floor(txBase64.length * 3 / 4);
         return { valid: false, error: `tx_oversize: ~${estBytes} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
@@ -648,9 +665,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     if (txBuf.length === 0) {
         return { valid: false, error: 'tx_unparseable: decoded buffer is empty', programs: [] };
     }
-    // Exact byte-length check (post-decode): catches any tx whose base64 was
-    // under 1644 chars but whose decoded length still exceeds 1232 (padding
-    // edge cases).
+    // C1 (BAT-1013-followup): exact byte-length check (post-decode) catches any
+    // tx whose base64 was under 1644 chars but whose decoded length still
+    // exceeds 1232 (padding edge cases — padded base64 strings under 1644
+    // chars that decode just over 1232 bytes).
     if (txBuf.length > 1232) {
         return { valid: false, error: `tx_oversize: ${txBuf.length} bytes exceeds Solana's 1232-byte packet cap.`, programs: [] };
     }
@@ -675,6 +693,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     let offset = 0;
     const numSigs = readCompactU16(txBuf, offset);
     offset = numSigs.offset;
+    // R-next-10: readCompactU16 returns sentinels (value=0xFFFFFFFF) on
+    // truncation/overflow. Without an explicit check here, the bounds
+    // guard below would compute `0xFFFFFFFF * 64` and surface a noisy
+    // error message with the sentinel value. Fail-closed cleanly with
+    // a specific error instead. Mirrors the per-call-site checks already
+    // in place for numInstructions / numAlts.
+    if (!numSigs.terminated || numSigs.overflowed) {
+        return { valid: false, error: 'tx_unparseable: signature count varint truncated or overflowed.', programs };
+    }
     // Buffer-bounds guard (Copilot PR #397 R4): a tx claiming N signatures
     // without N * 64 bytes of signature data would push offset past the
     // buffer and then all subsequent reads silently slip past.
@@ -704,7 +731,7 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
             return { valid: false, error: `unsupported_tx_version: v${version} (only v0 is supported)`, programs };
         }
     }
-    const isV0 = isVersioned;
+    const isV0 = isVersioned; // version is guaranteed 0 if we got here
 
     if (!isV0) {
         // Legacy transaction. Ultra always uses v0, so reject legacy under
@@ -727,10 +754,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         // (b) sig section count must match header's numRequired (the tx
         //     wire format requires exactly numRequired signatures), and
         // (c) numReadonlySigned must not exceed numRequired, and
-        // (d) numRequired must fit within numAccounts (checked further down).
+        // (d) numRequired must fit within numAccounts (checked further down), and
+        // (e) readonly-signed + readonly-unsigned sum must fit inside the
+        //     static account key count.
+        // Previously the v0 path silently truncated numRequired via
+        // Math.min(numRequired, accountKeys.length) — letting a tx claiming
+        // numRequired > accounts slip past with no signer check.
         const legacyNumRequired = txBuf[offset]; offset++;
         const legacyNumReadonlySigned = txBuf[offset]; offset++;
-        offset++; // numReadonlyUnsigned
+        const legacyNumReadonlyUnsigned = txBuf[offset]; offset++;
         if (legacyNumRequired < 1) {
             return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
         }
@@ -742,12 +774,22 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
         const numAccounts = readCompactU16(txBuf, offset);
         offset = numAccounts.offset;
+        // R-next-10 same-class sweep: explicit terminated/overflowed check
+        // produces a clean error message instead of letting the sentinel
+        // value (0xFFFFFFFF) leak into downstream invariant or bounds
+        // checks. Mirrors numSigs + numInstructions + numAlts patterns.
+        if (!numAccounts.terminated || numAccounts.overflowed) {
+            return { valid: false, error: 'tx_unparseable: legacy account count varint truncated or overflowed.', programs };
+        }
         // Copilot R10: legacy signers must also fit within account keys
         // (symmetric to the v0 check below). Without this, a tx claiming
         // N signatures with fewer than N account keys passes the wire-
         // format invariants but trusts a logical impossibility.
         if (legacyNumRequired > numAccounts.value) {
             return { valid: false, error: `invalid_header: numRequiredSignatures=${legacyNumRequired} exceeds account key count=${numAccounts.value}.`, programs };
+        }
+        if (legacyNumReadonlySigned + legacyNumReadonlyUnsigned > numAccounts.value) {
+            return { valid: false, error: `invalid_header: readonly sum (${legacyNumReadonlySigned}+${legacyNumReadonlyUnsigned}) exceeds account key count=${numAccounts.value}.`, programs };
         }
 
         // Buffer-bounds guard (Copilot PR #397 R3): a malformed/truncated
@@ -845,14 +887,15 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Solana's signer limit is size-based (1232-byte packet cap), not a fixed
     // numeric cap. The previous Math.min clamp in skipPayerCheck silently
     // truncated nonsensical numRequired values and let bogus headers through.
-    const numRequired = txBuf[offset]; offset++;
-    const numReadonlySigned = txBuf[offset]; offset++;
-    offset++; // numReadonlyUnsigned
     // Protocol invariants (not arbitrary numeric cap):
     //   (a) numRequired >= 1 (fee payer is always a signer)
     //   (b) numRequired === sig section count (wire-format invariant)
     //   (c) numReadonlySigned <= numRequired
     //   (d) numRequired <= numAccounts (signer set fits in account keys)
+    //   (e) readonly-signed + readonly-unsigned <= numStaticAccounts
+    const numRequired = txBuf[offset]; offset++;
+    const numReadonlySigned = txBuf[offset]; offset++;
+    const numReadonlyUnsigned = txBuf[offset]; offset++;
     if (numRequired < 1) {
         return { valid: false, error: `invalid_header: numRequiredSignatures=0 (fee payer must be a signer).`, programs };
     }
@@ -871,6 +914,18 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Static account keys.
     const numStaticAccounts = readCompactU16(txBuf, offset);
     offset = numStaticAccounts.offset;
+    // R-next-10 same-class sweep: explicit terminated/overflowed check.
+    if (!numStaticAccounts.terminated || numStaticAccounts.overflowed) {
+        return { valid: false, error: 'tx_unparseable: v0 static account count varint truncated or overflowed.', programs };
+    }
+    // Copilot R9 finding #3: v0 signers MUST be in the static account key
+    // section (ALT-resolved accounts cannot be signers per the protocol).
+    if (numRequired > numStaticAccounts.value) {
+        return { valid: false, error: `invalid_header: v0 numRequiredSignatures=${numRequired} exceeds numStaticAccounts=${numStaticAccounts.value} (signers must be in static-key section, not ALT).`, programs };
+    }
+    if (numReadonlySigned + numReadonlyUnsigned > numStaticAccounts.value) {
+        return { valid: false, error: `invalid_header: readonly sum (${numReadonlySigned}+${numReadonlyUnsigned}) exceeds static account key count=${numStaticAccounts.value}.`, programs };
+    }
     // Buffer-bounds guard (Copilot PR #397 R3): see legacy path comment above.
     if (offset + numStaticAccounts.value * 32 > txBuf.length) {
         return { valid: false, error: `v0: declared ${numStaticAccounts.value} static account keys exceeds remaining buffer (${txBuf.length - offset} bytes; need ${numStaticAccounts.value * 32}).`, programs };
@@ -879,12 +934,6 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     for (let i = 0; i < numStaticAccounts.value; i++) {
         accountKeys.push(base58Encode(txBuf.slice(offset, offset + 32)));
         offset += 32;
-    }
-
-    // Copilot R9 finding #3: v0 signers MUST be in the static account key
-    // section (ALT-resolved accounts cannot be signers per the protocol).
-    if (numRequired > numStaticAccounts.value) {
-        return { valid: false, error: `invalid_header: v0 numRequiredSignatures=${numRequired} exceeds numStaticAccounts=${numStaticAccounts.value} (signers must be in static-key section, not ALT).`, programs };
     }
 
     // Reject zero-account tx (same rationale as the legacy path above).
@@ -898,8 +947,12 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
     } else {
         // Ultra gasless mode: Jupiter pays fees, wallet must still be a required signer.
-        const requiredSignerCount = Math.min(numRequired, accountKeys.length);
-        const requiredSigners = accountKeys.slice(0, requiredSignerCount);
+        // C10 (BAT-1013-followup): the prior Math.min(numRequired, accountKeys.length)
+        // clamp silently truncated a malformed tx claiming more signers than it
+        // had accounts. The invariant check above (numRequired ≤
+        // numStaticAccounts.value) now rejects that shape upfront, so the
+        // slice here is structurally safe — no clamp needed.
+        const requiredSigners = accountKeys.slice(0, numRequired);
         if (!requiredSigners.includes(expectedPayerBase58)) {
             return { valid: false, error: `Signer mismatch: expected ${expectedPayerBase58} to be among required signers`, programs };
         }
@@ -917,9 +970,8 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
     // Walk instructions to collect programs[] labels. ALT-resolved programs
     // (programIdIdx >= numStaticAccounts) are part of Jupiter's normal v0
     // routing and are NOT rejected as program-id mismatches here — strict
-    // ALT program-id resolution will live in wallet/burner-policy.js
-    // (Tier 2 / PR #398) where we have access to simulation metadata.
-    // BUT we still verify that any ALT
+    // ALT program-id resolution lives in wallet/burner-policy.js where we
+    // have access to simulation metadata. BUT we still verify that any ALT
     // index actually CAN be satisfied: the message's ALT section (after the
     // instructions) must contribute enough lookup keys to cover the index.
     // Without this, a structurally malformed tx with no ALTs declared but
@@ -1025,13 +1077,14 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
 
 // Read Solana compact-u16 encoding.
 // Returns { value, offset, terminated, overflowed }.
-//   - `terminated: false` → buffer ran out mid-varint.
+//   - `terminated: false` → buffer ran out mid-varint (last byte high bit set).
 //   - `overflowed: true` → > 0xFFFF OR > 3 bytes (Solana compact-u16 max).
 // On either invalid case, `value` is forced to a sentinel (0xFFFFFFFF) so
 // downstream bounds checks of the shape `offset + value * N > buf.length`
-// reject naturally without per-call-site checking (Copilot PR #397 R6:
-// callers were repeatedly missing the explicit overflowed/terminated
-// check; fail-closed at the function level is the durable fix).
+// reject vacuously, and for-loops `for (let i=0; i<value; i++)` hit the
+// per-iter bounds guard immediately. (Copilot PR #397 R4/R6: per-call-site
+// checks of overflowed/terminated were repeatedly missed; fail-closed at the
+// function level is the durable fix.)
 function readCompactU16(buf, offset) {
     let value = 0;
     let shift = 0;
