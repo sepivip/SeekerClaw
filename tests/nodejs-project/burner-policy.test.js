@@ -1249,6 +1249,109 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.class, 'security');
     });
 
+    await runAsync('BAT-1025 v9.1 R4: SOL-input + expectedTokenOwner set + destination is System account (non-SPL) → simulation_recipient_mismatch (Copilot R4 SOL-input bypass close)', async () => {
+        // Copilot R4 caught a defense-in-depth gap specific to the
+        // SOL-input case. For SPL inputs, the existing
+        // simulation_metadata_missing guard (line 1562-1568) catches
+        // an undecodable destination first (availability class). But
+        // for SOL inputs (check.mint === 'native_sol'), the SPL guard
+        // doesn't run — validateSimDelta takes the native_sol branch
+        // which only computes lamportsDelta. Without the R4 R4 guard,
+        // a tampered SOL-input tx that routes to a System account
+        // would have silently no-op'd the owner-slot binding because
+        // postAI.splToken would be undefined and the existing guard
+        // (`postAI.splToken && ...`) would simply skip. The R4 fix
+        // fails closed with security class.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUP_V2_PROGRAM, INPUT_TOKEN_ACCOUNT],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                // Burner SOL pre/post: outflow of exactly the declared
+                // burnerDebit amount (5M lamports) plus a small fee
+                // (5k lamports) so the burner-side sol_fee_headroom
+                // tolerance accepts the delta. Lets the deposit-vault
+                // check (where R4 fires) be reached.
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_994_995_000 }),
+                },
+                // Tampered destination: System account post-state, no
+                // splToken metadata. Mint = 'native_sol' in the check,
+                // so validateSimDelta takes the native_sol if-branch
+                // — the existing SPL metadata-missing guard would NOT
+                // run on this path. R4 guard catches the no-op silently
+                // dropped expectedTokenOwner binding.
+                [INPUT_TOKEN_ACCOUNT]: {
+                    pre: null,
+                    post: nativeAccountInfo({ lamports: 5_000_000 }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            // SOL input: burnerDebit on the burner pubkey itself with
+            // mint='native_sol'. This causes check.mint='native_sol'
+            // → validateSimDelta takes the if-branch, not the SPL else.
+            burnerDebit: { account: BURNER, mint: 'native_sol', atomicAmount: '5000000' },
+            depositVault: { pubkey: INPUT_TOKEN_ACCOUNT, expectedTokenOwner: RECEIVER_ADDRESS },
+            burnerOwnedAccounts: [],
+        }, { burnerPubkey: BURNER, simulator });
+        // Two acceptable rejection classes prove the bypass is closed:
+        // (a) the R4 fail-closed (simulation_recipient_mismatch), or
+        // (b) any earlier delta-class check that happens to fire first
+        // for the same fixture. The point is: with R4 in place, this
+        // shape CANNOT silently sign. Without R4, postAI.splToken is
+        // undefined → the existing owner-slot check no-ops → the policy
+        // could accept. The assertion below proves rejection regardless
+        // of which gate fires first.
+        assert.strictEqual(r.ok, false, `expected reject of non-SPL destination with expectedTokenOwner set, got ${JSON.stringify(r)}`);
+        assert.ok(
+            r.error === 'simulation_recipient_mismatch' || r.error === 'simulation_delta_mismatch',
+            `expected a security-class reject (R4 owner-slot OR delta band), got error=${r.error} reason=${r.reason}`
+        );
+        assert.strictEqual(r.class, 'security');
+    });
+
+    check('BAT-1025 v9.1 R4: shape validator rejects malformed expectedOwner when provided (Copilot R4 contract drift)', () => {
+        // Per R4: when a producer PROVIDES the field, it must be a valid
+        // base58 pubkey. A caller bug (empty string, typo, upstream null
+        // -> empty string conversion) should fail at the shape gate
+        // BEFORE validateSimDelta, not silently drop through.
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: {
+                pubkey: INPUT_TOKEN_ACCOUNT,
+                expectedOwner: '!!!malformed-non-base58!!!',
+                expectedTokenOwner: RECEIVER_ADDRESS,
+            },
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /expectedOwner provided but is not a valid base58 pubkey/);
+    });
+
+    check('BAT-1025 v9.1 R4: shape validator rejects malformed expectedTokenOwner when provided', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: {
+                pubkey: INPUT_TOKEN_ACCOUNT,
+                expectedOwner: JUP_V1_PROGRAM,
+                expectedTokenOwner: 'too-short',
+            },
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /expectedTokenOwner provided but is not a valid base58 pubkey/);
+    });
+
     await runAsync('BAT-1025 v9.1 no-V1-change: V1 expectedOwner-only shape still passes shape gate (V1 path untouched)', async () => {
         // V1 producer (tools/solana.js:2176-2233) still emits depositVault
         // with the legacy expectedOwner field and no expectedTokenOwner.

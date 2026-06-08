@@ -358,7 +358,15 @@ function writeFixture(payload) {
         let preSnapshot = null;
         const alwaysRunSim = true;
         if (alwaysRunSim || !result.phaseMatched) {
-            console.log('\n[Phase ii] No top-level match — running simulateTransaction(innerInstructions:true) ...');
+            // Honest narration (Copilot PR #401 R4): when phase i already
+            // matched, phase ii still runs unconditionally because the
+            // pinned fixture needs sim post-state for the replay test —
+            // call that out so reviewers don't misread the log.
+            if (result.phaseMatched) {
+                console.log(`\n[Phase ii] Phase i already matched (Option ${result.optionConfirmed}) — also running simulateTransaction(innerInstructions:true) to populate sim.value.accounts for the replay fixture ...`);
+            } else {
+                console.log('\n[Phase ii] No top-level match — running simulateTransaction(innerInstructions:true) to walk inner instructions ...');
+            }
             const rpcUrl = process.env.SOLANA_RPC;
             if (!rpcUrl) throw new Error('SOLANA_RPC missing from .env.test');
             const conn = new Connection(rpcUrl, 'processed');

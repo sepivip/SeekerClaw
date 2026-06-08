@@ -1013,6 +1013,21 @@ function validateExpectedDeltaShape(expectedDelta) {
             // splToken.owner slot). Enforcement in validateSimDelta:
             // expectedTokenOwner → postAI.splToken.owner-slot assertion;
             // expectedOwner stays shape-only until BAT-1029 V1 wiring.
+            //
+            // Copilot PR #401 R4 (2026-06-08): when either field is
+            // PROVIDED (non-undefined/null) it must be a valid base58
+            // pubkey — otherwise a caller bug (e.g. accidental empty
+            // string, an upstream null, or a typo'd field) silently
+            // drops through to validateSimDelta and either no-ops the
+            // binding or surfaces as a confusing simulation_recipient_mismatch
+            // later. Fail fast at the shape gate so the producer-side
+            // bug is the rejection reason.
+            if (v.expectedOwner != null && !isNonEmptyBase58(v.expectedOwner)) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner provided but is not a valid base58 pubkey');
+            }
+            if (v.expectedTokenOwner != null && !isNonEmptyBase58(v.expectedTokenOwner)) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedTokenOwner provided but is not a valid base58 pubkey');
+            }
             const hasExpectedOwner = isNonEmptyBase58(v.expectedOwner);
             const hasExpectedTokenOwner = isNonEmptyBase58(v.expectedTokenOwner);
             if (!hasExpectedOwner && !hasExpectedTokenOwner) {
@@ -1613,6 +1628,26 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
         // / `postAI.splToken &&` guards keep the assertion a no-op for
         // genuine System-account-only destinations.
         if (check.expectedTokenOwner) {
+            // Copilot PR #401 R4 (2026-06-08): close the SOL-input bypass.
+            // When a producer declares expectedTokenOwner, the destination
+            // is contractually an SPL token account whose owner-slot we
+            // must bind. If the account EXISTS but is not SPL-decodable
+            // (postAI.splToken is falsy), a tampered tx has routed the
+            // declared destination to a System account or an opaque
+            // non-SPL account — the binding cannot be performed. Fail
+            // closed with the same simulation_recipient_mismatch (security
+            // class) reject so the policy never silently no-ops the
+            // active-destination invariant. preAI gets the same treatment
+            // when it exists (covers a takeover where pre was a real
+            // SPL account but the attacker repurposed it before sign).
+            if (preAI.exists && !preAI.splToken) {
+                return reject('simulation_recipient_mismatch',
+                    `pre ${check.address} declares expectedTokenOwner but is not SPL-decodable (no splToken metadata)`);
+            }
+            if (postAI.exists && !postAI.splToken) {
+                return reject('simulation_recipient_mismatch',
+                    `post ${check.address} declares expectedTokenOwner but is not SPL-decodable (no splToken metadata)`);
+            }
             if (preAI.exists && preAI.splToken && preAI.splToken.owner !== check.expectedTokenOwner) {
                 return reject('simulation_recipient_mismatch',
                     `pre ${check.address} splToken.owner ${preAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
