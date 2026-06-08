@@ -59,6 +59,12 @@ async function check(label, fn) {
 const FIXTURE_PUBKEY = 'BurNeR1111111111111111111111111111111111111';
 const FIXTURE_PUBKEY_2 = 'MaiN1111111111111111111111111111111111111111';
 const FIXTURE_INPUT_MINT = 'So11111111111111111111111111111111111111112';
+// BAT-1025 v9.1 (Codex Option C re-pin 2026-06-08): depositCraft must return
+// receiverAddress (= Privy vault PDA) and inputTokenAccount (= ephemeral SPL
+// Token Account). Existing test fixtures grow these two fields; new tests
+// cover the missing/malformed cases.
+const FIXTURE_RECEIVER_ADDRESS = 'VauLt22222222222222222222222222222222222222';
+const FIXTURE_INPUT_TOKEN_ACCOUNT = 'inputTokenAcc333333333333333333333333333333';
 const FIXTURE_OUTPUT_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 // ── Build a minimal valid Memo-only auth tx for FIXTURE_PUBKEY ───────────────
@@ -369,7 +375,7 @@ function _buildTransferTx(payerB58) {
     console.log('\ndepositCraft + submitCreateOrder:');
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', requestId: 'dr-001' } });
+    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', requestId: 'dr-001', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 200, data: { id: 'order-001', txSignature: 'sig-001' } });
     await check('happy path: craft → submit → order id', async () => {
         const craft = await triggerV2.depositCraft({
@@ -395,7 +401,7 @@ function _buildTransferTx(payerB58) {
     // ── submitCreateOrder: ambiguous + history-recovery ─────────────────────
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', requestId: 'dr-002' } });
+    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', requestId: 'dr-002', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'jupiter_internal' } });        // ambiguous create
     _enqueue({                                                                 // recovery /orders/history
         status: 200,
@@ -437,7 +443,7 @@ function _buildTransferTx(payerB58) {
     // ── submitCreateOrder: ambiguous + history miss → no-recovery ───────────
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-003' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-003', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     _enqueue({ status: 200, data: { orders: [] } });
     await check('ambiguous (500) + empty history → create_ambiguous_no_recovery', async () => {
@@ -467,11 +473,93 @@ function _buildTransferTx(payerB58) {
         }
     });
 
+    // ── BAT-1025 v9.1: depositCraft receiverAddress + inputTokenAccount validation ──
+    console.log('\nBAT-1025 v9.1: depositCraft response-shape validation:');
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-v91-missing-receiver', inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
+    await check('BAT-1025 v9.1: depositCraft missing receiverAddress → vault_unavailable', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        assert.strictEqual(craft.ok, false);
+        assert.strictEqual(craft.error, 'vault_unavailable');
+        assert.match(craft.reason, /receiverAddress/);
+    });
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-v91-missing-ita', receiverAddress: FIXTURE_RECEIVER_ADDRESS } });
+    await check('BAT-1025 v9.1: depositCraft missing inputTokenAccount → vault_unavailable', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        assert.strictEqual(craft.ok, false);
+        assert.strictEqual(craft.error, 'vault_unavailable');
+        assert.match(craft.reason, /inputTokenAccount/);
+    });
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-v91-malformed-receiver', receiverAddress: '!!!not-base58!!!', inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
+    await check('BAT-1025 v9.1: depositCraft malformed receiverAddress (non-base58) → vault_unavailable', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        assert.strictEqual(craft.ok, false);
+        assert.strictEqual(craft.error, 'vault_unavailable');
+        assert.match(craft.reason, /receiverAddress/);
+    });
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-v91-malformed-ita', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: 'shorty' } });
+    await check('BAT-1025 v9.1: depositCraft malformed inputTokenAccount (too short) → vault_unavailable', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        assert.strictEqual(craft.ok, false);
+        assert.strictEqual(craft.error, 'vault_unavailable');
+        assert.match(craft.reason, /inputTokenAccount/);
+    });
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-v91-equal', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_RECEIVER_ADDRESS } });
+    await check('BAT-1025 v9.1: depositCraft inputTokenAccount === receiverAddress → vault_unavailable (sanity)', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        assert.strictEqual(craft.ok, false);
+        assert.strictEqual(craft.error, 'vault_unavailable');
+        assert.match(craft.reason, /inputTokenAccount === receiverAddress/);
+    });
+
+    triggerV2._resetCachesForTests();
+    _resetHttp();
+    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_DEPOSIT', requestId: 'dr-v91-happy', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
+    await check('BAT-1025 v9.1: depositCraft happy path surfaces receiverAddress + inputTokenAccount on the return', async () => {
+        const craft = await triggerV2.depositCraft({
+            pubkey: FIXTURE_PUBKEY, token: 'jwt',
+            inputMint: FIXTURE_INPUT_MINT, outputMint: FIXTURE_OUTPUT_MINT, inputAmount: '1000000',
+        });
+        assert.strictEqual(craft.ok, true);
+        assert.strictEqual(craft.receiverAddress, FIXTURE_RECEIVER_ADDRESS);
+        assert.strictEqual(craft.inputTokenAccount, FIXTURE_INPUT_TOKEN_ACCOUNT);
+        assert.strictEqual(craft.depositRequestId, 'dr-v91-happy');
+    });
+
     // ── cancelStep1 + confirmCancel ─────────────────────────────────────────
     console.log('\ncancelStep1 + confirmCancel:');
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_CANCEL', requestId: 'cr-001' } });
+    _enqueue({ status: 200, data: { transaction: 'UNSIGNED_CANCEL', requestId: 'cr-001', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 200, data: { id: 'order-x', txSignature: 'cancel-sig-001' } });
     await check('two-step cancel happy path', async () => {
         const s1 = await triggerV2.cancelStep1({ orderId: 'order-x', pubkey: FIXTURE_PUBKEY, token: 'jwt' });
@@ -904,7 +992,7 @@ function _buildTransferTx(payerB58) {
     // (a) Terminal-state orders MUST NOT be reported as recovered.
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-fail' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-fail', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     _enqueue({ status: 200, data: { orders: [
         { id: 'dead-order', orderState: 'cancelled', rawState: 'cancelled',
@@ -935,7 +1023,7 @@ function _buildTransferTx(payerB58) {
     // recovered result surfaces the deposit-event txSignature.
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-active' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-active', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     _enqueue({ status: 200, data: { orders: [
         { id: 'our-order', orderState: 'active', rawState: 'active',
@@ -968,7 +1056,7 @@ function _buildTransferTx(payerB58) {
     // (c) Stale identical order (outside the time window) is NOT matched.
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-stale' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-stale', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     // An order from 10 minutes ago with identical mint+amount must not be falsely
     // matched as "ours" — the tight time window is the only safeguard now.
@@ -1003,7 +1091,7 @@ function _buildTransferTx(payerB58) {
     // on the same input token could see recovery pick the wrong order id.
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-discrim' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-discrim', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'oops' } });
     const OTHER_OUTPUT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'; // USDT
     _enqueue({ status: 200, data: { orders: [
@@ -1038,7 +1126,7 @@ function _buildTransferTx(payerB58) {
     console.log('\nsubmitCreateOrder 2xx handling (BAT-697 double-check):');
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-201' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-201', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 201, data: { id: 'order-201', txSignature: 'sig-201' } });
     await check('HTTP 201 with id is accepted as success', async () => {
         const craft = await triggerV2.depositCraft({
@@ -1057,7 +1145,7 @@ function _buildTransferTx(payerB58) {
 
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-202' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-202', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 202, data: { /* no id */ } });
     _enqueue({ status: 200, data: { orders: [] } });
     await check('HTTP 202 without id triggers recovery (ambiguous)', async () => {
@@ -1089,7 +1177,7 @@ function _buildTransferTx(payerB58) {
         signTransaction: async () => 'X', signMessage: null,
     });
     // Now drive an ambiguous create → recovery path that 401's.
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-recover-401' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-recover-401', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'jupiter_internal' } });
     _enqueue({ status: 401, data: { error: 'expired' } });
     // PR #388 R4: recovery 401 must route through `create_ambiguous_no_recovery`
@@ -1133,7 +1221,7 @@ function _buildTransferTx(payerB58) {
     // reservation → under-counted spend if the deposit actually landed.
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-throw' } });
+    _enqueue({ status: 200, data: { transaction: 'U', requestId: 'dr-throw', receiverAddress: FIXTURE_RECEIVER_ADDRESS, inputTokenAccount: FIXTURE_INPUT_TOKEN_ACCOUNT } });
     _enqueue({ status: 500, data: { error: 'jupiter_internal' } });
     // Next dequeue intentionally throws (simulate transport error).
     httpQueue.push(() => { throw new Error('ECONNRESET during /orders/history'); });
