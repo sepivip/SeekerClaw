@@ -1,7 +1,7 @@
 /**
  * BAT-1025 C1 — live capture of Jupiter Trigger V2 deposit tx + pre-sign simulation.
  *
- * Per the BAT-1025 v8.9 contract on Linear (Codex-approved 2026-06-08):
+ * Per the BAT-1025 v9.1 contract on Linear (Codex Option C re-pin, 2026-06-08):
  *
  *   Phase (i)  — deserialize the unsigned deposit tx, walk TOP-LEVEL Token Program
  *                Transfer / TransferChecked instructions. If a burner-source SPL
@@ -485,7 +485,7 @@ function writeFixture(payload) {
         console.error(err.message);
         console.error(err.stack);
         const fixture = {
-            spec: 'BAT-1025 v8.9 C1 capture — ERROR',
+            spec: 'BAT-1025 v9.1 C1 capture — ERROR',
             capturedAt: new Date().toISOString(),
             verdict: 'capture_error',
             error: err.message,

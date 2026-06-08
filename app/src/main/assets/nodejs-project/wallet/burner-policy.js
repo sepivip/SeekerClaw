@@ -1007,8 +1007,10 @@ function validateExpectedDeltaShape(expectedDelta) {
             // accountInfo.owner program id — V1 trigger pattern) OR
             // expectedTokenOwner (the SPL token-account owner-slot value —
             // V2 trigger pattern after Codex Option C re-pin 2026-06-08).
-            // Exactly one is required; both can be present for callers that
-            // want belt-and-suspenders. Enforcement in validateSimDelta:
+            // AT LEAST ONE is required; both can be present for callers
+            // that want belt-and-suspenders (e.g. a future producer that
+            // both program-owner-checks the destination AND binds its
+            // splToken.owner slot). Enforcement in validateSimDelta:
             // expectedTokenOwner → postAI.splToken.owner-slot assertion;
             // expectedOwner stays shape-only until BAT-1029 V1 wiring.
             const hasExpectedOwner = isNonEmptyBase58(v.expectedOwner);
@@ -1586,26 +1588,38 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
                         `post ${check.address} mint ${postAI.splToken.mint} != declared ${check.mint}`);
                 }
             }
-            // BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08):
-            // for Jupiter Trigger V2 deposits the destination is an ephemeral
-            // SPL Token Account whose owner-slot value MUST equal the high-
-            // level Privy vault PDA returned as receiverAddress from
-            // /trigger/v2/deposit/craft. Producers propagate that pubkey to
-            // check.expectedTokenOwner via depositVault.expectedTokenOwner.
-            // When set, assert it against the decoded splToken.owner on both
-            // sides (pre may not exist for freshly-created ATAs — only check
-            // when splToken is decodable). Reuses simulation_recipient_mismatch
-            // per Codex: keeps the reject-code surface area unchanged so this
-            // PR avoids SAB-audit scope.
-            if (check.expectedTokenOwner) {
-                if (preAI.exists && preAI.splToken && preAI.splToken.owner !== check.expectedTokenOwner) {
-                    return reject('simulation_recipient_mismatch',
-                        `pre ${check.address} splToken.owner ${preAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
-                }
-                if (postAI.exists && postAI.splToken && postAI.splToken.owner !== check.expectedTokenOwner) {
-                    return reject('simulation_recipient_mismatch',
-                        `post ${check.address} splToken.owner ${postAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
-                }
+        }
+        // BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08):
+        // for Jupiter Trigger V2 deposits the destination is an ephemeral
+        // SPL Token Account whose owner-slot value MUST equal the high-
+        // level Privy vault PDA returned as receiverAddress from
+        // /trigger/v2/deposit/craft. Producers propagate that pubkey to
+        // check.expectedTokenOwner via depositVault.expectedTokenOwner.
+        // When set, assert it against the decoded splToken.owner on both
+        // sides (pre may not exist for freshly-created ATAs — only check
+        // when splToken is decodable). Reuses simulation_recipient_mismatch
+        // per Codex: keeps the reject-code surface area unchanged so this
+        // PR avoids SAB-audit scope.
+        //
+        // Copilot PR #401 R1 (2026-06-08): this assertion is INTENTIONALLY
+        // OUTSIDE the `check.mint !== 'native_sol'` SPL branch above. A
+        // producer that declares burnerDebit.mint='native_sol' (SOL-input
+        // V2 trigger) can still legitimately supply expectedTokenOwner
+        // when the on-chain destination is an SPL token wrapper (e.g. wSOL
+        // ATA) whose splToken sub-shape decodes cleanly. Nesting this
+        // check inside the SPL branch would silently skip the owner-slot
+        // binding on those routes — exactly the bypass class Codex flagged
+        // in the v8.6 active-destination blocker. The `preAI.splToken &&`
+        // / `postAI.splToken &&` guards keep the assertion a no-op for
+        // genuine System-account-only destinations.
+        if (check.expectedTokenOwner) {
+            if (preAI.exists && preAI.splToken && preAI.splToken.owner !== check.expectedTokenOwner) {
+                return reject('simulation_recipient_mismatch',
+                    `pre ${check.address} splToken.owner ${preAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
+            }
+            if (postAI.exists && postAI.splToken && postAI.splToken.owner !== check.expectedTokenOwner) {
+                return reject('simulation_recipient_mismatch',
+                    `post ${check.address} splToken.owner ${postAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
             }
         }
 
