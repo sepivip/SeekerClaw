@@ -464,8 +464,39 @@ function writeAuditOnly(payload) {
             result.evidence.simErr = sim.value.err;
             result.evidence.simLogs = (sim.value.logs || []).slice(-20);
             result.evidence.altCounts = { writable: altWritable.length, readonly: altReadonly.length };
+
+            // Copilot PR #401 R9: re-walk top-level with ALT-resolved keys.
+            // Phase (i) above ran against staticKeys only — any top-level
+            // SPL Transfer whose programIdIndex or accountKeyIndexes
+            // reference an ALT-loaded account would have been silently
+            // skipped (the `idx >= allKeys.length → return` branch in
+            // walkTopLevelForBurnerTransfer). For the BAT-1025 C1 capture
+            // this didn't bite because the V2 deposit tx uses 0 ALTs,
+            // but a future Jupiter route that emits an ALT-loaded
+            // top-level Token Program would falsely halt the script.
+            // Re-walking with allKeysIncludingAlt closes that gap.
             if (!result.phaseMatched) {
-                console.log('[Phase iii] ❌ HALT: No burner-source SPL Transfer to inputTokenAccount (Option C) or deriveAta(vaultPubkey, USDC) (Option B) at top OR inner level.');
+                console.log('[Phase ii.alt] Re-walking top-level instructions with ALT-resolved key set (R9 follow-up)...');
+                const phase1AltMatches = walkTopLevelForBurnerTransfer(msg, allKeysIncludingAlt, burnerUsdcAta);
+                console.log(`[Phase ii.alt] burner-source SPL transfers (ALT-resolved): ${phase1AltMatches.length}`);
+                const phase1AltOptionB = phase1AltMatches.find(m => m.destination === vaultUsdcAta);
+                const phase1AltOptionC = phase1AltMatches.find(m => m.destination === inputTokenAccount && inputTokenAccount);
+                if (phase1AltOptionB) {
+                    console.log('[Phase ii.alt] ✅ Option B CONFIRMED at top level (ALT-resolved)');
+                    result.phaseMatched = 'i-alt';
+                    result.optionConfirmed = 'B';
+                    result.matchedTransfer = phase1AltOptionB;
+                } else if (phase1AltOptionC) {
+                    console.log('[Phase ii.alt] ✅ Option C CONFIRMED at top level (ALT-resolved)');
+                    result.phaseMatched = 'i-alt';
+                    result.optionConfirmed = 'C';
+                    result.matchedTransfer = phase1AltOptionC;
+                }
+                result.evidence.phase1AltMatches = phase1AltMatches;
+            }
+
+            if (!result.phaseMatched) {
+                console.log('[Phase iii] ❌ HALT: No burner-source SPL Transfer to inputTokenAccount (Option C) or deriveAta(vaultPubkey, USDC) (Option B) at top, top-with-ALT, or inner level.');
             }
         }
 
