@@ -837,7 +837,7 @@ These are infrastructure / RPC failures, not security failures. User can legitim
 | Code | What happened | Agent action |
 |---|---|---|
 | `simulation_failed` | Simulator (RPC) call threw — timeout, network error, rate-limited beyond shaper backoff | Tell user. Offer: retry burner OR fall back to MWA. |
-| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). **Translation rules** (do NOT quote raw JSON): (a) `InsufficientFundsForFee` → "The burner wallet doesn't have enough SOL to pay transaction fees. Please send at least ~0.005 SOL to the burner address and retry." (b) `AccountLoadedTwice` → "The transaction references the same account as both sender and recipient — sending to yourself is not supported. Pick a different recipient address. (If you wanted to fund the burner FROM main, ask: `send X SOL from main to burner`.)" | **For `AccountLoadedTwice`:** surface the translated reason and ask the user to clarify the recipient — do NOT offer MWA retry (the same self-send error would occur on MWA). **For all other `simulation_returned_error` reasons** (including `InsufficientFundsForFee`): surface translated reason, then offer "retry burner once OR fall back to MWA". |
+| `simulation_returned_error` | RPC returned `value.err` (e.g. on-chain InstructionError). **As of BAT-1024 the reason is pre-decoded** — it names the Program + error name + description + (when applicable) an actionable Layer-2 hint, plus the last 5 `Program log:` lines for forensics. **Translation rules** (do NOT quote raw JSON): (a) `InsufficientFundsForFee` → "The burner wallet doesn't have enough SOL to pay transaction fees. Please send at least ~0.005 SOL to the burner address and retry." (b) `AccountLoadedTwice` → "The transaction references the same account as both sender and recipient — sending to yourself is not supported. Pick a different recipient address. (If you wanted to fund the burner FROM main, ask: `send X SOL from main to burner`.)" (c) BAT-1024 decoded Custom:N (e.g. "SPL Token returned InsufficientFunds (code 1): ...") → surface that line in plain language; if the reason explicitly includes the hint "burner likely needs SOL top-up for rent", OFFER to top up by calling `solana_send(source="main", to=<burner_pubkey>, amount=0.02)` and retrying. | **For `AccountLoadedTwice`:** surface the translated reason and ask the user to clarify the recipient — do NOT offer MWA retry (the same self-send error would occur on MWA). **For BAT-1024 topup hint:** offer the topup; do NOT claim Jupiter is down; do NOT guess at USDC ATA initialization issues — the decoded line is the truth. **For all other `simulation_returned_error` reasons** (including `InsufficientFundsForFee`): surface translated reason, then offer "retry burner once OR fall back to MWA". |
 | `simulation_metadata_missing` | `value.accounts[i]` was null for a required address; `getMultipleAccounts` pre-snapshot missing; OR an account exists but its data cannot be decoded as an SPL Token account (e.g. Token-2022 with extensions the burner decoder doesn't recognize). | Same. Often caused by public RPC dropping data under load, or a Token-2022 account format outside the supported decoder. Suggest MWA fallback. |
 | `tx_unparseable` | The tx bytes couldn't be parsed as legacy or v0 — likely a malformed Jupiter response | Surface. Offer retry. |
 | `alt_unresolved` | An instruction references an ALT-resolved program ID that simulation didn't surface | Same. Common when Helius cache misses. |
@@ -863,6 +863,39 @@ For users who want to halt autonomous signing immediately:
 3. **Wipe burner** — Settings → Burner Wallet → Wipe Burner. Destroys sealed key. Funds remain on-chain but unreachable until a new key is generated and the user transfers them.
 
 The agent SHOULD walk users through option 1 first when they ask "how do I stop the agent from signing" — it's the least destructive and fully reversible.
+
+### Burner SOL rent gotchas (BAT-1024)
+
+The most common burner-policy `simulation_returned_error` after BAT-1013 ships is **SPL Token `InsufficientFunds`** at the SOL-rent layer, which fires when:
+
+- The burner is creating a new account on-chain (Jupiter Trigger V2 Order PDA, ATA for output token, vault PDA) and the burner's SOL balance is below the rent-exempt minimum for those allocations
+- The burner has plenty of USDC but ~0 SOL — the input-token balance is fine; the SOL balance for rent is not
+- The agent (without BAT-1024) saw raw `{"InstructionError":[3,{"Custom":1}]}` and had no signal that it was a rent issue
+
+**With BAT-1024, the burner-policy reason string now decodes this case explicitly:**
+
+> SPL Token returned InsufficientFunds (code 1): Source account does not have enough tokens (or lamports for rent) to fund the transfer. — burner likely needs SOL top-up for rent (typical: ~0.01-0.02 SOL covers Order PDA + vault ATA). Suggest solana_send(source=main, to=<burner pubkey>, amount=0.02) and retry. (unitsConsumed=8421)
+>   logs[-5..]:
+>   Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]
+>   Program log: Error: insufficient funds
+>   Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1
+
+**Agent recovery flow:**
+
+1. Detect: the reason string includes the substring `"burner likely needs SOL top-up"` OR `"returned InsufficientFunds (code 1)"` (matches both SPL Token AND Token-2022 decoded reasons).
+2. Get the burner pubkey from the wallet section of your system prompt (it's already there via the snapshot cache). If for some reason it isn't visible, call `wallet_status` first.
+3. Offer to the user, in plain language: "Your burner is out of SOL for rent. Want me to send 0.02 SOL from your main wallet to the burner? After it confirms I'll retry the original order."
+4. On user confirmation: call `solana_send(source="main", to=<burner_pubkey>, amount=0.02)`. This will prompt MWA (Solflare popup). The tool result confirms BROADCAST (returned signature) — not on-chain finality. Under normal network conditions broadcast → finality is ~1-3 seconds, so retrying the original tool call right after the topup tool returns success is fine.
+5. After the topup tool result succeeds: retry the original tool call. If the retry also fails with the same rent error, tell the user "the topup may not have confirmed yet — check your wallet app for the tx status, then say 'retry' once it confirms."
+
+**What NOT to do:**
+
+- Do NOT claim Jupiter is down — the decoded line tells you it's SPL Token, not Jupiter.
+- Do NOT guess at "USDC ATA isn't initialized" — if that were the cause, you'd see `OwnerMismatch` (code 4) or `MintMismatch` (code 3), not `InsufficientFunds` (code 1).
+- Do NOT retry the original action without topping up first — the simulation is deterministic; it'll fail the same way.
+- Do NOT recommend the user manually top up via Phantom — you have the tools to do it for them via `solana_send(source="main")`.
+
+**How often this fires:** every Jupiter Trigger V2 create + cancel against a burner with < ~0.01 SOL. Most users will hit this on first burner use. The fix is one topup that lasts many orders.
 
 ### Tool-handler errors (distinct from burner-policy rejects)
 
