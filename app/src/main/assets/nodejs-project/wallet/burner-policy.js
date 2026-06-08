@@ -986,7 +986,19 @@ function validateExpectedDeltaShape(expectedDelta) {
             const v = expectedDelta.depositVault;
             if (!v || typeof v !== 'object') return reject('expected_delta_invalid_shape', 'depositVault required');
             if (!isNonEmptyBase58(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required');
-            if (!isNonEmptyBase58(v.expectedOwner)) return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner required');
+            // BAT-1025 v9.1: producers can supply either expectedOwner (the
+            // accountInfo.owner program id — V1 trigger pattern) OR
+            // expectedTokenOwner (the SPL token-account owner-slot value —
+            // V2 trigger pattern after Codex Option C re-pin 2026-06-08).
+            // Exactly one is required; both can be present for callers that
+            // want belt-and-suspenders. Enforcement in validateSimDelta:
+            // expectedTokenOwner → postAI.splToken.owner-slot assertion;
+            // expectedOwner stays shape-only until BAT-1029 V1 wiring.
+            const hasExpectedOwner = isNonEmptyBase58(v.expectedOwner);
+            const hasExpectedTokenOwner = isNonEmptyBase58(v.expectedTokenOwner);
+            if (!hasExpectedOwner && !hasExpectedTokenOwner) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner or depositVault.expectedTokenOwner required');
+            }
             return accept();
         }
         case 'solana_send': {
@@ -1358,6 +1370,12 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
                 mint: expectedDelta.burnerDebit ? expectedDelta.burnerDebit.mint : 'native_sol',
                 role: 'vault',
                 expectedDeltaAtomic: BigInt(expectedDelta.burnerDebit ? expectedDelta.burnerDebit.atomicAmount : 0),
+                // BAT-1025 v9.1: propagate expectedTokenOwner to the check so
+                // validateSimDelta can assert postAI.splToken.owner equality.
+                // Falsy when V1/legacy producers used the old expectedOwner
+                // field, which is intentionally NOT propagated here (it stays
+                // shape-only until BAT-1029 wires V1).
+                expectedTokenOwner: vault.expectedTokenOwner || null,
                 // Vault MAY be created at deposit time (Jupiter Trigger V2
                 // registers vaults lazily).
                 existencePolicy: { mustExistBefore: false, allowCreate: true, allowClose: false },
@@ -1549,6 +1567,27 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
                 if (postAI.exists && postAI.splToken && postAI.splToken.mint !== check.mint) {
                     return reject('simulation_mint_mismatch',
                         `post ${check.address} mint ${postAI.splToken.mint} != declared ${check.mint}`);
+                }
+            }
+            // BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08):
+            // for Jupiter Trigger V2 deposits the destination is an ephemeral
+            // SPL Token Account whose owner-slot value MUST equal the high-
+            // level Privy vault PDA returned as receiverAddress from
+            // /trigger/v2/deposit/craft. Producers propagate that pubkey to
+            // check.expectedTokenOwner via depositVault.expectedTokenOwner.
+            // When set, assert it against the decoded splToken.owner on both
+            // sides (pre may not exist for freshly-created ATAs — only check
+            // when splToken is decodable). Reuses simulation_recipient_mismatch
+            // per Codex: keeps the reject-code surface area unchanged so this
+            // PR avoids SAB-audit scope.
+            if (check.expectedTokenOwner) {
+                if (preAI.exists && preAI.splToken && preAI.splToken.owner !== check.expectedTokenOwner) {
+                    return reject('simulation_recipient_mismatch',
+                        `pre ${check.address} splToken.owner ${preAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
+                }
+                if (postAI.exists && postAI.splToken && postAI.splToken.owner !== check.expectedTokenOwner) {
+                    return reject('simulation_recipient_mismatch',
+                        `post ${check.address} splToken.owner ${postAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
                 }
             }
         }
