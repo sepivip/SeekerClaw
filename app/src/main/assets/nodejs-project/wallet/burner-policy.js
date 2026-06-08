@@ -1646,9 +1646,16 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
         // ATA) whose splToken sub-shape decodes cleanly. Nesting this
         // check inside the SPL branch would silently skip the owner-slot
         // binding on those routes — exactly the bypass class Codex flagged
-        // in the v8.6 active-destination blocker. The `preAI.splToken &&`
-        // / `postAI.splToken &&` guards keep the assertion a no-op for
-        // genuine System-account-only destinations.
+        // in the v8.6 active-destination blocker.
+        //
+        // Copilot PR #401 R6 (2026-06-08, refining R4): the original R1
+        // comment said the splToken-presence guards kept the assertion a
+        // no-op on System-account destinations. That was the R1 mental
+        // model, but R4 promoted it to a SECURITY FAIL-CLOSED — when
+        // expectedTokenOwner is set, an existing-but-non-SPL-decodable
+        // account is treated as a tampered destination and rejected with
+        // simulation_recipient_mismatch. Updating this comment to match
+        // the implementation below so future readers don't get whiplash.
         if (check.expectedTokenOwner) {
             // Copilot PR #401 R4 (2026-06-08): close the SOL-input bypass.
             // When a producer declares expectedTokenOwner, the destination

@@ -505,15 +505,25 @@ function writeAuditOnly(payload) {
                 loadedAddresses: simResult.value.loadedAddresses,
             } : null,
         };
-        writeFixture(fixture);
+        // Copilot PR #401 R6 (refining R5): only refresh the canonical
+        // pinned fixture on a SUCCESSFUL phase match. A halt-and-
+        // escalate run (no Option B/C match → phaseMatched=null) writes
+        // ONLY to the timestamped audit-trail copy — the committed
+        // pinned snapshot stays whatever it was, so a stale failure
+        // payload can't get accidentally committed via `git add -A`.
+        if (result.phaseMatched) {
+            writeFixture(fixture);
+        } else {
+            writeAuditOnly(fixture);
+        }
 
         console.log(`\n=== C1 RESULT ===`);
         console.log(`Verdict: ${result.verdict}`);
-        console.log(`Phase matched: ${result.phaseMatched || '(none)'}`);
+        console.log(`Phase matched: ${result.phaseMatched || '(none — pinned fixture NOT refreshed)'}`);
         if (result.matchedTransfer) {
             console.log(`Matched transfer: ${result.matchedTransfer.level} level, src=${redactPubkey(result.matchedTransfer.source)}, dst=${redactPubkey(result.matchedTransfer.destination)}, amount=${result.matchedTransfer.amountAtomic}`);
         }
-        console.log(`Pinned fixture: ${PINNED_FIXTURE}`);
+        console.log(`Pinned fixture: ${result.phaseMatched ? PINNED_FIXTURE : '(unchanged — halt-and-escalate)'}`);
         console.log(`Audit fixture:  ${AUDIT_FIXTURE}`);
 
         process.exit(result.phaseMatched ? 0 : 2);
