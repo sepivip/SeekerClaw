@@ -1256,7 +1256,7 @@ async function runAsync(name, fn) {
         // an undecodable destination first (availability class). But
         // for SOL inputs (check.mint === 'native_sol'), the SPL guard
         // doesn't run — validateSimDelta takes the native_sol branch
-        // which only computes lamportsDelta. Without the R4 R4 guard,
+        // which only computes lamportsDelta. Without the R4 guard,
         // a tampered SOL-input tx that routes to a System account
         // would have silently no-op'd the owner-slot binding because
         // postAI.splToken would be undefined and the existing guard
