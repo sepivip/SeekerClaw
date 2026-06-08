@@ -463,7 +463,14 @@ function writeFixture(payload) {
             matchedTransfer: result.matchedTransfer || null,
             txBase64: depositTxB64,
             receiverAddress,
-            jupiterCraftRequestId: craftRequestId,
+            // Copilot PR #401 R3: redact at write time so the audit-trail
+            // copy can never be accidentally committed with a raw Jupiter
+            // session id. The raw value lives in the `craftRequestId`
+            // local variable while the script runs (available for any
+            // in-process diagnostic), but is never persisted to either
+            // fixture. The fixtures/README.md secret-hygiene rule
+            // explicitly calls this out.
+            jupiterCraftRequestId: '<redacted-jupiter-session-id>',
             preSnapshot,
             sim: simResult ? {
                 slot: simResult.context?.slot,
