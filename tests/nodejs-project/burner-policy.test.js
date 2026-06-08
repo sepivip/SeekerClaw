@@ -2393,6 +2393,194 @@ async function runAsync(name, fn) {
         }
     });
 
+    // ─── BAT-1024: Custom:N decoder + sim.logs surfacing ────────────────────
+    //
+    // Caught during BAT-1013 device test 2026-06-08: burner-policy stringifies
+    // sim.value.err and throws away sim.value.logs, leaving the agent with
+    // `{"InstructionError":[3,{"Custom":1}]}` and no way to act on it. These
+    // tests pin the new decoder + log-surfacing contract.
+
+    const SPL_TOKEN_PID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    const TOKEN_2022_PID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+    const SYSTEM_PID = '11111111111111111111111111111111';
+    const UNKNOWN_PID = 'UnknownProgram1111111111111111111111111111';
+
+    check('BAT-1024: decodeCustomError SPL Token InsufficientFunds (code 1)', () => {
+        const d = policy._decodeCustomError(SPL_TOKEN_PID, 1);
+        assert.ok(d, 'expected a decoded entry, got null');
+        assert.strictEqual(d.program, 'SPL Token');
+        assert.strictEqual(d.name, 'InsufficientFunds');
+        assert.match(d.description, /tokens|lamports|rent/i);
+    });
+
+    check('BAT-1024: decodeCustomError System Program ResultWithNegativeLamports (code 1)', () => {
+        const d = policy._decodeCustomError(SYSTEM_PID, 1);
+        assert.ok(d);
+        assert.strictEqual(d.program, 'System Program');
+        assert.strictEqual(d.name, 'ResultWithNegativeLamports');
+    });
+
+    check('BAT-1024: decodeCustomError Token-2022 InsufficientFunds (code 1)', () => {
+        const d = policy._decodeCustomError(TOKEN_2022_PID, 1);
+        assert.ok(d);
+        assert.strictEqual(d.program, 'Token-2022');
+        assert.strictEqual(d.name, 'InsufficientFunds');
+    });
+
+    check('BAT-1024: decodeCustomError returns null for unknown program', () => {
+        const d = policy._decodeCustomError(UNKNOWN_PID, 1);
+        assert.strictEqual(d, null);
+    });
+
+    check('BAT-1024: decodeCustomError returns null for unknown code in known program', () => {
+        // SPL Token tops out at 19 (NonNativeNotSupported) in our table.
+        const d = policy._decodeCustomError(SPL_TOKEN_PID, 9999);
+        assert.strictEqual(d, null);
+    });
+
+    check('BAT-1024: programNameOf names known programs, friendly-trims unknown', () => {
+        assert.strictEqual(policy._programNameOf(SPL_TOKEN_PID), 'SPL Token');
+        assert.strictEqual(policy._programNameOf(SYSTEM_PID), 'System Program');
+        const u = policy._programNameOf(UNKNOWN_PID);
+        assert.match(u, /unknown program \(Unkn…1111\)/);
+        assert.strictEqual(policy._programNameOf(null), 'unknown program');
+        assert.strictEqual(policy._programNameOf(undefined), 'unknown program');
+    });
+
+    check('BAT-1024: summarizeSimulationLogs bounds output to last 5 lines, 160 chars each', () => {
+        const longLine = 'x'.repeat(500);
+        const logs = ['a', 'b', 'c', 'd', 'e', 'f', 'g', longLine];
+        const out = policy._summarizeSimulationLogs(logs);
+        const lines = out.split('\n  '); // joiner from impl
+        assert.strictEqual(lines.length, 5, `expected exactly 5 lines, got ${lines.length}`);
+        assert.strictEqual(lines[0], 'd', `first kept line should be "d", got "${lines[0]}"`);
+        assert.strictEqual(lines[4].length, 160, `last line (long) should be trimmed to 160, got ${lines[4].length}`);
+        assert.ok(lines[4].endsWith('...'), 'long line should be ellipsis-trimmed');
+    });
+
+    check('BAT-1024: summarizeSimulationLogs handles empty/missing logs', () => {
+        assert.strictEqual(policy._summarizeSimulationLogs(undefined), '');
+        assert.strictEqual(policy._summarizeSimulationLogs(null), '');
+        assert.strictEqual(policy._summarizeSimulationLogs([]), '');
+        assert.strictEqual(policy._summarizeSimulationLogs('not an array'), '');
+    });
+
+    check('BAT-1024: formatSimulationErrorReason decodes SPL Token InsufficientFunds AND appends topup suggestion', () => {
+        // Today's actual failure: createOrder fails at ix index 3 with SPL Token Custom:1.
+        const parsed = {
+            staticAccountKeys: [
+                'BurnerPubkey1111111111111111111111111111111',
+                'UsdcMint111111111111111111111111111111111111',
+                'SystemProgram111111111111111111111111111111',
+                SPL_TOKEN_PID, // idx 3 — the failing instruction's programIdIdx
+                'VaultATA1111111111111111111111111111111111',
+            ],
+            instructions: [
+                { programIdIdx: 2, accountIdxs: [0], dataBytes: Buffer.alloc(0) },
+                { programIdIdx: 2, accountIdxs: [0], dataBytes: Buffer.alloc(0) },
+                { programIdIdx: 2, accountIdxs: [0], dataBytes: Buffer.alloc(0) },
+                { programIdIdx: 3, accountIdxs: [4, 0], dataBytes: Buffer.alloc(0) }, // SPL Token transfer
+            ],
+        };
+        const simValue = {
+            err: { InstructionError: [3, { Custom: 1 }] },
+            unitsConsumed: 8421,
+            logs: [
+                'Program 11111111111111111111111111111111 invoke [1]',
+                'Program 11111111111111111111111111111111 success',
+                `Program ${SPL_TOKEN_PID} invoke [2]`,
+                'Program log: Error: insufficient funds',
+                `Program ${SPL_TOKEN_PID} failed: custom program error: 0x1`,
+            ],
+        };
+        const reason = policy._formatSimulationErrorReason(simValue, parsed, parsed.staticAccountKeys);
+        // Primary decoded line
+        assert.match(reason, /SPL Token returned InsufficientFunds \(code 1\)/, `missing primary decoded line: ${reason}`);
+        // Topup suggestion (Layer 2)
+        assert.match(reason, /burner likely needs SOL top-up/i, `missing topup suggestion: ${reason}`);
+        assert.match(reason, /solana_send\(source=main/, `missing actionable solana_send hint: ${reason}`);
+        // Units consumed
+        assert.match(reason, /unitsConsumed=8421/);
+        // Log tail
+        assert.match(reason, /logs\[-5\.\.\]:/);
+        assert.match(reason, /Program log: Error: insufficient funds/);
+        // NO raw InstructionError JSON leaking through
+        assert.ok(!/\{"InstructionError"/.test(reason), `raw err JSON leaked: ${reason}`);
+    });
+
+    check('BAT-1024: Layer 2 topup hint must NOT fire for SPL Token non-InsufficientFunds codes', () => {
+        // Same shape as the SPL Token + Custom:1 case, but Custom:4 (OwnerMismatch)
+        // — the decoder must surface the human reason WITHOUT the topup suggestion,
+        // because OwnerMismatch isn't fixed by topping up the burner.
+        const parsed = {
+            staticAccountKeys: ['BurnerPubkey1111111111111111111111111111111', SPL_TOKEN_PID],
+            instructions: [{ programIdIdx: 1, accountIdxs: [], dataBytes: Buffer.alloc(0) }],
+        };
+        const simValue = { err: { InstructionError: [0, { Custom: 4 }] }, logs: [] };
+        const reason = policy._formatSimulationErrorReason(simValue, parsed, parsed.staticAccountKeys);
+        assert.match(reason, /SPL Token returned OwnerMismatch \(code 4\)/);
+        assert.ok(!/top-up|topup/i.test(reason),
+            `topup hint must not fire for non-InsufficientFunds codes; got: ${reason}`);
+        assert.ok(!/solana_send/.test(reason),
+            `solana_send hint must not fire for non-InsufficientFunds codes; got: ${reason}`);
+    });
+
+    check('BAT-1024: Layer 2 topup hint must NOT fire for non-token-program InsufficientFunds-equivalent', () => {
+        // System Program code 1 = ResultWithNegativeLamports. The decoder
+        // should surface the System Program error WITHOUT the SPL-Token
+        // topup suggestion (different mitigation: it's an arithmetic issue
+        // at the System layer, not always a top-up fix).
+        const parsed = {
+            staticAccountKeys: [SYSTEM_PID],
+            instructions: [{ programIdIdx: 0, accountIdxs: [], dataBytes: Buffer.alloc(0) }],
+        };
+        const simValue = { err: { InstructionError: [0, { Custom: 1 }] }, logs: [] };
+        const reason = policy._formatSimulationErrorReason(simValue, parsed, parsed.staticAccountKeys);
+        assert.match(reason, /System Program returned ResultWithNegativeLamports/);
+        assert.ok(!/top-up|topup/i.test(reason),
+            `topup hint is SPL-Token-specific; got: ${reason}`);
+    });
+
+    check('BAT-1024: formatSimulationErrorReason names unknown program when code is unknown', () => {
+        const parsed = {
+            staticAccountKeys: [UNKNOWN_PID],
+            instructions: [{ programIdIdx: 0, accountIdxs: [], dataBytes: Buffer.alloc(0) }],
+        };
+        const simValue = { err: { InstructionError: [0, { Custom: 42 }] }, logs: [] };
+        const reason = policy._formatSimulationErrorReason(simValue, parsed, parsed.staticAccountKeys);
+        assert.match(reason, /unknown program \(Unkn…1111\) rejected at instruction 0 with Custom:42/);
+    });
+
+    check('BAT-1024: formatSimulationErrorReason falls back gracefully when logs absent', () => {
+        const parsed = {
+            staticAccountKeys: [SPL_TOKEN_PID],
+            instructions: [{ programIdIdx: 0, accountIdxs: [], dataBytes: Buffer.alloc(0) }],
+        };
+        const simValue = { err: { InstructionError: [0, { Custom: 1 }] } };
+        const reason = policy._formatSimulationErrorReason(simValue, parsed, parsed.staticAccountKeys);
+        assert.match(reason, /SPL Token returned InsufficientFunds/);
+        assert.ok(!/logs\[-5\.\.\]/.test(reason), 'log section should be absent when no logs');
+        assert.ok(!/unitsConsumed/.test(reason), 'unitsConsumed section should be absent when missing');
+    });
+
+    check('BAT-1024: formatSimulationErrorReason handles non-InstructionError shapes (preserve current behavior)', () => {
+        const parsed = { staticAccountKeys: [], instructions: [] };
+        const simValue = { err: 'BlockhashNotFound', logs: ['Program 11111 invoke [1]'] };
+        const reason = policy._formatSimulationErrorReason(simValue, parsed, []);
+        // Falls through to original "simulation failed on-chain: ..." style for unrecognized shapes
+        assert.match(reason, /simulation failed on-chain: BlockhashNotFound/);
+        // Logs are still appended for diagnostics
+        assert.match(reason, /logs\[-5\.\.\]:/);
+    });
+
+    check('BAT-1024: formatSimulationErrorReason handles out-of-bounds ix index without throwing', () => {
+        const parsed = { staticAccountKeys: [], instructions: [] };
+        const simValue = { err: { InstructionError: [99, { Custom: 1 }] }, logs: [] };
+        // Should not throw, should preserve original err JSON
+        const reason = policy._formatSimulationErrorReason(simValue, parsed, []);
+        assert.match(reason, /simulation failed on-chain:/);
+    });
+
     console.log();
     console.log(`Result: ${pass} passed, ${fail} failed`);
     if (fail > 0) process.exit(1);

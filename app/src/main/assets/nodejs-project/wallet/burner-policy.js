@@ -271,6 +271,184 @@ const DELTA_KINDS = Object.freeze([
 
 const SIGNER_MODES = Object.freeze(['burner_only', 'sponsored', 'cosigned']);
 
+// ─── BAT-1024: on-chain simulation error decoder ──────────────────────────
+//
+// When sim.value.err is `{InstructionError: [N, {Custom: M}]}`, Solana's
+// json-stringified form is opaque to humans ("Custom:1" tells you nothing).
+// To make the agent's reply actionable, we:
+//   1. Translate Custom:M against the per-program error enum (table below)
+//   2. Name the program even when the code is unknown
+//   3. Surface the simulation's `logs[]` tail (the Program log lines that
+//      explain what actually failed — most simulators include them)
+//
+// Sources for each table are upstream program repos. Per the
+// `feedback_official_docs_over_memory` rule, every entry MUST be traceable
+// to a source URL in the // SOURCE: comment below the table. Do not add
+// codes from memory.
+//
+// Common case (today's BAT-1013 device test, 2026-06-08): Jupiter Trigger V2
+// createOrder fails with `{"InstructionError":[3,{"Custom":1}]}`. ix index 3
+// is the SPL Token transfer that funds the deposit vault — Custom:1 = SPL
+// Token TokenError::InsufficientFunds, which means the burner's source ATA
+// didn't have enough lamports (almost always SOL rent for newly-created
+// vault/order accounts, NOT the input-token balance — because the SOL math
+// for rent must succeed independently of the input transfer).
+
+const PROGRAM_ERROR_TABLES = Object.freeze({
+    // SPL Token program (classic SPL token, not Token-2022).
+    // SOURCE: github.com/solana-labs/solana-program-library
+    //         token/program/src/error.rs  (TokenError enum)
+    'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA': {
+        name: 'SPL Token',
+        codes: Object.freeze({
+            0: { name: 'NotRentExempt', description: 'Lamport balance below rent-exempt threshold.' },
+            1: { name: 'InsufficientFunds', description: 'Source account does not have enough tokens (or lamports for rent) to fund the transfer.' },
+            2: { name: 'InvalidMint', description: 'Token mint mismatch.' },
+            3: { name: 'MintMismatch', description: 'Account mint does not match the operation mint.' },
+            4: { name: 'OwnerMismatch', description: 'Owner does not match expected.' },
+            5: { name: 'FixedSupply', description: 'Mint is fixed supply; cannot mint more.' },
+            6: { name: 'AlreadyInUse', description: 'Account is already initialized.' },
+            7: { name: 'InvalidNumberOfProvidedSigners', description: 'Invalid number of provided signers for multisig.' },
+            8: { name: 'InvalidNumberOfRequiredSigners', description: 'Invalid number of required signers for multisig.' },
+            9: { name: 'UninitializedState', description: 'State is uninitialized.' },
+            10: { name: 'NativeNotSupported', description: 'Native mint is not supported by this instruction.' },
+            11: { name: 'NonNativeHasBalance', description: 'Non-native account can only be closed if its balance is zero.' },
+            12: { name: 'InvalidInstruction', description: 'Invalid instruction.' },
+            13: { name: 'InvalidState', description: 'State is invalid for the requested operation.' },
+            14: { name: 'Overflow', description: 'Arithmetic overflow during token operation.' },
+            15: { name: 'AuthorityTypeNotSupported', description: 'Authority type not supported.' },
+            16: { name: 'MintCannotFreeze', description: 'Mint has no freeze authority.' },
+            17: { name: 'AccountFrozen', description: 'Token account is frozen.' },
+            18: { name: 'MintDecimalsMismatch', description: 'Mint decimals do not match decimals declared in the instruction.' },
+            19: { name: 'NonNativeNotSupported', description: 'Non-native account is not supported by this instruction.' },
+        }),
+    },
+    // System Program — base lamport movement + account create.
+    // SOURCE: docs.solana.com & solana SDK system_instruction error enum
+    '11111111111111111111111111111111': {
+        name: 'System Program',
+        codes: Object.freeze({
+            0: { name: 'AccountAlreadyInUse', description: 'Account is already in use (already created).' },
+            1: { name: 'ResultWithNegativeLamports', description: 'Transfer would leave the source account with negative lamports.' },
+            2: { name: 'InvalidProgramId', description: 'Invalid program id supplied.' },
+            3: { name: 'InvalidAccountDataLength', description: 'Invalid account data length.' },
+            4: { name: 'MaxSeedLengthExceeded', description: 'Seed length exceeds limit.' },
+            5: { name: 'AddressWithSeedMismatch', description: 'Derived address does not match supplied address.' },
+            6: { name: 'NonceNoRecentBlockhashes', description: 'No recent blockhashes available to advance the nonce.' },
+            7: { name: 'NonceBlockhashNotExpired', description: 'Nonce blockhash has not yet expired.' },
+            8: { name: 'NonceUnexpectedBlockhashValue', description: 'Unexpected blockhash value in nonce account.' },
+        }),
+    },
+    // SPL Associated Token Account program.
+    // SOURCE: github.com/solana-labs/solana-program-library
+    //         associated-token-account/program/src/error.rs
+    'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL': {
+        name: 'SPL Associated Token Account',
+        codes: Object.freeze({
+            0: { name: 'InvalidOwner', description: 'Account is not owned by the expected program.' },
+        }),
+    },
+    // Token-2022 program (extensions). Shares the SPL Token base codes 0-19;
+    // extension codes start higher. Only the base codes are listed here —
+    // extension codes can be added as encountered.
+    // SOURCE: github.com/solana-labs/solana-program-library
+    //         token/program-2022/src/error.rs
+    'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb': {
+        name: 'Token-2022',
+        codes: Object.freeze({
+            0: { name: 'NotRentExempt', description: 'Lamport balance below rent-exempt threshold.' },
+            1: { name: 'InsufficientFunds', description: 'Source account does not have enough tokens (or lamports for rent) to fund the transfer.' },
+            2: { name: 'InvalidMint', description: 'Token mint mismatch.' },
+            3: { name: 'MintMismatch', description: 'Account mint does not match the operation mint.' },
+            4: { name: 'OwnerMismatch', description: 'Owner does not match expected.' },
+            14: { name: 'Overflow', description: 'Arithmetic overflow during token operation.' },
+            17: { name: 'AccountFrozen', description: 'Token account is frozen.' },
+        }),
+    },
+});
+
+function programNameOf(programId) {
+    if (!programId || typeof programId !== 'string') return 'unknown program';
+    const t = PROGRAM_ERROR_TABLES[programId];
+    if (t) return t.name;
+    // Friendly truncation: first 4 + last 4 chars so logs stay scannable.
+    const head = programId.slice(0, 4);
+    const tail = programId.slice(-4);
+    return `unknown program (${head}…${tail})`;
+}
+
+function decodeCustomError(programId, customCode) {
+    if (!programId || typeof customCode !== 'number') return null;
+    const t = PROGRAM_ERROR_TABLES[programId];
+    if (!t) return null;
+    const entry = t.codes[customCode];
+    if (!entry) return null;
+    return { program: t.name, name: entry.name, description: entry.description };
+}
+
+function summarizeSimulationLogs(logs, maxLines = 5, maxLineLen = 160) {
+    if (!Array.isArray(logs) || logs.length === 0) return '';
+    return logs.slice(-maxLines)
+        .map((l) => {
+            const s = String(l == null ? '' : l);
+            return s.length > maxLineLen ? s.slice(0, maxLineLen - 3) + '...' : s;
+        })
+        .join('\n  ');
+}
+
+/**
+ * Build the human-readable reject reason for a simulation_returned_error.
+ * Decodes InstructionError[idx, {Custom: code}] against per-program tables;
+ * appends `unitsConsumed` + the tail of `sim.value.logs[]` for diagnostics.
+ *
+ * `combinedAccountKeys` may be null when the err is detected before ALT
+ * resolution runs; in that case the program-name lookup falls back to
+ * static account keys only (still useful — most failing instructions
+ * reference statically-listed programs like SPL Token).
+ */
+function formatSimulationErrorReason(simValue, parsed, combinedAccountKeys) {
+    const err = simValue.err;
+    const errStr = typeof err === 'string' ? err : JSON.stringify(err);
+    let primary = `simulation failed on-chain: ${errStr}`;
+
+    if (err && typeof err === 'object' && Array.isArray(err.InstructionError)) {
+        const ixIdx = err.InstructionError[0];
+        const body = err.InstructionError[1];
+        if (typeof ixIdx === 'number' && body && typeof body.Custom === 'number'
+            && parsed && Array.isArray(parsed.instructions)
+            && ixIdx >= 0 && ixIdx < parsed.instructions.length) {
+            const instr = parsed.instructions[ixIdx];
+            const keys = combinedAccountKeys || parsed.staticAccountKeys || [];
+            const programId = (instr && typeof instr.programIdIdx === 'number' && instr.programIdIdx < keys.length)
+                ? keys[instr.programIdIdx]
+                : null;
+            const decoded = programId ? decodeCustomError(programId, body.Custom) : null;
+            if (decoded) {
+                primary = `${decoded.program} returned ${decoded.name} (code ${body.Custom}): ${decoded.description}`;
+                // BAT-1024 Layer 2: SPL Token InsufficientFunds is the
+                // most common burner failure mode — almost always SOL
+                // rent for newly-created accounts. Append an actionable
+                // suggestion so the agent doesn't have to guess.
+                if ((programId === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+                     || programId === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')
+                    && body.Custom === 1) {
+                    primary += ' — burner likely needs SOL top-up for rent (typical: ~0.01-0.02 SOL covers Order PDA + vault ATA). Suggest solana_send(source=main, to=<burner pubkey>, amount=0.02) and retry.';
+                }
+            } else {
+                primary = `${programNameOf(programId)} rejected at instruction ${ixIdx} with Custom:${body.Custom}`;
+            }
+        }
+    }
+
+    const units = (typeof simValue.unitsConsumed === 'number')
+        ? ` (unitsConsumed=${simValue.unitsConsumed})`
+        : '';
+    const logTail = summarizeSimulationLogs(simValue.logs);
+    return logTail
+        ? `${primary}${units}\n  logs[-5..]:\n  ${logTail}`
+        : `${primary}${units}`;
+}
+
 // ─── Structured response helpers ──────────────────────────────────────────
 
 function reject(code, reason, extra) {
@@ -1541,8 +1719,19 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
             `preSnapshot missing or wrong length (expected ${requestedAddresses.length}, got ${preSnapshot ? preSnapshot.length : 'null'})`);
     }
     if (sim.value.err !== null && sim.value.err !== undefined) {
-        const errStr = typeof sim.value.err === 'string' ? sim.value.err : JSON.stringify(sim.value.err);
-        return reject('simulation_returned_error', `simulation failed on-chain: ${errStr}`);
+        // BAT-1024: decode err.InstructionError[idx,{Custom:M}] + append
+        // sim.value.logs[] tail so the agent / user see actionable diagnostics
+        // instead of raw `{"InstructionError":[3,{"Custom":1}]}` JSON.
+        // combinedAccountKeys is built a few lines below; recompute the
+        // minimal version here so we can name the failing program. ALT
+        // entries may be missing (we don't have loadedAddresses yet) — the
+        // decoder gracefully falls back to static keys.
+        const _loadedHint = sim.value.loadedAddresses || {};
+        const _altWritable = Array.isArray(_loadedHint.writable) ? _loadedHint.writable.filter(isNonEmptyBase58) : [];
+        const _altReadonly = Array.isArray(_loadedHint.readonly) ? _loadedHint.readonly.filter(isNonEmptyBase58) : [];
+        const _combinedHint = [...parsed.staticAccountKeys, ..._altWritable, ..._altReadonly];
+        const reason = formatSimulationErrorReason(sim.value, parsed, _combinedHint);
+        return reject('simulation_returned_error', reason);
     }
 
     // ── 8. Build combined account keys (static + loadedAddresses) ──
@@ -1630,4 +1819,10 @@ module.exports = {
     _buildAccountChecks: buildAccountChecks,
     _applyTolerance: applyTolerance,
     _indexOfPubkey: indexOfPubkey,
+    // BAT-1024 decoder helpers (test surface)
+    _decodeCustomError: decodeCustomError,
+    _programNameOf: programNameOf,
+    _summarizeSimulationLogs: summarizeSimulationLogs,
+    _formatSimulationErrorReason: formatSimulationErrorReason,
+    _PROGRAM_ERROR_TABLES: PROGRAM_ERROR_TABLES,
 };
