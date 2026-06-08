@@ -45,6 +45,12 @@
 const { httpRequest } = require('../http');
 const { log, config } = require('../config');
 
+// Solana pubkey base58 validator. Mirrors wallet/burner-policy.js:892 — kept
+// local to avoid cross-module import churn for a 1-line predicate.
+function _isBase58Pubkey(s) {
+    return typeof s === 'string' && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
+}
+
 // ── Module-level state ──────────────────────────────────────────────────────
 
 // JWT cache: pubkey → { token, expiresAt }. Token is opaque (Jupiter Bearer).
@@ -810,15 +816,35 @@ function validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippa
  * needed to find the order in /orders/history if the create POST is lost
  * after deposit signing. Caller must NOT persist or log it.
  *
- * Contract (Jupiter V2 openapi, verified live 2026-05-29):
+ * Contract (Jupiter V2 openapi, verified live 2026-05-29; receiverAddress +
+ * inputTokenAccount surface BAT-1025 v9.1, captured live 2026-06-08):
  *   POST /trigger/v2/deposit/craft
  *   body: { inputMint, outputMint, userAddress, amount (smallest-unit string),
  *           orderType:'price', orderSubType:'single' }
  *   resp: { transaction (base64 unsigned), requestId, receiverAddress, mint,
- *           amount, tokenDecimals, ... }
+ *           amount, tokenDecimals, inputTokenAccount, ... }
  * Note the cross-endpoint naming quirk: craft uses `userAddress`/`amount`,
  * while /orders/price (submitCreateOrder) uses `userPubkey`/`inputAmount`.
  * The craft response's `requestId` becomes /orders/price's `depositRequestId`.
+ *
+ * Return on success: { ok: true, transaction, depositRequestId,
+ *                      recoveryContext, receiverAddress, inputTokenAccount }
+ *   - receiverAddress: the high-level Privy vault PDA (matches
+ *     ensureVault().vaultPubkey); shows up as splToken.owner-slot on the
+ *     on-chain deposit destination but is NOT itself the on-chain destination.
+ *   - inputTokenAccount: the EPHEMERAL classic SPL Token Account
+ *     (TokenkegQ…-owned) that the deposit tx funds with the burner's input
+ *     mint. Different per craft call. Used as expectedDelta.depositVault.pubkey
+ *     by tools/solana.js _jupiterTriggerCreateV2 so that burner-policy's
+ *     existing SPL Token mint + exact-delta check binds to the actual
+ *     destination, with an splToken.owner === receiverAddress assertion
+ *     added on the post-state in validateSimDelta.
+ *
+ * Failure modes — the response-shape validation rejects with
+ *   error='vault_unavailable' on missing/malformed receiverAddress or
+ *   inputTokenAccount, or inputTokenAccount === receiverAddress. These hit
+ *   the same vault_unavailable surface as the legacy missing-fields path
+ *   (caller propagates back through routeAndSign).
  */
 async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount }) {
     if (!token) return { ok: false, error: 'auth_required', reason: 'no JWT supplied — call authenticate() first' };
@@ -841,6 +867,28 @@ async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount 
     if (!craftRes.data || typeof craftRes.data.transaction !== 'string' || !craftRes.data.requestId) {
         return { ok: false, error: 'deposit_craft_failed', reason: 'response missing transaction or requestId' };
     }
+    // BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08): Jupiter Trigger V2
+    // creates an EPHEMERAL SPL Token Account (inputTokenAccount) per craft
+    // request as the on-chain destination for the burner's USDC. The vault
+    // pubkey itself (receiverAddress) is the SPL token-account owner-slot
+    // value, NOT the on-chain transfer destination. Both fields are required
+    // on the burner code path so the producer can wire depositVault.pubkey =
+    // inputTokenAccount and the policy can assert post-state splToken.owner
+    // === receiverAddress. Empirically verified via
+    // tests/jupiter-ultra/live-capture-sim-fixture.js — see
+    // tests/jupiter-ultra/fixtures/sim-deposit-pinned.json.
+    const receiverAddress = craftRes.data.receiverAddress;
+    const inputTokenAccount = craftRes.data.inputTokenAccount;
+    if (!_isBase58Pubkey(receiverAddress)) {
+        return { ok: false, error: 'vault_unavailable', reason: 'deposit/craft response missing or malformed receiverAddress' };
+    }
+    if (!_isBase58Pubkey(inputTokenAccount)) {
+        return { ok: false, error: 'vault_unavailable', reason: 'deposit/craft response missing or malformed inputTokenAccount' };
+    }
+    if (inputTokenAccount === receiverAddress) {
+        // Sanity: vault PDA cannot also be its own SPL token account destination.
+        return { ok: false, error: 'vault_unavailable', reason: 'deposit/craft response inputTokenAccount === receiverAddress' };
+    }
     const recoveryContext = {
         walletPubkey: pubkey,
         depositRequestId: craftRes.data.requestId,
@@ -860,6 +908,8 @@ async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount 
         transaction: craftRes.data.transaction,
         depositRequestId: craftRes.data.requestId,
         recoveryContext,
+        receiverAddress,
+        inputTokenAccount,
     };
 }
 
