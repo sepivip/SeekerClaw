@@ -1673,11 +1673,25 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
             // (postAI.splToken is falsy), a tampered tx has routed the
             // declared destination to a System account or an opaque
             // non-SPL account — the binding cannot be performed. Fail
-            // closed with the same simulation_recipient_mismatch (security
-            // class) reject so the policy never silently no-ops the
-            // active-destination invariant. preAI gets the same treatment
-            // when it exists (covers a takeover where pre was a real
-            // SPL account but the attacker repurposed it before sign).
+            // closed so the policy never silently no-ops the active-
+            // destination invariant.
+            //
+            // Copilot PR #401 R10 (2026-06-08): which reject code actually
+            // fires depends on the input mint. For non-`native_sol` (SPL
+            // inputs like USDC), the existing simulation_metadata_missing
+            // guard inside the SPL `else` branch above ALREADY rejects
+            // the same shape — as an AVAILABILITY-class error suggesting
+            // MWA fallback. The fail-closed simulation_recipient_mismatch
+            // (security-class) reject below is therefore primarily the
+            // load-bearing path for `native_sol` inputs, where the SPL
+            // decode guard doesn't run because validateSimDelta takes the
+            // `if (check.mint === 'native_sol')` branch. Future readers
+            // tracing a specific reject should expect:
+            //   • SPL input + non-SPL destination → simulation_metadata_missing (availability)
+            //   • SOL input + non-SPL destination → simulation_recipient_mismatch (security, here)
+            // preAI gets the same treatment when it exists (covers a
+            // takeover where pre was a real SPL account but the attacker
+            // repurposed it before sign).
             if (preAI.exists && !preAI.splToken) {
                 return reject('simulation_recipient_mismatch',
                     `pre ${check.address} declares expectedTokenOwner but is not SPL-decodable (no splToken metadata)`);
