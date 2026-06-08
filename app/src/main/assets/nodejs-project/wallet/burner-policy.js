@@ -82,7 +82,23 @@
 
 'use strict';
 
-const { TxParseError, parseTransaction } = require('./tx-parser');
+const { TxParseError, parseTransaction, base58Decode } = require('./tx-parser');
+
+// Strict 32-byte Solana pubkey predicate. Copilot PR #401 R5: the long-
+// standing `isNonEmptyBase58` (charset + 32-44 length) is too loose for
+// new code paths where a producer bug must fail fast at the shape gate
+// (vs slipping into validateSimDelta and surfacing as a confusing
+// later reject). This adds the byte-count check that
+// jupiter/trigger-v2.js `_isBase58Pubkey` and solana.js
+// `isValidSolanaAddress` both perform. Kept as a separate predicate
+// instead of tightening `isNonEmptyBase58` itself to avoid touching the
+// 11+ legacy call sites in this PR's scope.
+function _isStrictPubkey(s) {
+    if (typeof s !== 'string') return false;
+    if (s.length < 32 || s.length > 44) return false;
+    if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(s)) return false;
+    try { return base58Decode(s).length === 32; } catch { return false; }
+}
 const { readAccountInfo, tokenDelta, lamportsDelta } = require('./spl-token-layout');
 
 // Sentinel for SPL accounts whose mint is unknown at expectedDelta build
@@ -1022,14 +1038,20 @@ function validateExpectedDeltaShape(expectedDelta) {
             // binding or surfaces as a confusing simulation_recipient_mismatch
             // later. Fail fast at the shape gate so the producer-side
             // bug is the rejection reason.
-            if (v.expectedOwner != null && !isNonEmptyBase58(v.expectedOwner)) {
-                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner provided but is not a valid base58 pubkey');
+            // Copilot R5: use the strict 32-byte predicate here so the
+            // producer-side strictness in jupiter/trigger-v2.js mirrors
+            // the consumer side. Otherwise a 31/33-byte base58 string
+            // would pass the shape gate and surface later as a
+            // simulation_recipient_mismatch (or RPC error) that's
+            // harder to root-cause back to the producer bug.
+            if (v.expectedOwner != null && !_isStrictPubkey(v.expectedOwner)) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner provided but is not a valid 32-byte base58 pubkey');
             }
-            if (v.expectedTokenOwner != null && !isNonEmptyBase58(v.expectedTokenOwner)) {
-                return reject('expected_delta_invalid_shape', 'depositVault.expectedTokenOwner provided but is not a valid base58 pubkey');
+            if (v.expectedTokenOwner != null && !_isStrictPubkey(v.expectedTokenOwner)) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedTokenOwner provided but is not a valid 32-byte base58 pubkey');
             }
-            const hasExpectedOwner = isNonEmptyBase58(v.expectedOwner);
-            const hasExpectedTokenOwner = isNonEmptyBase58(v.expectedTokenOwner);
+            const hasExpectedOwner = _isStrictPubkey(v.expectedOwner);
+            const hasExpectedTokenOwner = _isStrictPubkey(v.expectedTokenOwner);
             if (!hasExpectedOwner && !hasExpectedTokenOwner) {
                 return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner or depositVault.expectedTokenOwner required');
             }

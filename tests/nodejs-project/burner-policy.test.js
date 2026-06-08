@@ -1333,7 +1333,7 @@ async function runAsync(name, fn) {
         });
         assert.strictEqual(r.ok, false);
         assert.strictEqual(r.error, 'expected_delta_invalid_shape');
-        assert.match(r.reason, /expectedOwner provided but is not a valid base58 pubkey/);
+        assert.match(r.reason, /expectedOwner provided but is not a valid (32-byte )?base58 pubkey/);
     });
 
     check('BAT-1025 v9.1 R4: shape validator rejects malformed expectedTokenOwner when provided', () => {
@@ -1349,7 +1349,30 @@ async function runAsync(name, fn) {
         });
         assert.strictEqual(r.ok, false);
         assert.strictEqual(r.error, 'expected_delta_invalid_shape');
-        assert.match(r.reason, /expectedTokenOwner provided but is not a valid base58 pubkey/);
+        assert.match(r.reason, /expectedTokenOwner provided but is not a valid (32-byte )?base58 pubkey/);
+    });
+
+    check('BAT-1025 v9.1 R5: shape validator rejects 31-byte-decoded base58 string (Copilot R5 strict 32-byte check)', () => {
+        // 43-char base58 string that base58-decodes to exactly 31 bytes.
+        // It passes the charset and length range, so the LEGACY
+        // `isNonEmptyBase58` (charset + 32-44 length) would have accepted
+        // it as a "pubkey" — but Solana pubkeys are exactly 32 bytes.
+        // R5 introduced `_isStrictPubkey` to catch this class of producer
+        // bug at the shape gate. Regression test: this MUST reject.
+        const thirtyOneByteBase58 = '3bwRzpPbZL9Go5eg1BJGHVpWLiBUJQGiusbLTsfUsSZ';
+        assert.strictEqual(thirtyOneByteBase58.length, 43, 'sanity check on test fixture length');
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            depositVault: {
+                pubkey: INPUT_TOKEN_ACCOUNT,
+                expectedTokenOwner: thirtyOneByteBase58,
+            },
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /not a valid 32-byte base58 pubkey/);
     });
 
     await runAsync('BAT-1025 v9.1 no-V1-change: V1 expectedOwner-only shape still passes shape gate (V1 path untouched)', async () => {

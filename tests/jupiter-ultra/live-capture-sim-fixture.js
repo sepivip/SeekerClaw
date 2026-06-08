@@ -126,8 +126,13 @@ function readLEUInt64(buf, offset) {
 }
 
 function decodeSplTransferAmount(dataBytes) {
-    // Transfer:        [0]=3,  [1..9]=amount (u64 LE)
-    // TransferChecked: [0]=12, [1..9]=amount (u64 LE), [9]=decimals
+    // SPL Token instruction layout (bytes inclusive on both ends):
+    //   Transfer:        [0]=3 discriminator,  [1..8]=amount (u64 LE)
+    //   TransferChecked: [0]=12 discriminator, [1..8]=amount (u64 LE), [9]=decimals
+    // (Copilot PR #401 R5: prior `[1..9]` notation was ambiguous /
+    // off-by-one — u64 LE is 8 bytes, occupying offsets 1 through 8.
+    // The reader below reads 8 bytes starting at offset 1, which is
+    // correct; only the comment was misleading.)
     if (dataBytes.length < 9) return null;
     const disc = dataBytes[0];
     if (disc !== TOKEN_IX.TRANSFER && disc !== TOKEN_IX.TRANSFER_CHECKED) return null;
@@ -222,6 +227,16 @@ function writeFixture(payload) {
     ensureFixtureDir();
     const json = JSON.stringify(payload, null, 2);
     fs.writeFileSync(PINNED_FIXTURE, json + '\n');
+    fs.writeFileSync(AUDIT_FIXTURE, json + '\n');
+}
+
+// Copilot PR #401 R5: write ONLY the timestamped audit-trail copy.
+// Used by the error path so a failed capture run cannot overwrite the
+// committed pinned fixture with an error payload (which would be one
+// `git add` away from a broken pinned commit).
+function writeAuditOnly(payload) {
+    ensureFixtureDir();
+    const json = JSON.stringify(payload, null, 2);
     fs.writeFileSync(AUDIT_FIXTURE, json + '\n');
 }
 
@@ -513,7 +528,11 @@ function writeFixture(payload) {
             error: err.message,
             evidence: result.evidence,
         };
-        try { writeFixture(fixture); } catch (_) { /* best effort */ }
+        // Copilot R5: error path writes ONLY to the timestamped audit
+        // fixture — never overwrites the committed pinned fixture with
+        // an error payload (which would be a `git add -A` away from
+        // accidentally committing a broken pinned snapshot).
+        try { writeAuditOnly(fixture); } catch (_) { /* best effort */ }
         process.exit(1);
     }
 })();
