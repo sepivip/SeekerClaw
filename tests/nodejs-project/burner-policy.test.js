@@ -1197,9 +1197,17 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.error, 'simulation_recipient_mismatch');
         assert.strictEqual(r.class, 'security');
         assert.match(r.reason, /splToken\.owner/);
+        // Reject reason must name BOTH the observed attacker owner-slot
+        // (ATTACKER_OWNER) and the declared expected owner-slot
+        // (RECEIVER_ADDRESS) — disambiguates from any other path that
+        // happens to mention one or the other.
         assert.ok(
-            r.reason.includes(ATTACKER_ATA) || r.reason.includes(RECEIVER_ADDRESS),
-            `reason should mention attacker or expected owner, got: ${r.reason}`
+            r.reason.includes(ATTACKER_OWNER),
+            `reason should name the attacker owner-slot ${ATTACKER_OWNER}, got: ${r.reason}`
+        );
+        assert.ok(
+            r.reason.includes(RECEIVER_ADDRESS),
+            `reason should name the declared expected owner-slot ${RECEIVER_ADDRESS}, got: ${r.reason}`
         );
     });
 
