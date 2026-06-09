@@ -1,6 +1,6 @@
 # WEBSITE.md — Website Content
 
-> Last updated: 2026-05-08 | Last deployed: _never_
+> Last updated: 2026-05-31 | Last deployed: _never_
 >
 > **Rule:** Every item must earn its screen space. Less is more.
 > Before deploying, review the Editorial Notes in each section.
@@ -10,13 +10,24 @@
 
 ---
 
+## Recognition
+
+🏆 **Winner — Solana Mobile Hackathon · April 2026.** This is now the single strongest credibility signal the website can lead with — official Solana Mobile recognition for on-device AI. Surface it prominently in the hero (badge under the title) and as a dedicated section above Features. [Announcement](https://x.com/RadiantsDAO/status/2049549148395798847).
+
+<!-- REVIEW 2026-05-31: Hackathon win is unshipped on the website. Highest priority deploy:
+     (1) badge under hero title ("🏆 Solana Mobile Hackathon Winner"),
+     (2) dedicated Award section above Features with the announcement link,
+     (3) JSON-LD `award` field added to the WebApplication schema in index.html. -->
+
+---
+
 ## Content Strategy
 
 <!-- Review this section every 2 weeks or when major features ship -->
 
 **Target audience:** Solana Seeker phone owners who want more from their device
 **Primary hook:** Your phone becomes an autonomous AI agent (24/7, on-device, via Telegram)
-**Secondary hooks:** Crypto-native (wallet, swaps, DCA), device control, privacy (runs locally)
+**Secondary hooks:** Crypto-native (wallet, swaps, DCA), device control, privacy (runs locally), **official Solana Mobile recognition (Hackathon Winner)**
 
 **Current market trends to leverage:**
 - AI agents are mainstream — position as "your personal one"
@@ -37,9 +48,15 @@
 | Value | Label | Why this stat? |
 |-------|-------|---------------|
 | 150,000+ | Seeker Devices | Social proof — large addressable market |
-| 60+ | Built-in Tools | Shows depth — but consider "50+" for cleaner number |
-| 360+ | PRs Shipped | Shows velocity — but do users care about PRs? |
+| 66 | Built-in Tools | Shows depth — official tool count from README |
+| 380+ | PRs Shipped | Shows velocity — but do users care about PRs? |
 | 24/7 | Autonomous Agent | Key differentiator — always on |
+
+<!-- REVIEW 2026-05-31: Now that we have the Hackathon Winner badge to lead with,
+     "PRs Shipped" is a weaker third stat than it used to be. Strong candidate to swap
+     for "🏆 Hackathon Winner" as the credibility stat — but that may belong as a
+     standalone badge rather than competing for a stats slot. Decide before deploy. -->
+
 
 <!-- REVIEW: Is "PRs Shipped" the right 3rd stat? Alternatives:
   - "34 Skills" — shows extensibility
