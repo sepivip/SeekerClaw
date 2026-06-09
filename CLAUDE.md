@@ -619,10 +619,10 @@ cd openclaw-reference && git pull
 
 | OpenClaw File | Purpose | SeekerClaw Equivalent |
 |---------------|---------|----------------------|
-| `src/agents/system-prompt.ts` | System prompt builder | `main.js:buildSystemBlocks()` |
-| `src/agents/skills/workspace.ts` | Skills loading | `main.js:loadSkills()` |
-| `src/memory/manager.ts` | Memory management | `main.js` (simplified) |
-| `src/cron/types.ts` | Cron/scheduling | `main.js:cronService` (ported) |
+| `src/agents/system-prompt.ts` | System prompt builder | `ai.js:buildSystemBlocks()` |
+| `src/skills/loading/` + `src/skills/discovery/` | Skills loading | `skills.js:loadSkills()` |
+| `src/memory/` | Memory management | `memory.js` (simplified) |
+| `src/cron/service/` + `src/cron/types.ts` | Cron/scheduling | `cron.js:cronService` (ported) |
 | `skills/` | 76 bundled skills | `workspace/skills/` (3 examples) |
 
 ### OpenClaw Compatibility Checklist
