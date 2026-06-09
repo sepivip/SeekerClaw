@@ -690,6 +690,22 @@ function _buildTransferTx(payerB58) {
         data.writeUInt32LE(Number((cap >> 32n) & 0xFFFFFFFFn), 5);
         assert.strictEqual(triggerV2._validateComputeBudgetInstr(data).ok, true);
     });
+    // PR #393 / BAT-995 device test 2026-06-02: Jupiter's real auth tx
+    // observed using SetComputeUnitPrice=1_000_000 micro_lamports/CU. The
+    // original PR #388 R10 cap of 10_000 rejected this. Cap was bumped to
+    // 2_000_000 (2× observed). Lock in the "Jupiter's observed real value
+    // is accepted" contract so a future tightening doesn't silently
+    // re-break the device path.
+    await check('R10/R12 accepts Jupiter\'s observed mainnet CU price of 1_000_000 micro_lamports/CU', async () => {
+        const data = Buffer.alloc(9);
+        data[0] = 0x03;
+        // Observed at 2026-06-02 in Beka's Seeker logs:
+        //   "ComputeBudget SetComputeUnitPrice=1000000 exceeds auth-tx cap 10000"
+        data.writeUInt32LE(1_000_000, 1);
+        data.writeUInt32LE(0, 5);
+        const r = triggerV2._validateComputeBudgetInstr(data);
+        assert.strictEqual(r.ok, true, 'must accept Jupiter\'s observed real mainnet value (1M micro_lamports/CU)');
+    });
     await check('R10 _validateComputeBudgetInstr REJECTS SetComputeUnitPrice at u64::MAX (the attack value)', async () => {
         const data = Buffer.alloc(9);
         data[0] = 0x03;
@@ -1157,6 +1173,347 @@ function _buildTransferTx(payerB58) {
         assert.strictEqual(_inferTriggerMint(SOL, USDC, ''), SOL, 'empty string is not a valid override');
         assert.strictEqual(_inferTriggerMint(SOL, USDC, null), SOL);
         assert.strictEqual(_inferTriggerMint(SOL, USDC, undefined), SOL);
+    });
+
+    // ── BAT-995 Self-Debug Layer 1: checkSolForTrigger pre-flight ───────────
+    console.log('\n[BAT-995] Layer 1 — checkSolForTrigger');
+
+    const { checkSolForTrigger, MIN_SOL_FOR_TRIGGER_LAMPORTS } = triggerV2;
+
+    await check('L1 floor constant is 0.005 SOL (5_000_000 lamports)', async () => {
+        assert.strictEqual(MIN_SOL_FOR_TRIGGER_LAMPORTS, 5_000_000,
+            'BAT-995 contract: trigger orders need at least 0.005 SOL for rent + fees');
+    });
+
+    await check('L1 rejects when balance < floor (returns insufficient_sol_for_rent with both numbers)', async () => {
+        const r = await checkSolForTrigger('Wallet1111111111111111111111111111111111111', async () => 1_733_602);
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'insufficient_sol_for_rent');
+        assert.strictEqual(r.haveLamports, 1_733_602);
+        assert.strictEqual(r.needLamports, 5_000_000);
+        assert.match(r.reason, /0\.005 SOL/, 'reason should mention the 0.005 SOL minimum');
+        assert.match(r.reason, /0\.00173[34]/, 'reason should mention the current balance (rounded to 6 decimals)');
+        assert.match(r.reason, /Wallet1111/, 'reason should mention the wallet address so user knows where to send');
+    });
+
+    await check('L1 accepts when balance >= floor', async () => {
+        const r = await checkSolForTrigger('Wallet1111111111111111111111111111111111111', async () => 5_000_000);
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.balance, 5_000_000);
+    });
+
+    await check('L1 accepts both lamports-number AND { value: lamports } RPC shapes', async () => {
+        const r1 = await checkSolForTrigger('Wallet1', async () => 10_000_000);
+        const r2 = await checkSolForTrigger('Wallet1', async () => ({ value: 10_000_000 }));
+        assert.strictEqual(r1.ok, true);
+        assert.strictEqual(r2.ok, true);
+        assert.strictEqual(r2.balance, 10_000_000);
+    });
+
+    await check('L1 returns sol_balance_check_failed when RPC returns { error }', async () => {
+        const r = await checkSolForTrigger('Wallet1', async () => ({ error: 'RPC timeout' }));
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'sol_balance_check_failed');
+        assert.match(r.reason, /RPC timeout/);
+    });
+
+    await check('L1 returns sol_balance_check_failed when RPC fn throws', async () => {
+        const r = await checkSolForTrigger('Wallet1', async () => { throw new Error('network'); });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'sol_balance_check_failed');
+        assert.match(r.reason, /network/);
+    });
+
+    await check('L1 R14: non-Error throws are handled defensively (e?.message ?? String(e))', async () => {
+        // Copilot R14 #3342208795: pre-fix code did `${e.message}` which
+        // either produced "undefined" (Error without .message) OR THREW a
+        // TypeError when e itself was undefined/null/primitive (e.message on
+        // undefined throws). Post-fix uses `e?.message ?? String(e)` so the
+        // function ALWAYS returns a structured error and carries the
+        // thrown-value's string form into the reason.
+        const cases = [
+            { thrown: 'string error', expectInReason: 'string error' },
+            { thrown: undefined, expectInReason: 'undefined' }, // String(undefined) = "undefined" — clean output where pre-fix would TypeError
+            { thrown: null, expectInReason: 'null' },
+            { thrown: 42, expectInReason: '42' },
+            { thrown: { code: 'WEIRD' }, expectInReason: '[object Object]' }, // degraded but stable
+        ];
+        for (const c of cases) {
+            const r = await checkSolForTrigger('Wallet1', async () => { throw c.thrown; });
+            assert.strictEqual(r.error, 'sol_balance_check_failed',
+                `non-Error throw (${String(c.thrown)}) should still produce sol_balance_check_failed (not crash the function)`);
+            assert.ok(r.reason.includes(c.expectInReason),
+                `reason "${r.reason}" should include "${c.expectInReason}"`);
+        }
+    });
+
+    await check('L1 rejects malformed RPC response shapes (null, string, NaN, Infinity, negative, wrong-typed value)', async () => {
+        for (const garbage of [null, 'wrong', NaN, Infinity, -1, { value: 'not a number' }]) {
+            const r = await checkSolForTrigger('Wallet1', async () => garbage);
+            assert.strictEqual(r.ok, false, `expected fail on ${JSON.stringify(garbage)}`);
+            assert.strictEqual(r.error, 'sol_balance_check_failed', `expected sol_balance_check_failed on ${JSON.stringify(garbage)}`);
+        }
+    });
+
+    await check('L1 input validation: requires walletAddress + getSolBalance', async () => {
+        const r1 = await checkSolForTrigger('', async () => 0);
+        assert.strictEqual(r1.error, 'invalid_input');
+        const r2 = await checkSolForTrigger('Wallet1', null);
+        assert.strictEqual(r2.error, 'invalid_input');
+    });
+
+    // ── BAT-995 Self-Debug Layer 2: diagnoseFailedDeposit sim parser ────────
+    console.log('\n[BAT-995] Layer 2 — diagnoseFailedDeposit');
+
+    const { diagnoseFailedDeposit } = triggerV2;
+
+    await check('L2 Custom(1) on SystemProgram → insufficient_sol_for_rent (disambiguated by logs)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE_TX_B64', async () => ({
+            value: {
+                err: { InstructionError: [4, { Custom: 1 }] },
+                logs: [
+                    'Program 11111111111111111111111111111111 invoke [1]',
+                    'Program 11111111111111111111111111111111 failed: custom program error: 0x1',
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_sol_for_rent');
+        assert.match(r.reason, /instruction 4/, 'should mention which instruction failed');
+        assert.match(r.reason, /SystemProgram/, 'should name the failing program');
+        assert.match(r.reason, /0\.005 SOL/, 'should mention the minimum');
+    });
+
+    await check('L2 Custom(1) on TokenProgram → insufficient_token_balance (NOT misclassified as SOL — Copilot review fix)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [6, { Custom: 1 }] },
+                logs: [
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [1]',
+                    'Program log: Instruction: Transfer',
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1',
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_token_balance',
+            'TokenProgram Custom(1) must NOT be reported as insufficient_sol_for_rent — that would tell the user to send more SOL when they actually need more input token');
+        assert.match(r.reason, /TokenProgram/);
+        assert.match(r.reason, /InsufficientFunds/);
+        assert.match(r.reason, /input token/);
+        assert.match(r.reason, /USDC/, 'should hint at the common case');
+    });
+
+    await check('L2 Custom(1) on unknown program → deposit_sim_failed (do NOT guess SOL-vs-token)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [3, { Custom: 1 }] },
+                logs: [
+                    'Program JupiterUnknown1111111111111111111111111111 invoke [1]',
+                    'Program JupiterUnknown1111111111111111111111111111 failed: custom program error: 0x1',
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed');
+        assert.match(r.reason, /JupiterUnknown1111/);
+        assert.match(r.reason, /both SOL and token balances|SOL and token/i,
+            'should tell the agent NOT to guess which is short');
+    });
+
+    await check('L2 Custom(1) with NO failed log entry → deposit_sim_failed with unknown program', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [2, { Custom: 1 }] },
+                logs: ['Program 11111111111111111111111111111111 invoke [1]'], // no `failed` line
+            },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed',
+            'absent disambiguation we must NOT pick a side');
+        assert.match(r.reason, /unknown/);
+    });
+
+    await check('L2 Custom(1) with empty logs array → deposit_sim_failed (defensive)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: { err: { InstructionError: [4, { Custom: 1 }] }, logs: [] },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed',
+            'no logs = no disambiguation possible; must not assume SOL');
+    });
+
+    await check('L2 R16: CPI nested failure (ATokenProgram → SystemProgram) → insufficient_sol_for_rent (must pick INNER, not OUTER)', async () => {
+        // Copilot R16 #3342350380: real Solana CPI traces emit failed lines
+        // INNERMOST FIRST (the actual cause), then each outer caller emits
+        // its own failed line as the error propagates. Picking the LAST
+        // failed line returns ATokenProgram (the outer caller) which isn't
+        // in our disambiguation map → falls to deposit_sim_failed, hiding
+        // the real cause. Forward scan picks the innermost SystemProgram
+        // failure correctly.
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [4, { Custom: 1 }] },
+                logs: [
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [1]',
+                    'Program log: CreateIdempotent',
+                    'Program 11111111111111111111111111111111 invoke [2]',
+                    'Program 11111111111111111111111111111111 failed: custom program error: 0x1', // inner — actual cause
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL consumed 8 of 200000 compute units',
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL failed: custom program error: 0x1', // outer propagation
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_sol_for_rent',
+            'must pick the innermost (first) failure — SystemProgram. Backward scan would have picked ATokenProgram (outer) → deposit_sim_failed.');
+        assert.match(r.reason, /SystemProgram/);
+    });
+
+    await check('L2 R16: CPI nested failure (ATokenProgram → TokenProgram Transfer) → insufficient_token_balance (must pick INNER)', async () => {
+        // Same CPI semantics, different inner program. Common shape: deposit
+        // tx uses ATokenProgram to create an account then SPL Transfer fails
+        // for InsufficientFunds. Must NOT misclassify as ATokenProgram-error.
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [6, { Custom: 1 }] },
+                logs: [
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [1]',
+                    'Program log: Create',
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]',
+                    'Program log: Instruction: Transfer',
+                    'Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1', // inner — actual cause
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL failed: custom program error: 0x1', // outer
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_token_balance',
+            'must pick the innermost (first) failure — TokenProgram. Backward scan would have picked ATokenProgram (outer) → deposit_sim_failed.');
+        assert.match(r.reason, /TokenProgram/);
+    });
+
+    await check('L2 R16: deep CPI chain (3 levels) — outer wrappers must NOT shadow the inner failure', async () => {
+        // Defensive: 3-level CPI. Innermost SystemProgram failure must be
+        // selected even with two propagating callers above it.
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: {
+                err: { InstructionError: [3, { Custom: 1 }] },
+                logs: [
+                    'Program OuterWrapper11111111111111111111111111111 invoke [1]',
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [2]',
+                    'Program 11111111111111111111111111111111 invoke [3]',
+                    'Program 11111111111111111111111111111111 failed: custom program error: 0x1',
+                    'Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL failed: custom program error: 0x1',
+                    'Program OuterWrapper11111111111111111111111111111 failed: custom program error: 0x1',
+                ],
+            },
+        }));
+        assert.strictEqual(r.error, 'insufficient_sol_for_rent');
+        assert.match(r.reason, /SystemProgram/);
+    });
+
+    await check('L2 maps non-Custom(1) InstructionError to deposit_sim_failed with index + raw code', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: { err: { InstructionError: [6, { Custom: 6001 }] }, logs: [] },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed');
+        assert.match(r.reason, /instruction 6/);
+        assert.match(r.reason, /6001/);
+    });
+
+    await check('L2 maps enum-string InstructionError code to deposit_sim_failed', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: { err: { InstructionError: [2, 'InvalidAccountData'] }, logs: [] },
+        }));
+        assert.strictEqual(r.error, 'deposit_sim_failed');
+        assert.match(r.reason, /InvalidAccountData/);
+    });
+
+    await check('L2 maps top-level BlockhashNotFound string to blockhash_expired with retry advice', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: { err: 'BlockhashNotFound', logs: [] },
+        }));
+        assert.strictEqual(r.error, 'blockhash_expired');
+        assert.match(r.reason, /retry|Retry|fresh/i, 'should tell user to retry');
+    });
+
+    await check('L2 returns deposit_failed_unknown when sim itself returns { error }', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({ error: 'RPC down' }));
+        assert.strictEqual(r.error, 'deposit_failed_unknown');
+        assert.match(r.reason, /RPC down/);
+    });
+
+    await check('L2 returns deposit_failed_unknown when sim shows NO on-chain error (Jupiter-side issue)', async () => {
+        const r1 = await diagnoseFailedDeposit('FAKE', async () => ({ value: { err: null, logs: [] } }));
+        const r2 = await diagnoseFailedDeposit('FAKE', async () => ({ value: { logs: [] } }));
+        assert.strictEqual(r1.error, 'deposit_failed_unknown');
+        assert.strictEqual(r2.error, 'deposit_failed_unknown');
+        assert.match(r1.reason, /Jupiter backend|stale blockhash/);
+    });
+
+    await check('L2 returns deposit_failed_unknown when simulate throws', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => { throw new Error('boom'); });
+        assert.strictEqual(r.error, 'deposit_failed_unknown');
+        assert.match(r.reason, /boom/);
+    });
+
+    await check('L2 R14: non-Error throws from simulate are handled defensively (e?.message ?? String(e))', async () => {
+        // Copilot R14 #3342208868: same defensive issue as L1 R14.
+        const cases = [
+            { thrown: 'rpc died', expectInReason: 'rpc died' },
+            { thrown: undefined, expectInReason: 'undefined' },
+            { thrown: null, expectInReason: 'null' },
+            { thrown: { code: 'WEIRD' }, expectInReason: '[object Object]' },
+        ];
+        for (const c of cases) {
+            const r = await diagnoseFailedDeposit('FAKE', async () => { throw c.thrown; });
+            assert.strictEqual(r.error, 'deposit_failed_unknown',
+                `non-Error throw (${String(c.thrown)}) should still produce deposit_failed_unknown (not crash)`);
+            assert.ok(r.reason.includes(c.expectInReason),
+                `reason "${r.reason}" should include "${c.expectInReason}"`);
+        }
+    });
+
+    await check('L2 requires simulate fn (defensive)', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', null);
+        assert.strictEqual(r.error, 'deposit_failed_unknown');
+        assert.match(r.reason, /no simulate fn/);
+    });
+
+    await check('L2 surfaces unknown structured err shape via JSON.stringify', async () => {
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({
+            value: { err: { WeirdError: { detail: 42 } }, logs: [] },
+        }));
+        assert.strictEqual(r.error, 'deposit_failed_unknown');
+        assert.match(r.reason, /WeirdError/);
+    });
+
+    await check('L2 preserves rawError for downstream debugging', async () => {
+        const rawErr = { InstructionError: [4, { Custom: 1 }] };
+        const r = await diagnoseFailedDeposit('FAKE', async () => ({ value: { err: rawErr, logs: [] } }));
+        assert.deepStrictEqual(r.rawError, rawErr);
+    });
+
+    await check('L2 CONTRACT — deposit_failed_unknown is the "non-actionable" sentinel (Copilot R12: callers preserve original error instead of overriding with this)', async () => {
+        // This rule is load-bearing for tools/solana.js create_failed branch:
+        //   if (diag.error !== 'deposit_failed_unknown') { override }
+        //   else { preserve original HTTP cause }
+        // Verify the helper actually emits this exact string in the non-
+        // actionable paths so the caller's check stays accurate.
+        const cases = [
+            { name: 'simulate returns { error }', sim: async () => ({ error: 'RPC down' }) },
+            { name: 'simulate throws', sim: async () => { throw new Error('boom'); } },
+            { name: 'sim returns no err (Jupiter-side issue)', sim: async () => ({ value: { err: null, logs: [] } }) },
+            { name: 'no simulate fn', sim: null },
+        ];
+        for (const c of cases) {
+            const r = await diagnoseFailedDeposit('FAKE', c.sim);
+            assert.strictEqual(r.error, 'deposit_failed_unknown',
+                `${c.name}: must return the sentinel so caller preserves original HTTP cause`);
+        }
+    });
+
+    // ── BAT-995 Layer 3: export contract ────────────────────────────────────
+    console.log('\n[BAT-995] Layer 3 — export contract');
+
+    await check('L3 trigger-v2 exports the self-debug primitives + constant', async () => {
+        assert.strictEqual(typeof triggerV2.checkSolForTrigger, 'function');
+        assert.strictEqual(typeof triggerV2.diagnoseFailedDeposit, 'function');
+        assert.strictEqual(typeof triggerV2.MIN_SOL_FOR_TRIGGER_LAMPORTS, 'number');
     });
 
     // ── Summary ─────────────────────────────────────────────────────────────

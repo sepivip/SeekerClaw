@@ -539,22 +539,73 @@ if (config.exaApiKey) config.exaApiKey = normalizeSecret(config.exaApiKey);
 if (config.tavilyApiKey) config.tavilyApiKey = normalizeSecret(config.tavilyApiKey);
 if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.firecrawlApiKey);
 
-// BAT-697 PR B: Jupiter Trigger V2 adapter feature flag. Default false —
-// V1 remains the shipping path until the staged-rollout commits (live smoke
-// → default flip → V1 removal) land in subsequent PRs. Normalize to a real
-// boolean so handlers can branch on `config.useTriggerV2 === true` without
-// truthy-coercing a string "false".
+// BAT-697 / BAT-995: Jupiter Trigger V2 is now the DEFAULT.
 //
-// PR #388 R7: Kotlin's writeConfigJson() does not yet emit a `useTriggerV2`
-// field (that arrives with PR C's Settings toggle), so the JSON-load path
-// always normalizes to false in the live runtime. To make PR B actually
-// enable-able for the PR C live-smoke phase WITHOUT shipping the UI early,
-// also accept SEEKERCLAW_USE_TRIGGER_V2=true via the env-var bridge (Settings
-// → Env Vars), which is already plumbed Kotlin → Node and merged into
-// process.env at line ~142 above. PR C migrates this to a proper Config
-// field + Settings toggle and can drop the env-var path.
-config.useTriggerV2 = config.useTriggerV2 === true
-    || process.env.SEEKERCLAW_USE_TRIGGER_V2 === 'true';
+// History:
+//   - BAT-697 PR B (#388) shipped the V2 adapter behind a flag, default
+//     OFF, with a staged-rollout plan: live smoke → default flip → V1
+//     removal across subsequent PRs.
+//   - 2026-06-02 device test on Beka's Seeker: Jupiter forced V1
+//     deprecation server-side — V1 endpoints now return deposit txs
+//     using the V2 routing program (`j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X`),
+//     which our verifySwapTransaction safety layer rejects as
+//     "unwhitelisted program". V1 is effectively dead. Jupiter killed
+//     the staging window we were planning around.
+//   - Therefore: flipping default to V2 now, in v2.1, so the shipping
+//     default actually works against real Jupiter mainnet.
+//
+// Opt-out path retained as a safety hatch: SEEKERCLAW_USE_TRIGGER_V2=false
+// reverts to V1. This won't help anyone today (V1 is broken externally),
+// but kept for two reasons:
+//   1. If Jupiter ever brings V1 back OR if we discover a V2 bug + need
+//      to hotfix users to V1 + simultaneously deploy a verifier whitelist
+//      update, the env-var path is the fastest rollback.
+//   2. Removing the toggle entirely + deleting V1 code is its own
+//      follow-up cleanup (BAT-996) — not bundled here to keep this PR
+//      tightly scoped to the default flip.
+//
+// Normalization: `config.useTriggerV2` is read from workspace/config.json
+// (Kotlin writeConfigJson doesn't emit this field, so it's typically
+// undefined). Default to true unless explicitly set to false. Env var
+// SEEKERCLAW_USE_TRIGGER_V2 takes precedence (Settings → Env Vars path,
+// already plumbed Kotlin → Node → process.env at line ~142 above).
+//
+// PR #393 Copilot R1: explicit opt-out must honor BOTH the boolean
+// `false` AND the string `"false"`. A hand-edited / imported config.json
+// can contain `"useTriggerV2": "false"` (string), which `!== false`
+// would treat as truthy and flip to V2 — silently overriding the user's
+// explicit opt-out. Normalize string "false" to false BEFORE the
+// !== false test.
+//
+// PR #393 Copilot R2: env-var values come from a freeform Settings UI
+// (Settings → Env Vars) where users can plausibly type leading/trailing
+// whitespace or non-canonical casing ("False ", "TRUE", "  true  ").
+// Strict equality silently ignores those inputs, making debugging a
+// rollback attempt painful ("I set the env var, why is it still on V2?").
+// Normalize (trim + lowercase) before comparing — same approach applied
+// to the workspace/config.json string-value path below for consistency.
+function _normalizeBoolEnv(raw) {
+    if (typeof raw !== 'string') return null;
+    const v = raw.trim().toLowerCase();
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return null;
+}
+const _envOverride = _normalizeBoolEnv(process.env.SEEKERCLAW_USE_TRIGGER_V2);
+if (_envOverride === false) {
+    config.useTriggerV2 = false;
+} else if (_envOverride === true) {
+    config.useTriggerV2 = true;
+} else {
+    // No env override → use config.json value if explicitly false (boolean
+    // OR string, normalized the same way as the env var so " False " etc
+    // are honored). Else default to true.
+    const _cfgVal = config.useTriggerV2;
+    const _explicitlyFalse =
+        _cfgVal === false
+        || (typeof _cfgVal === 'string' && _cfgVal.trim().toLowerCase() === 'false');
+    config.useTriggerV2 = !_explicitlyFalse;
+}
 
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
 const MCP_SERVERS = (config.mcpServers || [])

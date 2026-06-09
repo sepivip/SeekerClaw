@@ -67,11 +67,35 @@ assert.ok(TOOLS.length > 0, 'TOOLS array must be non-empty');
 
 // ── Recursive schema walker ─────────────────────────────────────────────────
 // Returns a list of issues. Empty list = schema is OK.
-function findSchemaIssues(schema, schemaPath /* string */) {
+//
+// `isTopLevel` distinguishes the tool's input_schema root from nested
+// property / item / combinator schemas. Some Anthropic-API restrictions
+// apply only at the top level (notably the oneOf/allOf/anyOf rule below).
+function findSchemaIssues(schema, schemaPath /* string */, isTopLevel = false) {
     const issues = [];
     if (schema == null || typeof schema !== 'object') {
         issues.push(`${schemaPath}: schema is not an object (got ${typeof schema})`);
         return issues;
+    }
+
+    // Rule: Anthropic API REJECTS top-level oneOf, allOf, and anyOf in tool
+    // input_schemas with HTTP 400 ("inputSchema does not support oneOf,
+    // allOf, or anyOf at the top level") — which takes down the ENTIRE
+    // toolset (not just the bad tool). Bit by this on PR #393 device test
+    // 2026-06-02 when V2 became the default — jupiter_trigger_create V2
+    // had a top-level `anyOf` for the expiresAt/expiryTime disjunction
+    // (originally PR #388 R7 contract). Runtime handler validation is the
+    // correct enforcement path; top-level combinators are not.
+    if (isTopLevel) {
+        for (const combinator of ['oneOf', 'anyOf', 'allOf']) {
+            if (Object.prototype.hasOwnProperty.call(schema, combinator)) {
+                issues.push(
+                    `${schemaPath}: has top-level '${combinator}' — Anthropic API REJECTS this with `
+                    + `HTTP 400 ("inputSchema does not support oneOf, allOf, or anyOf at the top level"), `
+                    + `taking down ALL agent turns. Enforce the constraint in the tool handler instead.`
+                );
+            }
+        }
     }
 
     // Resolve declared type(s) — string OR array of strings.
@@ -139,7 +163,7 @@ for (const tool of TOOLS) {
     assert.strictEqual(tool.input_schema.type, 'object',
         `tool ${tool.name}: input_schema.type must be 'object' (got ${JSON.stringify(tool.input_schema.type)})`);
 
-    const issues = findSchemaIssues(tool.input_schema, `[${tool.name}].input_schema`);
+    const issues = findSchemaIssues(tool.input_schema, `[${tool.name}].input_schema`, /* isTopLevel */ true);
     if (issues.length > 0) {
         failed++;
         allIssues.push({ tool: tool.name, issues });
@@ -162,31 +186,84 @@ console.log(`✓ All ${TOOLS.length} tool input_schemas pass JSON Schema validit
 // ── Internal self-check: confirm the validator actually catches the bug ─────
 // This is meta-test: if someone breaks `findSchemaIssues` (e.g. by removing
 // the array-needs-items rule), the rest of the test stays green but we've
-// lost the actual regression coverage. So we synthesize the exact buggy
-// schema BAT-664 shipped and assert the validator flags it.
-const synthBug = {
-    type: 'object',
-    properties: {
-        body: { type: ['object', 'array', 'string'], description: 'oops no items' },
+// lost the actual regression coverage. We synthesize the exact buggy
+// schema shapes we've shipped historically and assert the validator flags
+// each of them.
+//
+// Each entry's `topLevel` flag determines whether the validator should be
+// invoked in top-level mode (mimics the tool's input_schema root) — some
+// rules only fire at the top level.
+const BUG_SHAPES = [
+    {
+        name: 'BAT-664: type union containing "array" without items (kills entire toolset on Anthropic)',
+        topLevel: false,
+        schema: {
+            type: 'object',
+            properties: {
+                body: { type: ['object', 'array', 'string'], description: 'oops no items' },
+            },
+        },
     },
-};
-const synthIssues = findSchemaIssues(synthBug, '[meta]');
-if (synthIssues.length === 0) {
-    console.error('✗ META-CHECK FAILED — validator no longer detects the BAT-664 bug shape');
-    console.error('  (type union containing "array" without items). The regression');
-    console.error('  rule has been weakened — restore the check in findSchemaIssues.');
-    process.exit(1);
+    {
+        name: 'PR #393 / BAT-995: top-level anyOf (Anthropic: "inputSchema does not support oneOf, allOf, or anyOf at the top level")',
+        topLevel: true,
+        schema: {
+            type: 'object',
+            properties: { a: { type: 'string' }, b: { type: 'string' } },
+            anyOf: [{ required: ['a'] }, { required: ['b'] }],
+        },
+    },
+    {
+        name: 'PR #393 / BAT-995: top-level oneOf (same Anthropic rejection class)',
+        topLevel: true,
+        schema: {
+            type: 'object',
+            properties: { a: { type: 'string' }, b: { type: 'string' } },
+            oneOf: [{ required: ['a'] }, { required: ['b'] }],
+        },
+    },
+    {
+        name: 'PR #393 / BAT-995: top-level allOf (same Anthropic rejection class)',
+        topLevel: true,
+        schema: {
+            type: 'object',
+            properties: { a: { type: 'string' } },
+            allOf: [{ required: ['a'] }],
+        },
+    },
+];
+let metaFailures = 0;
+for (const { name, topLevel, schema } of BUG_SHAPES) {
+    const found = findSchemaIssues(schema, '[meta]', topLevel);
+    if (found.length === 0) {
+        console.error(`✗ META-CHECK FAILED — validator no longer detects: ${name}`);
+        console.error('  The regression rule has been weakened — restore the check in findSchemaIssues.');
+        metaFailures++;
+    } else {
+        console.log(`  ✓ flags: ${name}`);
+    }
 }
-console.log(`✓ Meta-check: validator correctly flags the BAT-664 bug shape (${synthIssues.length} issue${synthIssues.length === 1 ? '' : 's'})`);
+if (metaFailures > 0) process.exit(1);
+console.log(`✓ Meta-check: validator flags all ${BUG_SHAPES.length} historical bug shapes`);
 
-// ── PR #388 R9: flag-on schema smoke (Jupiter Trigger V2) ───────────────────
+// ── PR #388 R9 + PR #393 BAT-995: flag-on schema smoke (Jupiter Trigger V2) ─
 // The jupiter_trigger_create schema is constructed flag-aware at module load
 // (see tools/solana.js IIFE around line 145). The default flag-off pass above
-// only validates the V1 schema. Reload tools/index.js with
-// `config.useTriggerV2: true` so the V2 schema (incl. its `anyOf` expiry
-// disjunction) goes through findSchemaIssues. Without this, a flag-on
-// rollout could ship a malformed V2 schema undetected — the whole toolset
-// would be rejected by the Anthropic API on first agent turn.
+// validates the V1 schema (back-compat); this block reloads tools/index.js
+// with `config.useTriggerV2: true` so the V2 schema also goes through
+// findSchemaIssues. Without this, a malformed V2 schema would ship undetected
+// — the whole toolset gets rejected by the Anthropic API on first agent turn
+// and every user's bot goes silent.
+//
+// What this block now verifies (PR #393 R6 update — the original PR #388 R7
+// contract REQUIRED a top-level anyOf for the expiresAt/expiryTime
+// disjunction; PR #393 / BAT-995 device test caught that Anthropic API
+// REJECTS top-level anyOf/oneOf/allOf with HTTP 400, so the contract was
+// inverted):
+//   1. The V2 schema has NO top-level anyOf / oneOf / allOf — Anthropic-safe
+//   2. The V2 schema requires triggerPriceUsd (PR #388 R6)
+//   3. The full flag-on TOOLS set passes findSchemaIssues including the new
+//      top-level-combinator rejection rule
 require.cache[configPath].exports.config = { useTriggerV2: true };
 for (const key of Object.keys(require.cache)) {
     if (key.startsWith(BUNDLE) && key !== configPath) delete require.cache[key];
@@ -194,11 +271,25 @@ for (const key of Object.keys(require.cache)) {
 const { TOOLS: TOOLS_V2 } = require(path.join(BUNDLE, 'tools', 'index.js'));
 const triggerCreateV2 = TOOLS_V2.find(t => t.name === 'jupiter_trigger_create');
 assert.ok(triggerCreateV2, 'jupiter_trigger_create must be present in flag-on load');
-assert.ok(Array.isArray(triggerCreateV2.input_schema.anyOf),
-    'V2 schema must declare an anyOf for the expiry disjunction (PR #388 R7 contract)');
+// PR #393 / BAT-995 device test 2026-06-02: the original R7 contract here
+// (V2 schema MUST declare a top-level anyOf for expiry disjunction) was
+// WRONG — Anthropic API rejects top-level anyOf/oneOf/allOf with HTTP 400.
+// Replaced with the inverse contract: V2 schema MUST NOT have top-level
+// combinators (the handler's runtime check is the actual enforcement).
+// PR #393 R5: use hasOwnProperty (matches findSchemaIssues' check) so an
+// explicit `anyOf: undefined` or `anyOf: null` is ALSO rejected. Array.isArray
+// on a non-array would let those slip through, even though the key itself
+// is still present.
+assert.ok(!Object.prototype.hasOwnProperty.call(triggerCreateV2.input_schema, 'anyOf'),
+    'V2 schema MUST NOT declare top-level anyOf — Anthropic API rejects. '
+    + 'See PR #393 BAT-995. Handler validates expiresAt/expiryTime at runtime.');
+assert.ok(!Object.prototype.hasOwnProperty.call(triggerCreateV2.input_schema, 'oneOf'),
+    'V2 schema MUST NOT declare top-level oneOf — Anthropic API rejects.');
+assert.ok(!Object.prototype.hasOwnProperty.call(triggerCreateV2.input_schema, 'allOf'),
+    'V2 schema MUST NOT declare top-level allOf — Anthropic API rejects.');
 assert.ok(triggerCreateV2.input_schema.required.includes('triggerPriceUsd'),
     'V2 schema must require triggerPriceUsd (PR #388 R6 contract)');
-const v2Issues = findSchemaIssues(triggerCreateV2.input_schema, '[jupiter_trigger_create.V2].input_schema');
+const v2Issues = findSchemaIssues(triggerCreateV2.input_schema, '[jupiter_trigger_create.V2].input_schema', /* isTopLevel */ true);
 if (v2Issues.length > 0) {
     console.error('\n✗ V2 jupiter_trigger_create schema has issues (flag-on load):');
     for (const issue of v2Issues) console.error(`    - ${issue}`);
@@ -210,7 +301,7 @@ if (v2Issues.length > 0) {
 let v2Failed = 0;
 const v2AllIssues = [];
 for (const tool of TOOLS_V2) {
-    const issues = findSchemaIssues(tool.input_schema, `[V2][${tool.name}].input_schema`);
+    const issues = findSchemaIssues(tool.input_schema, `[V2][${tool.name}].input_schema`, /* isTopLevel */ true);
     if (issues.length > 0) { v2Failed++; v2AllIssues.push({ tool: tool.name, issues }); }
 }
 if (v2Failed > 0) {
@@ -221,4 +312,4 @@ if (v2Failed > 0) {
     }
     process.exit(1);
 }
-console.log(`✓ Flag-on (useTriggerV2=true): all ${TOOLS_V2.length} schemas pass + V2 jupiter_trigger_create has anyOf expiry + requires triggerPriceUsd`);
+console.log(`✓ Flag-on (useTriggerV2=true): all ${TOOLS_V2.length} schemas pass + V2 jupiter_trigger_create has NO top-level anyOf/oneOf/allOf (Anthropic-rejected) + requires triggerPriceUsd`);

@@ -164,15 +164,18 @@ const tools = [
             type: 'object',
             properties: { ...baseProperties, ...v2Properties },
             required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPriceUsd'],
-            // PR #388 R7: V2 handler hard-rejects with `expires_at_required`
-            // if NEITHER `expiresAt` nor `expiryTime` is provided. Encode
-            // that disjunction in the schema (anyOf) so the model/gate
-            // rejects the missing-expiry case at validation time rather than
-            // letting it reach the user-confirmation card and dying later.
-            anyOf: [
-                { required: ['expiresAt'] },
-                { required: ['expiryTime'] },
-            ],
+            // PR #388 R7 originally added an `anyOf` here to encode the
+            // "one of expiresAt/expiryTime required" disjunction at the
+            // schema level. PR #393 / BAT-995 device test 2026-06-02 caught
+            // that the Anthropic Messages API REJECTS top-level anyOf /
+            // oneOf / allOf in tool input_schemas — the entire toolset is
+            // returned with HTTP 400 ("inputSchema does not support oneOf,
+            // allOf, or anyOf at the top level"), taking down every agent
+            // turn. The handler's runtime check (returns expires_at_required
+            // if both fields are missing — see PR #388 R4) is the actual
+            // enforcement path; the schema-level disjunction was redundant
+            // model-side validation. Removed. Test rule added to
+            // tool-schemas.test.js to prevent regression.
         };
         const v1Schema = {
             type: 'object',
@@ -662,6 +665,21 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         }
         const vaultAddress = vaultResult.vaultPubkey;
 
+        // 10b. Pre-flight SOL balance — Layer 1 of BAT-995 self-debug.
+        // Avoids opaque "Failed to execute deposit" from Jupiter when the
+        // wallet can't pay rent for the deposit tx's temp USDC account.
+        // See trigger-v2.js checkSolForTrigger() for the implementation +
+        // DIAGNOSTICS.md "Jupiter Trigger V2 (BAT-995)" for the wire-level
+        // evidence (SystemProgram CreateAccount Custom(1) =
+        // ResultWithNegativeLamports) and full error-code reference.
+        const solCheck = await triggerV2.checkSolForTrigger(
+            walletAddress,
+            (addr) => solanaRpc('getBalance', [addr]),
+        );
+        if (!solCheck.ok) {
+            return { error: solCheck.error, reason: solCheck.reason };
+        }
+
         // 11. Craft deposit (outputMint is required by /deposit/craft).
         const craftResult = await triggerV2.depositCraft({
             pubkey: walletAddress,
@@ -749,6 +767,40 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                         `Your wallet's burner cap has been committed conservatively — if the deposit ` +
                         `did NOT land on-chain, the cap will regenerate at the next daily window.`;
                     return { signature: null, trigger: submitRes };
+                }
+                // Layer 2 of BAT-995 self-debug: if Jupiter rejected with a
+                // generic create_failed (HTTP 4xx from /orders/price), the
+                // most common cause is on-chain rejection of the deposit tx
+                // — e.g. ATA rent the pre-flight didn't know about, stale
+                // blockhash, or insufficient input-token balance. Locally
+                // simulate the signed deposit and surface the real cause so
+                // the agent can give the user actionable feedback instead of
+                // "Failed to execute deposit" → confabulated guesses.
+                //
+                // Copilot R12 (3341986481): only OVERRIDE the original error
+                // when the sim yields a specific actionable diagnosis. If sim
+                // returns deposit_failed_unknown (e.g. 4xx was actually a
+                // param-validation or auth issue Jupiter caught BEFORE on-chain
+                // submission, OR sim itself failed), preserving the original
+                // HTTP reason is more useful than silently downgrading it.
+                if (submitRes.error === 'create_failed') {
+                    const diag = await triggerV2.diagnoseFailedDeposit(
+                        signedDeposit,
+                        (txB64) => solanaRpc('simulateTransaction', [
+                            txB64,
+                            { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: false, commitment: 'confirmed' },
+                        ]),
+                    );
+                    const actionable = diag.error && diag.error !== 'deposit_failed_unknown';
+                    if (actionable) {
+                        log(`[Jupiter Trigger V2] create_failed → sim diagnosed: ${diag.error} (${diag.reason})`, 'WARN');
+                        return { error: diag.error, reason: diag.reason };
+                    }
+                    log(`[Jupiter Trigger V2] create_failed → sim non-actionable (${diag.error}); preserving original HTTP cause: ${submitRes.reason}`, 'WARN');
+                    return {
+                        error: submitRes.error,
+                        reason: `${submitRes.reason} (local sim could not identify a specific on-chain cause: ${diag.reason})`,
+                    };
                 }
                 return { error: submitRes.error, reason: submitRes.reason };
             },

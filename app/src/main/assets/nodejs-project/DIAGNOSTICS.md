@@ -789,3 +789,29 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 2. If the live probe confirms the catalog is stale, tell the user "the recorded price ($0.01) is out of date — actual is $0.02. I'll flag this for the maintainer." Don't refuse the call retroactively (it already settled).
 3. Maintainer-side fix: update `catalog.json` `entries[].endpoint.cost_usdc` for the affected entry, bump `paysh-catalog/SKILL.md` version so devices re-seed.
 
+## Jupiter Trigger V2 (BAT-995)
+
+### `jupiter_trigger_create` returns `insufficient_sol_for_rent`
+**Symptoms:** The tool refuses to submit the deposit (the V2 flow has already authenticated, registered the vault, and checked Shield by this point — pre-flight specifically blocks `deposit/craft` and `orders/price` before they touch server state), or returns this code after a deposit attempt when Layer 2's on-chain simulation matches. The `reason` field includes the wallet's current SOL balance vs. the 0.005 SOL minimum.
+**Diagnosis:** A V2 trigger deposit tx includes up to three rent-paying allocations (a temporary deposit token account + user wSOL ATA + vault SOL ATA, each ~0.00204 SOL rent-exempt). Pre-flight (`checkSolForTrigger` in `jupiter/trigger-v2.js`) requires ≥0.005 SOL in the active wallet — the burner if routing chose burner, otherwise the MWA wallet. If the wallet is the burner, the user funds it directly; if the wallet is the MWA, they fund their main wallet.
+**Fix:** Tell the user the exact wallet address from the error reason and ask them to send at least 0.005 SOL there. If pre-flight passes (≥0.005 SOL) but Jupiter still returns the same error post-submission, the wallet needs an additional ATA created — fund with another ~0.002 SOL.
+
+### `jupiter_trigger_create` returns `blockhash_expired`
+**Symptoms:** Returned after the local sim diagnoses a stale blockhash on the signed deposit tx (slow network between Jupiter's deposit/craft and orders/price).
+**Fix:** Retry the order — it'll get a fresh blockhash. Single transient failures are normal; persistent failures indicate RPC/network problems.
+
+### `jupiter_trigger_create` returns `create_failed` (with sim context appended to the reason)
+**Symptoms:** Reason starts with `HTTP <status>` and ends with `(local sim could not identify a specific on-chain cause: <sim outcome>)`. This is what the agent sees when Jupiter rejects `/orders/price` with a non-2xx that wasn't caused by an on-chain instruction error our sim can identify — most commonly param validation, auth, vault state, or a transient Jupiter backend issue.
+**Diagnosis:** `diagnoseFailedDeposit` returned its internal `deposit_failed_unknown` sentinel (sim returned no err, threw, or returned an error of its own), so the V2 handler (Copilot R12 contract, BAT-995) preserves the original HTTP cause instead of overriding it. The `deposit_failed_unknown` string is internal — agents will not see it; they see `create_failed` with the composed reason.
+**Fix:** Check `solana_balance` to confirm wallet state. Retry once after a short wait. If it persists, capture the agent log around the failure and treat as a real bug — do NOT speculate causes; surface the failure to the user and ask them to share logs.
+
+### `jupiter_trigger_create` returns `insufficient_token_balance`
+**Symptoms:** The reason mentions TokenProgram + InsufficientFunds. Wallet has SOL but not enough of the input token (typically USDC) for the order amount.
+**Diagnosis:** Layer 2 of `diagnoseFailedDeposit` walks `simulateTransaction.value.logs` to find the failing program. When it's `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` (TokenProgram), Custom(1) means InsufficientFunds — NOT a SOL rent issue. This split was added in Copilot review R11 (BAT-995) because the original mapping reported "send more SOL" for USDC shortages.
+**Fix:** Tell the user to top up the input token in the wallet shown in the reason field. Use `solana_balance` to confirm the actual token balance vs. the order amount.
+
+### `jupiter_trigger_create` returns `deposit_sim_failed`
+**Symptoms:** Local sim succeeded but the failure mode doesn't match the SOL-rent or token-insufficient patterns. Could be a non-Custom(1) error code, or a Custom(1) raised by a program (`programId`) that the disambiguation rule doesn't recognize.
+**Fix:** The `reason` field includes the instruction index AND the failing program address (or "unknown" if logs don't disambiguate). Check BOTH `solana_balance` (SOL + tokens) before retrying. Do NOT guess which is short — both have been wrong in production before. If sufficient on both sides, the error is likely from a recent Jupiter program change — escalate.
+
+

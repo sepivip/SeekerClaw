@@ -189,15 +189,37 @@ const _AUTH_ALLOWED_PROGRAMS = new Set([MEMO_PROGRAM_V1, MEMO_PROGRAM_V2, COMPUT
 // tx past the blind-sign guard.
 //   - Max CU limit: 200_000 (memo + budget ix fit comfortably under this;
 //     Solana default per-tx limit is 200K)
-//   - Max CU price: 10_000 micro_lamports/CU (combined with the 200K CU
-//     ceiling → priority fee worst case = 200_000 * 10_000 / 1_000_000
-//     = 2_000 lamports ≈ 0.000002 SOL — trivial vs the unbounded pre-fix
-//     exposure where an attacker could have set u64::MAX micro_lamports/CU
-//     and drained the burner)
+//   - Max CU price: 2_000_000 micro_lamports/CU (combined with the 200K CU
+//     ceiling → priority fee worst case = 200_000 * 2_000_000 / 1_000_000
+//     = 400_000 lamports ≈ 0.0004 SOL per auth tx — still trivial. Pre-cap
+//     threat model: SetComputeUnitPrice is a u64 micro_lamports/CU field,
+//     so the unbounded priority fee at u64::MAX would be
+//     200_000 * (1.8e19) / 1_000_000 ≈ 3.6e18 lamports ≈ 3.6e9 SOL —
+//     astronomically larger than any payer's actual balance. In practice
+//     the drain is bounded only by the payer's SOL — a hostile auth tx
+//     would drain whatever the burner has (or fail with insufficient-funds)
+//     on every signed challenge. PR #393 R8 update — the original comment
+//     said "~4.29 SOL per auth tx" which was wrong: ~4.29 SOL corresponds
+//     to u32::MAX in the DEPRECATED additional_fee path below, not to the
+//     u64 SetComputeUnitPrice path. R9 follow-up: corrected the magnitude
+//     from 3.7e21 to 3.6e18 lamports (extra 10^3 factor came from mistakenly
+//     applying the lamports→micro_lamports scale twice).)
 //   - Max additional_fee (deprecated tag 0x00): 5_000 lamports ≈ 0.000005
-//     SOL — same trivial ceiling, accommodates any real-world priority bump
+//     SOL — same trivial ceiling, accommodates any real-world priority bump.
+//     Pre-cap worst case at u32::MAX for this u32-lamports field = ~4.29 SOL
+//     per auth tx (this is the field where the 4.29 SOL figure actually
+//     applies, not SetComputeUnitPrice above).
+//
+// PR #393 / BAT-995 device test 2026-06-02: original CU price cap of
+// 10_000 micro_lamports/CU was 100× too tight. Jupiter's real auth
+// challenge txs on mainnet use SetComputeUnitPrice=1_000_000 (legitimate
+// priority fee under mainnet congestion). The blind-sign guard correctly
+// rejected those (working as designed) but the cap was empirically
+// uncalibrated — bumped to 2_000_000 (2× Jupiter's observed value for
+// headroom). The defense against unbounded-fee drain attacks is retained;
+// only the conservatism vs Jupiter's legitimate operating range is fixed.
 const _AUTH_MAX_CU_LIMIT = 200_000;
-const _AUTH_MAX_CU_PRICE_MICROLAMPORTS = 10_000n; // BigInt — instr field is u64
+const _AUTH_MAX_CU_PRICE_MICROLAMPORTS = 2_000_000n; // BigInt — instr field is u64
 const _AUTH_MAX_ADDITIONAL_FEE_LAMPORTS = 5_000;
 
 // Decode + validate a single ComputeBudget instruction's data bytes.
@@ -782,6 +804,214 @@ function validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippa
  * while /orders/price (submitCreateOrder) uses `userPubkey`/`inputAmount`.
  * The craft response's `requestId` becomes /orders/price's `depositRequestId`.
  */
+// BAT-995 self-debug Layer 1: Pre-flight SOL balance check.
+//
+// A V2 deposit tx Jupiter crafts can include up to THREE rent-paying account
+// allocations (temp USDC source account + wSOL ATA + vault SOL ATA). Each
+// rent-exempt token account is ~0.00204 SOL. If the wallet can't cover the
+// rent, the on-chain CreateAccount instruction fails simulation with
+// ResultWithNegativeLamports and Jupiter returns the opaque "Failed to
+// execute deposit" — which the agent historically confabulated as
+// "additional_signers_required". This pre-flight catches it cleanly.
+//
+// Threshold is 0.005 SOL: covers the temp account + one ATA + tx fees + a
+// small buffer. Users with both ATAs missing may still hit the on-chain
+// rejection — Layer 2 (diagnoseFailedDeposit) catches that.
+const MIN_SOL_FOR_TRIGGER_LAMPORTS = 5_000_000;
+
+/**
+ * Pre-flight: does the wallet have enough SOL for V2 deposit rent + fees?
+ *
+ * @param {string} walletAddress
+ * @param {function} getSolBalance — async (addr) => the RPC result for
+ *     getBalance. We accept all three shapes solanaRpc() can produce:
+ *       • a bare lamports `number` (test mocks / convenience wrappers)
+ *       • `{ value: <lamports> }` — Solana JSON-RPC's getBalance SUCCESS shape
+ *         (`{ context, value }`); our solanaRpc() returns the inner result.
+ *       • `{ error: <message> }` — solanaRpc()'s FAILURE shape (HTTP error,
+ *         parse error, timeout, etc.).
+ * @returns {Promise<{ok:true, balance:number} | {ok:false, error:string, reason:string, ...}>}
+ */
+async function checkSolForTrigger(walletAddress, getSolBalance) {
+    if (typeof walletAddress !== 'string' || !walletAddress) {
+        return { ok: false, error: 'invalid_input', reason: 'walletAddress required' };
+    }
+    if (typeof getSolBalance !== 'function') {
+        return { ok: false, error: 'invalid_input', reason: 'getSolBalance fn required' };
+    }
+    let raw;
+    try { raw = await getSolBalance(walletAddress); }
+    catch (e) {
+        return { ok: false, error: 'sol_balance_check_failed', reason: `RPC threw: ${e?.message ?? String(e)}` };
+    }
+    if (raw && typeof raw === 'object' && raw.error) {
+        return { ok: false, error: 'sol_balance_check_failed', reason: `RPC returned: ${raw.error}` };
+    }
+    const lamports = typeof raw === 'number'
+        ? raw
+        : (raw && typeof raw === 'object' && typeof raw.value === 'number') ? raw.value : null;
+    if (typeof lamports !== 'number' || !Number.isFinite(lamports) || lamports < 0) {
+        return { ok: false, error: 'sol_balance_check_failed', reason: 'invalid RPC response shape' };
+    }
+    if (lamports < MIN_SOL_FOR_TRIGGER_LAMPORTS) {
+        const solHave = (lamports / 1e9).toFixed(6);
+        const solNeed = (MIN_SOL_FOR_TRIGGER_LAMPORTS / 1e9).toFixed(3);
+        return {
+            ok: false,
+            error: 'insufficient_sol_for_rent',
+            reason: `Jupiter trigger orders need at least ${solNeed} SOL in the wallet for on-chain rent + fees (temporary deposit account + ATA rent). Current SOL: ${solHave}. Send more SOL to ${walletAddress} before placing the order.`,
+            haveLamports: lamports,
+            needLamports: MIN_SOL_FOR_TRIGGER_LAMPORTS,
+        };
+    }
+    return { ok: true, balance: lamports };
+}
+
+// Mainnet program IDs referenced by diagnoseFailedDeposit log-walking.
+// Kept inline (not a shared constants file) because they're only used here.
+const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+
+/**
+ * Find the program that raised the on-chain error by walking
+ * simulateTransaction's `logs` array. Each log line follows the
+ * pattern `Program <addr> invoke [<depth>]` on entry and
+ * `Program <addr> failed: ...` or `... success` on exit.
+ *
+ * Solana CPI semantics (Copilot R16 #3342350380): when an inner program
+ * fails, the inner `Program X failed:` line appears FIRST, then the outer
+ * caller(s) emit their own `Program Y failed:` lines as the error
+ * propagates up the call stack. The INNERMOST callee is the actual cause
+ * of the error — that's what we need for SystemProgram vs TokenProgram
+ * disambiguation. Picking the LAST failed line (the outermost caller)
+ * would be e.g. ATokenProgram in `CreateIdempotent → CreateAccount`, not
+ * the SystemProgram that actually ran out of lamports.
+ *
+ * So: scan FORWARDS, take the FIRST `failed` marker.
+ *
+ * @param {string[]} logs
+ * @returns {string|null} program address of the innermost failing program,
+ *                        or null if no `failed` line is present (logs
+ *                        truncated, sim didn't reach the failure path).
+ */
+function _failingProgramFromLogs(logs) {
+    if (!Array.isArray(logs)) return null;
+    // Match "Program <base58 pubkey> failed: <reason>" — pubkey allows 32-44
+    // base58 chars (the 32-byte address range). Cap at 64 to defend against
+    // pathological lines.
+    const re = /^Program ([1-9A-HJ-NP-Za-km-z]{32,64}) failed[:\s]/;
+    for (let i = 0; i < logs.length; i++) {
+        const line = logs[i];
+        if (typeof line !== 'string') continue;
+        const m = re.exec(line);
+        if (m) return m[1];
+    }
+    return null;
+}
+
+// BAT-995 self-debug Layer 2: Diagnose Jupiter's opaque "Failed to execute
+// deposit" by locally simulating the signed deposit tx against our Solana
+// RPC. Maps the on-chain InstructionError to a structured cause so the
+// agent can tell the user what to fix, instead of blindly retrying or
+// confabulating an error like "additional_signers_required". Pre-flight
+// catches the common case (low SOL); this catches everything else (extra
+// ATAs that pre-flight didn't account for, stale blockhash, weird
+// token-program errors).
+//
+// Error codes returned (CONTRACT — callers depend on the exact string):
+//   • insufficient_sol_for_rent   — actionable: tell user to send SOL.
+//   • insufficient_token_balance  — actionable: tell user to top up input token.
+//   • blockhash_expired           — actionable: retry the order.
+//   • deposit_sim_failed          — actionable: sim found a specific on-chain
+//                                    error but not one of the canonical cases;
+//                                    surface the reason + check balances.
+//   • deposit_failed_unknown      — NOT ACTIONABLE: sim itself failed, returned
+//                                    no error, or threw. The caller (e.g.
+//                                    tools/solana.js create_failed branch)
+//                                    should PRESERVE the original HTTP cause
+//                                    instead of overriding with this sentinel,
+//                                    because the 4xx may have been a Jupiter-
+//                                    side param/auth issue the sim can't see.
+//
+// @param {string} signedTxBase64  - the signed deposit tx we sent to Jupiter
+// @param {function} simulate      - async (txB64) => { value: { err, logs } }
+//                                    or { error }; match solanaRpc('simulateTransaction').
+// @returns {Promise<{error:string, reason:string, rawError?:any}>}
+async function diagnoseFailedDeposit(signedTxBase64, simulate) {
+    if (typeof simulate !== 'function') {
+        return { error: 'deposit_failed_unknown', reason: 'no simulate fn provided to diagnose' };
+    }
+    let simResult;
+    try { simResult = await simulate(signedTxBase64); }
+    catch (e) {
+        return { error: 'deposit_failed_unknown', reason: `Jupiter rejected the deposit and local simulation threw: ${e?.message ?? String(e)}` };
+    }
+    if (simResult && simResult.error) {
+        return { error: 'deposit_failed_unknown', reason: `Jupiter rejected the deposit and local RPC sim returned: ${simResult.error}` };
+    }
+    const value = simResult && simResult.value;
+    if (!value || !value.err) {
+        return {
+            error: 'deposit_failed_unknown',
+            reason: 'Jupiter rejected the deposit but local simulation shows no on-chain error. Likely a Jupiter backend issue or stale blockhash by submit time.',
+        };
+    }
+    const err = value.err;
+    if (Array.isArray(err.InstructionError) && err.InstructionError.length >= 2) {
+        const ixIndex = err.InstructionError[0];
+        const code = err.InstructionError[1];
+        // Custom(1) is overloaded — meaning depends on WHICH program raised it:
+        //   • SystemProgram (11111111111111111111111111111111)
+        //       → CreateAccount ResultWithNegativeLamports (insufficient SOL for rent)
+        //   • TokenProgram (TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA)
+        //       → Transfer InsufficientFunds (insufficient input token, e.g. USDC)
+        //   • anything else → unknown — fall back to generic deposit_sim_failed
+        // Misclassifying USDC-shortage as "send more SOL" wastes the user's
+        // time + funds (Copilot review R11). Walk logs to disambiguate.
+        if (code && typeof code === 'object' && code.Custom === 1) {
+            const logs = Array.isArray(value.logs) ? value.logs : [];
+            const failingProgram = _failingProgramFromLogs(logs);
+            if (failingProgram === SYSTEM_PROGRAM_ID) {
+                return {
+                    error: 'insufficient_sol_for_rent',
+                    reason: `On-chain simulation: instruction ${ixIndex} (SystemProgram) failed with ResultWithNegativeLamports — wallet has insufficient SOL for the deposit tx's rent allocations. V2 trigger orders need at least ${(MIN_SOL_FOR_TRIGGER_LAMPORTS / 1e9).toFixed(3)} SOL beyond the order amount for rent + fees. If this happened after pre-flight passed, the wallet likely needs another ATA created (extra ~0.002 SOL).`,
+                    rawError: err,
+                };
+            }
+            if (failingProgram === TOKEN_PROGRAM_ID) {
+                return {
+                    error: 'insufficient_token_balance',
+                    reason: `On-chain simulation: instruction ${ixIndex} (TokenProgram) failed with InsufficientFunds — the wallet doesn't have enough of the input token for this order. Use solana_balance to check the wallet's token balances; the user needs to top up the input token (typically USDC).`,
+                    rawError: err,
+                };
+            }
+            // Custom(1) raised by a program we don't have a rule for. Don't
+            // guess — both "send more SOL" and "send more USDC" can be wrong.
+            return {
+                error: 'deposit_sim_failed',
+                reason: `On-chain simulation: instruction ${ixIndex} failed with Custom(1) raised by program ${failingProgram || 'unknown'}. Both SOL and token balances should be checked manually before retrying.`,
+                rawError: err,
+            };
+        }
+        return {
+            error: 'deposit_sim_failed',
+            reason: `Local simulation failed at instruction ${ixIndex}: ${typeof code === 'string' ? code : JSON.stringify(code)}. Check wallet token balances and try again.`,
+            rawError: err,
+        };
+    }
+    if (typeof err === 'string') {
+        if (err === 'BlockhashNotFound' || err.includes('Blockhash')) {
+            return {
+                error: 'blockhash_expired',
+                reason: 'Deposit tx blockhash expired before submission. The network was slow between deposit/craft and orders/price. Try again — the order will use a fresh blockhash.',
+                rawError: err,
+            };
+        }
+        return { error: 'deposit_failed_unknown', reason: `On-chain simulation error: ${err}`, rawError: err };
+    }
+    return { error: 'deposit_failed_unknown', reason: `On-chain simulation error: ${JSON.stringify(err)}`, rawError: err };
+}
+
 async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount }) {
     if (!token) return { ok: false, error: 'auth_required', reason: 'no JWT supplied — call authenticate() first' };
     if (!outputMint) return { ok: false, error: 'invalid_input', reason: 'outputMint required for deposit/craft' };
@@ -1148,6 +1378,10 @@ module.exports = {
     ensureVault,
     listOrders,
     validateOrderArgs,
+    // Self-debug primitives (BAT-995 — agent gets actionable errors instead
+    // of Jupiter's opaque "Failed to execute deposit").
+    checkSolForTrigger,
+    diagnoseFailedDeposit,
     // Low-level (caller drives signing between primitives so reservation
     // lifecycles can wrap the deposit/cancel sign step).
     depositCraft,
@@ -1170,4 +1404,5 @@ module.exports = {
     _AUTH_MAX_CU_LIMIT,
     _AUTH_MAX_CU_PRICE_MICROLAMPORTS,
     _AUTH_MAX_ADDITIONAL_FEE_LAMPORTS,
+    MIN_SOL_FOR_TRIGGER_LAMPORTS,
 };
