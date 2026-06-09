@@ -16,11 +16,19 @@ from public on-chain data + the wallet identity recorded in its filename.
   evidence of the test-vs-prod divergence that triggered BAT-1031. **Not
   exercised by current replay tests after BAT-1031.**
 
-- `prod-burner-v2-trigger-2026-06-09.json` — **CANONICAL** for BAT-1031.
-  Gate 0 capture against the PROD BURNER (`221Y7STwi4XC8yzT39p8vuKMa8K5XemoXLeDQcsjP1dd`)
-  during the v9.1 `simulation_mint_mismatch` reject. Drives the BAT-1031
-  Path-A carve-out boundary tests. Contains only public on-chain data +
-  policy schema; no secrets.
+- `prod-burner-v2-trigger-2026-06-09.json` — **CANONICAL REFERENCE** for
+  BAT-1031. Gate 0 capture against the PROD BURNER
+  (`221Y7STwi4XC8yzT39p8vuKMa8K5XemoXLeDQcsjP1dd`) during the v9.1
+  `simulation_mint_mismatch` reject. The BAT-1031 Path-A carve-out
+  boundary tests in `tests/nodejs-project/burner-policy-carveout.test.js`
+  do NOT load this file at runtime — instead they synthesize fixtures
+  in-test that mirror this capture's shape (same instruction order, same
+  pre/post account layout, same WSOL ATA create-and-init sequence). The
+  committed JSON is the source-of-truth reference for what the
+  hand-built fixtures must continue to mirror, AND archival evidence of
+  the prod-burner-vs-test-wallet shape divergence documented in
+  Linear BAT-1031. Contains only public on-chain data + policy schema;
+  no secrets.
 
 Audit-trail timestamped captures (`sim-deposit-<unix-ms>.json`,
 `v2-flow-<unix-ms>.json`) are ignored by `.gitignore`. They accumulate locally

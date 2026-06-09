@@ -305,33 +305,43 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.t2.pass, true);
         assert.deepStrictEqual(r.t2.altResolvedBurnerOwned, []);
     });
-    check('A: T3 PASS — no drainer-class ops touch declared burner USDC ATA (only transferChecked, which IS drainer but declared)', () => {
+    check('A: T3 — declared burner USDC ATA surfaces with drainer op (transferChecked); freshly-created WSOL ATA does NOT (carve-out applies)', () => {
         const fx = buildHappyFixture();
         const r = extractTripwires(fx, { burnerPubkey: BURNER, declaredBurnerOwned: [BURNER_USDC_ATA] });
-        // T3 surfaces drainer-class ops on burner-owned accounts. The
-        // transferChecked on BURNER_USDC_ATA IS a drainer op — but this is
-        // the declared burnerDebit, so the carve-out logic does NOT need
-        // to apply here. Path-A trusts Jupiter for the destination; T3 is
-        // about UNDECLARED drainer activity on burner-owned accounts. The
-        // policy producer is responsible for declaring the debit.
-        //
-        // Our extractor flags this account because it's in burnerScope and
-        // has a drainer op. It then attempts the carve-out, which fails
-        // (account pre-existed). For this fixture, BURNER_USDC_ATA is
-        // declared and has a drainer (transferChecked) — that's the
-        // expected debit. The carve-out doesn't apply. T3 records it as
-        // a violation under our pure-extractor semantics; the live policy
-        // would short-circuit before T3 because the debit is declared and
-        // validated by validateSimDelta. For the carve-out boundary test,
-        // we assert the carve-out outcome rather than overall T3 pass —
-        // both BURNER_WSOL_ATA (freshly created) and BURNER_USDC_ATA
-        // (declared debit) are evaluated.
-        assert.ok(r.t3.violatingOps.length >= 0); // expected: declared-debit shows as drainer w/o carve
-        // The freshly-created WSOL ATA should NOT appear in violatingOps
-        // because it has no drainer-class op touching it.
+        // T3 surfaces drainer-class ops on every burner-owned account
+        // (declared or observed). The transferChecked on BURNER_USDC_ATA
+        // IS a drainer op — and BURNER_USDC_ATA pre-existed in the
+        // fixture (it had USDC pre-balance), so the carve-out CANNOT
+        // apply (condition 1: pre-state-does-not-exist is violated).
+        // The extractor therefore records BURNER_USDC_ATA in violatingOps
+        // with reason `carve_out_pre_state_exists`. This is the
+        // pure-extractor semantics — the live policy would never reach
+        // this T3 evaluation for the declared debit because
+        // validateSimDelta short-circuits earlier on the declared
+        // burnerDebit, but the carve-out test pins what the extractor
+        // sees independent of the runtime short-circuit.
+        const usdcViolation = r.t3.violatingOps.find(v => v.account === BURNER_USDC_ATA);
+        assert.ok(usdcViolation,
+            'BURNER_USDC_ATA (declared debit, pre-existed, has transferChecked drainer op) must appear in T3 violations under pure-extractor semantics');
+        assert.ok(
+            usdcViolation.reasons.includes('carve_out_pre_state_exists'),
+            `BURNER_USDC_ATA carve-out must fail with carve_out_pre_state_exists, got ${JSON.stringify(usdcViolation.reasons)}`,
+        );
+
+        // The freshly-created WSOL ATA has NO drainer-class op touching
+        // it (only canonical create/init ops), so it must NOT appear in
+        // T3 violations.
         const wsolViolation = r.t3.violatingOps.find(v => v.account === BURNER_WSOL_ATA);
         assert.strictEqual(wsolViolation, undefined,
             'BURNER_WSOL_ATA has no drainer op → must not appear in T3 violations');
+
+        // And the WSOL ATA is the one that SHOULD have the carve-out
+        // applied successfully because of its T5 footprint (zero balance
+        // + canonical-init ops only). t3.carveOutAppliedTo only collects
+        // accounts that had a drainer op AND passed the carve-out — the
+        // WSOL ATA has neither.
+        assert.ok(!r.t3.carveOutAppliedTo.includes(BURNER_WSOL_ATA),
+            'BURNER_WSOL_ATA is not a T3 carve-out application target (no drainer op against it)');
     });
     check('A: T4 PASS — fee payer is burner', () => {
         const fx = buildHappyFixture();
