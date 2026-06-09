@@ -58,7 +58,7 @@
 | `self_send_rejected` | 0 (cryptic AccountLoadedTwice surfaced raw) | 3 (DIAGNOSTICS row + translation + suggest source="main") | DIAGNOSTICS.md tool-handler table |
 | `over_burner_cap` | 0 (no explicit code for source='burner' over-cap path) | 3 (DIAGNOSTICS row + guidance: lower amount or omit source) | DIAGNOSTICS.md tool-handler table |
 
-**Important distinction documented:** these are tool-handler errors, NOT in `REJECT_CODES` (which stays at 29 — the locked enum for `validateBurnerTx` rejects only). Drift guard test `REJECT_CODES.length === 29` continues to pass.
+**Important distinction documented:** these are tool-handler errors, NOT in `REJECT_CODES` (the locked enum for `validateBurnerTx` rejects only). `REJECT_CODES.length` was 29 at v31 audit time and is lowered to 28 in BAT-1031 (the `simulation_recipient_mismatch` code was removed when the v9.1 `validateSimDelta expectedTokenOwner` branch was deleted alongside the depositVault destination-binding architecture — see Linear BAT-1031 v1.2). Drift guard test now asserts `REJECT_CODES.length === 28`.
 
 ---
 

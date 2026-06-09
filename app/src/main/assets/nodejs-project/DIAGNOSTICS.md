@@ -813,7 +813,6 @@ The same security rule applies on the MWA path; recommending MWA as a workaround
 | `cosigner_not_in_allowlist` | Extra required signer not declared by the protocol response | Same. |
 | `simulation_delta_mismatch` | Simulation shows burner's balance change doesn't match the declared expectedDelta within tolerance | Surface BOTH expected and observed values. Refuse. Common cause: bundled-instruction injection attack (Crypto Copilot class). |
 | `simulation_mint_mismatch` | Simulation shows the account's mint doesn't match the declared one | Same. |
-| `simulation_recipient_mismatch` | Recipient credit observed in simulation doesn't match declared atomicAmount | Same. |
 | `account_ownership_uncertain` | Drainer-opcode walk found an instruction whose target account ownership can't be resolved | Same. |
 | `token_2022_undeclared` | Tx uses Token-2022 program but `expectedDelta.tokenStandard !== 'token_2022'` | Same. |
 | `drainer_burn` | SPL `Burn` / `BurnChecked` opcode on a burner-owned ATA — would destroy the burner's tokens. Legitimate protocol marker burns (e.g., zero-value cancel flows) are accepted only when the target account is listed in policy `allowedBurnAccounts`. | Surface reason verbatim. Refuse. Suggest the user investigate the calling instruction or report. Do NOT retry on MWA — same security rule applies. |

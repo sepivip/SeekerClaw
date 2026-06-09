@@ -8,9 +8,11 @@
 //   - Token-2022 declaration enforcement
 //   - Per-shape `expectedDelta` validation (7 kinds)
 //   - Missing burnerPubkey → fail closed before any other check
-//   - `REJECT_CODES.length === 29` drift guard (was 26 before
+//   - `REJECT_CODES.length === 28` drift guard (was 26 before
 //     BAT-1013-followup; +3 for drainer_burn, token_2022_extension_unsupported,
-//     token_2022_send_unsupported; -5 dead aspirational codes pruned R11)
+//     token_2022_send_unsupported; -5 dead aspirational codes pruned R11;
+//     -1 in BAT-1031 for simulation_recipient_mismatch removed with the
+//     v9.1 validateSimDelta expectedTokenOwner branch)
 //
 // Uses the parser's internal hand-rolled binary format to construct
 // synthetic txs end-to-end through `validateBurnerTx`. Helper builders
