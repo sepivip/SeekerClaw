@@ -82,7 +82,23 @@
 
 'use strict';
 
-const { TxParseError, parseTransaction } = require('./tx-parser');
+const { TxParseError, parseTransaction, base58Decode } = require('./tx-parser');
+
+// Strict 32-byte Solana pubkey predicate. Copilot PR #401 R5: the long-
+// standing `isNonEmptyBase58` (charset + 32-44 length) is too loose for
+// new code paths where a producer bug must fail fast at the shape gate
+// (vs slipping into validateSimDelta and surfacing as a confusing
+// later reject). This adds the byte-count check that
+// jupiter/trigger-v2.js `_isBase58Pubkey` and solana.js
+// `isValidSolanaAddress` both perform. Kept as a separate predicate
+// instead of tightening `isNonEmptyBase58` itself to avoid touching the
+// 11+ legacy call sites in this PR's scope.
+function _isStrictPubkey(s) {
+    if (typeof s !== 'string') return false;
+    if (s.length < 32 || s.length > 44) return false;
+    if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(s)) return false;
+    try { return base58Decode(s).length === 32; } catch { return false; }
+}
 const { readAccountInfo, tokenDelta, lamportsDelta } = require('./spl-token-layout');
 
 // Sentinel for SPL accounts whose mint is unknown at expectedDelta build
@@ -981,12 +997,73 @@ function validateExpectedDeltaShape(expectedDelta) {
             // Call sites that cannot supply a verified depositVault MUST
             // route the tx to the main wallet (forceRouting='main') and
             // not invoke autonomous burner signing for this kind.
+            //
+            // Process lesson (BAT-1025 v9.1, 2026-06-08): five rounds of
+            // contract iteration (v8.5–v8.9) over-engineered a problem
+            // that 30 seconds of live capture would have collapsed into
+            // one. The premise driving the iteration — "the V2 vault PDA
+            // is the on-chain destination and is owned by the Jupiter
+            // Trigger V2 program" — was falsified by the C1 capture in
+            // tests/jupiter-ultra/live-capture-sim-fixture.js. In reality
+            // the destination is craft.inputTokenAccount, an ephemeral
+            // classic SPL Token Account whose splToken.owner-slot is the
+            // Privy vault PDA. For any future burner-policy contract
+            // touching a third-party-managed destination account
+            // (custodial wallet, MPC, Anchor program), CAPTURE FIRST:
+            // run an equivalent of live-capture-sim-fixture.js against a
+            // funded test wallet BEFORE drafting a contract addendum. Docs
+            // are useful but a contract anchored on docs alone cascades
+            // wrong premises across the entire policy architecture.
             const dErr = requireBurnerDebit(expectedDelta.burnerDebit);
             if (dErr) return reject('expected_delta_invalid_shape', dErr);
             const v = expectedDelta.depositVault;
             if (!v || typeof v !== 'object') return reject('expected_delta_invalid_shape', 'depositVault required');
-            if (!isNonEmptyBase58(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required');
-            if (!isNonEmptyBase58(v.expectedOwner)) return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner required');
+            // Copilot R7: depositVault.pubkey IS the on-chain destination
+            // the policy binds to. Tighten to the strict 32-byte predicate
+            // for consistency with expectedOwner / expectedTokenOwner
+            // (both fixed in R5). A 31/33-byte-decoded base58 string would
+            // otherwise slip through and produce a confusing RPC reject
+            // or simulation_metadata_missing later. Scope-discipline:
+            // ONLY tightening this deposit-kind path; the 11+ other
+            // isNonEmptyBase58 sites in burner-policy.js stay on the
+            // legacy predicate (independent refactor scope).
+            if (!_isStrictPubkey(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required (32-byte base58 pubkey)');
+            // BAT-1025 v9.1: producers can supply either expectedOwner (the
+            // accountInfo.owner program id — V1 trigger pattern) OR
+            // expectedTokenOwner (the SPL token-account owner-slot value —
+            // V2 trigger pattern after Codex Option C re-pin 2026-06-08).
+            // AT LEAST ONE is required; both can be present for callers
+            // that want belt-and-suspenders (e.g. a future producer that
+            // both program-owner-checks the destination AND binds its
+            // splToken.owner slot). Enforcement in validateSimDelta:
+            // expectedTokenOwner → postAI.splToken.owner-slot assertion;
+            // expectedOwner stays shape-only until BAT-1029 V1 wiring.
+            //
+            // Copilot PR #401 R4 (2026-06-08): when either field is
+            // PROVIDED (non-undefined/null) it must be a valid base58
+            // pubkey — otherwise a caller bug (e.g. accidental empty
+            // string, an upstream null, or a typo'd field) silently
+            // drops through to validateSimDelta and either no-ops the
+            // binding or surfaces as a confusing simulation_recipient_mismatch
+            // later. Fail fast at the shape gate so the producer-side
+            // bug is the rejection reason.
+            // Copilot R5: use the strict 32-byte predicate here so the
+            // producer-side strictness in jupiter/trigger-v2.js mirrors
+            // the consumer side. Otherwise a 31/33-byte base58 string
+            // would pass the shape gate and surface later as a
+            // simulation_recipient_mismatch (or RPC error) that's
+            // harder to root-cause back to the producer bug.
+            if (v.expectedOwner != null && !_isStrictPubkey(v.expectedOwner)) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner provided but is not a valid 32-byte base58 pubkey');
+            }
+            if (v.expectedTokenOwner != null && !_isStrictPubkey(v.expectedTokenOwner)) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedTokenOwner provided but is not a valid 32-byte base58 pubkey');
+            }
+            const hasExpectedOwner = _isStrictPubkey(v.expectedOwner);
+            const hasExpectedTokenOwner = _isStrictPubkey(v.expectedTokenOwner);
+            if (!hasExpectedOwner && !hasExpectedTokenOwner) {
+                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner or depositVault.expectedTokenOwner required');
+            }
             return accept();
         }
         case 'solana_send': {
@@ -1358,6 +1435,12 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
                 mint: expectedDelta.burnerDebit ? expectedDelta.burnerDebit.mint : 'native_sol',
                 role: 'vault',
                 expectedDeltaAtomic: BigInt(expectedDelta.burnerDebit ? expectedDelta.burnerDebit.atomicAmount : 0),
+                // BAT-1025 v9.1: propagate expectedTokenOwner to the check so
+                // validateSimDelta can assert postAI.splToken.owner equality.
+                // Falsy when V1/legacy producers used the old expectedOwner
+                // field, which is intentionally NOT propagated here (it stays
+                // shape-only until BAT-1029 wires V1).
+                expectedTokenOwner: vault.expectedTokenOwner || null,
                 // Vault MAY be created at deposit time (Jupiter Trigger V2
                 // registers vaults lazily).
                 existencePolicy: { mustExistBefore: false, allowCreate: true, allowClose: false },
@@ -1550,6 +1633,80 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
                     return reject('simulation_mint_mismatch',
                         `post ${check.address} mint ${postAI.splToken.mint} != declared ${check.mint}`);
                 }
+            }
+        }
+        // BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08):
+        // for Jupiter Trigger V2 deposits the destination is an ephemeral
+        // SPL Token Account whose owner-slot value MUST equal the high-
+        // level Privy vault PDA returned as receiverAddress from
+        // /trigger/v2/deposit/craft. Producers propagate that pubkey to
+        // check.expectedTokenOwner via depositVault.expectedTokenOwner.
+        // When set, assert it against the decoded splToken.owner on both
+        // sides (pre may not exist for freshly-created ATAs — only check
+        // when splToken is decodable). Reuses simulation_recipient_mismatch
+        // per Codex: keeps the reject-code surface area unchanged so this
+        // PR avoids SAB-audit scope.
+        //
+        // Copilot PR #401 R1 (2026-06-08): this assertion is INTENTIONALLY
+        // OUTSIDE the `check.mint !== 'native_sol'` SPL branch above. A
+        // producer that declares burnerDebit.mint='native_sol' (SOL-input
+        // V2 trigger) can still legitimately supply expectedTokenOwner
+        // when the on-chain destination is an SPL token wrapper (e.g. wSOL
+        // ATA) whose splToken sub-shape decodes cleanly. Nesting this
+        // check inside the SPL branch would silently skip the owner-slot
+        // binding on those routes — exactly the bypass class Codex flagged
+        // in the v8.6 active-destination blocker.
+        //
+        // Copilot PR #401 R6 (2026-06-08, refining R4): the original R1
+        // comment said the splToken-presence guards kept the assertion a
+        // no-op on System-account destinations. That was the R1 mental
+        // model, but R4 promoted it to a SECURITY FAIL-CLOSED — when
+        // expectedTokenOwner is set, an existing-but-non-SPL-decodable
+        // account is treated as a tampered destination and rejected with
+        // simulation_recipient_mismatch. Updating this comment to match
+        // the implementation below so future readers don't get whiplash.
+        if (check.expectedTokenOwner) {
+            // Copilot PR #401 R4 (2026-06-08): close the SOL-input bypass.
+            // When a producer declares expectedTokenOwner, the destination
+            // is contractually an SPL token account whose owner-slot we
+            // must bind. If the account EXISTS but is not SPL-decodable
+            // (postAI.splToken is falsy), a tampered tx has routed the
+            // declared destination to a System account or an opaque
+            // non-SPL account — the binding cannot be performed. Fail
+            // closed so the policy never silently no-ops the active-
+            // destination invariant.
+            //
+            // Copilot PR #401 R10 (2026-06-08): which reject code actually
+            // fires depends on the input mint. For non-`native_sol` (SPL
+            // inputs like USDC), the existing simulation_metadata_missing
+            // guard inside the SPL `else` branch above ALREADY rejects
+            // the same shape — as an AVAILABILITY-class error suggesting
+            // MWA fallback. The fail-closed simulation_recipient_mismatch
+            // (security-class) reject below is therefore primarily the
+            // load-bearing path for `native_sol` inputs, where the SPL
+            // decode guard doesn't run because validateSimDelta takes the
+            // `if (check.mint === 'native_sol')` branch. Future readers
+            // tracing a specific reject should expect:
+            //   • SPL input + non-SPL destination → simulation_metadata_missing (availability)
+            //   • SOL input + non-SPL destination → simulation_recipient_mismatch (security, here)
+            // preAI gets the same treatment when it exists (covers a
+            // takeover where pre was a real SPL account but the attacker
+            // repurposed it before sign).
+            if (preAI.exists && !preAI.splToken) {
+                return reject('simulation_recipient_mismatch',
+                    `pre ${check.address} declares expectedTokenOwner but is not SPL-decodable (no splToken metadata)`);
+            }
+            if (postAI.exists && !postAI.splToken) {
+                return reject('simulation_recipient_mismatch',
+                    `post ${check.address} declares expectedTokenOwner but is not SPL-decodable (no splToken metadata)`);
+            }
+            if (preAI.exists && preAI.splToken && preAI.splToken.owner !== check.expectedTokenOwner) {
+                return reject('simulation_recipient_mismatch',
+                    `pre ${check.address} splToken.owner ${preAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
+            }
+            if (postAI.exists && postAI.splToken && postAI.splToken.owner !== check.expectedTokenOwner) {
+                return reject('simulation_recipient_mismatch',
+                    `post ${check.address} splToken.owner ${postAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
             }
         }
 

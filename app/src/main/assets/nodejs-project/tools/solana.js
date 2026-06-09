@@ -774,7 +774,32 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         if (!craftResult.ok) {
             return { error: craftResult.error, reason: craftResult.reason };
         }
-        const { transaction: unsignedDepositTx, depositRequestId, recoveryContext } = craftResult;
+        const {
+            transaction: unsignedDepositTx,
+            depositRequestId,
+            recoveryContext,
+            receiverAddress: craftReceiverAddress,
+            inputTokenAccount: craftInputTokenAccount,
+        } = craftResult;
+
+        // BAT-1025 v9.1 producer-side cross-check (Codex re-pin 2026-06-08):
+        // Jupiter's /deposit/craft response includes both `receiverAddress`
+        // (the high-level Privy vault PDA) and `inputTokenAccount` (the
+        // ephemeral classic SPL Token Account that actually receives the
+        // burner's USDC). depositCraft already enforces both are base58 and
+        // that they're not equal. Here we add one further binding check that
+        // can only be made at the producer layer: the `receiverAddress`
+        // Jupiter returned MUST equal the `vaultPubkey` we previously got from
+        // /vaults/ensure. A divergence indicates either a TOCTOU race or a
+        // tampered craft response routing the deposit to an attacker-
+        // controlled vault — fail closed in both cases.
+        if (craftReceiverAddress !== vaultAddress) {
+            log(`[Jupiter Trigger V2] deposit/craft receiverAddress (${craftReceiverAddress}) does not match ensureVault().vaultPubkey (${vaultAddress}) — failing closed`, 'WARN');
+            return {
+                error: 'vault_unavailable',
+                reason: 'deposit/craft receiverAddress diverges from ensureVault vaultPubkey',
+            };
+        }
 
         // 12. Verify deposit tx fee payer matches active wallet — guard against
         // a malicious craft response that would route funds from the wrong wallet.
@@ -825,15 +850,30 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                     mint: inputIsSol ? 'native_sol' : inputToken.address,
                     atomicAmount: String(inputAmountAtomic),
                 },
-                // V2 vault pubkey from /vaults/ensure. expectedOwner is the
-                // Jupiter Limit Order V2 / Trigger V2 on-chain program — cross-
-                // verified against jup-ag/docs/openapi-spec/trigger/v1/trigger.yaml
-                // (programVersion field), jup-ag/platform-list, and Solscan label
-                // 'Jupiter Limit Order V2'. existencePolicy allows create since
-                // vault registration may happen in the same tx on first use.
+                // BAT-1025 v9.1 (Codex re-pin 2026-06-08): the deposit
+                // destination is the ephemeral classic SPL Token Account
+                // returned as `inputTokenAccount` from /deposit/craft — NOT
+                // the high-level Privy vault PDA. The vault PDA itself
+                // (`receiverAddress` = `vaultAddress` here) ends up only as
+                // the SPL token-account owner-slot value of inputTokenAccount.
+                //
+                // Empirically verified by
+                // tests/jupiter-ultra/live-capture-sim-fixture.js:
+                //  - postAI.accountInfo.owner = TokenkegQ… (classic SPL Token Program)
+                //  - decoded splToken.mint = burnerDebit.mint (e.g. USDC)
+                //  - decoded splToken.owner = receiverAddress (= vaultPubkey)
+                //
+                // expectedTokenOwner (NOT expectedOwner — see Codex C1
+                // review): names the SPL token-account owner-slot value the
+                // policy will assert against postAI.splToken.owner in
+                // validateSimDelta. Keeping `expectedTokenOwner` distinct
+                // from any future program-owner field avoids the v8.6/v8.9
+                // ambiguity Codex caught. existencePolicy allows create
+                // because the ephemeral inputTokenAccount is created in the
+                // same tx.
                 depositVault: {
-                    pubkey: vaultAddress,
-                    expectedOwner: 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X',
+                    pubkey: craftInputTokenAccount,
+                    expectedTokenOwner: craftReceiverAddress,
                 },
                 // Q8 (BAT-1013-followup): burnerOwnedAccounts declares only
                 // the EXPLICIT debit ATA. Multi-hop intermediate token
