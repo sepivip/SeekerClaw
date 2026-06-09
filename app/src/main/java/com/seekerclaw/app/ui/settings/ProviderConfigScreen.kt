@@ -989,6 +989,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // saved against the OLD authType (the one
                         // authType save reverted to) — silently mis-
                         // matched.
+                        val previousAuth = config?.authType ?: selectedAuth
                         val authSaved = saveField("authType", selectedAuth, needsRestart = true)
                         context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
                             .edit()
@@ -997,7 +998,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         if (authSaved && activeProvider == "openai") {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider("openai", selectedAuth)
-                            if (allowedModels.none { it.id == currentModel }) {
+                            // Only clamp models that belonged to the OLD auth
+                            // mode's list (e.g. gpt-5.4-mini is oauth-only and
+                            // must not survive oauth→api_key). A model on
+                            // NEITHER list is a user-typed custom ID — leave
+                            // it alone (BAT-1032).
+                            val wasOldListModel = modelsForProvider("openai", previousAuth).any { it.id == currentModel }
+                            if (allowedModels.none { it.id == currentModel } && wasOldListModel) {
                                 // Use safe default, NOT list order (newer models may be tier-gated).
                                 val fallback = defaultModelForProvider("openai", selectedAuth)
                                 saveField("model", fallback, needsRestart = false)

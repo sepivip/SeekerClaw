@@ -47,6 +47,7 @@ import com.seekerclaw.app.ui.components.cornerGlowBorder
 
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.AppStorageInfo
 import com.seekerclaw.app.util.DeviceInfo
@@ -113,8 +114,8 @@ fun SystemScreen(onBack: () -> Unit) {
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
     val modelName = config?.model
-        ?.ifBlank { "Not set" }
-        ?.let { formatModelName(it) }
+        ?.ifBlank { null }
+        ?.let { modelDisplayName(it) }
         ?: "Not set"
 
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
@@ -763,16 +764,6 @@ private fun formatUptime(millis: Long): String {
         if (hours % 24 > 0) append("${hours % 24}h ")
         append("${minutes % 60}m")
     }.trim()
-}
-
-private fun formatModelName(model: String): String {
-    return when {
-        model.contains("opus") -> "Opus 4.6"
-        model.contains("sonnet-4-6") -> "Sonnet 4.6"
-        model.contains("sonnet") -> "Sonnet 4.5"
-        model.contains("haiku") -> "Haiku 4.5"
-        else -> model.substringAfterLast("-").replaceFirstChar { it.uppercase() }
-    }
 }
 
 @Composable

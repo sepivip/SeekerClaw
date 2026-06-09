@@ -168,12 +168,13 @@ REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, POST_NOTIFICATIONS
 ## Model List
 
 Available models for the dropdown (using API aliases — auto-resolve to latest snapshot):
-- `claude-opus-4-7` — smartest, newest (Opus 4.7) — **default for fresh installs**
-- `claude-opus-4-6` — previous flagship (Opus 4.6)
+- `claude-fable-5` — most powerful, newest tier (Fable 5)
+- `claude-opus-4-8` — smartest Opus — **default for the Anthropic provider**
+- `claude-opus-4-7` — previous flagship (Opus 4.7)
 - `claude-sonnet-4-6` — balanced, recommended (Sonnet 4.6)
 - `claude-haiku-4-5` — fast, cheapest (Haiku 4.5)
 
-Defined in `app/src/main/java/com/seekerclaw/app/config/Models.kt`.
+Defined in `app/src/main/assets/nodejs-project/model-registry.json` — single source of truth read by both Kotlin (`ModelRegistry` in `Providers.kt`) and Node (`model-catalog.js`). A custom model ID typed in the picker is also supported on Anthropic/OpenAI and survives reconcile (BAT-1032).
 
 Model list can be updated via app update or future remote config.
 
@@ -197,7 +198,7 @@ Base64-encoded JSON:
   "anthropic_api_key": "sk-ant-api03-...",
   "telegram_bot_token": "123456789:ABCdefGHI...",
   "telegram_owner_id": "987654321",
-  "model": "claude-opus-4-7",
+  "model": "claude-opus-4-8",
   "agent_name": "MyAgent"
 }
 ```

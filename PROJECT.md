@@ -34,7 +34,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + Custom (any OpenAI-compatible gateway) | Claude Opus 4.7 default; OpenAI + OpenRouter + Custom via adapters |
+| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + Custom (any OpenAI-compatible gateway) | Claude Opus 4.8 default; OpenAI + OpenRouter + Custom via adapters |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.4.10 |
@@ -45,7 +45,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ## Features — Shipped
 
 ### AI Agent Core
-- **Claude integration** — Opus 4.7 (default), Opus 4.6, Sonnet 4.6, Haiku 4.5 selectable. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
+- **Claude integration** — Fable 5, Opus 4.8 (default), Opus 4.7, Sonnet 4.6, Haiku 4.5 selectable (+ custom model IDs). Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
 - **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter/custom) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. Custom provider for any OpenAI-compatible gateway — user-configurable base URL, API key, custom headers, and Chat Completions or Responses API format. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
 - **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
@@ -309,6 +309,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-06-09 | Fix: custom model silently reverted by config reconcile — equality gate trusts UI-saved values; UI/agent split-brain + restart-revert resolved. Feat: add Fable 5 + Opus 4.8 (new Anthropic default), drop Opus 4.6 from dropdown (BAT-1032). | — |
 | 2026-05-31 | Docs (BAT-990): README + PROJECT.md v2 sync — rewrite intro to lead with v2 thesis (autonomous USDC payments + hackathon win), add Autonomous Payments section, new x402 features row, rename to Solana Wallets, expand Live Settings, fix Extended Thinking model list, add Graceful Stop row, bundled-skills note, burner-wallet safety bullet. Tool count reconciled to 63 across 13 modules; bundled skills 22. Burner wording paste/import-only per BAT-936. | direct |
 | 2026-05-30 | Docs: add Solana Mobile Hackathon Winner badge + Award section in README; add Compose / Node.js / MCP badges | direct |
 | 2026-05-29 | Chore (tests): Jupiter Trigger V2 contract-probe + refund dev tools (BAT-697) — dev-only, not bundled in app | direct |

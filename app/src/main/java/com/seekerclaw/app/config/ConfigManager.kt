@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.StatFs
 import android.util.Base64
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.core.content.ContextCompat
 import com.seekerclaw.app.BuildConfig
@@ -1160,7 +1161,7 @@ object ConfigManager {
             authType = resolveAuthType(p),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
-            model = p.getString(KEY_MODEL, "claude-opus-4-7") ?: "claude-opus-4-7",
+            model = p.getString(KEY_MODEL, "claude-opus-4-8") ?: "claude-opus-4-8",
             agentName = livePrefs?.agentName ?: (p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent"),
             braveApiKey = braveApiKey,
             searchProvider = livePrefs?.searchProvider ?: (p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave"),
@@ -1311,28 +1312,14 @@ object ConfigManager {
         // gpt-5.4-mini but the api_key list doesn't, so switching oauth→
         // api_key on OpenAI must revalidate prefs.model against the new
         // auth mode's allowlist even when provider stays the same.
-        val resolvedModel: String = when {
-            newModel != null -> {
-                // Overlay model present — validate; substitute default if invalid.
-                if (isModelValidForProvider(effectiveProviderAfter, effectiveAuthAfter, newModel)) {
-                    newModel
-                } else {
-                    val providerDefault = defaultModelForProvider(effectiveProviderAfter, effectiveAuthAfter)
-                    if (providerDefault.isNotBlank()) providerDefault else newModel
-                }
-            }
-            providerChanged || authChanged -> {
-                // No overlay model but provider or auth changed — validate
-                // prefs.model against the NEW effective provider+auth.
-                if (isModelValidForProvider(effectiveProviderAfter, effectiveAuthAfter, fromPrefs.model)) {
-                    fromPrefs.model
-                } else {
-                    val providerDefault = defaultModelForProvider(effectiveProviderAfter, effectiveAuthAfter)
-                    if (providerDefault.isNotBlank()) providerDefault else fromPrefs.model
-                }
-            }
-            else -> fromPrefs.model
-        }
+        val resolvedModel: String = resolveModelForReconcile(
+            providerChanged = providerChanged,
+            authChanged = authChanged,
+            newModel = newModel,
+            prefsModel = fromPrefs.model,
+            effectiveProvider = effectiveProviderAfter,
+            effectiveAuth = effectiveAuthAfter,
+        )
         val modelChanged = resolvedModel != fromPrefs.model
 
         if (!providerChanged && !authChanged && !modelChanged) return fromPrefs
@@ -1424,6 +1411,59 @@ object ConfigManager {
             )
         }
         return reconciled
+    }
+
+    /**
+     * Decide the effective model during agent-settings reconciliation.
+     * Extracted from [reconcileWithAgentSettings] so the decision table is
+     * unit-testable without a Context (ConfigManagerModelReconcileTest).
+     *
+     * Branch 1 (BAT-1032): overlay model equals prefs with provider/auth
+     * unchanged — the steady state, not a change to reconcile. saveConfig()
+     * writes prefs and the agent_settings.json overlay together, so equality
+     * means the value IS what the Settings UI deliberately saved — including
+     * custom model IDs intentionally absent from the registry allowlist
+     * (custom-model picker entry, or a model later dropped from the registry
+     * that an existing user still runs). Validating here would "validate
+     * away" the user's choice: the allowlist clamp silently reverted custom
+     * models to the provider default on every loadConfig.
+     *
+     * Branches 2-3 keep the defensive clamps: a genuine external change
+     * (overlay != prefs, e.g. Node-written /model values or tampered files)
+     * is validated against the effective provider+auth, and a provider/auth
+     * switch revalidates prefs.model against the NEW pair (e.g. oauth→
+     * api_key on OpenAI must clamp the oauth-only gpt-5.4-mini).
+     */
+    @VisibleForTesting
+    internal fun resolveModelForReconcile(
+        providerChanged: Boolean,
+        authChanged: Boolean,
+        newModel: String?,
+        prefsModel: String,
+        effectiveProvider: String,
+        effectiveAuth: String,
+    ): String = when {
+        !providerChanged && !authChanged && newModel == prefsModel -> prefsModel
+        newModel != null -> {
+            // Overlay model present — validate; substitute default if invalid.
+            if (isModelValidForProvider(effectiveProvider, effectiveAuth, newModel)) {
+                newModel
+            } else {
+                val providerDefault = defaultModelForProvider(effectiveProvider, effectiveAuth)
+                if (providerDefault.isNotBlank()) providerDefault else newModel
+            }
+        }
+        providerChanged || authChanged -> {
+            // No overlay model but provider or auth changed — validate
+            // prefs.model against the NEW effective provider+auth.
+            if (isModelValidForProvider(effectiveProvider, effectiveAuth, prefsModel)) {
+                prefsModel
+            } else {
+                val providerDefault = defaultModelForProvider(effectiveProvider, effectiveAuth)
+                if (providerDefault.isNotBlank()) providerDefault else prefsModel
+            }
+        }
+        else -> prefsModel
     }
 
     /**
@@ -2124,7 +2164,7 @@ object ConfigManager {
             "claude" -> if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API key"
             else -> "API key"
         }
-        val aiModel = config?.model ?: "claude-opus-4-7"
+        val aiModel = config?.model ?: "claude-opus-4-8"
 
         // Timestamp
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)

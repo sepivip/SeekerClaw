@@ -172,7 +172,7 @@ object ConfigClaimImporter {
             "openai" -> "gpt-5.4"
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
-            else -> "claude-opus-4-7"
+            else -> "claude-opus-4-8"
         }
         val model = rawModel.ifBlank { defaultModel }
 
