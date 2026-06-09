@@ -744,15 +744,15 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             return { error: vaultResult.error, reason: vaultResult.reason };
         }
         const vaultAddress = vaultResult.vaultPubkey;
-        // C2 (BAT-1013-followup): tighten vaultPubkey validation at the call
-        // site. trigger-v2.ensureVault checks only that the field is truthy
-        // (a string like 'undefined' or 'true' from a malformed Jupiter
-        // response would pass). Validate as a real base58 Solana pubkey
-        // BEFORE building expectedDelta.depositVault.pubkey — otherwise the
-        // policy gate would either reject with a confusing
-        // expected_delta_invalid_shape OR (worse) the address could base58-
-        // decode to garbage and slip through. The V2 deposit flow depends on
-        // vaultPubkey being correct — there is no equivalent main-MWA
+        // BAT-1013: tighten vaultPubkey validation at the call site.
+        // trigger-v2.ensureVault checks only that the field is truthy (a
+        // string like 'undefined' or 'true' from a malformed Jupiter
+        // response would pass). Validate as a real base58 Solana pubkey.
+        // After BAT-1031 the policy no longer binds to vaultAddress, but
+        // the value still flows back to the caller (and into logs as
+        // diagnostic context), so a malformed pubkey here is still a
+        // fail-closed condition — the V2 deposit flow depends on
+        // vaultPubkey being correct, and there is no equivalent main-MWA
         // recovery (vault is Privy-custodial), so fail closed with a clear
         // error and let the agent surface it to the user.
         if (!isValidSolanaAddress(vaultAddress)) {
@@ -781,7 +781,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         } = craftResult;
 
         // BAT-1031 (Option A): no producer-side destination cross-check.
-        // The previous v9.1 binding (receiverAddress === vaultAddress and
+        // The previous binding (receiverAddress === vaultAddress and
         // depositVault.expectedTokenOwner === receiverAddress) was
         // structurally broken on the prod burner — Jupiter routes to an
         // Anchor PDA whose SPL decode produces a garbage mint and rejected
