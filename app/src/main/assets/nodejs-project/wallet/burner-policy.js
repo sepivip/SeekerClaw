@@ -84,21 +84,6 @@
 
 const { TxParseError, parseTransaction, base58Decode } = require('./tx-parser');
 
-// Strict 32-byte Solana pubkey predicate. Copilot PR #401 R5: the long-
-// standing `isNonEmptyBase58` (charset + 32-44 length) is too loose for
-// new code paths where a producer bug must fail fast at the shape gate
-// (vs slipping into validateSimDelta and surfacing as a confusing
-// later reject). This adds the byte-count check that
-// jupiter/trigger-v2.js `_isBase58Pubkey` and solana.js
-// `isValidSolanaAddress` both perform. Kept as a separate predicate
-// instead of tightening `isNonEmptyBase58` itself to avoid touching the
-// 11+ legacy call sites in this PR's scope.
-function _isStrictPubkey(s) {
-    if (typeof s !== 'string') return false;
-    if (s.length < 32 || s.length > 44) return false;
-    if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(s)) return false;
-    try { return base58Decode(s).length === 32; } catch { return false; }
-}
 const { readAccountInfo, tokenDelta, lamportsDelta } = require('./spl-token-layout');
 
 // Sentinel for SPL accounts whose mint is unknown at expectedDelta build
@@ -108,29 +93,20 @@ const { readAccountInfo, tokenDelta, lamportsDelta } = require('./spl-token-layo
 // uses tokenDelta for delta computation.
 const SPL_MINT_AGNOSTIC = '__spl_mint_agnostic__';
 
-// ─── Reject codes (locked: REJECT_CODES.length must equal 29) ─────────────
+// ─── Reject codes (locked: REJECT_CODES.length must equal 28) ─────────────
+//
+// BAT-1031: locked length lowered 29 → 28. The `simulation_recipient_mismatch`
+// code was the only fire site for the v9.1 `validateSimDelta expectedTokenOwner`
+// branch. Per Codex v1.2 sign-off the dormant branch is deleted (not kept),
+// and the code goes with it. If a future BAT revives same-class recipient-
+// owner binding, re-introduce the code together with the producer + tests.
 //
 // BAT-1013-followup amendment: locked length bumped 26 → 29 to accommodate
-// three new fail-closed paths that ship with producers in this PR:
+// three new fail-closed paths shipped with producers:
 //   - drainer_burn (B2): SPL Burn / BurnChecked on burner-owned account
 //   - token_2022_extension_unsupported (B3): Token-2022 extension opcode
 //   - token_2022_send_unsupported (C6/B3): SPL-token-2022 send/pay without
 //     caller-declared tokenStandardConfig
-//
-// FOLLOW-UPS deferred to a separate Codex amendment (will land alongside
-// producers — keeping length pinned to 29 here so the drift guard catches
-// any premature code-only additions):
-//   - priority_fee_drain (Q1): ComputeBudget SetComputeUnitPrice cap. Needs
-//     Codex sign-off on MAX_SWAP_CU_PRICE before producer wires in.
-//   - slot_drift (Q4): the simulator throws an Error with "slot_drift"
-//     prefix which the catch path wraps as simulation_failed today.
-//     Re-emit as a distinct code in the follow-up amendment.
-//   - tx_oversize / invalid_header (C1, C10): verifySwapTransaction emits
-//     string errors; map them to specific codes when the policy layer
-//     starts consuming the verifier output.
-//   - alt_account_unresolved (Q3): currently bounds-checked in-line via
-//     buffer reject; the policy-layer code stays aspirational until ALT
-//     resolution moves into burner-policy.
 
 const REJECT_CODES = Object.freeze([
     // Structural / parsing
@@ -168,7 +144,6 @@ const REJECT_CODES = Object.freeze([
     'simulation_metadata_missing',
     'simulation_delta_mismatch',
     'simulation_mint_mismatch',
-    'simulation_recipient_mismatch',
 ]);
 
 // Each rejection code's class — drives agent guidance in DIAGNOSTICS.md
@@ -190,7 +165,6 @@ const REJECT_CLASS = Object.freeze({
     cosigner_not_in_allowlist: 'security',
     simulation_delta_mismatch: 'security',
     simulation_mint_mismatch: 'security',
-    simulation_recipient_mismatch: 'security',
     account_ownership_uncertain: 'security',
     token_2022_undeclared: 'security',
     token_2022_extension_unsupported: 'security',   // NEW (B3)
@@ -987,83 +961,46 @@ function validateExpectedDeltaShape(expectedDelta) {
         }
         case 'jupiter_trigger_create_deposit':
         case 'jupiter_dca_create_deposit': {
-            // Contract v8.3 (per Codex review of v8.2): depositVault is
-            // LOAD-BEARING for deposit flows, not icing. Without a verified
-            // destination, a tampered tx could debit the exact expected
-            // amount from the burner to an attacker-controlled token
-            // account while still passing signerMode, fee-payer, drainer-
-            // opcode, and burnerDebit checks. depositVault is REQUIRED.
+            // BAT-1031 (Option A, Codex v1.2 sign-off 2026-06-09):
+            // trust Jupiter for the deposit destination; validate only
+            // burner-side state.
             //
-            // Call sites that cannot supply a verified depositVault MUST
-            // route the tx to the main wallet (forceRouting='main') and
-            // not invoke autonomous burner signing for this kind.
+            // Background — why depositVault was removed. BAT-1025 v9.1
+            // attempted to bind `depositVault.pubkey` to Jupiter's
+            // `craft.inputTokenAccount` and assert
+            // `postAI.splToken.owner === expectedTokenOwner` on the
+            // destination. v9.1 device-tested on the PROD BURNER
+            // 2026-06-09 STILL failed with `simulation_mint_mismatch`
+            // because Jupiter's prod-burner response routes to an
+            // Anchor PDA (data.length=372), not a classic 165-byte SPL
+            // Token Account. The SPL decoder reads bytes [0..32] as
+            // "mint" and produces a garbage pubkey that can never match
+            // the declared USDC mint. The v9.1 architecture was built
+            // against a capture from the wrong wallet (the test wallet
+            // at tests/jupiter-ultra/.env.test happens to return a
+            // real SPL Token Account; prod burner does not).
             //
-            // Process lesson (BAT-1025 v9.1, 2026-06-08): five rounds of
-            // contract iteration (v8.5–v8.9) over-engineered a problem
-            // that 30 seconds of live capture would have collapsed into
-            // one. The premise driving the iteration — "the V2 vault PDA
-            // is the on-chain destination and is owned by the Jupiter
-            // Trigger V2 program" — was falsified by the C1 capture in
-            // tests/jupiter-ultra/live-capture-sim-fixture.js. In reality
-            // the destination is craft.inputTokenAccount, an ephemeral
-            // classic SPL Token Account whose splToken.owner-slot is the
-            // Privy vault PDA. For any future burner-policy contract
-            // touching a third-party-managed destination account
-            // (custodial wallet, MPC, Anchor program), CAPTURE FIRST:
-            // run an equivalent of live-capture-sim-fixture.js against a
-            // funded test wallet BEFORE drafting a contract addendum. Docs
-            // are useful but a contract anchored on docs alone cascades
-            // wrong premises across the entire policy architecture.
+            // Option A: same trust class as `jupiter_swap_immediate` /
+            // `jupiter_ultra` (shipped since BAT-582 with no
+            // destination binding and no incidents). BAT-1031 protects
+            // the declared `burnerDebit.account` by exact mint +
+            // atomic-amount delta. It does NOT add general zero-delta
+            // enforcement for `burnerOwnedAccounts` or sim-discovered
+            // burner-owned ATAs in non-zero deposit flows; BAT-1027
+            // owns that. Drainer walker is unchanged. No `simOwned`
+            // propagation in BAT-1031.
+            //
+            // Residual risk = the declared atomic amount (bounded).
+            // Burner SOL is protected by `wantsBurnerSolFloor` for SPL
+            // inputs; native-SOL inputs use `sol_fee_headroom`.
+            //
+            // DCA-on-burner remains main-wallet-only via the existing
+            // `dcaForceRouting` routing decision in tools/solana.js;
+            // see tests/nodejs-project/solana-dca-routing.test.js for
+            // the regression pin.
+            // V1 trigger stays on BAT-1029 (main-wallet routing).
             const dErr = requireBurnerDebit(expectedDelta.burnerDebit);
             if (dErr) return reject('expected_delta_invalid_shape', dErr);
-            const v = expectedDelta.depositVault;
-            if (!v || typeof v !== 'object') return reject('expected_delta_invalid_shape', 'depositVault required');
-            // Copilot R7: depositVault.pubkey IS the on-chain destination
-            // the policy binds to. Tighten to the strict 32-byte predicate
-            // for consistency with expectedOwner / expectedTokenOwner
-            // (both fixed in R5). A 31/33-byte-decoded base58 string would
-            // otherwise slip through and produce a confusing RPC reject
-            // or simulation_metadata_missing later. Scope-discipline:
-            // ONLY tightening this deposit-kind path; the 11+ other
-            // isNonEmptyBase58 sites in burner-policy.js stay on the
-            // legacy predicate (independent refactor scope).
-            if (!_isStrictPubkey(v.pubkey)) return reject('expected_delta_invalid_shape', 'depositVault.pubkey required (32-byte base58 pubkey)');
-            // BAT-1025 v9.1: producers can supply either expectedOwner (the
-            // accountInfo.owner program id — V1 trigger pattern) OR
-            // expectedTokenOwner (the SPL token-account owner-slot value —
-            // V2 trigger pattern after Codex Option C re-pin 2026-06-08).
-            // AT LEAST ONE is required; both can be present for callers
-            // that want belt-and-suspenders (e.g. a future producer that
-            // both program-owner-checks the destination AND binds its
-            // splToken.owner slot). Enforcement in validateSimDelta:
-            // expectedTokenOwner → postAI.splToken.owner-slot assertion;
-            // expectedOwner stays shape-only until BAT-1029 V1 wiring.
-            //
-            // Copilot PR #401 R4 (2026-06-08): when either field is
-            // PROVIDED (non-undefined/null) it must be a valid base58
-            // pubkey — otherwise a caller bug (e.g. accidental empty
-            // string, an upstream null, or a typo'd field) silently
-            // drops through to validateSimDelta and either no-ops the
-            // binding or surfaces as a confusing simulation_recipient_mismatch
-            // later. Fail fast at the shape gate so the producer-side
-            // bug is the rejection reason.
-            // Copilot R5: use the strict 32-byte predicate here so the
-            // producer-side strictness in jupiter/trigger-v2.js mirrors
-            // the consumer side. Otherwise a 31/33-byte base58 string
-            // would pass the shape gate and surface later as a
-            // simulation_recipient_mismatch (or RPC error) that's
-            // harder to root-cause back to the producer bug.
-            if (v.expectedOwner != null && !_isStrictPubkey(v.expectedOwner)) {
-                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner provided but is not a valid 32-byte base58 pubkey');
-            }
-            if (v.expectedTokenOwner != null && !_isStrictPubkey(v.expectedTokenOwner)) {
-                return reject('expected_delta_invalid_shape', 'depositVault.expectedTokenOwner provided but is not a valid 32-byte base58 pubkey');
-            }
-            const hasExpectedOwner = _isStrictPubkey(v.expectedOwner);
-            const hasExpectedTokenOwner = _isStrictPubkey(v.expectedTokenOwner);
-            if (!hasExpectedOwner && !hasExpectedTokenOwner) {
-                return reject('expected_delta_invalid_shape', 'depositVault.expectedOwner or depositVault.expectedTokenOwner required');
-            }
             return accept();
         }
         case 'solana_send': {
@@ -1401,56 +1338,25 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
             });
         }
     } else if (kind === 'jupiter_trigger_create_deposit' || kind === 'jupiter_dca_create_deposit') {
-        // No burner credit at deposit time; output happens at fill time
-        // in a separate tx the burner doesn't sign. depositVault is
-        // REQUIRED for deposit kinds (contract v8.3): we verify the
-        // named vault receives EXACTLY the burner's debit. The shape
-        // validator above rejects with expected_delta_invalid_shape if
-        // depositVault is absent, so callers that cannot provide it must
-        // route to main wallet (forceRouting='main') instead.
+        // BAT-1031 (Option A): trust Jupiter for the deposit destination.
+        // No vault check is pushed — `burnerDebit` is already encoded
+        // upstream in the `if (expectedDelta.burnerDebit) { ... }` block
+        // earlier in this function and provides the exact mint +
+        // atomic-amount enforcement on the declared burner-source ATA.
         //
-        // Contract v8.3 amendment (Codex review of v8.3 report): the
-        // previous 50-bps headroom was a sanctioned skim window — a
-        // tampered tx could route 0.5% of the burner's deposit to an
-        // attacker-controlled account while still passing the vault
-        // delta check. Default is now `mode: 'exact'`. Jupiter does
-        // not skim fees at deposit time (fees are taken at fill time
-        // in a separate tx the burner doesn't sign), so exact mode
-        // does not break the happy path.
+        // The previous v9.1 vault-check push asserted
+        // `postAI.splToken.owner === expectedTokenOwner` against the
+        // depositVault account. That check rejected on the prod burner
+        // because Jupiter's actual destination is an Anchor PDA
+        // (data.length=372), not a classic SPL Token Account. See the
+        // explainer in validateExpectedDeltaShape's
+        // `jupiter_trigger_create_deposit` case for the full background.
         //
-        // Future fee-bearing paths (Token-2022 transfer fee, explicit
-        // platform/referral fee) require:
-        //   - `expectedDelta.tokenStandard: 'token_2022'` declared AND
-        //     fee math validated against on-chain mint config, OR
-        //   - explicit `expectedDelta.depositFee: { recipient, maxAtomic }`
-        //     with policy verifying BOTH the vault credit AND the fee
-        //     destination.
-        // Neither is implemented yet — those paths fail closed (the
-        // vault delta will be off and exact mode rejects), and users
-        // fall back to MWA.
-        const vault = expectedDelta.depositVault;
-        if (vault) {
-            checks.push({
-                address: vault.pubkey,
-                mint: expectedDelta.burnerDebit ? expectedDelta.burnerDebit.mint : 'native_sol',
-                role: 'vault',
-                expectedDeltaAtomic: BigInt(expectedDelta.burnerDebit ? expectedDelta.burnerDebit.atomicAmount : 0),
-                // BAT-1025 v9.1: propagate expectedTokenOwner to the check so
-                // validateSimDelta can assert postAI.splToken.owner equality.
-                // Falsy when V1/legacy producers used the old expectedOwner
-                // field, which is intentionally NOT propagated here (it stays
-                // shape-only until BAT-1029 wires V1).
-                expectedTokenOwner: vault.expectedTokenOwner || null,
-                // Vault MAY be created at deposit time (Jupiter Trigger V2
-                // registers vaults lazily).
-                existencePolicy: { mustExistBefore: false, allowCreate: true, allowClose: false },
-                deltaTolerance: { mode: 'exact' },
-            });
-        }
-        // C7 (BAT-1013-followup): SPL-input deposits must constrain the
-        // burner's native-SOL delta the same way SPL-input swaps do — the
-        // burner is paying network fees + potential ATA-rent in SOL, and
-        // without the floor a tampered deposit could quietly drain SOL.
+        // C7 (BAT-1013-followup, preserved): SPL-input deposits must
+        // constrain the burner's native-SOL delta the same way
+        // SPL-input swaps do — the burner pays network fees + potential
+        // ATA rent in SOL, and without the floor a tampered deposit
+        // could quietly drain SOL.
         if (wantsBurnerSolFloor) {
             checks.push({
                 address: burnerPubkey,
@@ -1635,81 +1541,6 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
                 }
             }
         }
-        // BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08):
-        // for Jupiter Trigger V2 deposits the destination is an ephemeral
-        // SPL Token Account whose owner-slot value MUST equal the high-
-        // level Privy vault PDA returned as receiverAddress from
-        // /trigger/v2/deposit/craft. Producers propagate that pubkey to
-        // check.expectedTokenOwner via depositVault.expectedTokenOwner.
-        // When set, assert it against the decoded splToken.owner on both
-        // sides (pre may not exist for freshly-created ATAs — only check
-        // when splToken is decodable). Reuses simulation_recipient_mismatch
-        // per Codex: keeps the reject-code surface area unchanged so this
-        // PR avoids SAB-audit scope.
-        //
-        // Copilot PR #401 R1 (2026-06-08): this assertion is INTENTIONALLY
-        // OUTSIDE the `check.mint !== 'native_sol'` SPL branch above. A
-        // producer that declares burnerDebit.mint='native_sol' (SOL-input
-        // V2 trigger) can still legitimately supply expectedTokenOwner
-        // when the on-chain destination is an SPL token wrapper (e.g. wSOL
-        // ATA) whose splToken sub-shape decodes cleanly. Nesting this
-        // check inside the SPL branch would silently skip the owner-slot
-        // binding on those routes — exactly the bypass class Codex flagged
-        // in the v8.6 active-destination blocker.
-        //
-        // Copilot PR #401 R6 (2026-06-08, refining R4): the original R1
-        // comment said the splToken-presence guards kept the assertion a
-        // no-op on System-account destinations. That was the R1 mental
-        // model, but R4 promoted it to a SECURITY FAIL-CLOSED — when
-        // expectedTokenOwner is set, an existing-but-non-SPL-decodable
-        // account is treated as a tampered destination and rejected with
-        // simulation_recipient_mismatch. Updating this comment to match
-        // the implementation below so future readers don't get whiplash.
-        if (check.expectedTokenOwner) {
-            // Copilot PR #401 R4 (2026-06-08): close the SOL-input bypass.
-            // When a producer declares expectedTokenOwner, the destination
-            // is contractually an SPL token account whose owner-slot we
-            // must bind. If the account EXISTS but is not SPL-decodable
-            // (postAI.splToken is falsy), a tampered tx has routed the
-            // declared destination to a System account or an opaque
-            // non-SPL account — the binding cannot be performed. Fail
-            // closed so the policy never silently no-ops the active-
-            // destination invariant.
-            //
-            // Copilot PR #401 R10 (2026-06-08): which reject code actually
-            // fires depends on the input mint. For non-`native_sol` (SPL
-            // inputs like USDC), the existing simulation_metadata_missing
-            // guard inside the SPL `else` branch above ALREADY rejects
-            // the same shape — as an AVAILABILITY-class error suggesting
-            // MWA fallback. The fail-closed simulation_recipient_mismatch
-            // (security-class) reject below is therefore primarily the
-            // load-bearing path for `native_sol` inputs, where the SPL
-            // decode guard doesn't run because validateSimDelta takes the
-            // `if (check.mint === 'native_sol')` branch. Future readers
-            // tracing a specific reject should expect:
-            //   • SPL input + non-SPL destination → simulation_metadata_missing (availability)
-            //   • SOL input + non-SPL destination → simulation_recipient_mismatch (security, here)
-            // preAI gets the same treatment when it exists (covers a
-            // takeover where pre was a real SPL account but the attacker
-            // repurposed it before sign).
-            if (preAI.exists && !preAI.splToken) {
-                return reject('simulation_recipient_mismatch',
-                    `pre ${check.address} declares expectedTokenOwner but is not SPL-decodable (no splToken metadata)`);
-            }
-            if (postAI.exists && !postAI.splToken) {
-                return reject('simulation_recipient_mismatch',
-                    `post ${check.address} declares expectedTokenOwner but is not SPL-decodable (no splToken metadata)`);
-            }
-            if (preAI.exists && preAI.splToken && preAI.splToken.owner !== check.expectedTokenOwner) {
-                return reject('simulation_recipient_mismatch',
-                    `pre ${check.address} splToken.owner ${preAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
-            }
-            if (postAI.exists && postAI.splToken && postAI.splToken.owner !== check.expectedTokenOwner) {
-                return reject('simulation_recipient_mismatch',
-                    `post ${check.address} splToken.owner ${postAI.splToken.owner} != declared ${check.expectedTokenOwner}`);
-            }
-        }
-
         // ── Apply tolerance ──
         const toleranceErr = applyTolerance(primaryDelta, check.expectedDeltaAtomic, check.deltaTolerance, check.mint);
         if (toleranceErr) {
