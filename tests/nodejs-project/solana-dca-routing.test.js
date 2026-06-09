@@ -45,13 +45,23 @@ const SOLANA_TOOLS_PATH = path.join(BUNDLE, 'tools', 'solana.js');
 
 // ─── Test harness ─────────────────────────────────────────────────────────
 
+// All invariants in this file are synchronous source-string regex
+// assertions — there is no IO, no Jupiter API, no Android bridge. Keep
+// check() strictly synchronous so a future maintainer can't accidentally
+// introduce an async invariant whose failure is silently swallowed by an
+// unawaited Promise. If a real async case becomes necessary, mirror the
+// runAsync() pattern from burner-policy.test.js and explicitly await it
+// from main().
 let pass = 0, fail = 0;
 function check(name, fn) {
     try {
         const r = fn();
-        if (r instanceof Promise) {
-            return r.then(() => { pass++; console.log(`  ✓ ${name}`); })
-                .catch(e => { fail++; console.error(`  ✗ ${name}: ${e.message}`); });
+        if (r && typeof r.then === 'function') {
+            throw new Error(
+                `${name}: this test harness is synchronous-only — async test ` +
+                `bodies are not supported here. Move the test to a runAsync() ` +
+                `pattern (see burner-policy.test.js) if you need async semantics.`,
+            );
         }
         pass++;
         console.log(`  ✓ ${name}`);

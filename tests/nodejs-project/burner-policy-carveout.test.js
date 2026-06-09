@@ -77,10 +77,18 @@ function nativeAccountInfo({ lamports, owner = SYSTEM_PROGRAM }) {
 // ── Fixture A: happy path (mirrors 2026-06-09 prod capture) ───────────────
 //
 // requestedAddresses ordering — sim.value.accounts is index-aligned to this.
+// IMPORTANT: this MUST mirror the canonical prod-burner capture
+// (fixtures/prod-burner-v2-trigger-2026-06-09.json) which requests only
+// [BURNER_USDC_ATA, DEPOSIT_VAULT, BURNER]. The freshly-created burner
+// WSOL ATA (BURNER_WSOL_ATA) is intentionally NOT in requestedAddresses
+// or sim.value.accounts — it is discoverable ONLY via postTokenBalances
+// and innerInstructions, matching the on-chain producer behavior. The
+// extractor's isPostBurnerOwnedSpl helper falls back to postTokenBalances
+// to prove condition 2 in this shape (Copilot R2.3/R2.4).
 function buildHappyFixture(overrides) {
     const requestedAddresses = [
-        BURNER_WSOL_ATA,        // freshly-created burner WSOL ATA — zero balance
-        DEPOSIT_VAULT,          // jupiter limit order v2 deposit vault
+        BURNER_USDC_ATA,        // existing burner USDC ATA — debit source
+        DEPOSIT_VAULT,          // jupiter limit order v2 deposit vault (Anchor PDA)
         BURNER,                 // burner native SOL
     ];
 
@@ -165,11 +173,13 @@ function buildHappyFixture(overrides) {
         },
     ];
 
-    // sim.value.accounts — index-aligned to requestedAddresses.
+    // sim.value.accounts — index-aligned to requestedAddresses. Mirrors
+    // canonical prod capture: NO entry for BURNER_WSOL_ATA — the carve-out
+    // discovers it via postTokenBalances + innerInstructions instead.
     const accounts = [
-        // 0: BURNER_WSOL_ATA — freshly created, owner = burner, amount = 0
-        splTokenAccountInfo({ mint: WSOL_MINT, owner: BURNER, amountAtomic: '0' }),
-        // 1: DEPOSIT_VAULT — owned by JUP_V2_PROGRAM
+        // 0: BURNER_USDC_ATA — existing burner USDC ATA, post-debit balance
+        splTokenAccountInfo({ mint: USDC_MINT, owner: BURNER, amountAtomic: '10719298' }),
+        // 1: DEPOSIT_VAULT — owned by JUP_V2_PROGRAM (Anchor PDA, 372 bytes)
         { lamports: 3_480_000, owner: JUP_V2_PROGRAM, data: ['', 'base64'], executable: false, rentEpoch: 0, space: 372 },
         // 2: BURNER — native SOL
         nativeAccountInfo({ lamports: 7_294_460 }),
@@ -372,13 +382,12 @@ async function runAsync(name, fn) {
         const fx = buildHappyFixture((f) => {
             // WSOL ATA somehow ended up with 1 USDC equivalent — should never happen
             // in a clean Jupiter trigger deposit, but the test pins the boundary.
+            // The WSOL ATA is discoverable only via postTokenBalances in the
+            // canonical prod fixture shape, so mutating postTokenBalances[0]
+            // alone is the correct boundary mutation.
             f.sim.value.postTokenBalances[0].uiTokenAmount = {
                 amount: '1000000', decimals: 9, uiAmount: 0.001, uiAmountString: '0.001',
             };
-            // also reflect in the accounts data so source-of-truth matches.
-            f.sim.value.accounts[0] = splTokenAccountInfo({
-                mint: WSOL_MINT, owner: BURNER, amountAtomic: '1000000',
-            });
         });
         const r = extractTripwires(fx, {
             burnerPubkey: BURNER,
@@ -492,6 +501,60 @@ async function runAsync(name, fn) {
         }, [{ parsed: { type: 'createAccount' }, programId: SYSTEM_PROGRAM }], 100_000);
         assert.strictEqual(r.applies, false);
         assert.ok(r.reasons.includes('carve_out_nonzero_balance'));
+    });
+    check('applyCarveOut: missing postAmountAtomic → reason=post_amount_unknown (distinct from nonzero_balance)', () => {
+        // Copilot R2.2: a null/undefined postAmountAtomic must produce a
+        // distinct disqualifier reason so the caller can tell "data gap"
+        // apart from "non-zero balance proven by data."
+        const rNull = applyCarveOut({
+            preExists: false,
+            postIsValidBurnerOwnedSpl: true,
+            postAmountAtomic: null,
+        }, [{ parsed: { type: 'createAccount' }, programId: SYSTEM_PROGRAM }], 100_000);
+        assert.strictEqual(rNull.applies, false);
+        assert.ok(rNull.reasons.includes('carve_out_post_amount_unknown'),
+            `expected carve_out_post_amount_unknown, got ${JSON.stringify(rNull.reasons)}`);
+        assert.ok(!rNull.reasons.includes('carve_out_nonzero_balance'),
+            'missing-amount must NOT be reported as nonzero_balance');
+
+        const rUndef = applyCarveOut({
+            preExists: false,
+            postIsValidBurnerOwnedSpl: true,
+            postAmountAtomic: undefined,
+        }, [{ parsed: { type: 'createAccount' }, programId: SYSTEM_PROGRAM }], 100_000);
+        assert.strictEqual(rUndef.applies, false);
+        assert.ok(rUndef.reasons.includes('carve_out_post_amount_unknown'),
+            'undefined amount must also surface carve_out_post_amount_unknown');
+    });
+    check('isPostBurnerOwnedSpl: postTokenBalances-only account passes condition 2 (Copilot R2.3 regression)', () => {
+        // Pin the dual-source helper: an account that is NOT in
+        // sim.value.accounts but IS reported by postTokenBalances as
+        // burner-owned classic SPL must satisfy condition 2. This is the
+        // shape of the canonical prod-burner capture's WSOL ATA.
+        const { isPostBurnerOwnedSpl } = _internals;
+        const ABSENT = 'AbsentFromValueAccountsXXXXXXXXXXXXXXXXXXXz';
+        const capture = {
+            combinedAccountKeys: [BURNER, ABSENT],
+            sim: {
+                value: {
+                    accounts: [], // intentionally empty — only postTokenBalances proves it
+                    postTokenBalances: [
+                        {
+                            accountIndex: 1,
+                            mint: WSOL_MINT,
+                            owner: BURNER,
+                            programId: TOKEN_PROGRAM,
+                            uiTokenAmount: { amount: '0', decimals: 9, uiAmount: 0, uiAmountString: '0' },
+                        },
+                    ],
+                },
+            },
+        };
+        assert.strictEqual(
+            isPostBurnerOwnedSpl(ABSENT, capture, BURNER, new Map()),
+            true,
+            'postTokenBalances declaration must satisfy condition 2 even when sim.value.accounts has no entry',
+        );
     });
     check('applyCarveOut: headroom exceeded → reason=headroom_exceeded', () => {
         const r = applyCarveOut({

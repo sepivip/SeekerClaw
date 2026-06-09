@@ -180,6 +180,39 @@ function instructionType(ix) {
     return null;
 }
 
+// Determine "post is valid SPL Token Account owned by burner" using BOTH
+// sim.value.accounts (verify owner bytes 32..64) AND
+// sim.value.postTokenBalances (declared owner field). The Codex amendment 6
+// reading: an account that postTokenBalances reports as burner-owned classic
+// SPL — even when it is not in sim.value.accounts because the caller didn't
+// include it in `accounts.config` — is "valid burner-owned SPL" for the
+// purposes of the BAT-1031 v1.2 §3 carve-out condition 2. The canonical
+// prod capture has exactly this shape: the freshly-created burner WSOL ATA
+// appears in postTokenBalances but not in requestedAddresses.
+function isPostBurnerOwnedSpl(addr, capture, burnerPubkey, postAcctByAddr) {
+    // Source 1: sim.value.accounts entry (when caller requested it).
+    const postAcct = postAcctByAddr ? postAcctByAddr.get(addr) : null;
+    if (postAcct) {
+        const postParsed = readSplTokenAccount(postAcct);
+        if (postParsed && pubkeysEqual(postParsed.owner, burnerPubkey)) return true;
+    }
+    // Source 2: postTokenBalances declaration. Trust the declared owner/
+    // programId — the simulator is the source of truth and Token-2022
+    // accounts are already routed to nonStandardTokenSet upstream.
+    const value = (capture && capture.sim && capture.sim.value) || {};
+    const ptb = Array.isArray(value.postTokenBalances) ? value.postTokenBalances : [];
+    const cak = Array.isArray(capture.combinedAccountKeys) ? capture.combinedAccountKeys : [];
+    for (const entry of ptb) {
+        if (!entry || typeof entry !== 'object') continue;
+        const ptbAddr = (typeof entry.accountIndex === 'number' && cak[entry.accountIndex]) || null;
+        if (ptbAddr !== addr) continue;
+        if (entry.owner !== burnerPubkey) continue;
+        if (entry.programId && entry.programId !== TOKEN_PROGRAM) continue;
+        return true;
+    }
+    return false;
+}
+
 function programIdOf(ix) {
     if (ix && typeof ix.programId === 'string') return ix.programId;
     return null;
@@ -270,7 +303,15 @@ function applyCarveOut(ctx, instructionsTouchingAccount, postLamports) {
     if (!ctx.postIsValidBurnerOwnedSpl) reasons.push('carve_out_post_not_valid_burner_spl');
 
     // Condition 3: post amount === "0".
-    if (ctx.postAmountAtomic !== '0') reasons.push('carve_out_nonzero_balance');
+    // Distinguish between an explicitly-non-zero amount (drainer-class
+    // disqualifier) and an unknown/absent amount (data gap — the caller
+    // hasn't proven the account ended at zero, which is also a carve-out
+    // disqualifier but for a different reason than a positive balance).
+    if (ctx.postAmountAtomic == null) {
+        reasons.push('carve_out_post_amount_unknown');
+    } else if (ctx.postAmountAtomic !== '0') {
+        reasons.push('carve_out_nonzero_balance');
+    }
 
     // Condition 4: no drainer-class op touches this account in the same tx.
     const drainerHit = (instructionsTouchingAccount || []).find(ix => {
@@ -436,10 +477,12 @@ function extractTripwires(capture, opts) {
         if (hasDrainer) {
             // Try the carve-out: build the context and see whether ALL six
             // conditions hold. If they hold, T3 carve applies; otherwise T3
-            // fires.
-            const postAcct = postAcctByAddr.get(addr);
-            const postParsed = postAcct ? readSplTokenAccount(postAcct) : null;
-            const postIsValidBurnerOwnedSpl = !!(postParsed && pubkeysEqual(postParsed.owner, burnerPubkey));
+            // fires. postIsValidBurnerOwnedSpl uses the dual-source helper
+            // so a postTokenBalances-only account (not in requestedAddresses)
+            // still satisfies condition 2 — matches the canonical prod
+            // fixture shape where the freshly-created burner WSOL ATA is
+            // discoverable only via postTokenBalances.
+            const postIsValidBurnerOwnedSpl = isPostBurnerOwnedSpl(addr, capture, burnerPubkey, postAcctByAddr);
             const carve = applyCarveOut({
                 preExists: preExistsByAddr.get(addr) === true,
                 postIsValidBurnerOwnedSpl,
@@ -476,9 +519,12 @@ function extractTripwires(capture, opts) {
     // disqualifying reasons.
     const t5Violations = [];
     for (const addr of undeclared) {
-        const postAcct = postAcctByAddr.get(addr);
-        const postParsed = postAcct ? readSplTokenAccount(postAcct) : null;
-        const postIsValidBurnerOwnedSpl = !!(postParsed && pubkeysEqual(postParsed.owner, burnerPubkey));
+        // Use the dual-source helper (sim.value.accounts + postTokenBalances)
+        // so a postTokenBalances-only burner-owned account still satisfies
+        // carve-out condition 2 — required for the canonical prod fixture
+        // shape where the freshly-created burner WSOL ATA isn't requested
+        // but IS reported as burner-owned by postTokenBalances.
+        const postIsValidBurnerOwnedSpl = isPostBurnerOwnedSpl(addr, capture, burnerPubkey, postAcctByAddr);
         const ixsTouching = ixsByAccount.get(addr) || [];
         const carve = applyCarveOut({
             preExists: preExistsByAddr.get(addr) === true,
@@ -521,5 +567,6 @@ module.exports = {
         pubkeysEqual,
         flattenInnerInstructions,
         burnerNetSolDelta,
+        isPostBurnerOwnedSpl,
     },
 };
