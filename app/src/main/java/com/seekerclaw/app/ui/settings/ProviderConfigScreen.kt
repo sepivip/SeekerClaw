@@ -995,10 +995,16 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // matched.
                         val previousAuth = config?.authType ?: selectedAuth
                         val authSaved = saveField("authType", selectedAuth, needsRestart = true)
-                        context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-                            .edit()
-                            .putString("lastAuthType_$activeProvider", selectedAuth)
-                            .apply()
+                        if (authSaved) {
+                            // Only remember the auth mode that actually persisted —
+                            // lastAuthType_* seeds future provider switches, so writing
+                            // it on a failed save would drift UI defaults away from
+                            // the real config state.
+                            context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                                .edit()
+                                .putString("lastAuthType_$activeProvider", selectedAuth)
+                                .apply()
+                        }
                         if (authSaved && activeProvider == "openai") {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider("openai", selectedAuth)

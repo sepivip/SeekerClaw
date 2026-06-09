@@ -22,11 +22,11 @@ import org.junit.Test
 class ConfigManagerModelReconcileTest {
 
     /**
-     * Production-shaped fixture (all four providers, full Claude list).
-     * Kept production-shaped deliberately: initForTest installs into the
-     * global ModelRegistry singleton and the convention (ModelRegistryTest)
-     * is to leave a production-shaped registry behind so later test classes
-     * in the same JVM see realistic state regardless of execution order.
+     * Production-shaped fixture (all four providers, full Claude list) so
+     * the clamp/default assertions exercise realistic registry state.
+     * Installed fresh in @Before and torn down via resetForTest() in
+     * @After (ModelRegistryTest's pattern) — the singleton never leaks
+     * into other test classes regardless of execution order.
      */
     private val fixtureProviders: List<ProviderInfo> = listOf(
         ProviderInfo(
