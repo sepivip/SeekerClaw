@@ -1161,7 +1161,12 @@ object ConfigManager {
             authType = resolveAuthType(p),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
-            model = p.getString(KEY_MODEL, "claude-opus-4-8") ?: "claude-opus-4-8",
+            // Trim at the read boundary: legacy prefs values (pre-BAT-1032
+            // claim imports) may carry whitespace, and Node's startup config
+            // path uses config.model verbatim — a padded ID breaks provider
+            // requests. Blank-after-trim falls back to the default.
+            model = (p.getString(KEY_MODEL, "claude-opus-4-8") ?: "claude-opus-4-8")
+                .trim().ifBlank { "claude-opus-4-8" },
             agentName = livePrefs?.agentName ?: (p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent"),
             braveApiKey = braveApiKey,
             searchProvider = livePrefs?.searchProvider ?: (p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave"),
