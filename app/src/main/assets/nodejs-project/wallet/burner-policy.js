@@ -96,10 +96,11 @@ const SPL_MINT_AGNOSTIC = '__spl_mint_agnostic__';
 // ─── Reject codes (locked: REJECT_CODES.length must equal 28) ─────────────
 //
 // BAT-1031: locked length lowered 29 → 28. The `simulation_recipient_mismatch`
-// code was the only fire site for the v9.1 `validateSimDelta expectedTokenOwner`
-// branch. Per Codex v1.2 sign-off the dormant branch is deleted (not kept),
-// and the code goes with it. If a future BAT revives same-class recipient-
-// owner binding, re-introduce the code together with the producer + tests.
+// code was the only fire site for the prior `validateSimDelta expectedTokenOwner`
+// branch (a depositVault-destination-owner binding that did not work against
+// the prod burner — see BAT-1031). The branch is deleted, and the code goes
+// with it. If a future BAT revives same-class recipient-owner binding,
+// re-introduce the code together with the producer + tests.
 //
 // BAT-1013-followup amendment: locked length bumped 26 → 29 to accommodate
 // three new fail-closed paths shipped with producers:
@@ -782,8 +783,8 @@ function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta, burn
                 // owned ATA destroys tokens — equivalent to a drain from the
                 // burner's perspective.
                 //
-                // Codex v8.4 amendment 2: cancel flows legitimately burn the
-                // protocol order/position marker token. Accept only when:
+                // Cancel flows legitimately burn the protocol order/position
+                // marker token; covered by BAT-1013 cancel test. Accept only when:
                 //   (a) expectedDelta.kind === 'zero_value_cancel', AND
                 //   (b) target account is in expectedDelta.allowedBurnAccounts
                 //       (caller MUST declare the specific order/position
@@ -826,9 +827,9 @@ function validateDrainerOpcodes(parsed, burnerOwnedAccounts, expectedDelta, burn
                         const destAcct = (typeof destIdx === 'number' && destIdx >= 0
                             && destIdx < parsed.staticAccountKeys.length)
                             ? parsed.staticAccountKeys[destIdx] : null;
-                        // Codex v8.4 amendment 1: close authority MUST be the
-                        // burner (the wSOL ATA was created by the burner; only
-                        // the burner can legitimately close it). Without this
+                        // wSOL-exemption close authority MUST be the burner
+                        // (the wSOL ATA was created by the burner; only the
+                        // burner can legitimately close it). Without this
                         // check, a tx could declare a wsolExemption with the
                         // right ata + destination but a different authority,
                         // potentially allowing a relayer to redirect rent.
@@ -965,20 +966,20 @@ function validateExpectedDeltaShape(expectedDelta) {
             // trust Jupiter for the deposit destination; validate only
             // burner-side state.
             //
-            // Background — why depositVault was removed. BAT-1025 v9.1
-            // attempted to bind `depositVault.pubkey` to Jupiter's
-            // `craft.inputTokenAccount` and assert
+            // Background — why depositVault was removed. The prior
+            // implementation attempted to bind `depositVault.pubkey` to
+            // Jupiter's `craft.inputTokenAccount` and assert
             // `postAI.splToken.owner === expectedTokenOwner` on the
-            // destination. v9.1 device-tested on the PROD BURNER
-            // 2026-06-09 STILL failed with `simulation_mint_mismatch`
+            // destination. It was device-tested on the PROD BURNER
+            // 2026-06-09 and STILL failed with `simulation_mint_mismatch`
             // because Jupiter's prod-burner response routes to an
             // Anchor PDA (data.length=372), not a classic 165-byte SPL
             // Token Account. The SPL decoder reads bytes [0..32] as
             // "mint" and produces a garbage pubkey that can never match
-            // the declared USDC mint. The v9.1 architecture was built
-            // against a capture from the wrong wallet (the test wallet
-            // at tests/jupiter-ultra/.env.test happens to return a
-            // real SPL Token Account; prod burner does not).
+            // the declared USDC mint. That architecture was built against
+            // a capture from the wrong wallet (the test wallet at
+            // tests/jupiter-ultra/.env.test happens to return a real
+            // SPL Token Account; prod burner does not).
             //
             // Option A: same trust class as `jupiter_swap_immediate` /
             // `jupiter_ultra` (shipped since BAT-582 with no
@@ -1344,7 +1345,7 @@ function buildAccountChecks(expectedDelta, burnerPubkey) {
         // earlier in this function and provides the exact mint +
         // atomic-amount enforcement on the declared burner-source ATA.
         //
-        // The previous v9.1 vault-check push asserted
+        // The previous vault-check push asserted
         // `postAI.splToken.owner === expectedTokenOwner` against the
         // depositVault account. That check rejected on the prod burner
         // because Jupiter's actual destination is an Anchor PDA
