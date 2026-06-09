@@ -46,12 +46,14 @@ const SOLANA_TOOLS_PATH = path.join(BUNDLE, 'tools', 'solana.js');
 // ─── Test harness ─────────────────────────────────────────────────────────
 
 // All invariants in this file are synchronous source-string regex
-// assertions — there is no IO, no Jupiter API, no Android bridge. Keep
-// check() strictly synchronous so a future maintainer can't accidentally
-// introduce an async invariant whose failure is silently swallowed by an
-// unawaited Promise. If a real async case becomes necessary, mirror the
-// runAsync() pattern from burner-policy.test.js and explicitly await it
-// from main().
+// assertions. The test does perform synchronous disk I/O (fs.readFileSync
+// against tools/solana.js once at startup), but no network I/O, no
+// Jupiter API roundtrip, no Android bridge, no async work of any kind.
+// Keep check() strictly synchronous so a future maintainer can't
+// accidentally introduce an async invariant whose failure is silently
+// swallowed by an unawaited Promise. If a real async case becomes
+// necessary, mirror the runAsync() pattern from burner-policy.test.js
+// and explicitly await it from main().
 let pass = 0, fail = 0;
 function check(name, fn) {
     try {

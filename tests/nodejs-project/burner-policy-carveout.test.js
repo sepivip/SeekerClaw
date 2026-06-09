@@ -590,6 +590,47 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.t2.pass, true);
         assert.deepStrictEqual(r.t2.altResolvedBurnerOwned, []);
     });
+    check('isPostBurnerOwnedSpl: Source 1 REJECTS account whose program owner != TOKEN_PROGRAM (Copilot R5.2 regression)', () => {
+        // A 165-byte account owned by Token-2022 (or any non-classic-SPL
+        // program) must NOT satisfy condition 2 via Source 1, even when
+        // its layout decodes cleanly and bytes [32..64] match the burner
+        // pubkey. Token-2022 accounts route to nonStandardTokenSet via the
+        // pause-and-re-engage path; the carve-out cannot be granted.
+        const { isPostBurnerOwnedSpl, base58Decode } = _internals;
+        const TOKEN_2022 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+        const TOKEN_2022_ATA = 'Token2022AccountburnerOwned165bXXXXXXXXXXz';
+        // Hand-build a 165-byte SPL-layout buffer with burner in owner-slot.
+        const buf = Buffer.alloc(165, 0);
+        base58Decode(WSOL_MINT).copy(buf, 0, 0, 32);
+        base58Decode(BURNER).copy(buf, 32, 0, 32);
+        buf.writeBigUInt64LE(0n, 64);
+        const acctForToken2022 = {
+            lamports: 2_039_280,
+            owner: TOKEN_2022, // ← THE BUG: 165-byte layout but program-owner != classic SPL
+            data: [buf.toString('base64'), 'base64'],
+            executable: false,
+            rentEpoch: 0,
+            space: 165,
+        };
+        const postAcctByAddr = new Map([[TOKEN_2022_ATA, acctForToken2022]]);
+        const captureNoPtb = { combinedAccountKeys: [], sim: { value: {} } };
+        assert.strictEqual(
+            isPostBurnerOwnedSpl(TOKEN_2022_ATA, captureNoPtb, BURNER, postAcctByAddr),
+            false,
+            'Token-2022-owned 165-byte account must NOT satisfy condition 2 via Source 1',
+        );
+
+        // And the same account owned by the classic SPL Token Program WOULD
+        // satisfy it — proves the guard is the program-owner check, not
+        // some other filter.
+        const acctForClassic = { ...acctForToken2022, owner: TOKEN_PROGRAM };
+        const postAcctByAddrClassic = new Map([[TOKEN_2022_ATA, acctForClassic]]);
+        assert.strictEqual(
+            isPostBurnerOwnedSpl(TOKEN_2022_ATA, captureNoPtb, BURNER, postAcctByAddrClassic),
+            true,
+            'Same layout owned by classic SPL Token Program MUST satisfy condition 2',
+        );
+    });
     check('isPostBurnerOwnedSpl: postTokenBalances-only account passes condition 2 (Copilot R2.3 regression)', () => {
         // Pin the dual-source helper: an account that is NOT in
         // sim.value.accounts but IS reported by postTokenBalances as

@@ -191,8 +191,17 @@ function instructionType(ix) {
 // appears in postTokenBalances but not in requestedAddresses.
 function isPostBurnerOwnedSpl(addr, capture, burnerPubkey, postAcctByAddr) {
     // Source 1: sim.value.accounts entry (when caller requested it).
+    // CRITICAL (Copilot R5.2): also gate on acct.owner === TOKEN_PROGRAM
+    // (the classic SPL Token Program). Without this check, a Token-2022
+    // account whose 165-byte layout happens to overlap the SPL Token v3
+    // layout would satisfy condition 2 — but Token-2022 accounts must be
+    // routed to the nonStandardTokenSet "pause and re-engage" path
+    // (BAT-1031 v1.2 §nit3). Token-2022 detection is handled upstream in
+    // buildObservedBurnerOwnedSet; this guard is the defensive
+    // back-stop so the carve-out CANNOT silently apply to a Token-2022
+    // burner-owned account.
     const postAcct = postAcctByAddr ? postAcctByAddr.get(addr) : null;
-    if (postAcct) {
+    if (postAcct && postAcct.owner === TOKEN_PROGRAM) {
         const postParsed = readSplTokenAccount(postAcct);
         if (postParsed && pubkeysEqual(postParsed.owner, burnerPubkey)) return true;
     }
@@ -473,18 +482,13 @@ function extractTripwires(capture, opts) {
         }
     }
 
-    // Build post lamport cost per address (best-effort).
-    const postLamportsByAddr = new Map();
-    const pre = Array.isArray(value.preBalances) ? value.preBalances : [];
-    const post = Array.isArray(value.postBalances) ? value.postBalances : [];
-    for (let i = 0; i < cak.length && i < pre.length && i < post.length; i++) {
-        const addr = cak[i];
-        const spent = Number(pre[i]) - Number(post[i]);
-        if (spent > 0) postLamportsByAddr.set(addr, spent);
-    }
-
-    // For zero-balance carve-out, the "lamport cost" is the burner's net
-    // SOL delta (i.e., what the burner paid for create/init across the tx).
+    // For zero-balance carve-out, the "lamport cost" passed to applyCarveOut
+    // is the burner's NET SOL delta across the tx — what the burner paid
+    // for create/init (rent) + tx fee. We do NOT use per-account lamport
+    // spend here: the carve-out is a tx-level fail-closed gate, not a
+    // per-account gate. burnerNetSolDelta returns null when the data is
+    // missing, and applyCarveOut treats null as "spend unknown" (fail
+    // closed) per Copilot R4.3.
     const burnerSolSpend = burnerNetSolDelta(capture, burnerPubkey);
 
     for (const addr of burnerScope) {
