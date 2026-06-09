@@ -13,7 +13,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
-- **Claude model lineup** (BAT-1032): added **Fable 5** (`claude-fable-5`, new top tier) and **Opus 4.8** (`claude-opus-4-8`, new Anthropic default); dropped Opus 4.6 from the dropdown. Existing Opus 4.6 users keep working — the saved model carries forward off-list (displays as raw ID).
+- **Claude model lineup** (BAT-1032): added **Fable 5** (`claude-fable-5`, new top tier) and **Opus 4.8** (`claude-opus-4-8`, new Anthropic default). Opus 4.6 stays in the registry for now — review found that dropping a registry row silently disables Extended Thinking for users still on that model (the registry drives `reasoningSupport`); it can be dropped once a retired-models concept exists.
 
 ## [2.0.0] - 2026-05-19
 

@@ -1938,7 +1938,7 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-fable-5':      200000, // 1M actual; conservative cap consistent with mobile memory limits
     'claude-opus-4-8':     200000,
     'claude-opus-4-7':     200000,
-    'claude-opus-4-6':     200000, // kept for existing users with 4.6 still selected (removed from UI dropdown)
+    'claude-opus-4-6':     200000,
     'claude-sonnet-4-6':   200000,
     'claude-sonnet-4-5':   200000,
     'claude-haiku-4-5':    200000,

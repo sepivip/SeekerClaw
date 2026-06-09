@@ -85,6 +85,7 @@ class ModelRegistryTest {
                 ModelInfo("claude-fable-5", "Fable 5", "yes"),
                 ModelInfo("claude-opus-4-8", "Opus 4.8", "yes"),
                 ModelInfo("claude-opus-4-7", "Opus 4.7", "yes"),
+                ModelInfo("claude-opus-4-6", "Opus 4.6", "yes"),
                 ModelInfo("claude-sonnet-4-6", "Sonnet 4.6", "yes"),
                 ModelInfo("claude-haiku-4-5", "Haiku 4.5", "no"),
             ),
@@ -450,6 +451,7 @@ class ModelRegistryTest {
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-fable-5", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-8", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-7", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-6", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-sonnet-4-6", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.5", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", "api_key"))

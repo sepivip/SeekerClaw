@@ -1442,28 +1442,32 @@ object ConfigManager {
         prefsModel: String,
         effectiveProvider: String,
         effectiveAuth: String,
-    ): String = when {
-        !providerChanged && !authChanged && newModel == prefsModel -> prefsModel
-        newModel != null -> {
-            // Overlay model present — validate; substitute default if invalid.
-            if (isModelValidForProvider(effectiveProvider, effectiveAuth, newModel)) {
-                newModel
+    ): String {
+        // stringField() trims the overlay value, so the prefs side must be
+        // trimmed too or a legacy padded prefs value (e.g. an untrimmed
+        // claim import) would miss the equality gate and fall into the
+        // clamp — reintroducing the exact bug this gate fixes. Returning
+        // the trimmed value lets prefs self-normalize on the next write.
+        val prefsTrimmed = prefsModel.trim()
+        // Validate-or-clamp: keep the candidate when the registry lists it
+        // for the effective pair, else substitute the provider default
+        // (keep the candidate when the provider has no default — custom).
+        fun clampToProviderList(candidate: String): String =
+            if (isModelValidForProvider(effectiveProvider, effectiveAuth, candidate)) {
+                candidate
             } else {
-                val providerDefault = defaultModelForProvider(effectiveProvider, effectiveAuth)
-                if (providerDefault.isNotBlank()) providerDefault else newModel
+                defaultModelForProvider(effectiveProvider, effectiveAuth).ifBlank { candidate }
             }
-        }
-        providerChanged || authChanged -> {
-            // No overlay model but provider or auth changed — validate
+        return when {
+            !providerChanged && !authChanged && newModel == prefsTrimmed -> prefsTrimmed
+            // Overlay model present and differs from prefs — external change
+            // (Node /model, tampered file): validate against the effective pair.
+            newModel != null -> clampToProviderList(newModel)
+            // No overlay model but provider or auth changed — revalidate
             // prefs.model against the NEW effective provider+auth.
-            if (isModelValidForProvider(effectiveProvider, effectiveAuth, prefsModel)) {
-                prefsModel
-            } else {
-                val providerDefault = defaultModelForProvider(effectiveProvider, effectiveAuth)
-                if (providerDefault.isNotBlank()) providerDefault else prefsModel
-            }
+            providerChanged || authChanged -> clampToProviderList(prefsTrimmed)
+            else -> prefsModel
         }
-        else -> prefsModel
     }
 
     /**

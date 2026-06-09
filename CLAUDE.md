@@ -171,6 +171,7 @@ Available models for the dropdown (using API aliases — auto-resolve to latest 
 - `claude-fable-5` — most powerful, newest tier (Fable 5)
 - `claude-opus-4-8` — smartest Opus — **default for the Anthropic provider**
 - `claude-opus-4-7` — previous flagship (Opus 4.7)
+- `claude-opus-4-6` — older flagship (Opus 4.6) — retained: dropping a registry row silently disables Extended Thinking for users still on it (registry drives `reasoningSupport`); drop only once a retired-models concept exists
 - `claude-sonnet-4-6` — balanced, recommended (Sonnet 4.6)
 - `claude-haiku-4-5` — fast, cheapest (Haiku 4.5)
 

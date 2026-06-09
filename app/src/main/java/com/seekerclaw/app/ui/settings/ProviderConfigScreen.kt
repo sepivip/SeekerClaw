@@ -1007,7 +1007,16 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             if (allowedModels.none { it.id == currentModel } && wasOldListModel) {
                                 // Use safe default, NOT list order (newer models may be tier-gated).
                                 val fallback = defaultModelForProvider("openai", selectedAuth)
-                                saveField("model", fallback, needsRestart = false)
+                                // Multi-step save contract (saveField KDoc): check the
+                                // Boolean. On failure saveField already toasted and
+                                // reverted the displayed triple; the stale model
+                                // self-heals when the user next picks a model.
+                                if (!saveField("model", fallback, needsRestart = false)) {
+                                    android.util.Log.w(
+                                        "ProviderConfigScreen",
+                                        "model clamp save failed after auth switch — stale model persists until re-picked",
+                                    )
+                                }
                             }
                             // If switching away from OAuth, clear any leftover OAuth UI state
                             // so the API key field renders cleanly. The showOAuthSection guard

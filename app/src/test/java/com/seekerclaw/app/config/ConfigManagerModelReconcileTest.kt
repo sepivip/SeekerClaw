@@ -21,6 +21,13 @@ import org.junit.Test
  */
 class ConfigManagerModelReconcileTest {
 
+    /**
+     * Production-shaped fixture (all four providers, full Claude list).
+     * Kept production-shaped deliberately: initForTest installs into the
+     * global ModelRegistry singleton and the convention (ModelRegistryTest)
+     * is to leave a production-shaped registry behind so later test classes
+     * in the same JVM see realistic state regardless of execution order.
+     */
     private val fixtureProviders: List<ProviderInfo> = listOf(
         ProviderInfo(
             id = "openai",
@@ -34,12 +41,14 @@ class ConfigManagerModelReconcileTest {
             models = listOf(
                 ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                 ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
+                ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
             ),
             modelsByAuth = mapOf(
                 "oauth" to listOf(
                     ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                     ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
                     ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"),
+                    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
                 ),
             ),
         ),
@@ -55,8 +64,33 @@ class ConfigManagerModelReconcileTest {
             models = listOf(
                 ModelInfo("claude-fable-5", "Fable 5", "yes"),
                 ModelInfo("claude-opus-4-8", "Opus 4.8", "yes"),
+                ModelInfo("claude-opus-4-7", "Opus 4.7", "yes"),
+                ModelInfo("claude-opus-4-6", "Opus 4.6", "yes"),
                 ModelInfo("claude-sonnet-4-6", "Sonnet 4.6", "yes"),
+                ModelInfo("claude-haiku-4-5", "Haiku 4.5", "no"),
             ),
+        ),
+        ProviderInfo(
+            id = "openrouter",
+            displayName = "OpenRouter",
+            authTypes = listOf("api_key"),
+            keyHint = "sk-or-v1-…",
+            consoleUrl = "https://openrouter.ai",
+            keysUrl = "https://openrouter.ai/keys",
+            freeform = true,
+            defaultModel = "anthropic/claude-sonnet-4-6",
+            models = emptyList(),
+        ),
+        ProviderInfo(
+            id = "custom",
+            displayName = "Custom",
+            authTypes = listOf("api_key"),
+            keyHint = "your-api-key",
+            consoleUrl = "https://seekerclaw.xyz/docs/custom-provider",
+            keysUrl = "https://seekerclaw.xyz/docs/custom-provider",
+            freeform = true,
+            defaultModel = "",
+            models = emptyList(),
         ),
     )
 
@@ -106,15 +140,35 @@ class ConfigManagerModelReconcileTest {
 
     @Test
     fun `dropped-from-registry model survives for existing users`() {
-        // A model removed from the registry (e.g. claude-opus-4-6 after the
-        // BAT-1032 bump) must keep working for users who still run it.
+        // A model removed from the registry in a future bump must keep
+        // working for users who still run it (uses a fake retired ID —
+        // not in the fixture's claude list).
         assertEquals(
-            "claude-opus-4-6",
+            "claude-legacy-model",
             ConfigManager.resolveModelForReconcile(
                 providerChanged = false,
                 authChanged = false,
-                newModel = "claude-opus-4-6",
-                prefsModel = "claude-opus-4-6",
+                newModel = "claude-legacy-model",
+                prefsModel = "claude-legacy-model",
+                effectiveProvider = "claude",
+                effectiveAuth = "api_key",
+            ),
+        )
+    }
+
+    @Test
+    fun `padded prefs model still hits the equality gate`() {
+        // stringField trims the overlay; the gate must trim the prefs side
+        // too or a legacy padded value (e.g. an untrimmed claim import)
+        // would fall into the clamp. The trimmed value is returned so
+        // prefs self-normalize.
+        assertEquals(
+            "my-custom-model-id",
+            ConfigManager.resolveModelForReconcile(
+                providerChanged = false,
+                authChanged = false,
+                newModel = "my-custom-model-id",
+                prefsModel = " my-custom-model-id ",
                 effectiveProvider = "claude",
                 effectiveAuth = "api_key",
             ),

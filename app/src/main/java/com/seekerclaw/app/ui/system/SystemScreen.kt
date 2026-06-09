@@ -113,10 +113,12 @@ fun SystemScreen(onBack: () -> Unit) {
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
-    val modelName = config?.model
-        ?.ifBlank { null }
-        ?.let { modelDisplayName(it) }
-        ?: "Not set"
+    val modelName = remember(config) {
+        config?.model
+            ?.ifBlank { null }
+            ?.let { modelDisplayName(it) }
+            ?: "Not set"
+    }
 
     var deviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
     var appStorage by remember { mutableStateOf<AppStorageInfo?>(null) }
