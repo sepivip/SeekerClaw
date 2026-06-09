@@ -96,12 +96,15 @@ class ConfigManagerModelReconcileTest {
 
     @Before
     fun setUp() {
+        ModelRegistry.resetForTest()
         ModelRegistry.initForTest(fixtureProviders)
     }
 
     @After
     fun tearDown() {
-        ModelRegistry.initForTest(fixtureProviders)
+        // Reset the global singleton so this class can't pollute later
+        // classes in the same JVM (matches ModelRegistryTest's pattern).
+        ModelRegistry.resetForTest()
     }
 
     // ---- The BAT-1032 equality gate -----------------------------------

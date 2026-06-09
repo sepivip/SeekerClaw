@@ -795,7 +795,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 )
             },
             text = {
-                Column {
+                // Scrollable: the model list grew past the height-bounded
+                // AlertDialog (BAT-1032 added Fable 5 + Opus 4.8), which
+                // clipped the Custom row at the bottom so it couldn't be
+                // tapped. Scroll keeps every row reachable as the list grows.
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     models.forEach { model ->
                         Row(
                             modifier = Modifier

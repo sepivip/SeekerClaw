@@ -1471,7 +1471,9 @@ object ConfigManager {
             // No overlay model but provider or auth changed — revalidate
             // prefs.model against the NEW effective provider+auth.
             providerChanged || authChanged -> clampToProviderList(prefsTrimmed)
-            else -> prefsModel
+            // Steady state, nothing to reconcile — return the trimmed value
+            // for consistency (self-normalizes a padded prefs entry).
+            else -> prefsTrimmed
         }
     }
 
