@@ -43,15 +43,23 @@ const EVENT_AUTH = 'ArsDfE54RTkC3zhtzPdtvTtKw9XSV5w1PCTBFVGiLd52';
 const SLOT_HASHES = '27ZASRjinQgXKsrijKqb9xyRnH6W5KWgLSDveRghvHqc';
 
 // ── Fixture builder: SPL Token Account (165 bytes) ────────────────────────
+//
+// Copilot R6.2: throw on non-32-byte decoded pubkeys instead of silently
+// truncating with Math.min(32, length). A short or invalid base58 string
+// previously got zero-padded into a "valid" 165-byte layout, hiding broken
+// test constants and making downstream failures impossible to root-cause.
 function splTokenAccountInfo({ mint, owner, amountAtomic, lamports = 2_039_280 }) {
     const buf = Buffer.alloc(165, 0);
-    // mint
     const m = _internals.base58Decode(mint);
-    m.copy(buf, 0, 0, Math.min(32, m.length));
-    // owner
+    if (m.length !== 32) {
+        throw new Error(`splTokenAccountInfo: mint must decode to 32 bytes, got ${m.length} for '${mint}'`);
+    }
+    m.copy(buf, 0);
     const o = _internals.base58Decode(owner);
-    o.copy(buf, 32, 0, Math.min(32, o.length));
-    // amount (u64 LE)
+    if (o.length !== 32) {
+        throw new Error(`splTokenAccountInfo: owner must decode to 32 bytes, got ${o.length} for '${owner}'`);
+    }
+    o.copy(buf, 32);
     buf.writeBigUInt64LE(BigInt(amountAtomic), 64);
     return {
         lamports,
@@ -589,6 +597,83 @@ async function runAsync(name, fn) {
         });
         assert.strictEqual(r.t2.pass, true);
         assert.deepStrictEqual(r.t2.altResolvedBurnerOwned, []);
+    });
+    check('isPostBurnerOwnedSpl: Source 2 REJECTS postTokenBalances entry with missing programId (Copilot R6.3 regression)', () => {
+        // Missing/undefined programId is an information gap. The carve-out
+        // must fail closed — we cannot grant condition 2 without a proven
+        // classic SPL Token Program declaration.
+        const { isPostBurnerOwnedSpl } = _internals;
+        const ABSENT = 'AbsentFromValueAccountsButPTBXXXXXXXXXXXXXz';
+        const captureMissingProgramId = {
+            combinedAccountKeys: [BURNER, ABSENT],
+            sim: { value: { accounts: [], postTokenBalances: [
+                { accountIndex: 1, mint: WSOL_MINT, owner: BURNER /* programId MISSING */, uiTokenAmount: { amount: '0' } },
+            ] } },
+        };
+        assert.strictEqual(
+            isPostBurnerOwnedSpl(ABSENT, captureMissingProgramId, BURNER, new Map()),
+            false,
+            'missing programId must fail closed — cannot grant condition 2 without proof',
+        );
+
+        // Sanity: with programId === TOKEN_PROGRAM it passes.
+        const captureWithProgramId = {
+            combinedAccountKeys: [BURNER, ABSENT],
+            sim: { value: { accounts: [], postTokenBalances: [
+                { accountIndex: 1, mint: WSOL_MINT, owner: BURNER, programId: TOKEN_PROGRAM, uiTokenAmount: { amount: '0' } },
+            ] } },
+        };
+        assert.strictEqual(
+            isPostBurnerOwnedSpl(ABSENT, captureWithProgramId, BURNER, new Map()),
+            true,
+        );
+    });
+    check('buildObservedBurnerOwnedSet: missing programId routes to nonStandardTokenSet (Copilot R6.4 regression)', () => {
+        // Same-class as R6.3 but in the upstream burner-owned set extraction.
+        // A postTokenBalances entry with a missing programId must NOT be
+        // silently added to `observed` — it routes to nonStandardTokenSet,
+        // which means Gate 0 result is "pause and re-engage."
+        const fx = buildHappyFixture((f) => {
+            // Strip the programId field from the WSOL ATA postTokenBalances entry.
+            delete f.sim.value.postTokenBalances[0].programId;
+        });
+        const r = extractTripwires(fx, {
+            burnerPubkey: BURNER,
+            declaredBurnerOwned: [BURNER_USDC_ATA],
+        });
+        // WSOL ATA must NOT be in observed (would have been silent fail-open)
+        assert.ok(
+            !r.t5.observed.includes(BURNER_WSOL_ATA),
+            'WSOL ATA with missing programId must NOT be in observed set',
+        );
+        // ...it must be in nonStandardTokenSet (pause-and-re-engage).
+        assert.ok(
+            r.t5.nonStandardTokenSet.includes(BURNER_WSOL_ATA),
+            `expected WSOL ATA in nonStandardTokenSet, got ${JSON.stringify(r.t5.nonStandardTokenSet)}`,
+        );
+        // T5 pass requires nonStandardTokenSet to be empty — so T5 FAILs.
+        assert.strictEqual(r.t5.pass, false, 'T5 FAIL when any nonStandardTokenSet entry exists');
+    });
+    check('splTokenAccountInfo: throws on non-32-byte decoded pubkey (Copilot R6.2 regression)', () => {
+        // A previously-silent truncation would zero-pad a short base58
+        // string into a "valid" 165-byte layout. The fixture builder now
+        // throws on length-mismatch — broken test constants fail loudly.
+        // Use valid base58 chars but short length so base58Decode succeeds
+        // and the length-check is what fires.
+        const SHORT_PUBKEY = '111111111111';      // valid base58, ~9 bytes decoded
+        assert.throws(
+            () => splTokenAccountInfo({ mint: SHORT_PUBKEY, owner: BURNER, amountAtomic: '0' }),
+            /splTokenAccountInfo: mint must decode to 32 bytes/,
+            'mint that doesn\'t decode to 32 bytes must throw',
+        );
+        assert.throws(
+            () => splTokenAccountInfo({ mint: WSOL_MINT, owner: SHORT_PUBKEY, amountAtomic: '0' }),
+            /splTokenAccountInfo: owner must decode to 32 bytes/,
+            'owner that doesn\'t decode to 32 bytes must throw',
+        );
+        // Sanity: proper 32-byte pubkeys still work.
+        const ok = splTokenAccountInfo({ mint: WSOL_MINT, owner: BURNER, amountAtomic: '0' });
+        assert.strictEqual(ok.space, 165);
     });
     check('isPostBurnerOwnedSpl: Source 1 REJECTS account whose program owner != TOKEN_PROGRAM (Copilot R5.2 regression)', () => {
         // A 165-byte account owned by Token-2022 (or any non-classic-SPL

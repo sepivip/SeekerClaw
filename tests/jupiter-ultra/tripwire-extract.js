@@ -205,9 +205,11 @@ function isPostBurnerOwnedSpl(addr, capture, burnerPubkey, postAcctByAddr) {
         const postParsed = readSplTokenAccount(postAcct);
         if (postParsed && pubkeysEqual(postParsed.owner, burnerPubkey)) return true;
     }
-    // Source 2: postTokenBalances declaration. Trust the declared owner/
-    // programId — the simulator is the source of truth and Token-2022
-    // accounts are already routed to nonStandardTokenSet upstream.
+    // Source 2: postTokenBalances declaration. Require an explicit
+    // `programId === TOKEN_PROGRAM` match. A missing/undefined programId
+    // is an information gap — fail closed (Copilot R6.3). Token-2022
+    // accounts are routed to nonStandardTokenSet upstream and never
+    // satisfy this predicate.
     const value = (capture && capture.sim && capture.sim.value) || {};
     const ptb = Array.isArray(value.postTokenBalances) ? value.postTokenBalances : [];
     const cak = Array.isArray(capture.combinedAccountKeys) ? capture.combinedAccountKeys : [];
@@ -216,7 +218,7 @@ function isPostBurnerOwnedSpl(addr, capture, burnerPubkey, postAcctByAddr) {
         const ptbAddr = (typeof entry.accountIndex === 'number' && cak[entry.accountIndex]) || null;
         if (ptbAddr !== addr) continue;
         if (entry.owner !== burnerPubkey) continue;
-        if (entry.programId && entry.programId !== TOKEN_PROGRAM) continue;
+        if (entry.programId !== TOKEN_PROGRAM) continue;
         return true;
     }
     return false;
@@ -268,6 +270,13 @@ function buildObservedBurnerOwnedSet({ capture, burnerPubkey, addressOrder, addr
     }
 
     // Source 2: sim.value.postTokenBalances — declared owner field.
+    // Strict programId classification (Copilot R6.4):
+    //   - programId === TOKEN_PROGRAM           → observed (classic SPL)
+    //   - programId === TOKEN_2022_PROGRAM      → nonStandardTokenSet (pause)
+    //   - any other / missing / undefined       → fail-closed: nonStandardTokenSet
+    //     (information gap is treated as Token-2022-class — Gate 0 must
+    //     pause and re-engage rather than silently grant burner-owned
+    //     classification with no proven program).
     const ptb = Array.isArray(value.postTokenBalances) ? value.postTokenBalances : [];
     const cak = Array.isArray(capture.combinedAccountKeys) ? capture.combinedAccountKeys : [];
     for (const entry of ptb) {
@@ -276,12 +285,13 @@ function buildObservedBurnerOwnedSet({ capture, burnerPubkey, addressOrder, addr
         const addr = (typeof entry.accountIndex === 'number' && cak[entry.accountIndex]) || null;
         if (!addr) continue;
         if (!passesFilter(addr)) continue;
-        if (entry.programId === TOKEN_2022_PROGRAM) {
+        if (entry.programId === TOKEN_PROGRAM) {
+            observed.add(addr);
+        } else {
+            // Token-2022 OR missing/unknown programId — both route to the
+            // pause-and-re-engage path.
             nonStandard.add(addr);
-            continue;
         }
-        if (entry.programId && entry.programId !== TOKEN_PROGRAM) continue;
-        observed.add(addr);
     }
 
     return { observed: Array.from(observed), nonStandardTokenSet: Array.from(nonStandard) };

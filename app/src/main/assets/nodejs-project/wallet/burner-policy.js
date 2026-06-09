@@ -82,7 +82,7 @@
 
 'use strict';
 
-const { TxParseError, parseTransaction, base58Decode } = require('./tx-parser');
+const { TxParseError, parseTransaction } = require('./tx-parser');
 
 const { readAccountInfo, tokenDelta, lamportsDelta } = require('./spl-token-layout');
 
