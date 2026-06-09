@@ -183,18 +183,25 @@ function loadDcaProducerSlice() {
         );
     });
 
-    check('Invariant 5: no \'jupiter_dca_create_deposit\' delta kind in the producer slice', () => {
-        // Per the BAT-1031 §C4 catalogue, jupiter_dca_create_deposit is NOT
-        // a registered delta kind. Only jupiter_trigger_create_deposit exists
-        // (BAT-1031 / BAT-1027). If a 'jupiter_dca_create_deposit' literal
-        // appears here, the producer is fabricating a delta kind the policy
-        // layer does not recognise — fail closed.
+    check('Invariant 5: no \'jupiter_dca_create_deposit\' delta kind emitted from the DCA producer', () => {
+        // jupiter_dca_create_deposit IS a registered delta kind in
+        // wallet/burner-policy.js DELTA_KINDS (line ~256) — the policy
+        // layer KNOWS this shape and has a validateExpectedDeltaShape case
+        // for it. What this invariant pins is the orthogonal contract:
+        // the DCA producer must NEVER actually emit that delta kind from
+        // its expectedDelta construction site, because emission would imply
+        // an attempt to run autonomous burner signing for DCA before vault
+        // discovery ships. The kind exists for forward-compat with a future
+        // BAT-XXXX that wires DCA-on-burner; today the producer must stay
+        // on dcaForceRouting='main' + expectedDelta: null.
         const re = /['"]jupiter_dca_create_deposit['"]/;
         assert.ok(
             !re.test(producer.slice),
-            `'jupiter_dca_create_deposit' delta kind is not part of the BAT-1031 ` +
-            `catalogue. The only registered deposit kind is jupiter_trigger_create_deposit. ` +
-            `Remove this string or register the kind in wallet/burner-policy.js.`
+            `'jupiter_dca_create_deposit' literal appeared inside jupiter_dca_create. ` +
+            `The kind IS registered in burner-policy.js DELTA_KINDS, but the DCA ` +
+            `producer must not emit it until vault discovery and a destination ` +
+            `assertion are in place. Either remove the literal or open a follow-up ` +
+            `to enable DCA-on-burner with the proper safety guarantees.`
         );
     });
 

@@ -330,8 +330,15 @@ function applyCarveOut(ctx, instructionsTouchingAccount, postLamports) {
         }
     }
 
-    // Condition 6: lamport headroom.
-    if (typeof postLamports === 'number' && postLamports > ZERO_VALUE_SOL_HEADROOM_LAMPORTS) {
+    // Condition 6: lamport headroom — must be a PROVEN bound. A missing
+    // postLamports (caller couldn't compute the burner SOL spend because
+    // the burner wasn't in combinedAccountKeys, or preBalances/postBalances
+    // were truncated, etc.) means we cannot prove the cost stayed inside
+    // headroom — fail closed with a distinct reason instead of treating
+    // "unknown" as "no problem." Copilot R4.3.
+    if (typeof postLamports !== 'number' || !Number.isFinite(postLamports)) {
+        reasons.push('carve_out_lamport_spend_unknown');
+    } else if (postLamports > ZERO_VALUE_SOL_HEADROOM_LAMPORTS) {
         reasons.push('carve_out_headroom_exceeded');
     }
 
@@ -339,14 +346,23 @@ function applyCarveOut(ctx, instructionsTouchingAccount, postLamports) {
 }
 
 // ── Burner net SOL delta ─────────────────────────────────────────────────
+// Returns the burner's net SOL spend (preBalance - postBalance) as a
+// finite number, OR null when the data needed to compute it is missing
+// (burner not in combinedAccountKeys, balances arrays truncated/missing,
+// non-numeric balance values). null is the "unknown" signal that
+// applyCarveOut's condition 6 reads to fail closed instead of fail open.
+// Copilot R4.3.
 function burnerNetSolDelta(capture, burnerPubkey) {
     const value = (capture && capture.sim && capture.sim.value) || {};
     const cak = Array.isArray(capture.combinedAccountKeys) ? capture.combinedAccountKeys : [];
     const pre = Array.isArray(value.preBalances) ? value.preBalances : [];
     const post = Array.isArray(value.postBalances) ? value.postBalances : [];
     const idx = cak.indexOf(burnerPubkey);
-    if (idx < 0 || idx >= pre.length || idx >= post.length) return 0;
-    return Number(pre[idx]) - Number(post[idx]);
+    if (idx < 0 || idx >= pre.length || idx >= post.length) return null;
+    const preNum = Number(pre[idx]);
+    const postNum = Number(post[idx]);
+    if (!Number.isFinite(preNum) || !Number.isFinite(postNum)) return null;
+    return preNum - postNum;
 }
 
 // ── extractTripwires (top-level) ─────────────────────────────────────────

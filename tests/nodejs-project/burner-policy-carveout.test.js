@@ -260,13 +260,20 @@ function buildHappyFixture(overrides) {
 }
 
 // ── Test harness ──────────────────────────────────────────────────────────
+// check() is sync-only: the previous Promise-handling branch returned a
+// Promise that callers never awaited, so an async invariant could pass
+// PASS or be reported after the process printed the summary. If you need
+// async, use runAsync() (defined below) which IS properly awaited from
+// main(). Copilot R4.2.
 let pass = 0, fail = 0;
 function check(name, fn) {
     try {
         const r = fn();
-        if (r instanceof Promise) {
-            return r.then(() => { pass++; console.log(`  ✓ ${name}`); })
-                .catch(e => { fail++; console.error(`  ✗ ${name}: ${e.message}`); });
+        if (r && typeof r.then === 'function') {
+            throw new Error(
+                `${name}: check() is synchronous-only. Use runAsync(name, async () => { ... }) ` +
+                `from main() instead — main() awaits runAsync, but check() returns immediately.`,
+            );
         }
         pass++;
         console.log(`  ✓ ${name}`);
@@ -622,6 +629,51 @@ async function runAsync(name, fn) {
         ZERO_VALUE_SOL_HEADROOM_LAMPORTS + 1);
         assert.strictEqual(r.applies, false);
         assert.ok(r.reasons.includes('carve_out_headroom_exceeded'));
+    });
+    check('applyCarveOut: missing lamport spend → reason=lamport_spend_unknown (fail-closed, Copilot R4.3)', () => {
+        // null postLamports must NOT pass the carve-out — proven-spend bound
+        // is load-bearing per BAT-1031 v1.2 §3 condition 6.
+        const rNull = applyCarveOut({
+            preExists: false,
+            postIsValidBurnerOwnedSpl: true,
+            postAmountAtomic: '0',
+        }, [{ parsed: { type: 'createAccount' }, programId: SYSTEM_PROGRAM }], null);
+        assert.strictEqual(rNull.applies, false);
+        assert.ok(
+            rNull.reasons.includes('carve_out_lamport_spend_unknown'),
+            `expected carve_out_lamport_spend_unknown, got ${JSON.stringify(rNull.reasons)}`,
+        );
+        assert.ok(
+            !rNull.reasons.includes('carve_out_headroom_exceeded'),
+            'unknown spend must not be reported as headroom_exceeded',
+        );
+
+        // undefined and NaN also fail closed.
+        const rUndef = applyCarveOut({
+            preExists: false, postIsValidBurnerOwnedSpl: true, postAmountAtomic: '0',
+        }, [{ parsed: { type: 'createAccount' }, programId: SYSTEM_PROGRAM }], undefined);
+        assert.ok(rUndef.reasons.includes('carve_out_lamport_spend_unknown'));
+
+        const rNan = applyCarveOut({
+            preExists: false, postIsValidBurnerOwnedSpl: true, postAmountAtomic: '0',
+        }, [{ parsed: { type: 'createAccount' }, programId: SYSTEM_PROGRAM }], Number.NaN);
+        assert.ok(rNan.reasons.includes('carve_out_lamport_spend_unknown'));
+    });
+    check('burnerNetSolDelta: returns null when burner not in combinedAccountKeys (R4.3 helper)', () => {
+        const { burnerNetSolDelta } = _internals;
+        const capture = {
+            combinedAccountKeys: ['SomeOtherAcctXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz'],
+            sim: { value: { preBalances: [100], postBalances: [50] } },
+        };
+        assert.strictEqual(burnerNetSolDelta(capture, BURNER), null);
+    });
+    check('burnerNetSolDelta: returns number when burner is present (R4.3 helper)', () => {
+        const { burnerNetSolDelta } = _internals;
+        const capture = {
+            combinedAccountKeys: [BURNER],
+            sim: { value: { preBalances: [10_000_000], postBalances: [5_000_000] } },
+        };
+        assert.strictEqual(burnerNetSolDelta(capture, BURNER), 5_000_000);
     });
     check('applyCarveOut: non-canonical op → reason=non_canonical_op', () => {
         const r = applyCarveOut({
