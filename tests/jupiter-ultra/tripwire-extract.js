@@ -374,16 +374,22 @@ function extractTripwires(capture, opts) {
 
     // T2: ALT-resolved writable burner-owned (writable addresses pulled in
     // via address-lookup tables that resolve to burner-owned accounts).
-    // Use addressFilter so Source 2 (postTokenBalances) only counts
-    // accounts that were actually ALT-resolved — without the filter,
-    // postTokenBalances would surface every burner-owned ATA in the tx,
-    // not just the ALT-resolved ones.
+    //
+    // CRITICAL: sim.value.accounts is index-aligned to the caller-supplied
+    // `accounts.config.addresses` (i.e., the policy's requestedAddresses),
+    // NOT to `loadedAddresses.writable`. Passing loadedWritable as
+    // addressOrder into Source 1 would misattribute post-state from
+    // requested addresses to ALT-resolved addresses whenever the lengths
+    // misalign. So Source 1 is disabled for T2 (addressOrder: []) and we
+    // rely on Source 2 (postTokenBalances, which references combinedAccountKeys
+    // — those include BOTH static and ALT-resolved keys, so a burner-owned
+    // ALT-resolved account will surface there) filtered to ALT writables.
     const loadedWritable = (value.loadedAddresses && Array.isArray(value.loadedAddresses.writable))
         ? value.loadedAddresses.writable : [];
     const altObserved = buildObservedBurnerOwnedSet({
         capture,
         burnerPubkey,
-        addressOrder: loadedWritable,
+        addressOrder: [],
         addressFilter: loadedWritable,
     });
     const t2 = {

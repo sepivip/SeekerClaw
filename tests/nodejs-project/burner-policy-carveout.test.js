@@ -526,6 +526,63 @@ async function runAsync(name, fn) {
         assert.ok(rUndef.reasons.includes('carve_out_post_amount_unknown'),
             'undefined amount must also surface carve_out_post_amount_unknown');
     });
+    check('T2: ALT-resolved burner-owned account detected via postTokenBalances filter (Copilot R3.1 regression)', () => {
+        // R3.1: previously T2 passed `addressOrder: loadedWritable` into
+        // buildObservedBurnerOwnedSet, but Source 1 iterates sim.value.accounts
+        // assuming index-alignment to addressOrder. Per Solana JSON-RPC docs,
+        // sim.value.accounts[i] is index-aligned to the caller-supplied
+        // accounts.config.addresses (requestedAddresses), NOT to
+        // loadedAddresses.writable. The fix disables Source 1 for T2
+        // (addressOrder: []) and relies on Source 2 filtered to ALT keys.
+        //
+        // This regression test builds a fixture where loadedAddresses.writable
+        // contains an ALT-resolved key that postTokenBalances reports as
+        // burner-owned. The extractor MUST detect it as T2 fail.
+        const ALT_BURNER_ATA = 'AltResolvedBurnerATAforR3pinXXXXXXXXXXXXXXz';
+        const fx = buildHappyFixture((f) => {
+            f.sim.value.loadedAddresses = {
+                writable: [ALT_BURNER_ATA],
+                readonly: [],
+            };
+            // ALT-resolved key appears in combinedAccountKeys (post-resolution)
+            // at a new index. postTokenBalances references it via accountIndex.
+            f.combinedAccountKeys = f.combinedAccountKeys.concat([ALT_BURNER_ATA]);
+            f.sim.value.postTokenBalances.push({
+                accountIndex: f.combinedAccountKeys.length - 1,
+                mint: WSOL_MINT,
+                owner: BURNER,
+                programId: TOKEN_PROGRAM,
+                uiTokenAmount: { amount: '0', decimals: 9, uiAmount: 0, uiAmountString: '0' },
+            });
+            // preBalances / postBalances also extend.
+            f.sim.value.preBalances.push(0);
+            f.sim.value.postBalances.push(2_039_280);
+        });
+        const r = extractTripwires(fx, {
+            burnerPubkey: BURNER,
+            declaredBurnerOwned: [BURNER_USDC_ATA],
+        });
+        assert.strictEqual(r.t2.pass, false, 'T2 must FAIL on ALT-resolved burner-owned');
+        assert.ok(
+            r.t2.altResolvedBurnerOwned.includes(ALT_BURNER_ATA),
+            `expected ALT_BURNER_ATA in altResolvedBurnerOwned, got ${JSON.stringify(r.t2.altResolvedBurnerOwned)}`,
+        );
+    });
+    check('T2: source-1 disabled (sim.value.accounts NOT misattributed when addressOrder is empty)', () => {
+        // Companion regression: even when sim.value.accounts contains
+        // entries that LOOK like burner-owned SPL, T2 must NOT attribute
+        // them to any ALT-resolved address when loadedWritable is empty.
+        // This proves the Source-1 disable holds even under hostile shapes.
+        const fx = buildHappyFixture();
+        // Sanity: loadedAddresses.writable is empty in the happy fixture.
+        assert.deepStrictEqual(fx.sim.value.loadedAddresses.writable, []);
+        const r = extractTripwires(fx, {
+            burnerPubkey: BURNER,
+            declaredBurnerOwned: [BURNER_USDC_ATA],
+        });
+        assert.strictEqual(r.t2.pass, true);
+        assert.deepStrictEqual(r.t2.altResolvedBurnerOwned, []);
+    });
     check('isPostBurnerOwnedSpl: postTokenBalances-only account passes condition 2 (Copilot R2.3 regression)', () => {
         // Pin the dual-source helper: an account that is NOT in
         // sim.value.accounts but IS reported by postTokenBalances as
