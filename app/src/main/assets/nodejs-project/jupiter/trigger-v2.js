@@ -825,7 +825,8 @@ function validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippa
  * after deposit signing. Caller must NOT persist or log it.
  *
  * Contract (Jupiter V2 openapi, verified live 2026-05-29; receiverAddress +
- * inputTokenAccount surface BAT-1025 v9.1, captured live 2026-06-08):
+ * inputTokenAccount return shape preserved across the BAT-1031 Option A
+ * pivot — see below):
  *   POST /trigger/v2/deposit/craft
  *   body: { inputMint, outputMint, userAddress, amount (smallest-unit string),
  *           orderType:'price', orderSubType:'single' }
@@ -837,16 +838,18 @@ function validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippa
  *
  * Return on success: { ok: true, transaction, depositRequestId,
  *                      recoveryContext, receiverAddress, inputTokenAccount }
- *   - receiverAddress: the high-level Privy vault PDA (matches
- *     ensureVault().vaultPubkey); shows up as splToken.owner-slot on the
- *     on-chain deposit destination but is NOT itself the on-chain destination.
- *   - inputTokenAccount: the EPHEMERAL classic SPL Token Account
- *     (TokenkegQ…-owned) that the deposit tx funds with the burner's input
- *     mint. Different per craft call. Used as expectedDelta.depositVault.pubkey
- *     by tools/solana.js _jupiterTriggerCreateV2 so that burner-policy's
- *     existing SPL Token mint + exact-delta check binds to the actual
- *     destination, with an splToken.owner === receiverAddress assertion
- *     added on the post-state in validateSimDelta.
+ *   - receiverAddress + inputTokenAccount are validated here as base58
+ *     pubkeys and rejected if equal, but they are NOT consumed by
+ *     burner-policy after BAT-1031 (depositVault was removed because
+ *     Jupiter's actual on-chain destination on the prod burner is an
+ *     Anchor PDA whose 372-byte data buffer the SPL Token Account decoder
+ *     parsed as garbage — see Linear BAT-1031). Producer-side base58
+ *     strictness + the inputTokenAccount !== receiverAddress sanity check
+ *     are diagnostic value only: they catch a malformed/empty craft
+ *     response upstream of the burner-policy gate. The fields are
+ *     preserved in the return shape for forward compatibility — if a
+ *     future opt-in destination-binding scheme materializes, it can wire
+ *     to these without re-plumbing depositCraft.
  *
  * Failure modes — the response-shape validation rejects with
  *   error='vault_unavailable' on missing/malformed receiverAddress or
@@ -875,16 +878,18 @@ async function depositCraft({ pubkey, token, inputMint, outputMint, inputAmount 
     if (!craftRes.data || typeof craftRes.data.transaction !== 'string' || !craftRes.data.requestId) {
         return { ok: false, error: 'deposit_craft_failed', reason: 'response missing transaction or requestId' };
     }
-    // BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08): Jupiter Trigger V2
-    // creates an EPHEMERAL SPL Token Account (inputTokenAccount) per craft
-    // request as the on-chain destination for the burner's USDC. The vault
-    // pubkey itself (receiverAddress) is the SPL token-account owner-slot
-    // value, NOT the on-chain transfer destination. Both fields are required
-    // on the burner code path so the producer can wire depositVault.pubkey =
-    // inputTokenAccount and the policy can assert post-state splToken.owner
-    // === receiverAddress. Empirically verified via
-    // tests/jupiter-ultra/live-capture-sim-fixture.js — see
-    // tests/jupiter-ultra/fixtures/sim-deposit-pinned.json.
+    // BAT-1031: Jupiter's /deposit/craft returns receiverAddress (a
+    // high-level vault PDA) and inputTokenAccount. These are validated
+    // here strictly for diagnostic value only — burner-policy after
+    // BAT-1031 does NOT bind to either (the actual on-chain destination
+    // on the prod burner is an Anchor PDA whose SPL decode yields a
+    // garbage mint; trying to validate it caused the prior
+    // implementation's simulation_mint_mismatch rejects). Producer-side
+    // fail-closed on
+    // missing/malformed fields and on inputTokenAccount === receiverAddress
+    // is preserved so a malformed craft response is rejected upstream
+    // of the policy gate. Fields are returned to the caller for forward-
+    // compat with any future opt-in binding scheme.
     const receiverAddress = craftRes.data.receiverAddress;
     const inputTokenAccount = craftRes.data.inputTokenAccount;
     if (!_isBase58Pubkey(receiverAddress)) {

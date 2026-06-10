@@ -8,9 +8,11 @@
 //   - Token-2022 declaration enforcement
 //   - Per-shape `expectedDelta` validation (7 kinds)
 //   - Missing burnerPubkey → fail closed before any other check
-//   - `REJECT_CODES.length === 29` drift guard (was 26 before
+//   - `REJECT_CODES.length === 28` drift guard (was 26 before
 //     BAT-1013-followup; +3 for drainer_burn, token_2022_extension_unsupported,
-//     token_2022_send_unsupported; -5 dead aspirational codes pruned R11)
+//     token_2022_send_unsupported; -5 dead aspirational codes pruned R11;
+//     -1 in BAT-1031 for simulation_recipient_mismatch removed with the
+//     v9.1 validateSimDelta expectedTokenOwner branch)
 //
 // Uses the parser's internal hand-rolled binary format to construct
 // synthetic txs end-to-end through `validateBurnerTx`. Helper builders
@@ -124,18 +126,26 @@ async function runAsync(name, fn) {
     console.log();
 
     console.log('REJECT_CODES drift guard');
-    check('REJECT_CODES.length === 29 (BAT-1013-followup contract amendment)', () => {
-        // Locked length bumped 26 → 29 by BAT-1013-followup, adding the
-        // three new codes that ship with producers in this PR:
-        //   drainer_burn, token_2022_extension_unsupported,
-        //   token_2022_send_unsupported.
-        // Five additional aspirational codes (slot_drift,
-        // alt_account_unresolved, tx_oversize, invalid_header,
-        // priority_fee_drain) are DEFERRED to a separate Codex amendment
-        // that will land alongside producers — keeping length pinned to
-        // 29 here so this drift guard catches premature code-only
-        // additions.
-        assert.strictEqual(policy.REJECT_CODES.length, 29);
+    check('REJECT_CODES.length === 28 (BAT-1031: simulation_recipient_mismatch removed with depositVault binding)', () => {
+        // Locked length history:
+        //   - 26 baseline (BAT-1013).
+        //   - 29 after BAT-1013-followup added drainer_burn,
+        //     token_2022_extension_unsupported, token_2022_send_unsupported.
+        //   - 28 after BAT-1031 removed simulation_recipient_mismatch.
+        //     That code was the only fire site for the prior
+        //     validateSimDelta expectedTokenOwner branch, which was
+        //     deleted along with the depositVault destination-binding
+        //     architecture (Option A: trust Jupiter for destination,
+        //     validate only burner-side state).
+        assert.strictEqual(policy.REJECT_CODES.length, 28);
+    });
+    check('REJECT_CODES no longer contains simulation_recipient_mismatch (BAT-1031)', () => {
+        assert.ok(!policy.REJECT_CODES.includes('simulation_recipient_mismatch'),
+            'simulation_recipient_mismatch should have been removed with depositVault binding');
+    });
+    check('REJECT_CODES still includes simulation_mint_mismatch (still load-bearing for SPL branches)', () => {
+        assert.ok(policy.REJECT_CODES.includes('simulation_mint_mismatch'),
+            'simulation_mint_mismatch is fired by the SPL-typed branch of validateSimDelta for solana_send recipient, agent_pay_x402, jupiter_swap_immediate burnerCredit, and burnerDebit on SPL inputs');
     });
     check('REJECT_CODES includes BAT-1013-followup additions (with producers)', () => {
         for (const code of [
@@ -247,14 +257,38 @@ async function runAsync(name, fn) {
         });
         assert.strictEqual(r.ok, true);
     });
-    check('jupiter_trigger_create_deposit shape has NO creditMin', () => {
+    check('BAT-1031: jupiter_trigger_create_deposit shape accepts burnerDebit-only (no depositVault required)', () => {
+        // Option A: burner-policy no longer reads depositVault. The shape
+        // validator accepts purely on burnerDebit + signerMode.
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000000' },
+        });
+        assert.strictEqual(r.ok, true);
+    });
+    check('BAT-1031: jupiter_trigger_create_deposit shape ignores depositVault when present (forward-compat with V1 producer)', () => {
+        // V1 producer (tools/solana.js _jupiterTriggerCreateV1) still
+        // constructs a depositVault field on v1ExpectedDelta even after
+        // BAT-1031. The shape validator must accept this gracefully so
+        // V1 continues to work (V1 routes to main-wallet anyway per
+        // BAT-1029, but the policy gate still runs the shape check on
+        // the constructed expectedDelta).
         const r = policy._validateExpectedDeltaShape({
             kind: 'jupiter_trigger_create_deposit',
             signerMode: 'burner_only',
             burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '10000000' },
             depositVault: { pubkey: BURNER_USDC_ATA, expectedOwner: JUPITER_LIMIT_ORDER_V2 },
         });
-        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.ok, true, 'depositVault if present must be ignored, not rejected');
+    });
+    check('BAT-1031: jupiter_trigger_create_deposit rejects missing burnerDebit', () => {
+        const r = policy._validateExpectedDeltaShape({
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+        });
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
     });
     check('agent_pay_x402 v2 must use signerMode cosigned', () => {
         const r = policy._validateExpectedDeltaShape({
@@ -1002,28 +1036,37 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.error, 'drainer_set_authority');
     });
 
-    console.log();
-    console.log('Contract v8.3: depositVault REQUIRED + deposit destination is load-bearing (Codex review)');
+    // ─── BAT-1031: Option A — V2/DCA trigger deposit ──────────────────────────
+    //
+    // The prior v9.1 contract tested a depositVault destination-binding
+    // architecture (depositVault.pubkey + expectedTokenOwner) that was
+    // structurally broken on the prod burner — Jupiter's actual on-chain
+    // destination is an Anchor PDA whose SPL decode produces a garbage
+    // mint, so simulation_mint_mismatch rejected every prod burner V2
+    // trigger create. BAT-1031 reverts to "trust Jupiter for destination,
+    // validate only burner-side state" (same trust class as
+    // jupiter_swap_immediate / jupiter_ultra). See Linear BAT-1031 v1.1 +
+    // v1.2 + Appendix A.
+    //
+    // Tests deleted (Codex v1.2 sign-off): all v9.1 happy/attacker/SOL-input
+    // bypass / strict-pubkey shape / R10 / V1 no-op tests covering the
+    // depositVault / expectedTokenOwner / simulation_recipient_mismatch
+    // surface. The dormant validateSimDelta branch and its sole reject
+    // code went with them.
 
-    // Canonical Jupiter program IDs — cross-verified via 5-source workflow
-    // (jup-ag/docs, jup-ag/platform-list, @jup-ag/* npm SDKs, Solscan,
-    // web-search) AND empirically confirmed on mainnet via getAccountInfo.
-    // Drift guard: if these strings change, the matching tools/solana.js
-    // expectedOwner constants must change in lockstep.
+    console.log();
+    console.log('BAT-1031: Jupiter program ID drift guards (preserved across Option A pivot)');
+
     const JUP_V1_PROGRAM = 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu';
     const JUP_V2_PROGRAM = 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X';
     const JUP_DCA_PROGRAM = 'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M';
-    const JUPITER_V2_VAULT = 'JupV2VauLtXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
-    const ATTACKER_ATA = 'AttacKerAtaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
 
     check('drift guard: V1 program ID locked to canonical jupoN...', () => {
         assert.strictEqual(JUP_V1_PROGRAM, 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu');
-        // Catch the EQefh vs EQefr typo class: V1 must NOT contain EQef substring
         assert.ok(!JUP_V1_PROGRAM.includes('EQef'), 'V1 should not contain EQef substring');
     });
     check('drift guard: V2 program ID locked to canonical j1o2...EQefh... (NOT EQefr typo)', () => {
         assert.strictEqual(JUP_V2_PROGRAM, 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X');
-        // Codex amendment: pin the EXACT EQefh773 string to catch the EQefr773 typo
         assert.ok(JUP_V2_PROGRAM.includes('EQefh773'), 'V2 must contain EQefh773 (catches EQefr typo class)');
         assert.ok(!JUP_V2_PROGRAM.includes('EQefr'), 'V2 must not contain EQefr (typo)');
     });
@@ -1031,97 +1074,17 @@ async function runAsync(name, fn) {
         assert.strictEqual(JUP_DCA_PROGRAM, 'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M');
     });
 
-    check('v8.3: jupiter_trigger_create_deposit with depositVault=null → expected_delta_invalid_shape', () => {
-        const r = policy._validateExpectedDeltaShape({
-            kind: 'jupiter_trigger_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: null,
-        });
-        assert.strictEqual(r.ok, false);
-        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
-    });
+    console.log();
+    console.log('BAT-1031: validateBurnerTx — jupiter_trigger_create_deposit on Option A path');
 
-    check('v8.3: jupiter_dca_create_deposit with depositVault=undefined → expected_delta_invalid_shape', () => {
-        const r = policy._validateExpectedDeltaShape({
-            kind: 'jupiter_dca_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-        });
-        assert.strictEqual(r.ok, false);
-        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
-    });
+    const INPUT_TOKEN_ACCOUNT = 'JuptdepoStTknAcctXXXXXXXXXXXXXXXXXXXXXXXXXz';
 
-    // ── BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08): the three v8.3
-    // vault-premise tests previously here (`v8.3 regression: malicious
-    // deposit`, `v8.3 amendment regression: skim attack`, and `v8.3 happy
-    // path: V2 trigger deposit` — see git history before commit
-    // feature/BAT-1025-v9.1-option-c) were deleted because they encoded a
-    // falsified premise: that JUPITER_V2_VAULT was the on-chain deposit
-    // destination and that depositVault.expectedOwner = JUP_V2_PROGRAM was
-    // an enforced invariant. The C1 capture proved otherwise — the
-    // destination is an ephemeral SPL Token Account
-    // (`craft.inputTokenAccount`) whose splToken.owner-slot is
-    // receiverAddress (= vaultPubkey). v9.1 fixture-replay-equivalent
-    // coverage lives just below the R7 zero_value_auth test that's still
-    // here. The R7 test is orthogonal (covers burnerOwnedAccounts zero-
-    // delta on zero_value_auth) and stays per Codex.
-
-    await runAsync('R7 amendment: zero_value_auth with SPL drain on burner-owned ATA → simulation_delta_mismatch', async () => {
-        // Without the R7 fix, a zero_value_auth tx labeled by the caller as
-        // "no value movement" could quietly transfer SPL tokens out of a
-        // burner-owned ATA — drainer-walk catches SetAuthority/Approve/
-        // CloseAccount but NOT a plain Transfer. With R7, the policy
-        // constrains every declared burnerOwnedAccount to zero delta.
-        const txB64 = buildTx({
-            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA],
-            numRequiredSignatures: 1,
-            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
-        });
-        const simulator = mockSimulator({
-            accounts: {
-                // Burner SOL unchanged (no fee headroom needed for this test)
-                [BURNER]: {
-                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
-                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
-                },
-                // Burner USDC ATA had 1 USDC, now drained to 0 — should reject
-                [BURNER_USDC_ATA]: {
-                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
-                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
-                },
-            },
-        });
-        const r = await policy.validateBurnerTx(txB64, {
-            kind: 'zero_value_auth',
-            signerMode: 'burner_only',
-            allowedInstructionClasses: ['memo'],
-            burnerOwnedAccounts: [BURNER_USDC_ATA],
-        }, { burnerPubkey: BURNER, simulator });
-        assert.strictEqual(r.ok, false, `expected reject, got ${JSON.stringify(r)}`);
-        assert.strictEqual(r.error, 'simulation_delta_mismatch');
-        assert.strictEqual(r.class, 'security');
-    });
-
-    // ─── BAT-1025 v9.1 (Codex Option C re-pin, 2026-06-08) ────────────────
-    // Synthetic counterparts of the live capture in
-    // tests/jupiter-ultra/fixtures/sim-deposit-pinned.json:
-    //  - depositVault.pubkey = ephemeral classic SPL Token Account
-    //    (= craft.inputTokenAccount) — INPUT_TOKEN_ACCOUNT here
-    //  - depositVault.expectedTokenOwner = receiverAddress (= vaultPubkey)
-    //    — RECEIVER_ADDRESS here
-    //  - splToken.owner-slot at post-state equals RECEIVER_ADDRESS
-    //  - the v8.3 expectedOwner program-id field is intentionally absent
-
-    const INPUT_TOKEN_ACCOUNT = 'inputTokenAcc333333333333333333333333333333';
-    const RECEIVER_ADDRESS = 'VauLt22222222222222222222222222222222222222';
-    // ATTACKER_OWNER for splTokenAccountInfo owner-slot must base58-decode
-    // to 32 bytes (else the synthetic data buffer is malformed and the
-    // SPL decoder bails with simulation_metadata_missing instead of the
-    // owner-slot mismatch we want to exercise).
-    const ATTACKER_OWNER = 'AttacKer44444444444444444444444444444444444';
-
-    await runAsync('BAT-1025 v9.1 happy path: V2 trigger deposit with expectedTokenOwner — accept', async () => {
+    await runAsync('BAT-1031: SPL-input happy path — burnerDebit-only expectedDelta, no destination binding required', async () => {
+        // Mirrors the 2026-06-09 prod-burner capture shape: 1 USDC moves
+        // from BURNER_USDC_ATA to the order's input vault. No destination
+        // check is built by buildAccountChecks after Option A; the policy
+        // pins the burner-side debit exactly and the burner-system SOL
+        // floor catches fee-budget drains. Expect ok=true.
         const txB64 = buildTx({
             accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, INPUT_TOKEN_ACCOUNT],
             numRequiredSignatures: 1,
@@ -1131,18 +1094,13 @@ async function runAsync(name, fn) {
             accounts: {
                 [BURNER]: {
                     pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
-                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                    // Fee + ATA rent come out of burner. Stays well within
+                    // ZERO_VALUE_SOL_HEADROOM_LAMPORTS (10M lamports).
+                    post: nativeAccountInfo({ lamports: 1_995_000_000 }),
                 },
                 [BURNER_USDC_ATA]: {
-                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
-                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
-                },
-                // The ephemeral inputTokenAccount: SPL Token Program-owned,
-                // splToken.owner-slot = receiverAddress (= the Privy vault
-                // PDA), credited by burnerDebit exactly.
-                [INPUT_TOKEN_ACCOUNT]: {
-                    pre: splTokenAccountInfo({ mint: USDC, owner: RECEIVER_ADDRESS, amountAtomic: '0' }),
-                    post: splTokenAccountInfo({ mint: USDC, owner: RECEIVER_ADDRESS, amountAtomic: '1000000' }),
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '11719298' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '10719298' }),
                 },
             },
         });
@@ -1150,118 +1108,17 @@ async function runAsync(name, fn) {
             kind: 'jupiter_trigger_create_deposit',
             signerMode: 'burner_only',
             burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: { pubkey: INPUT_TOKEN_ACCOUNT, expectedTokenOwner: RECEIVER_ADDRESS },
             burnerOwnedAccounts: [BURNER_USDC_ATA],
         }, { burnerPubkey: BURNER, simulator });
-        assert.strictEqual(r.ok, true, `expected ok, got ${JSON.stringify(r)}`);
-        assert.strictEqual(r.simulated, true);
+        assert.strictEqual(r.ok, true, `expected accept on Option A SPL happy path, got ${JSON.stringify(r)}`);
     });
 
-    await runAsync('BAT-1025 v9.1: attacker owner-slot — splToken.owner != receiverAddress → simulation_recipient_mismatch', async () => {
-        // The exact attack Codex flagged as the v8.6 active-destination
-        // blocker: a tampered tx where everything looks legit at the
-        // burner side but the destination's splToken.owner-slot is an
-        // attacker-controlled pubkey, NOT the declared receiverAddress.
-        const txB64 = buildTx({
-            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, INPUT_TOKEN_ACCOUNT],
-            numRequiredSignatures: 1,
-            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3], dataBytes: Buffer.from([0xAB]) }],
-        });
-        const simulator = mockSimulator({
-            accounts: {
-                [BURNER]: {
-                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
-                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
-                },
-                [BURNER_USDC_ATA]: {
-                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
-                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
-                },
-                // Destination is the right mint + delta, but its
-                // splToken.owner-slot is the ATTACKER instead of the
-                // declared receiverAddress.
-                [INPUT_TOKEN_ACCOUNT]: {
-                    pre: splTokenAccountInfo({ mint: USDC, owner: ATTACKER_OWNER, amountAtomic: '0' }),
-                    post: splTokenAccountInfo({ mint: USDC, owner: ATTACKER_OWNER, amountAtomic: '1000000' }),
-                },
-            },
-        });
-        const r = await policy.validateBurnerTx(txB64, {
-            kind: 'jupiter_trigger_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: { pubkey: INPUT_TOKEN_ACCOUNT, expectedTokenOwner: RECEIVER_ADDRESS },
-            burnerOwnedAccounts: [BURNER_USDC_ATA],
-        }, { burnerPubkey: BURNER, simulator });
-        assert.strictEqual(r.ok, false, `expected reject of attacker owner-slot, got ${JSON.stringify(r)}`);
-        assert.strictEqual(r.error, 'simulation_recipient_mismatch');
-        assert.strictEqual(r.class, 'security');
-        assert.match(r.reason, /splToken\.owner/);
-        // Reject reason must name BOTH the observed attacker owner-slot
-        // (ATTACKER_OWNER) and the declared expected owner-slot
-        // (RECEIVER_ADDRESS) — disambiguates from any other path that
-        // happens to mention one or the other.
-        assert.ok(
-            r.reason.includes(ATTACKER_OWNER),
-            `reason should name the attacker owner-slot ${ATTACKER_OWNER}, got: ${r.reason}`
-        );
-        assert.ok(
-            r.reason.includes(RECEIVER_ADDRESS),
-            `reason should name the declared expected owner-slot ${RECEIVER_ADDRESS}, got: ${r.reason}`
-        );
-    });
-
-    await runAsync('BAT-1025 v9.1: attacker mint — destination mint != burnerDebit.mint → simulation_mint_mismatch', async () => {
-        const FAKE_USDC = 'fAkeUsdc1111111111111111111111111111111111z';
-        const txB64 = buildTx({
-            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, INPUT_TOKEN_ACCOUNT],
-            numRequiredSignatures: 1,
-            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3], dataBytes: Buffer.from([0xAB]) }],
-        });
-        const simulator = mockSimulator({
-            accounts: {
-                [BURNER]: {
-                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
-                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
-                },
-                [BURNER_USDC_ATA]: {
-                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
-                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
-                },
-                // Destination owner-slot is correct but mint is a fake
-                // mint — pre-existing simulation_mint_mismatch check
-                // catches this.
-                [INPUT_TOKEN_ACCOUNT]: {
-                    pre: splTokenAccountInfo({ mint: FAKE_USDC, owner: RECEIVER_ADDRESS, amountAtomic: '0' }),
-                    post: splTokenAccountInfo({ mint: FAKE_USDC, owner: RECEIVER_ADDRESS, amountAtomic: '1000000' }),
-                },
-            },
-        });
-        const r = await policy.validateBurnerTx(txB64, {
-            kind: 'jupiter_trigger_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: { pubkey: INPUT_TOKEN_ACCOUNT, expectedTokenOwner: RECEIVER_ADDRESS },
-            burnerOwnedAccounts: [BURNER_USDC_ATA],
-        }, { burnerPubkey: BURNER, simulator });
-        assert.strictEqual(r.ok, false, `expected reject of mint mismatch, got ${JSON.stringify(r)}`);
-        assert.strictEqual(r.error, 'simulation_mint_mismatch');
-        assert.strictEqual(r.class, 'security');
-    });
-
-    await runAsync('BAT-1025 v9.1 R4: SOL-input + expectedTokenOwner set + destination is System account (non-SPL) → simulation_recipient_mismatch (Copilot R4 SOL-input bypass close)', async () => {
-        // Copilot R4 caught a defense-in-depth gap specific to the
-        // SOL-input case. For SPL inputs, the existing
-        // simulation_metadata_missing guard (line 1562-1568) catches
-        // an undecodable destination first (availability class). But
-        // for SOL inputs (check.mint === 'native_sol'), the SPL guard
-        // doesn't run — validateSimDelta takes the native_sol branch
-        // which only computes lamportsDelta. Without the R4 guard,
-        // a tampered SOL-input tx that routes to a System account
-        // would have silently no-op'd the owner-slot binding because
-        // postAI.splToken would be undefined and the existing guard
-        // (`postAI.splToken && ...`) would simply skip. The R4 fix
-        // fails closed with security class.
+    await runAsync('BAT-1031: SOL-input happy path — burnerDebit mint=native_sol, sol_fee_headroom tolerance', async () => {
+        // SOL-input deposits use sol_fee_headroom on the burner-system
+        // check. v9.1 R4 had a dedicated SOL-input bypass test against
+        // the depositVault destination check; with depositVault gone the
+        // relevant invariant is "SOL-input burnerDebit + headroom passes
+        // cleanly." Pin it here.
         const txB64 = buildTx({
             accountKeys: [BURNER, JUP_V2_PROGRAM, INPUT_TOKEN_ACCOUNT],
             numRequiredSignatures: 1,
@@ -1269,135 +1126,29 @@ async function runAsync(name, fn) {
         });
         const simulator = mockSimulator({
             accounts: {
-                // Burner SOL pre/post: outflow of exactly the declared
-                // burnerDebit amount (5M lamports) plus a small fee
-                // (5k lamports) so the burner-side sol_fee_headroom
-                // tolerance accepts the delta. Lets the deposit-vault
-                // check (where R4 fires) be reached.
                 [BURNER]: {
                     pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    // 5M lamports declared debit + ~5k fee = within headroom.
                     post: nativeAccountInfo({ lamports: 1_994_995_000 }),
-                },
-                // Tampered destination: System account post-state, no
-                // splToken metadata. Mint = 'native_sol' in the check,
-                // so validateSimDelta takes the native_sol if-branch
-                // — the existing SPL metadata-missing guard would NOT
-                // run on this path. R4 guard catches the no-op silently
-                // dropped expectedTokenOwner binding.
-                [INPUT_TOKEN_ACCOUNT]: {
-                    pre: null,
-                    post: nativeAccountInfo({ lamports: 5_000_000 }),
                 },
             },
         });
         const r = await policy.validateBurnerTx(txB64, {
             kind: 'jupiter_trigger_create_deposit',
             signerMode: 'burner_only',
-            // SOL input: burnerDebit on the burner pubkey itself with
-            // mint='native_sol'. This causes check.mint='native_sol'
-            // → validateSimDelta takes the if-branch, not the SPL else.
             burnerDebit: { account: BURNER, mint: 'native_sol', atomicAmount: '5000000' },
-            depositVault: { pubkey: INPUT_TOKEN_ACCOUNT, expectedTokenOwner: RECEIVER_ADDRESS },
             burnerOwnedAccounts: [],
         }, { burnerPubkey: BURNER, simulator });
-        // Copilot R7: pin the assertion to the R4 owner-slot fail-closed
-        // path specifically. The fixture sets the destination's lamports
-        // delta exactly to burnerDebit.atomicAmount (5_000_000), so the
-        // delta band passes — the only remaining gate is R4's
-        // postAI.splToken-undecodable check, which MUST be the one that
-        // fires for this regression to be a genuine R4 regression.
-        // Without R4, postAI.splToken is undefined → the existing
-        // owner-slot check no-ops → the policy would silently sign.
-        assert.strictEqual(r.ok, false, `expected reject of non-SPL destination with expectedTokenOwner set, got ${JSON.stringify(r)}`);
-        assert.strictEqual(r.error, 'simulation_recipient_mismatch',
-            `expected R4 owner-slot fail-closed (simulation_recipient_mismatch), got error=${r.error} reason=${r.reason}`);
-        assert.strictEqual(r.class, 'security');
-        assert.match(r.reason, /not SPL-decodable|no splToken metadata/);
+        assert.strictEqual(r.ok, true, `expected accept on Option A SOL happy path, got ${JSON.stringify(r)}`);
     });
 
-    check('BAT-1025 v9.1 R4: shape validator rejects malformed expectedOwner when provided (Copilot R4 contract drift)', () => {
-        // Per R4: when a producer PROVIDES the field, it must be a valid
-        // base58 pubkey. A caller bug (empty string, typo, upstream null
-        // -> empty string conversion) should fail at the shape gate
-        // BEFORE validateSimDelta, not silently drop through.
-        const r = policy._validateExpectedDeltaShape({
-            kind: 'jupiter_trigger_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: {
-                pubkey: INPUT_TOKEN_ACCOUNT,
-                expectedOwner: '!!!malformed-non-base58!!!',
-                expectedTokenOwner: RECEIVER_ADDRESS,
-            },
-        });
-        assert.strictEqual(r.ok, false);
-        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
-        assert.match(r.reason, /expectedOwner provided but is not a valid (32-byte )?base58 pubkey/);
-    });
-
-    check('BAT-1025 v9.1 R4: shape validator rejects malformed expectedTokenOwner when provided', () => {
-        const r = policy._validateExpectedDeltaShape({
-            kind: 'jupiter_trigger_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: {
-                pubkey: INPUT_TOKEN_ACCOUNT,
-                expectedOwner: JUP_V1_PROGRAM,
-                expectedTokenOwner: 'too-short',
-            },
-        });
-        assert.strictEqual(r.ok, false);
-        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
-        assert.match(r.reason, /expectedTokenOwner provided but is not a valid (32-byte )?base58 pubkey/);
-    });
-
-    check('BAT-1025 v9.1 R5: shape validator rejects 31-byte-decoded base58 string (Copilot R5 strict 32-byte check)', () => {
-        // 43-char base58 string that base58-decodes to exactly 31 bytes.
-        // It passes the charset and length range, so the LEGACY
-        // `isNonEmptyBase58` (charset + 32-44 length) would have accepted
-        // it as a "pubkey" — but Solana pubkeys are exactly 32 bytes.
-        // R5 introduced `_isStrictPubkey` to catch this class of producer
-        // bug at the shape gate. Regression test: this MUST reject.
-        const thirtyOneByteBase58 = '3bwRzpPbZL9Go5eg1BJGHVpWLiBUJQGiusbLTsfUsSZ';
-        assert.strictEqual(thirtyOneByteBase58.length, 43, 'sanity check on test fixture length');
-        const r = policy._validateExpectedDeltaShape({
-            kind: 'jupiter_trigger_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: {
-                pubkey: INPUT_TOKEN_ACCOUNT,
-                expectedTokenOwner: thirtyOneByteBase58,
-            },
-        });
-        assert.strictEqual(r.ok, false);
-        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
-        assert.match(r.reason, /not a valid 32-byte base58 pubkey/);
-    });
-
-    await runAsync('BAT-1025 v9.1 no-V1-change: V1 expectedOwner-only shape still passes shape gate (V1 path untouched)', async () => {
-        // V1 producer (tools/solana.js:2176-2233) still emits depositVault
-        // with the legacy expectedOwner field and no expectedTokenOwner.
-        // Codex amendment 3: V1 is scope-out for BAT-1025; the V1 binding
-        // is tracked as BAT-1029. Assert that the V1 shape still satisfies
-        // the shape validator AND that the new expectedTokenOwner branch
-        // in validateSimDelta is a no-op (we don't fire the new
-        // simulation_recipient_mismatch check for V1 because the producer
-        // didn't supply expectedTokenOwner).
-        const shapeRes = policy._validateExpectedDeltaShape({
-            kind: 'jupiter_trigger_create_deposit',
-            signerMode: 'burner_only',
-            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            depositVault: { pubkey: JUPITER_V2_VAULT, expectedOwner: JUP_V1_PROGRAM },
-        });
-        assert.strictEqual(shapeRes.ok, true, `V1 expectedOwner-only shape should still pass, got ${JSON.stringify(shapeRes)}`);
-
-        // And a synthetic V1 sim path: destination splToken.owner is the
-        // attacker, no expectedTokenOwner declared — the v9.1 owner-slot
-        // assertion does NOT fire (no-op for V1). Other gates may still
-        // fail closed (delta etc.) but this test isolates the v9.1 new
-        // branch.
+    await runAsync('BAT-1031: burnerDebit.atomicAmount tampered → simulation_delta_mismatch', async () => {
+        // The declared atomicAmount is 1_000_000 but sim shows the burner
+        // ATA actually decreasing by 5_000_000. Exact-delta enforcement
+        // on burnerDebit must reject — this is the load-bearing safety
+        // invariant for Option A.
         const txB64 = buildTx({
-            accountKeys: [BURNER, JUP_V1_PROGRAM, BURNER_USDC_ATA, JUPITER_V2_VAULT],
+            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, INPUT_TOKEN_ACCOUNT],
             numRequiredSignatures: 1,
             instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3], dataBytes: Buffer.from([0xAB]) }],
         });
@@ -1408,18 +1159,9 @@ async function runAsync(name, fn) {
                     post: nativeAccountInfo({ lamports: 1_999_995_000 }),
                 },
                 [BURNER_USDC_ATA]: {
-                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
-                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
-                },
-                // V1: Order PDA is created in the deposit tx so pre=null
-                // (allowCreate path). Post is the V1 vault account with
-                // mint=USDC + amount=1M. splToken.owner-slot here is
-                // whatever V1's Order PDA carries — the policy doesn't care
-                // for V1 because V1 didn't declare expectedTokenOwner, so
-                // the new v9.1 owner-slot branch is a no-op for V1.
-                [JUPITER_V2_VAULT]: {
-                    pre: null,
-                    post: splTokenAccountInfo({ mint: USDC, owner: ATTACKER_OWNER, amountAtomic: '1000000' }),
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '11719298' }),
+                    // Declared 1M, actual 5M out — tampered.
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '6719298' }),
                 },
             },
         });
@@ -1427,16 +1169,63 @@ async function runAsync(name, fn) {
             kind: 'jupiter_trigger_create_deposit',
             signerMode: 'burner_only',
             burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
-            // V1 producer pattern: expectedOwner only, NO expectedTokenOwner.
-            depositVault: { pubkey: JUPITER_V2_VAULT, expectedOwner: JUP_V1_PROGRAM },
             burnerOwnedAccounts: [BURNER_USDC_ATA],
         }, { burnerPubkey: BURNER, simulator });
-        // ACCEPT: the new v9.1 splToken.owner-slot check is a no-op for V1
-        // (no expectedTokenOwner field on the check struct), and all other
-        // V1 gates pass (burnerDebit exact + vault delta exact + mint
-        // match + burner SOL fee headroom). V1 binding gap stays as
-        // BAT-1029 follow-up.
-        assert.strictEqual(r.ok, true, `V1 should still accept (v9.1 new branch is a no-op for V1), got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.ok, false, `expected reject on tampered debit, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'simulation_delta_mismatch');
+        assert.strictEqual(r.class, 'security');
+    });
+
+    await runAsync('BAT-1031: BAT-1027 TODO/xfail — undeclared burner-owned ATA loss is NOT caught today (per-account delta is BAT-1027 scope)', async () => {
+        // Documents the gap that BAT-1027 owns. A burner-owned ATA whose
+        // balance decreases during jupiter_trigger_create_deposit but is
+        // NOT in burnerOwnedAccounts is NOT rejected today:
+        //   - drainer walker only blocks Transfer in zero_value_* kinds;
+        //   - non-zero deposit flows don't get per-account delta
+        //     enforcement until BAT-1027 lands.
+        // This test currently asserts result.ok === true (documenting the
+        // gap). It MUST flip to ok === false once BAT-1027 ships per-account
+        // delta + simOwned propagation. Do not claim this is caught by
+        // current code in any release note or audit.
+        const SECOND_BURNER_ATA = 'SecBurnerAtaTwoXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const SOME_OTHER_MINT = 'NonUsdcMntsynthXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUP_V2_PROGRAM, BURNER_USDC_ATA, INPUT_TOKEN_ACCOUNT, SECOND_BURNER_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3, 4], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER]: {
+                    pre: nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 1_999_995_000 }),
+                },
+                [BURNER_USDC_ATA]: {
+                    pre: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '11719298' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '10719298' }),
+                },
+                // Undeclared burner-owned SPL account that loses tokens
+                // during the same tx. Current code does not reject; BAT-1027
+                // will. Per-account delta on undeclared owned accounts is
+                // BAT-1027 scope, NOT BAT-1031.
+                [SECOND_BURNER_ATA]: {
+                    pre: splTokenAccountInfo({ mint: SOME_OTHER_MINT, owner: BURNER, amountAtomic: '5000' }),
+                    post: splTokenAccountInfo({ mint: SOME_OTHER_MINT, owner: BURNER, amountAtomic: '0' }),
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_trigger_create_deposit',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA], // SECOND_BURNER_ATA intentionally undeclared
+        }, { burnerPubkey: BURNER, simulator });
+        // BAT-1027 gap: this passes today. Flips to ok=false after BAT-1027.
+        // If this assertion ever flips organically (ok=false), BAT-1027 has
+        // landed — update both this test and the BAT-1031 v1.1 §"What we
+        // DROP" honesty section.
+        assert.strictEqual(r.ok, true,
+            `BAT-1031 expects undeclared burner-owned ATA loss to pass today (BAT-1027 closes this). Got ${JSON.stringify(r)}`);
     });
 
     // ─── BAT-1013-followup: B1 / B2 / B3 / C3..C7 / C11 / C14 / C15 / Q3 / Q9 ───

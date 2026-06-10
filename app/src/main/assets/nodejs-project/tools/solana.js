@@ -744,15 +744,15 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             return { error: vaultResult.error, reason: vaultResult.reason };
         }
         const vaultAddress = vaultResult.vaultPubkey;
-        // C2 (BAT-1013-followup): tighten vaultPubkey validation at the call
-        // site. trigger-v2.ensureVault checks only that the field is truthy
-        // (a string like 'undefined' or 'true' from a malformed Jupiter
-        // response would pass). Validate as a real base58 Solana pubkey
-        // BEFORE building expectedDelta.depositVault.pubkey — otherwise the
-        // policy gate would either reject with a confusing
-        // expected_delta_invalid_shape OR (worse) the address could base58-
-        // decode to garbage and slip through. The V2 deposit flow depends on
-        // vaultPubkey being correct — there is no equivalent main-MWA
+        // BAT-1013: tighten vaultPubkey validation at the call site.
+        // trigger-v2.ensureVault checks only that the field is truthy (a
+        // string like 'undefined' or 'true' from a malformed Jupiter
+        // response would pass). Validate as a real base58 Solana pubkey.
+        // After BAT-1031 the policy no longer binds to vaultAddress, but
+        // the value still flows back to the caller (and into logs as
+        // diagnostic context), so a malformed pubkey here is still a
+        // fail-closed condition — the V2 deposit flow depends on
+        // vaultPubkey being correct, and there is no equivalent main-MWA
         // recovery (vault is Privy-custodial), so fail closed with a clear
         // error and let the agent surface it to the user.
         if (!isValidSolanaAddress(vaultAddress)) {
@@ -778,28 +778,17 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
             transaction: unsignedDepositTx,
             depositRequestId,
             recoveryContext,
-            receiverAddress: craftReceiverAddress,
-            inputTokenAccount: craftInputTokenAccount,
         } = craftResult;
 
-        // BAT-1025 v9.1 producer-side cross-check (Codex re-pin 2026-06-08):
-        // Jupiter's /deposit/craft response includes both `receiverAddress`
-        // (the high-level Privy vault PDA) and `inputTokenAccount` (the
-        // ephemeral classic SPL Token Account that actually receives the
-        // burner's USDC). depositCraft already enforces both are base58 and
-        // that they're not equal. Here we add one further binding check that
-        // can only be made at the producer layer: the `receiverAddress`
-        // Jupiter returned MUST equal the `vaultPubkey` we previously got from
-        // /vaults/ensure. A divergence indicates either a TOCTOU race or a
-        // tampered craft response routing the deposit to an attacker-
-        // controlled vault — fail closed in both cases.
-        if (craftReceiverAddress !== vaultAddress) {
-            log(`[Jupiter Trigger V2] deposit/craft receiverAddress (${craftReceiverAddress}) does not match ensureVault().vaultPubkey (${vaultAddress}) — failing closed`, 'WARN');
-            return {
-                error: 'vault_unavailable',
-                reason: 'deposit/craft receiverAddress diverges from ensureVault vaultPubkey',
-            };
-        }
+        // BAT-1031 (Option A): no producer-side destination cross-check.
+        // The previous binding (receiverAddress === vaultAddress and
+        // depositVault.expectedTokenOwner === receiverAddress) was
+        // structurally broken on the prod burner — Jupiter routes to an
+        // Anchor PDA whose SPL decode produces a garbage mint and rejected
+        // every deposit. burner-policy now relies on burnerDebit exact-
+        // delta + sol_fee_headroom for the burner-side safety bound;
+        // destination shape is Jupiter's responsibility. See Linear
+        // BAT-1031 v1.1 + v1.2 + Appendix A.
 
         // 12. Verify deposit tx fee payer matches active wallet — guard against
         // a malicious craft response that would route funds from the wrong wallet.
@@ -850,42 +839,29 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                     mint: inputIsSol ? 'native_sol' : inputToken.address,
                     atomicAmount: String(inputAmountAtomic),
                 },
-                // BAT-1025 v9.1 (Codex re-pin 2026-06-08): the deposit
-                // destination is the ephemeral classic SPL Token Account
-                // returned as `inputTokenAccount` from /deposit/craft — NOT
-                // the high-level Privy vault PDA. The vault PDA itself
-                // (`receiverAddress` = `vaultAddress` here) ends up only as
-                // the SPL token-account owner-slot value of inputTokenAccount.
+                // BAT-1031 + BAT-1027: burnerOwnedAccounts declares only
+                // the EXPLICIT input debit ATA. Other burner-owned ATAs the
+                // deposit flow may touch — the freshly-created output WSOL
+                // ATA (when input is SPL), wrap/unwrap intermediaries — are
+                // NOT enumerated here.
                 //
-                // Empirically verified by
-                // tests/jupiter-ultra/live-capture-sim-fixture.js:
-                //  - postAI.accountInfo.owner = TokenkegQ… (classic SPL Token Program)
-                //  - decoded splToken.mint = burnerDebit.mint (e.g. USDC)
-                //  - decoded splToken.owner = receiverAddress (= vaultPubkey)
-                //
-                // expectedTokenOwner (NOT expectedOwner — see Codex C1
-                // review): names the SPL token-account owner-slot value the
-                // policy will assert against postAI.splToken.owner in
-                // validateSimDelta. Keeping `expectedTokenOwner` distinct
-                // from any future program-owner field avoids the v8.6/v8.9
-                // ambiguity Codex caught. existencePolicy allows create
-                // because the ephemeral inputTokenAccount is created in the
-                // same tx.
-                depositVault: {
-                    pubkey: craftInputTokenAccount,
-                    expectedTokenOwner: craftReceiverAddress,
-                },
-                // Q8 (BAT-1013-followup): burnerOwnedAccounts declares only
-                // the EXPLICIT debit ATA. Multi-hop intermediate token
-                // accounts the deposit flow may touch (e.g. wrap/unwrap
-                // wSOL, route hops) are NOT declared here — burner-policy.js
-                // step 10 derives those from the simulation pre-snapshot
-                // (declared ∪ sim-owned ∪ aux balances). If an undeclared
-                // account is burner-owned, sim-owned picks it up; if it's
-                // not burner-owned, the policy's ownership-resolver fails
-                // closed (drainer_* or account_ownership_uncertain). Keep
-                // this list minimal — declaring intermediate ATAs we don't
-                // actually control opens an attack surface.
+                // What is and isn't caught today:
+                //   • Drainer walker (burner-policy validateDrainerOpcodes)
+                //     still blocks SetAuthority / Approve / CloseAccount /
+                //     Burn / Assign / AdvanceNonce on any account
+                //     resolvable as burner-owned, AND blocks plain Transfer
+                //     in `zero_value_*` kinds.
+                //   • For `jupiter_trigger_create_deposit` (a non-zero-value
+                //     deposit), a plain SPL Transfer out of an UNDECLARED
+                //     burner-owned ATA is NOT currently rejected.
+                //     Generalized undeclared-ATA per-account delta
+                //     enforcement lands in BAT-1027.
+                //   • The same-tx-create-init-with-zero-balance pattern
+                //     (Jupiter creating the burner's WSOL output ATA at
+                //     deposit time, paying rent from the burner inside the
+                //     existing sol_fee_headroom) is documented in the
+                //     BAT-1031 v1.2 Gate 0 carve-out rubric and exercised
+                //     by tests/nodejs-project/burner-policy-carveout.test.js.
                 burnerOwnedAccounts: [debitAccount].filter(a => a !== burnerPubkey),
             };
         } catch (eDelta) {

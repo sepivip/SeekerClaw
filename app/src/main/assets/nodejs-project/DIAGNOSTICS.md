@@ -812,8 +812,7 @@ The same security rule applies on the MWA path; recommending MWA as a workaround
 | `fee_payer_not_in_allowlist` | Fee payer matches no allowed pubkey (sponsored/cosigned modes) | Same. |
 | `cosigner_not_in_allowlist` | Extra required signer not declared by the protocol response | Same. |
 | `simulation_delta_mismatch` | Simulation shows burner's balance change doesn't match the declared expectedDelta within tolerance | Surface BOTH expected and observed values. Refuse. Common cause: bundled-instruction injection attack (Crypto Copilot class). |
-| `simulation_mint_mismatch` | Simulation shows the account's mint doesn't match the declared one | Same. |
-| `simulation_recipient_mismatch` | Recipient credit observed in simulation doesn't match declared atomicAmount | Same. |
+| `simulation_mint_mismatch` | Simulation shows the account's mint doesn't match the declared one. **BAT-1031 scoped this to the burner-side debit account only** — Jupiter destination accounts are no longer mint-validated by the policy. Likely cause: wrong ATA derivation, wrong mint passed by the calling tool, or an attacker-injected bundled instruction touching a different-mint burner-owned ATA. | Same. |
 | `account_ownership_uncertain` | Drainer-opcode walk found an instruction whose target account ownership can't be resolved | Same. |
 | `token_2022_undeclared` | Tx uses Token-2022 program but `expectedDelta.tokenStandard !== 'token_2022'` | Same. |
 | `drainer_burn` | SPL `Burn` / `BurnChecked` opcode on a burner-owned ATA — would destroy the burner's tokens. Legitimate protocol marker burns (e.g., zero-value cancel flows) are accepted only when the target account is listed in policy `allowedBurnAccounts`. | Surface reason verbatim. Refuse. Suggest the user investigate the calling instruction or report. Do NOT retry on MWA — same security rule applies. |
@@ -919,3 +918,25 @@ Known fail-closed paths and behavioral notes that ship with the BAT-1013 burner-
 2. **DCA `create` routes to main wallet, not burner.** `jupiter_dca_create` currently surfaces an MWA popup rather than signing autonomously. Burner DCA is unsupported pending DCA-vault account discovery; the policy cannot verify the destination owner without it. **User-visible fix:** approve the MWA popup as usual; DCA list/cancel still work.
 3. **Slot-drift surfaces as `simulation_failed`.** When account snapshots and simulation slots drift apart (a public-RPC consistency failure), the availability bucket wraps the case as `simulation_failed`. There is no separate `slot_drift` user-visible code today. **User-visible fix:** add a Helius API key in Settings — the dedicated RPC removes most slot-drift triggers.
 4. **Burner pubkey cache invalidation.** The burner pubkey is verified against `/burner/status` on every autonomous sign (not cached after first call). After wipe + reimport (or any pubkey change), the next sign picks up the new pubkey automatically — no app restart required. The agent can confidently tell users "your new burner is live on the next autonomous action" after a wipe + reimport flow.
+
+### BAT-1031: Jupiter deposit-destination trust (Option A)
+
+After BAT-1031 (PR #402), the burner policy TRUSTS `api.jup.ag` for the deposit/output destination of `jupiter_trigger_create_deposit`, `jupiter_dca_create_deposit`, `jupiter_swap_immediate`, and `jupiter_ultra`. The policy enforces only:
+
+- **Burner-side debit:** exact mint + atomic amount on the declared `burnerDebit.account`.
+- **Burner SOL preservation:** `sol_fee_headroom` for native-SOL inputs (≤ `ZERO_VALUE_SOL_HEADROOM_LAMPORTS` = 0.01 SOL per tx); `wantsBurnerSolFloor` for SPL inputs.
+- **Burner-owned drainer-opcode walk:** `SetAuthority` / `Approve` / `CloseAccount` / `Burn` / `Assign` / `AdvanceNonce` + `Transfer` in `zero_value_*` kinds on any burner-owned account is still rejected even inside a Jupiter tx.
+
+**What this is NOT:** blanket trust of any "Jupiter-shaped" instruction. The drainer walk, signer-mode check, and `simulation_delta_mismatch` (security class) all still fire.
+
+**Why the previous v9.1 `depositVault` binding was deleted (history note):** v9.1 tried to assert `postAI.splToken.owner === expectedTokenOwner` on the deposit destination. Device-tested on prod burner 2026-06-09 — STILL rejected with `simulation_mint_mismatch` because Jupiter's actual destination is an Anchor PDA (data.length=372), not a classic 165-byte SPL Token Account. SPL-decoding bytes [0..32] produced a garbage mint that never matched USDC. v9.1 was built against a test-wallet capture whose `inputTokenAccount` happened to be a real SPL Token Account; the prod-burner shape is different. See Linear BAT-1031 v1.1 + v1.2 for full context.
+
+**User-asks-the-agent flows:**
+- *"Why was this V2 deposit accepted even though the destination is a strange PDA?"* → The destination is a Jupiter program-owned account (Order PDA / vault / ATA) by design. Residual risk = the declared atomic amount per tx, bounded by per-tx + daily caps. The burner-side debit is enforced exactly; if the destination were hostile, `simulation_delta_mismatch` would catch the deviation.
+- *"How do I know Jupiter didn't drain me through that PDA?"* → expectedDelta is enforced end-to-end on the burner-side debit; intermediate allocations under Jupiter's program authority are accepted as part of the declared net. The drainer walk on burner-owned ATAs still fires regardless of program authority.
+
+### Retired reject codes (post-BAT-1031)
+
+| Code | Retired in | Notes |
+|---|---|---|
+| `simulation_recipient_mismatch` | BAT-1031 (PR #402) | Was the sole fire site for the `validateSimDelta expectedTokenOwner` branch in the deleted depositVault destination-binding. **If seen in current logs:** the device is running a stale APK (verify System screen short SHA against the current commit), OR the log line predates the BAT-1031 ship. Do NOT advise the user to investigate the destination — the check is gone. The reject code is also no longer in `REJECT_CODES` (locked length is now 28). |

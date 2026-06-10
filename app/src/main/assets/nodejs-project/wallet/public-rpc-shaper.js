@@ -1,6 +1,6 @@
 // SeekerClaw — wallet/public-rpc-shaper.js
 //
-// BAT-1013 v8.1 amendment #6: rate-shape `simulateTransaction` calls on the
+// BAT-1013: rate-shape `simulateTransaction` calls on the
 // PUBLIC mainnet RPC path (`api.mainnet-beta.solana.com`) so the burner
 // policy doesn't burn through the documented ~40 req/10s shared-quota
 // ceiling on a single hot tool dispatch.

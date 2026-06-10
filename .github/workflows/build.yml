@@ -81,7 +81,9 @@ jobs:
             bridge-token-reload \
             verify-swap-transaction \
             burner-policy \
+            burner-policy-carveout \
             tools-solana-routing \
+            solana-dca-routing \
             tx-parser \
             public-rpc-shaper \
             ci-coverage-manifest
