@@ -36,12 +36,15 @@ This skill activates ONLY when the user's message contains one of the explicit p
 
 ### Opt-in keywords (skill activates)
 
-- `pay.sh` / `paysh` / `pay sh` — naming the platform
+The authoritative activation contract is the `triggers:` list in this file's frontmatter (BAT-1035). The skill activates only when the user's message contains one of those exact phrases:
+
+- `pay.sh` / `paysh` — naming the platform
 - `x402` — naming the protocol
-- `pay for X` / `pay to X` / `pay <amount> to <service>` / `use pay` — explicit paying verb
-- `look this up paid` / `fetch this paid` / `buy data from <service>` — explicit paid-fetch verb
-- `use <service> to pay` / `pay <service> for X` — service-name + paying verb
+- `pay with burner` — explicit burner-pay intent
+- `pay for` — explicit paying verb
 - `what can you pay for` / `show me pay.sh services` / `list paid services` — capability question
+
+Intentionally NOT triggers: `pay to <person>` (that is a normal SOL/SPL transfer — use `solana_send`, not a paid API) and `pay with main` (`agent_pay` settles from the burner only, never the main wallet). If a message is ambiguous, prefer the free path — paid lookups cost USDC and the user did not authorize a charge implicitly.
 
 ### NOT opt-in (skill stays dormant)
 
