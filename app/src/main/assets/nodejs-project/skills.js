@@ -32,6 +32,11 @@ const { SKILLS_DIR, log, config, SHELL_ALLOWLIST } = require('./config');
  * ---
  * name: skill-name
  * description: "What it does"
+ * priority: 0        # optional: integer -100..100 (default 0). When more than
+ *                    # two skills match a message, the matcher keeps the two
+ *                    # highest-priority (ties broken by load order). Use a
+ *                    # higher value only for narrow, explicitly-authorized
+ *                    # triggers so a skill is not dropped by the 2-skill cap.
  * metadata:
  *   openclaw:
  *     emoji: "🔧"
@@ -186,6 +191,22 @@ function parseYamlLines(lines, parentIndent) {
 // SKILL FILE PARSING
 // ============================================================================
 
+// BAT-1035: parse the optional `priority` frontmatter field. Public frontmatter,
+// so the contract is explicit and stable: a finite integer clamped to
+// [-100, 100]; anything non-finite / non-numeric / absent → 0. We truncate
+// (not round) toward zero so "10.9" and "10" behave the same.
+const SKILL_PRIORITY_MIN = -100;
+const SKILL_PRIORITY_MAX = 100;
+function parseSkillPriority(raw) {
+    if (raw === undefined || raw === null) return 0;
+    const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(n)) return 0;
+    const i = Math.trunc(n);
+    if (i < SKILL_PRIORITY_MIN) return SKILL_PRIORITY_MIN;
+    if (i > SKILL_PRIORITY_MAX) return SKILL_PRIORITY_MAX;
+    return i;
+}
+
 function parseSkillFile(content, skillDir) {
     const skill = {
         name: '',
@@ -193,6 +214,7 @@ function parseSkillFile(content, skillDir) {
         description: '',
         instructions: '',
         version: '',
+        priority: 0,        // BAT-1035: generic matcher priority (-100..100); default 0
         tools: [],
         emoji: '',
         image: '',
@@ -215,6 +237,12 @@ function parseSkillFile(content, skillDir) {
             if (frontmatter.name) skill.name = frontmatter.name;
             if (frontmatter.description) skill.description = frontmatter.description;
             if (frontmatter.version) skill.version = frontmatter.version;
+            // BAT-1035: optional generic `priority` — a finite integer clamped
+            // to [-100, 100]; invalid / non-numeric / out-of-range collapse to
+            // the documented default. Drives the two-skill-cap selection in
+            // findMatchingSkills so an explicitly-authorized skill can outrank
+            // directory load order without hard-coding any skill name.
+            skill.priority = parseSkillPriority(frontmatter.priority);
             if (frontmatter.triggers) {
                 const parsed = toArray(frontmatter.triggers)
                     .map(t => String(t).trim().toLowerCase())
@@ -546,13 +574,26 @@ function loadSkills() {
 // ============================================================================
 
 function findMatchingSkills(message) {
-    const skills = loadSkills();
+    return selectMatchingSkills(loadSkills(), message);
+}
+
+// BAT-1035: pure collect-sort-slice over a given skills array — kept separate
+// from loadSkills() so the priority + 2-skill-cap behavior is unit-testable
+// with synthetic skills.
+//
+// Collect ALL trigger-matched skills (no early break), then sort by priority
+// DESC and load order ASC, and cap at 2. The previous early break at
+// `matched.length >= 2` made it impossible for an explicitly-authorized
+// higher-priority skill (e.g. paysh-catalog on a pay request) to survive the
+// cap when two other skills happened to match first by directory order —
+// dropping the payment skill on an authorized paid request, the original bug
+// class. loadIndex is recorded EXPLICITLY (not relying on Array.sort
+// stability) so the tiebreak is deterministic across engines.
+function selectMatchingSkills(skills, message) {
     const lowerMsg = message.toLowerCase();
-
     const matched = [];
-    for (const skill of skills) {
-        if (matched.length >= 2) break;
-
+    for (let i = 0; i < skills.length; i++) {
+        const skill = skills[i];
         const hasTrigger = skill.triggers.some(trigger => {
             // Multi-word triggers: substring match is fine
             if (trigger.includes(' ')) return lowerMsg.includes(trigger);
@@ -561,10 +602,17 @@ function findMatchingSkills(message) {
             return regex.test(message);
         });
 
-        if (hasTrigger) matched.push(skill);
+        if (hasTrigger) matched.push({ skill, loadIndex: i });
     }
 
-    return matched;
+    matched.sort((a, b) => {
+        const pa = Number.isFinite(a.skill.priority) ? a.skill.priority : 0;
+        const pb = Number.isFinite(b.skill.priority) ? b.skill.priority : 0;
+        if (pb !== pa) return pb - pa;          // higher priority first
+        return a.loadIndex - b.loadIndex;       // stable: earlier load order first
+    });
+
+    return matched.slice(0, 2).map(m => m.skill);
 }
 
 function buildSkillsSection(skills) {
@@ -601,5 +649,7 @@ function buildSkillsSection(skills) {
 module.exports = {
     loadSkills,
     findMatchingSkills,
+    selectMatchingSkills,   // BAT-1035: pure matcher (priority + 2-cap), test surface
     parseSkillFile,
+    parseSkillPriority,     // BAT-1035: priority frontmatter parser, test surface
 };

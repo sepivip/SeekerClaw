@@ -1,7 +1,17 @@
 ---
 name: paysh-catalog
-description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for'. Stay dormant otherwise; defer to free tools. Full keyword list and policy in SKILL.md body."
-version: "1.8.0"
+description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for' / 'pay with burner', or asks what they can pay for. Stay dormant otherwise; defer to free tools. Full keyword list and policy in SKILL.md body."
+version: "1.9.0"
+priority: 10
+triggers:
+  - "pay.sh"
+  - "paysh"
+  - "x402"
+  - "pay with burner"
+  - "pay for"
+  - "what can you pay for"
+  - "show me pay.sh services"
+  - "list paid services"
 metadata:
   openclaw:
     emoji: "🛒"
