@@ -237,9 +237,10 @@ function parseSkillFile(content, skillDir) {
             if (frontmatter.name) skill.name = frontmatter.name;
             if (frontmatter.description) skill.description = frontmatter.description;
             if (frontmatter.version) skill.version = frontmatter.version;
-            // BAT-1035: optional generic `priority` — a finite integer clamped
-            // to [-100, 100]; invalid / non-numeric / out-of-range collapse to
-            // the documented default. Drives the two-skill-cap selection in
+            // BAT-1035: optional generic `priority` — a finite integer. Absent
+            // / non-numeric / NaN / ±Infinity → 0 (the default); in-range
+            // fractional values truncate toward zero; out-of-range values clamp
+            // to [-100, 100]. Drives the two-skill-cap selection in
             // findMatchingSkills so an explicitly-authorized skill can outrank
             // directory load order without hard-coding any skill name.
             skill.priority = parseSkillPriority(frontmatter.priority);

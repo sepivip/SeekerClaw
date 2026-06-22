@@ -36,7 +36,10 @@ require.cache[configPath] = {
         SKILLS_DIR: path.join(BUNDLE, '..', 'default-skills'),
         log: () => {},
         config: {},
-        SHELL_ALLOWLIST: [],
+        // skills.js uses SHELL_ALLOWLIST.has(...) in requirements gating —
+        // keep the stub shape accurate (a Set, not an Array) even though the
+        // functions under test do not exercise that path.
+        SHELL_ALLOWLIST: new Set(),
     },
 };
 
