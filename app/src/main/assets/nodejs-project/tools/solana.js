@@ -9,6 +9,10 @@ const {
 
 const { androidBridgeCall } = require('../bridge');
 
+// BAT-1037: native-SOL-only denomination guard (pure, dependency-free module
+// so it is unit-testable without config). See tools/solana-send-guard.js.
+const { classifySolSendDenomination } = require('./solana-send-guard');
+
 const {
     solanaRpc, base58Encode, buildSolTransferTx,
     resolveToken, jupiterQuote, jupiterPrice,
@@ -162,7 +166,7 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send **native SOL only** to a Solana address. This tool does NOT send SPL tokens (USDC, BONK, PYUSD, …) and does NOT take a fiat amount — do not supply `token` / `mint` / `asset` / `symbol` / `currency`; pass only `to` + `amount` (in SOL). For an SPL token transfer the user must use their wallet app / main wallet manually (a dedicated `solana_send_token` tool is not available yet). For a USD amount, call `solana_price` to get SOL/USD and compute the SOL amount yourself (solana_price does not convert non-USD currencies). **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -1267,6 +1271,15 @@ const handlers = {
     },
 
     async solana_send(input, chatId) {
+        // BAT-1037: solana_send is native-SOL-only. Reject SPL / fiat
+        // denomination hints (field-only log — never the supplied value)
+        // before any routing or tx build, so a wrong-asset request fails fast
+        // with actionable guidance and zero downstream side effects.
+        const denomReject = classifySolSendDenomination(input);
+        if (denomReject) {
+            log(`[solana_send] REJECT field=${denomReject.field} error=${denomReject.error}`, 'WARN');
+            return { error: denomReject.error, reason: denomReject.reason };
+        }
         // BAT-582 Phase 5: route through wallet dispatch so a configured
         // burner wallet can sign autonomously when under cap, and the
         // main MWA flow stays the fallback for over-cap or uncapped assets.
