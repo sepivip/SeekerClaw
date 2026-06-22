@@ -1565,6 +1565,25 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.error, 'expected_delta_invalid_shape', `got ${JSON.stringify(r)}`);
     });
 
+    await runAsync('BAT-1027 kind-gate: wsolAtaExemption on a NON-swap kind does NOT exempt — loss scan still catches the drain', async () => {
+        // Copilot R1: the wsolAtaExemption skip is kind-gated to
+        // jupiter_swap_immediate (matching the drainer-walk). A stray exemption
+        // on a non-swap payload must NOT carve the account out of the loss scan.
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_DRAIN]: {
+                    pre:  splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '5000' }),
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '0' }),
+                },
+            }),
+        });
+        const r = await policy.validateBurnerTx(depTx([D_DRAIN]), depDelta({
+            wsolAtaExemption: { ata: D_DRAIN, destination: BURNER },   // ignored on a deposit kind
+        }), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'drainer_undeclared_burner_ata',
+            `kind-gate must prevent a non-swap wsolAtaExemption from exempting the drained ATA; got ${JSON.stringify(r)}`);
+    });
+
     // ─── BAT-1013-followup: B1 / B2 / B3 / C3..C7 / C11 / C14 / C15 / Q3 / Q9 ───
 
     console.log();

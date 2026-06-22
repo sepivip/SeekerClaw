@@ -1721,7 +1721,11 @@ async function validatePerAccountLoss(ctx) {
     //    canonical wSOL ATA in validateBurnerTx step 1b, so it cannot be an
     //    arbitrary attacker-chosen account here.
     const declaredAddresses = new Set(checks.map(c => c.address));
-    if (expectedDelta.wsolAtaExemption && isNonEmptyBase58(expectedDelta.wsolAtaExemption.ata)) {
+    if (expectedDelta.kind === 'jupiter_swap_immediate'
+        && expectedDelta.wsolAtaExemption && isNonEmptyBase58(expectedDelta.wsolAtaExemption.ata)) {
+        // Kind-gated to jupiter_swap_immediate to match the drainer-walk
+        // CloseAccount exemption — a stray wsolAtaExemption on a non-swap
+        // payload cannot silently carve an account out of the loss scan.
         declaredAddresses.add(expectedDelta.wsolAtaExemption.ata);
     }
 
@@ -1763,7 +1767,13 @@ async function validatePerAccountLoss(ctx) {
             return reject('simulation_failed', 'BAT-1027 second pass returned no sim.value object');
         }
         if (pass2.sim.value.err !== null && pass2.sim.value.err !== undefined) {
-            return reject('simulation_returned_error', `BAT-1027 second pass simulation returned an error: ${JSON.stringify(pass2.sim.value.err)}`);
+            // Decode consistently with pass 1 (formatSimulationErrorReason):
+            // human-readable program + error + a logs tail, not raw JSON.
+            const p2l = pass2.sim.value.loadedAddresses || {};
+            const p2w = Array.isArray(p2l.writable) ? p2l.writable.filter(isNonEmptyBase58) : [];
+            const p2r = Array.isArray(p2l.readonly) ? p2l.readonly.filter(isNonEmptyBase58) : [];
+            const p2Combined = [...parsed.staticAccountKeys, ...p2w, ...p2r];
+            return reject('simulation_returned_error', formatSimulationErrorReason(pass2.sim.value, parsed, p2Combined));
         }
         const pass2Pre = Array.isArray(pass2.preSnapshot) ? pass2.preSnapshot : null;
         const pass2Post = Array.isArray(pass2.sim.value.accounts) ? pass2.sim.value.accounts : null;
@@ -1893,8 +1903,12 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
     //      drained without any reject firing (Transfer is not drainer-gated for
     //      non-zero kinds, and the loss scan would skip it). Pin it to the
     //      address actually derived from the burner + native mint; anything
-    //      else is a contract bug and fails closed.
-    if (expectedDelta.wsolAtaExemption && isNonEmptyBase58(expectedDelta.wsolAtaExemption.ata)) {
+    //      else is a contract bug and fails closed. Gated to
+    //      jupiter_swap_immediate — the only kind where wsolAtaExemption is
+    //      meaningful (matches the drainer-walk CloseAccount exemption); on any
+    //      other kind a stray exemption is ignored (not verified, not exempted).
+    if (expectedDelta.kind === 'jupiter_swap_immediate'
+        && expectedDelta.wsolAtaExemption && isNonEmptyBase58(expectedDelta.wsolAtaExemption.ata)) {
         let expectedWsolAta = null;
         try {
             // eslint-disable-next-line global-require
