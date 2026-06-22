@@ -27,6 +27,7 @@ const path = require('path');
 const BUNDLE = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
 const policy = require(path.join(BUNDLE, 'wallet', 'burner-policy.js'));
 const { base58Encode, base58Decode } = require(path.join(BUNDLE, 'wallet', 'tx-parser.js'));
+const ata = require(path.join(BUNDLE, 'wallet', 'ata.js'));   // BAT-1027: canonical wSOL ATA derivation
 
 const BURNER = '11111111111111111111111111111112';                              // synthetic burner pubkey (28 chars of 1 + '2')
 const FACILITATOR = 'BurzePo3LkJyXJzCvDwBfwiKtKBp5Xh5jExjQ4tNQ8RJ';            // x402 v2 facilitator (random base58)
@@ -67,14 +68,18 @@ function pubkeyBytes(base58Str) {
  * @param {boolean} [opts.v0=false]
  * @returns {string} base64-encoded tx
  */
-function buildTx({ accountKeys, numRequiredSignatures, instructions, v0 = false }) {
+function buildTx({ accountKeys, numRequiredSignatures, instructions, v0 = false, numReadonlySigned = 0, numReadonlyUnsigned = 0 }) {
     const blockhash = Buffer.alloc(32, 0x99);
     const parts = [
         compactU16(numRequiredSignatures),
         Buffer.alloc(64 * numRequiredSignatures), // empty signature slots
     ];
     if (v0) parts.push(Buffer.from([0x80]));
-    parts.push(Buffer.from([numRequiredSignatures, 0, 0])); // header
+    // header: numRequiredSignatures, numReadonlySigned, numReadonlyUnsigned.
+    // BAT-1027: numReadonlyUnsigned lets a fixture mark the trailing program
+    // account readonly (the realistic Solana layout), so the writable-only
+    // candidate set excludes it — used to exercise the skip-pass-2 path.
+    parts.push(Buffer.from([numRequiredSignatures, numReadonlySigned, numReadonlyUnsigned])); // header
     parts.push(compactU16(accountKeys.length));
     for (const k of accountKeys) parts.push(pubkeyBytes(k));
     parts.push(blockhash);
@@ -126,7 +131,7 @@ async function runAsync(name, fn) {
     console.log();
 
     console.log('REJECT_CODES drift guard');
-    check('REJECT_CODES.length === 28 (BAT-1031: simulation_recipient_mismatch removed with depositVault binding)', () => {
+    check('REJECT_CODES.length === 29 (BAT-1027: drainer_undeclared_burner_ata added)', () => {
         // Locked length history:
         //   - 26 baseline (BAT-1013).
         //   - 29 after BAT-1013-followup added drainer_burn,
@@ -137,7 +142,17 @@ async function runAsync(name, fn) {
         //     deleted along with the depositVault destination-binding
         //     architecture (Option A: trust Jupiter for destination,
         //     validate only burner-side state).
-        assert.strictEqual(policy.REJECT_CODES.length, 28);
+        //   - 29 after BAT-1027 added drainer_undeclared_burner_ata, the
+        //     post-simulation per-account loss invariant (two-pass
+        //     complete-state) that rejects an undeclared burner-owned SPL
+        //     account losing balance across the tx.
+        assert.strictEqual(policy.REJECT_CODES.length, 29);
+    });
+    check('REJECT_CODES includes drainer_undeclared_burner_ata, class=security (BAT-1027)', () => {
+        assert.ok(policy.REJECT_CODES.includes('drainer_undeclared_burner_ata'),
+            'drainer_undeclared_burner_ata must be in REJECT_CODES');
+        assert.strictEqual(policy.REJECT_CLASS.drainer_undeclared_burner_ata, 'security',
+            'drainer_undeclared_burner_ata must be security-class (no MWA retry suggestion)');
     });
     check('REJECT_CODES no longer contains simulation_recipient_mismatch (BAT-1031)', () => {
         assert.ok(!policy.REJECT_CODES.includes('simulation_recipient_mismatch'),
@@ -651,20 +666,42 @@ async function runAsync(name, fn) {
     // Build a simulator that returns canned sim + preSnapshot for the
     // requested addresses. `accounts` is a map { addr: { pre, post } }
     // where each entry is an accountInfo object or null.
-    function mockSimulator({ accounts, simExtra = {}, throwError = null }) {
-        return async (_txBase64, { addresses }) => {
+    // BAT-1027: the simulator now also returns `pinnedRpcUrl` (so the policy's
+    // two-pass loss invariant can pin pass 2 to pass 1's RPC) and is called a
+    // SECOND time with the candidate (all-writable) address set whenever a
+    // writable account was not already requested in pass 1. The mock maps by
+    // address, so the second call naturally returns the right per-address
+    // states. Optional knobs exercise the BAT-1027 fail-closed paths:
+    //   - pinnedRpcUrl: null  → pass-1 reports no pin → pass-2 fails closed
+    //   - loadedAddressesByCall: [p1, p2] → per-call ALT contents (drift tests)
+    //   - throwOnCall: N → throw on the 0-based Nth call (pass-2 throw)
+    function mockSimulator({
+        accounts,
+        simExtra = {},
+        throwError = null,
+        pinnedRpcUrl = 'https://mock-helius.test/rpc',
+        loadedAddresses = { writable: [], readonly: [] },
+        loadedAddressesByCall = null,
+        throwOnCall = null,
+    }) {
+        let call = -1;
+        return async (_txBase64, opts) => {
+            call++;
+            const addresses = (opts && Array.isArray(opts.addresses)) ? opts.addresses : [];
             if (throwError) throw new Error(throwError);
+            if (throwOnCall !== null && call === throwOnCall) throw new Error(`mock pass-${call} simulation failed`);
             const preSnapshot = addresses.map(addr => (accounts[addr] && accounts[addr].pre !== undefined) ? accounts[addr].pre : null);
             const valueAccounts = addresses.map(addr => (accounts[addr] && accounts[addr].post !== undefined) ? accounts[addr].post : null);
+            const la = (loadedAddressesByCall && loadedAddressesByCall[call]) ? loadedAddressesByCall[call] : loadedAddresses;
             const sim = {
                 value: Object.assign({
                     err: null,
                     logs: [],
                     accounts: valueAccounts,
-                    loadedAddresses: { writable: [], readonly: [] },
+                    loadedAddresses: la,
                 }, simExtra),
             };
-            return { sim, preSnapshot, slot: 123 };
+            return { sim, preSnapshot, slot: 123, pinnedRpcUrl };
         };
     }
 
@@ -1176,17 +1213,16 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.class, 'security');
     });
 
-    await runAsync('BAT-1031: BAT-1027 TODO/xfail — undeclared burner-owned ATA loss is NOT caught today (per-account delta is BAT-1027 scope)', async () => {
-        // Documents the gap that BAT-1027 owns. A burner-owned ATA whose
-        // balance decreases during jupiter_trigger_create_deposit but is
-        // NOT in burnerOwnedAccounts is NOT rejected today:
-        //   - drainer walker only blocks Transfer in zero_value_* kinds;
-        //   - non-zero deposit flows don't get per-account delta
-        //     enforcement until BAT-1027 lands.
-        // This test currently asserts result.ok === true (documenting the
-        // gap). It MUST flip to ok === false once BAT-1027 ships per-account
-        // delta + simOwned propagation. Do not claim this is caught by
-        // current code in any release note or audit.
+    await runAsync('BAT-1027: undeclared burner-owned ATA loss in jupiter_trigger_create_deposit → drainer_undeclared_burner_ata (was BAT-1031 xfail)', async () => {
+        // BAT-1027 CLOSES the gap this test used to document. A burner-owned
+        // ATA whose balance decreases during a non-zero deposit flow but is
+        // NOT declared (not burnerDebit.account, not in burnerOwnedAccounts)
+        // is now rejected by the two-pass per-account loss invariant:
+        //   - SECOND_BURNER_ATA is a static-writable key the caller never
+        //     declared, so it is absent from pass 1's requested set;
+        //   - pass 2 requests the full writable candidate set, sees its
+        //     5000→0 drain, and rejects drainer_undeclared_burner_ata.
+        // Flipped from the prior ok===true xfail when BAT-1027 landed.
         const SECOND_BURNER_ATA = 'SecBurnerAtaTwoXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
         const SOME_OTHER_MINT = 'NonUsdcMntsynthXXXXXXXXXXXXXXXXXXXXXXXXXXXz';
         const txB64 = buildTx({
@@ -1220,12 +1256,313 @@ async function runAsync(name, fn) {
             burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
             burnerOwnedAccounts: [BURNER_USDC_ATA], // SECOND_BURNER_ATA intentionally undeclared
         }, { burnerPubkey: BURNER, simulator });
-        // BAT-1027 gap: this passes today. Flips to ok=false after BAT-1027.
-        // If this assertion ever flips organically (ok=false), BAT-1027 has
-        // landed — update both this test and the BAT-1031 v1.1 §"What we
-        // DROP" honesty section.
-        assert.strictEqual(r.ok, true,
-            `BAT-1031 expects undeclared burner-owned ATA loss to pass today (BAT-1027 closes this). Got ${JSON.stringify(r)}`);
+        // BAT-1027: the undeclared burner-ATA drain is now caught by the
+        // two-pass per-account loss invariant.
+        assert.strictEqual(r.ok, false,
+            `BAT-1027 must reject undeclared burner-owned ATA loss. Got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'drainer_undeclared_burner_ata',
+            `expected drainer_undeclared_burner_ata, got ${r.error}`);
+        assert.strictEqual(r.class, 'security');
+    });
+
+    // ─── BAT-1027: two-pass complete-state per-account loss invariant ──────────
+    console.log();
+    console.log('BAT-1027: two-pass per-account loss invariant (drainer_undeclared_burner_ata)');
+
+    // Guaranteed-valid 32-byte synthetic pubkeys (base58Encode round-trips to
+    // exactly 32 bytes, so the hand-rolled tx layout stays aligned).
+    const mkPk = (seed) => base58Encode(Buffer.alloc(32, seed));
+    const D_DEBIT = BURNER_USDC_ATA;        // declared burnerDebit (reused)
+    const D_DRAIN = mkPk(0x22);             // undeclared burner-owned, drained (static)
+    const D_ALT   = mkPk(0x23);             // undeclared burner-owned, drained (via ALT)
+    const D_ZERO  = mkPk(0x24);             // undeclared burner-owned, zero net delta
+    const D_NEW   = mkPk(0x25);             // undeclared burner-owned, created in tx
+    const M_OTHER = mkPk(0x26);             // a non-USDC mint
+    const WSOL    = 'So11111111111111111111111111111111111111112';
+    const BURNER_WSOL_ATA = ata.deriveAtaBase58(BURNER, WSOL);   // canonical wSOL ATA — step 1b requires this exact address
+    const ANCHOR_PROGRAM = 'jup7TZf8nFr2BcW6gQr5dyhPHL8h6Q9Cn2dQ6c8Ydhd'; // a non-token program owner (spoof PDA)
+
+    // Non-zero deposit expectedDelta with USDC debit from D_DEBIT (−1,000,000).
+    const depDelta = (extra = {}) => Object.assign({
+        kind: 'jupiter_trigger_create_deposit',
+        signerMode: 'burner_only',
+        burnerDebit: { account: D_DEBIT, mint: USDC, atomicAmount: '1000000' },
+        burnerOwnedAccounts: [D_DEBIT],
+    }, extra);
+
+    // The declared-account states that satisfy validateSimDelta cleanly:
+    // burner native fee within headroom + debit exactly −1,000,000.
+    const baseAccounts = () => ({
+        [BURNER]: {
+            pre:  nativeAccountInfo({ lamports: 2_000_000_000 }),
+            post: nativeAccountInfo({ lamports: 1_995_000_000 }),
+        },
+        [D_DEBIT]: {
+            pre:  splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '11719298' }),
+            post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '10719298' }),
+        },
+    });
+
+    // Deposit tx with extra static-writable keys appended after the declared
+    // [BURNER, PROGRAM, D_DEBIT]. All keys writable (header numReadonly* = 0),
+    // so the candidate set picks up every extra key in pass 2.
+    const depTx = (extraKeys = [], v0 = false) => buildTx({
+        accountKeys: [BURNER, JUP_V2_PROGRAM, D_DEBIT, ...extraKeys],
+        numRequiredSignatures: 1,
+        instructions: [{ programIdIdx: 1, accountIdxs: [0, 2], dataBytes: Buffer.from([0xAB]) }],
+        v0,
+    });
+
+    await runAsync('BAT-1027 N1: static undeclared burner-owned ATA drain → drainer_undeclared_burner_ata', async () => {
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_DRAIN]: {
+                    pre:  splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '5000' }),
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '0' }),
+                },
+            }),
+        });
+        const r = await policy.validateBurnerTx(depTx([D_DRAIN]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'drainer_undeclared_burner_ata', `got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.class, 'security');
+    });
+
+    await runAsync('BAT-1027 N2: ALT-resolved undeclared burner-owned ATA drain → drainer_undeclared_burner_ata', async () => {
+        // D_ALT is NOT a static key — it arrives via sim.value.loadedAddresses
+        // (the ALT-writable set). The candidate set unions static-writable with
+        // ALT-writable, so pass 2 requests D_ALT and catches the drain.
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_ALT]: {
+                    pre:  splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '7000' }),
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '0' }),
+                },
+            }),
+            loadedAddresses: { writable: [D_ALT], readonly: [] },
+        });
+        const r = await policy.validateBurnerTx(depTx([], true), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'drainer_undeclared_burner_ata', `got ${JSON.stringify(r)}`);
+        assert.ok(r.reason.includes(D_ALT), `reject reason must name the drained ALT address ${D_ALT}; got "${r.reason}"`);
+    });
+
+    await runAsync('BAT-1027 N3: transient ATA absent pre+post (created-and-closed) → accept', async () => {
+        // D_NEW is a static-writable candidate but absent in both snapshots
+        // (not in the mock map → null/null) → net 0 → no loss.
+        const simulator = mockSimulator({ accounts: baseAccounts() });
+        const r = await policy.validateBurnerTx(depTx([D_NEW]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected accept (transient absent), got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('BAT-1027 P1: undeclared burner-owned ATA with zero net delta → accept', async () => {
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_ZERO]: {
+                    pre:  splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '5000' }),
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '5000' }),
+                },
+            }),
+        });
+        const r = await policy.validateBurnerTx(depTx([D_ZERO]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected accept (zero delta), got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('BAT-1027 P2: candidateSet ⊆ requestedAddresses → single pass (skip pass-2), accept', async () => {
+        let calls = 0;
+        const base = mockSimulator({ accounts: baseAccounts() });
+        const counting = async (tx, opts) => { calls++; return base(tx, opts); };
+        // PROGRAM is the readonly tail (numReadonlyUnsigned=1) → not writable →
+        // not a candidate. Only BURNER + D_DEBIT are writable, both declared →
+        // candidateSet ⊆ requestedAddresses → pass 2 is skipped.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, D_DEBIT, JUP_V2_PROGRAM],
+            numRequiredSignatures: 1,
+            numReadonlyUnsigned: 1,
+            instructions: [{ programIdIdx: 2, accountIdxs: [0, 1], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const r = await policy.validateBurnerTx(txB64, depDelta(), { burnerPubkey: BURNER, simulator: counting });
+        assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
+        assert.strictEqual(calls, 1, `expected single simulation pass (skip pass-2), got ${calls}`);
+    });
+
+    await runAsync('BAT-1027 P3: declared burnerDebit negative delta is NOT flagged (owned by validateSimDelta) → accept', async () => {
+        const simulator = mockSimulator({ accounts: baseAccounts() });
+        const r = await policy.validateBurnerTx(depTx([]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected accept, got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('BAT-1027 P4: undeclared burner-owned ATA created in tx (pre-absent, post-present) → accept', async () => {
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_NEW]: {
+                    pre:  null,
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '9000' }),
+                },
+            }),
+        });
+        const r = await policy.validateBurnerTx(depTx([D_NEW]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected accept (created ATA, +delta), got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('BAT-1027 P5: loadedAddresses drift between pass 1 and pass 2 → simulation_metadata_missing', async () => {
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_ALT]: {
+                    pre:  splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '7000' }),
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '0' }),
+                },
+            }),
+            // pass 1 resolves D_ALT; pass 2 resolves a different ALT set → drift.
+            loadedAddressesByCall: [
+                { writable: [D_ALT], readonly: [] },
+                { writable: [D_ZERO], readonly: [] },
+            ],
+        });
+        const r = await policy.validateBurnerTx(depTx([], true), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_metadata_missing', `got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('BAT-1027 P6: pinned RPC URL missing → pass-2 fails closed (simulation_failed)', async () => {
+        // Codex pin #1: a security comparison across two passes must not run an
+        // unpinned second pass. pass-1 reports pinnedRpcUrl=null → fail closed.
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_DRAIN]: {
+                    pre:  splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '5000' }),
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '0' }),
+                },
+            }),
+            pinnedRpcUrl: null,
+        });
+        const r = await policy.validateBurnerTx(depTx([D_DRAIN]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_failed', `got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.class, 'availability');
+    });
+
+    await runAsync('BAT-1027 P7: declared wSOL transient ATA close (pre-present, post-absent) → accept (exempt)', async () => {
+        // jupiter_swap_immediate native-SOL swap: the wSOL ATA is created,
+        // wrapped, swapped, then CloseAccount-unwrapped. Declaring it via
+        // wsolAtaExemption keeps the loss invariant from flagging its close.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA, BURNER_WSOL_ATA],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({
+            accounts: {
+                [BURNER_USDC_ATA]: {
+                    pre:  splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '1000000' }),
+                    post: splTokenAccountInfo({ mint: USDC, owner: BURNER, amountAtomic: '0' }),
+                },
+                [BURNER]: {
+                    pre:  nativeAccountInfo({ lamports: 2_000_000_000 }),
+                    post: nativeAccountInfo({ lamports: 2_000_995_000 }),
+                },
+                [BURNER_WSOL_ATA]: {
+                    pre:  splTokenAccountInfo({ mint: WSOL, owner: BURNER, amountAtomic: '1000000000' }),
+                    post: null,   // unwrapped + closed
+                },
+            },
+        });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER, mint: 'native_sol', atomicAmount: '500000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+            wsolAtaExemption: { ata: BURNER_WSOL_ATA, destination: BURNER },
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `expected accept (wSOL exemption), got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('BAT-1027 P8: pass-2 simulation throws → simulation_failed (fail closed)', async () => {
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [D_DRAIN]: {
+                    pre:  splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '5000' }),
+                    post: splTokenAccountInfo({ mint: M_OTHER, owner: BURNER, amountAtomic: '0' }),
+                },
+            }),
+            throwOnCall: 1,   // 0 = pass 1 (succeeds), 1 = pass 2 (throws)
+        });
+        const r = await policy.validateBurnerTx(depTx([D_DRAIN]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'simulation_failed', `got ${JSON.stringify(r)}`);
+    });
+
+    check('BAT-1027 unit: _buildCandidateSet writable formula + 128 ceiling + malformed header', () => {
+        // Writable formula (Codex pin #2): signed [0, nSig - nroSigned),
+        // unsigned [nSig, len - nroUnsigned), plus all ALT-writable.
+        const keys = [mkPk(1), mkPk(2), mkPk(3), mkPk(4)]; // 0..3
+        const ok = policy._buildCandidateSet(
+            { numRequiredSignatures: 1, numReadonlySigned: 0, numReadonlyUnsigned: 1, staticAccountKeys: keys },
+            [mkPk(5)]);
+        assert.ok(!ok.err, `unexpected err: ${JSON.stringify(ok.err)}`);
+        // writable: signed {0}, unsigned [1, 4-1=3) = {1,2}, + ALT {mkPk(5)} → 4
+        assert.deepStrictEqual(new Set(ok.candidateSet), new Set([keys[0], keys[1], keys[2], mkPk(5)]));
+        assert.ok(!ok.candidateSet.includes(keys[3]), 'readonly-unsigned tail must be excluded');
+
+        // > 128 candidates (realistic via ALT expansion) → fail closed.
+        const altMany = Array.from({ length: 130 }, (_, i) => mkPk(i + 1));
+        const over = policy._buildCandidateSet(
+            { numRequiredSignatures: 1, numReadonlySigned: 0, numReadonlyUnsigned: 0, staticAccountKeys: [BURNER] },
+            altMany);
+        assert.ok(over.err && over.err.error === 'simulation_metadata_missing', `expected ceiling reject, got ${JSON.stringify(over)}`);
+
+        // Malformed header (signers > static keys) → policy_parse_uncertainty.
+        const bad = policy._buildCandidateSet(
+            { numRequiredSignatures: 5, numReadonlySigned: 0, numReadonlyUnsigned: 0, staticAccountKeys: [BURNER] },
+            []);
+        assert.ok(bad.err && bad.err.error === 'policy_parse_uncertainty', `expected parse-uncertainty, got ${JSON.stringify(bad)}`);
+    });
+
+    // Adversarial-review regression: a non-token Anchor PDA whose raw bytes
+    // embed the burner pubkey at data offset 32 (the SPL "owner" field
+    // position) with a numeric field at offset 64 that DECREASES across the
+    // tx. Without the programOwner gate this is misread as a burner-owned
+    // token account losing balance → false-positive drainer_undeclared_burner_
+    // ata that would permanently halt the flow. The on-chain program owner is
+    // a non-token program, so it must be skipped.
+    const anchorPdaSpoof = ({ u64 }) => {
+        const amt = Buffer.alloc(8); amt.writeBigUInt64LE(BigInt(u64));
+        const buf = Buffer.concat([Buffer.alloc(32, 0xAA), pubkeyBytes(BURNER), amt]); // mint | owner=BURNER | amount
+        return { lamports: 3_000_000, owner: ANCHOR_PROGRAM, data: [buf.toString('base64'), 'base64'], executable: false, rentEpoch: 0 };
+    };
+
+    await runAsync('BAT-1027 blocker-regression: non-token Anchor PDA embedding burner pubkey at offset 32 with decreasing u64 → NOT flagged (programOwner gate)', async () => {
+        const PDA = mkPk(0x40);
+        const simulator = mockSimulator({
+            accounts: Object.assign(baseAccounts(), {
+                [PDA]: {
+                    pre:  anchorPdaSpoof({ u64: 5000 }),
+                    post: anchorPdaSpoof({ u64: 0 }),   // numeric field dropped — a -5000 "delta" IF misread as a token account
+                },
+            }),
+        });
+        const r = await policy.validateBurnerTx(depTx([PDA]), depDelta(), { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.ok, true, `non-token Anchor PDA must not be misread as a burner token account; got ${JSON.stringify(r)}`);
+    });
+
+    await runAsync('BAT-1027 hardening: wsolAtaExemption.ata != canonical wSOL ATA → expected_delta_invalid_shape (fail closed)', async () => {
+        // An arbitrary burner-owned ATA in wsolAtaExemption would otherwise
+        // escape BOTH the loss scan (declaredAddresses skip) and the drainer
+        // Transfer gate (not active for non-zero kinds). Pin to the canonical
+        // derived address.
+        const txB64 = buildTx({
+            accountKeys: [BURNER, JUPITER_V6, BURNER_USDC_ATA, D_DRAIN],
+            numRequiredSignatures: 1,
+            instructions: [{ programIdIdx: 1, accountIdxs: [0, 2, 3], dataBytes: Buffer.from([0xAB]) }],
+        });
+        const simulator = mockSimulator({ accounts: baseAccounts() });
+        const r = await policy.validateBurnerTx(txB64, {
+            kind: 'jupiter_swap_immediate',
+            signerMode: 'burner_only',
+            burnerDebit: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '1000000' },
+            burnerCreditMin: { account: BURNER, mint: 'native_sol', atomicAmount: '500000' },
+            burnerOwnedAccounts: [BURNER_USDC_ATA],
+            toleranceBps: 100,
+            wsolAtaExemption: { ata: D_DRAIN, destination: BURNER },   // NOT the canonical burner wSOL ATA
+        }, { burnerPubkey: BURNER, simulator });
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape', `got ${JSON.stringify(r)}`);
     });
 
     // ─── BAT-1013-followup: B1 / B2 / B3 / C3..C7 / C11 / C14 / C15 / Q3 / Q9 ───
