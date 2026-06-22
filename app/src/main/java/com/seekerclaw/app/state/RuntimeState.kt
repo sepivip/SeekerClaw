@@ -57,7 +57,7 @@ import kotlinx.serialization.Serializable
 data class RuntimeState(
     val provider: String = "claude",
     val authType: String = "api_key",
-    val model: String = "claude-opus-4-7",
+    val model: String = "claude-opus-4-8",
     /**
      * BAT-549 Commit 3b: user-facing toggle for "Extended Thinking".
      * When `true` AND the active model's `reasoningSupport === "yes"`

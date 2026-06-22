@@ -393,8 +393,8 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 **Symptoms:** User toggled `/think on` (or Settings > AI Provider > Reasoning > Extended thinking ON) but responses look the same as before.
 **Diagnosis:** The toggle is a no-op for models the registry doesn't list as supporting reasoning (Haiku 4.5; any freeform / unregistered model id). Run `/think` (no args) — it surfaces a user-facing hint when the active model isn't supported, e.g. "This model does not support extended thinking..." or "This model is not in SeekerClaw's known model list...". The agent's system prompt also exposes this state — the agent itself can tell the user.
 **Fix:**
-- "does not support" hint: switch to a yes-supporting model (Opus 4.7, Sonnet 4.6, GPT-5.4/5.5, Codex models) via `/model` or Settings.
-- "not in known model list" hint: this is the safe default for models not in the registry. If the user is on Custom and knows their gateway supports thinking, ask them to confirm — the request param genuinely isn't sent because the registry is the source of truth (a "thinking" status that lies about whether thinking is happening would be worse than no status).
+- "does not support" hint: switch to a yes-supporting model (Fable 5, Opus 4.8/4.7/4.6, Sonnet 4.6, GPT-5.4/5.5, Codex models) via `/model` or Settings.
+- "not in known model list" hint: this is the safe default for models not in the registry. If the user is on Custom — or typed a custom model ID on Anthropic/OpenAI (supported since BAT-1032) — and knows their endpoint supports thinking, ask them to confirm — the request param genuinely isn't sent because the registry is the source of truth (a "thinking" status that lies about whether thinking is happening would be worse than no status).
 
 ### Custom + DeepSeek V4: 400 Loop on `/resume` After Tool Calls
 **Symptoms:** User on Custom provider with a DeepSeek V4 model gets `400` errors after tool calls, often in a loop after `/resume`.
@@ -416,7 +416,7 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 **Diagnosis:** The bubble requires ALL THREE gates: `reasoningEnabled === true`, `reasoningDisplayInChat === true`, AND `reasoningSupport === 'yes'` for the active model. If any are missing, the bubble is suppressed by design (a "Thinking..." status that lies about whether thinking is happening would be worse than no status). Common gaps:
 - `reasoningEnabled` is off → toggle on Settings > Reasoning > Extended thinking, OR `/think on`
 - Active model is `Haiku 4.5` → `reasoningSupport=no` → toggle is a true no-op for that model; switch model
-- Active model is on Custom (any model) or OpenRouter (any model) → freeform registry → `reasoningSupport=unknown` → bubble stays suppressed because "thinking" can't be reliably promised
+- Active model is on Custom (any model), OpenRouter (any model), or a custom/unregistered model ID on Anthropic/OpenAI (BAT-1032) → not in the registry → `reasoningSupport=unknown` → bubble stays suppressed because "thinking" can't be reliably promised
 - The bubble has a 500ms debounce — if the model responds in under 500ms, the bubble never shows even when all gates align (by design — fast turns shouldn't flash)
 **Fix:** Confirm via `/think` (no-args) which surfaces the current toggle states and a "not in known model list" / "does not support" hint when applicable. The contract is "status is shown when extended thinking IS happening AND the user opted in" — anything else is silenced.
 
@@ -469,12 +469,45 @@ read runtime_state.json
 - `[/model] runtime_state.json write returned false` (WARN) — write returned a soft-fail; UI may show stale model
 - `[/provider] runtime_state.json write returned false / write threw` (ERROR) — provider switch couldn't persist; overlay reverted
 - `[/provider] runtime_state revert failed` (WARN) — UI may show stale state
+- `[/think] runtime_state.json write threw` (ERROR) — same disk-write failure family; the reasoning toggle didn't persist, retry after freeing storage
 - `[Config] runtime_state.json has invalid content` / `decode failed` (WARN) — fallback to config.json on next read
 **Fix:**
 1. If write failed: check device storage (`android_storage` tool or `df -h`); a full filesystem prevents `runtime_state.json` writes.
 2. If `/provider` is stuck mid-switch: the overlay auto-reverts on write failure. Re-issue `/provider <name>` once storage is healthy.
 3. For provider switches, the service restarts to pick up new credentials — give it 5-10s before sending the next message.
 4. If UI keeps showing stale state after a successful write: kill and reopen the SeekerClaw app (the dashboard reads `runtime_state.json` independently).
+
+### /model Rejects a Model ID That Settings Accepted (BAT-1032)
+**Symptoms:** User typed a custom model ID in Settings > AI Provider > Model > Custom model (Anthropic/OpenAI) — it works — but `/model <same-id>` replies "Unknown model for claude/openai. Options: ...".
+**Diagnosis:** By design, not a bug. The Settings picker's Custom entry is freeform — any ID is accepted, persists across restarts, and is the live model (verify: the system prompt's Runtime line shows it as active). `/model` validates against the registry allowlist as a typo guard in a no-autocomplete chat channel.
+**Fix:** Nothing to fix — explain the asymmetry. Off-list IDs are set via Settings only; `/model` switches between registry-listed IDs. If the user believes their custom ID stopped working, check for an API 404 (see "If API calls keep failing" — a 404 means the ID itself is wrong/unknown at the provider).
+
+### Custom Model ID Returns API 404 (Model Not Found)
+**Symptoms:** Every AI turn fails after setting a custom model ID; logs show HTTP 404 / `model_not_found` from the provider API.
+**Check:**
+```
+grep -i "404\|model_not_found\|not found" node_debug.log | tail -10
+```
+**Diagnosis:** The custom ID has a typo or isn't served to this account (tier-gated, deprecated, or wrong provider). Settings accepts any string by design (BAT-1032) — validity is only known when the API answers.
+**Fix:** `/model <registry-listed-id>` recovers immediately (slash commands work even when AI turns fail), or correct the ID in Settings > AI Provider > Model > Custom model.
+
+### Sent Media Never Reached the Agent
+**Symptoms:** User sends a photo/file in chat; the agent never references it, or replies as if no attachment existed.
+**Check:**
+```
+grep -i "Media download" node_debug.log | tail -10
+```
+**Diagnosis:** `Media download failed: <err>` (ERROR) — network blip while fetching the attachment from the channel CDN. Files over the size cap are rejected loudly with an inline note (not this failure mode).
+**Fix:** Re-send the attachment when connectivity is stable; for large files, compress below the cap.
+
+### /resume Fails or Finds No Task
+**Symptoms:** `/resume` reports no task to resume, or fails to restore an interrupted task.
+**Check:**
+```
+grep -i "\[Resume\]\|TaskStore" node_debug.log | tail -10
+```
+**Diagnosis:** `[Resume] FAIL: loadCheckpoint returned null` — the checkpoint expired, was cleaned up, or the save failed at interrupt time (`[TaskStore] saveCheckpoint failed` = storage issue).
+**Fix:** Restate the task in a fresh message; if saveCheckpoint failures appear, free device storage.
 
 ### MCP Reconcile Silently Failed (BAT-514)
 **Symptoms:** User edits an MCP server in Settings (toggle enable, edit token, add/remove). UI updates but the agent still has the OLD active tool set — or no MCP tools at all when there should be some.

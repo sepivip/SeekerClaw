@@ -5,6 +5,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Custom model IDs no longer silently revert** (BAT-1032) — saving a custom model on Anthropic/OpenAI used to survive only on the Node side: every `loadConfig()` re-validated it against the registry allowlist and clamped prefs back to the provider default, so the model picker, AI Provider page, and Dashboard all showed the wrong model, and a service restart reverted the agent too. The config reconcile now trusts the value the Settings UI saved (overlay == prefs, provider/auth unchanged) while keeping all defensive clamps for external/corrupt values and provider/auth switches.
+- System screen no longer labels every Opus model "Opus 4.6" — the model name now resolves through the model registry.
+- Switching OpenAI auth type no longer wipes a custom model ID; only models belonging to the old auth mode's list are clamped (e.g. oauth-only `gpt-5.4-mini` on oauth→api_key).
+
+### Changed
+
+- **Claude model lineup** (BAT-1032): added **Fable 5** (`claude-fable-5`, new top tier) and **Opus 4.8** (`claude-opus-4-8`, new Anthropic default). Opus 4.6 stays in the registry for now — review found that dropping a registry row silently disables Extended Thinking for users still on that model (the registry drives `reasoningSupport`); it can be dropped once a retired-models concept exists.
+
 ## [2.0.0] - 2026-05-19
 
 > **Major version bump.** Promoted from `v2.0.0-rc1` (tagged 2026-05-18) after on-device smoke test on Solana Seeker confirmed all four checklist items: install-over-1.10.0 preserves user memory, System screen reads `2.0.0 (20)` with SHA `54696d42`, Telegram round-trip, paid call via tripadvisor returns real data for $0.01 first try with no retry burn.

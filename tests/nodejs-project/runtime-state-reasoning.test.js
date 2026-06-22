@@ -50,7 +50,7 @@ eq('DEFAULTS.customConfigSignature = null', D.customConfigSignature, null);
 // Existing fields untouched
 eq('DEFAULTS.provider = claude (preserved)', D.provider, 'claude');
 eq('DEFAULTS.authType = api_key (preserved)', D.authType, 'api_key');
-eq('DEFAULTS.model = claude-opus-4-7 (preserved)', D.model, 'claude-opus-4-7');
+eq('DEFAULTS.model = claude-opus-4-8 (preserved)', D.model, 'claude-opus-4-8');
 
 console.log();
 console.log('── Old-shape file loads cleanly (3-field upgrade compat) ──');

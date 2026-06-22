@@ -179,7 +179,7 @@ let OWNER_ID = CHANNEL === 'discord'
 // per-store hot read path (reader gets a usable value, never crashes),
 // but WRONG for our fallback chain. If `runtime_state.json` is corrupt,
 // `_runtimeState.read()` would return `runtime-state.DEFAULTS`
-// (`{claude, api_key, claude-opus-4-7}`) which would silently OVERRIDE
+// (`{claude, api_key, claude-opus-4-8}`) which would silently OVERRIDE
 // whatever `config.json` has — masking the corruption AND leaking
 // defaults into a user's actual config. Inline JSON.parse so we can
 // distinguish "decoded cleanly" from "fell back to defaults" and treat
@@ -318,7 +318,7 @@ const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 1
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
-    : 'claude-opus-4-7';
+    : 'claude-opus-4-8';
 // BAT-513: model resolves from runtime_state.json first, then
 // config.json, then the per-provider safe default. The agent_settings.json
 // overlay path (resolveActiveModel) still applies AFTER this for live

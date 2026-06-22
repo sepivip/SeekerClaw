@@ -80,8 +80,10 @@ class ModelRegistryTest {
             consoleUrl = "https://console.anthropic.com",
             keysUrl = "https://console.anthropic.com/settings/keys",
             freeform = false,
-            defaultModel = "claude-opus-4-7",
+            defaultModel = "claude-opus-4-8",
             models = listOf(
+                ModelInfo("claude-fable-5", "Fable 5", "yes"),
+                ModelInfo("claude-opus-4-8", "Opus 4.8", "yes"),
                 ModelInfo("claude-opus-4-7", "Opus 4.7", "yes"),
                 ModelInfo("claude-opus-4-6", "Opus 4.6", "yes"),
                 ModelInfo("claude-sonnet-4-6", "Sonnet 4.6", "yes"),
@@ -253,7 +255,7 @@ class ModelRegistryTest {
     fun `defaultModelForProvider returns explicit registry value`() {
         assertEquals("gpt-5.4", ModelRegistry.defaultModelForProvider("openai", "api_key"))
         assertEquals("gpt-5.4", ModelRegistry.defaultModelForProvider("openai", "oauth"))
-        assertEquals("claude-opus-4-7", ModelRegistry.defaultModelForProvider("claude", "api_key"))
+        assertEquals("claude-opus-4-8", ModelRegistry.defaultModelForProvider("claude", "api_key"))
         assertEquals("anthropic/claude-sonnet-4-6", ModelRegistry.defaultModelForProvider("openrouter", "api_key"))
         assertEquals("", ModelRegistry.defaultModelForProvider("custom", "api_key"))
     }
@@ -446,6 +448,8 @@ class ModelRegistryTest {
 
     @Test
     fun `reasoningSupportFor — known yes models`() {
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-fable-5", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-8", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-7", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-opus-4-6", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-sonnet-4-6", "api_key"))

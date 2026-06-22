@@ -53,8 +53,8 @@ object SettingsHelpTexts {
 
     const val MODEL =
         "Your agent's brain. Models depend on your provider.\n\n" +
-        "Anthropic examples: Opus 4.6 (powerful), Sonnet 4.6 (balanced), Haiku 4.5 (fast).\n" +
-        "OpenAI examples: GPT-5.4 (frontier), GPT-5.2 (flagship), GPT-5.3 Codex (code agent).\n\n" +
+        "Anthropic examples: Fable 5 (frontier), Opus 4.8 (powerful), Sonnet 4.6 (balanced), Haiku 4.5 (fast).\n" +
+        "OpenAI examples: GPT-5.5 (frontier), GPT-5.4 (flagship), GPT-5.3 Codex (code agent).\n\n" +
         "Exact options may change over time \u2014 pick your fighter \uD83E\uDDE0"
 
     const val AGENT_NAME =

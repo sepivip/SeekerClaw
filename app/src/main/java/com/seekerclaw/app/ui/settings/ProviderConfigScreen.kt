@@ -795,7 +795,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 )
             },
             text = {
-                Column {
+                // Scrollable: the model list grew past the height-bounded
+                // AlertDialog (BAT-1032 added Fable 5 + Opus 4.8), which
+                // clipped the Custom row at the bottom so it couldn't be
+                // tapped. Scroll keeps every row reachable as the list grows.
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     models.forEach { model ->
                         Row(
                             modifier = Modifier
@@ -989,18 +993,40 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // saved against the OLD authType (the one
                         // authType save reverted to) — silently mis-
                         // matched.
+                        val previousAuth = config?.authType ?: selectedAuth
                         val authSaved = saveField("authType", selectedAuth, needsRestart = true)
-                        context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
-                            .edit()
-                            .putString("lastAuthType_$activeProvider", selectedAuth)
-                            .apply()
+                        if (authSaved) {
+                            // Only remember the auth mode that actually persisted —
+                            // lastAuthType_* seeds future provider switches, so writing
+                            // it on a failed save would drift UI defaults away from
+                            // the real config state.
+                            context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                                .edit()
+                                .putString("lastAuthType_$activeProvider", selectedAuth)
+                                .apply()
+                        }
                         if (authSaved && activeProvider == "openai") {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider("openai", selectedAuth)
-                            if (allowedModels.none { it.id == currentModel }) {
+                            // Only clamp models that belonged to the OLD auth
+                            // mode's list (e.g. gpt-5.4-mini is oauth-only and
+                            // must not survive oauth→api_key). A model on
+                            // NEITHER list is a user-typed custom ID — leave
+                            // it alone (BAT-1032).
+                            val wasOldListModel = modelsForProvider("openai", previousAuth).any { it.id == currentModel }
+                            if (allowedModels.none { it.id == currentModel } && wasOldListModel) {
                                 // Use safe default, NOT list order (newer models may be tier-gated).
                                 val fallback = defaultModelForProvider("openai", selectedAuth)
-                                saveField("model", fallback, needsRestart = false)
+                                // Multi-step save contract (saveField KDoc): check the
+                                // Boolean. On failure saveField already toasted and
+                                // reverted the displayed triple; the stale model
+                                // self-heals when the user next picks a model.
+                                if (!saveField("model", fallback, needsRestart = false)) {
+                                    android.util.Log.w(
+                                        "ProviderConfigScreen",
+                                        "model clamp save failed after auth switch — stale model persists until re-picked",
+                                    )
+                                }
                             }
                             // If switching away from OAuth, clear any leftover OAuth UI state
                             // so the API key field renders cleanly. The showOAuthSection guard

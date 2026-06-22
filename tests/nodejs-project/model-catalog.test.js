@@ -329,6 +329,10 @@ console.log();
 console.log('── BAT-549 Commit 3: reasoningSupportFor tri-state resolver ──');
 
 // Known reasoning-capable Claude models
+check('claude/claude-fable-5 → yes',
+    mc.reasoningSupportFor('claude', 'claude-fable-5', 'api_key'), 'yes');
+check('claude/claude-opus-4-8 → yes',
+    mc.reasoningSupportFor('claude', 'claude-opus-4-8', 'api_key'), 'yes');
 check('claude/claude-opus-4-7 → yes',
     mc.reasoningSupportFor('claude', 'claude-opus-4-7', 'api_key'), 'yes');
 check('claude/claude-opus-4-6 → yes',

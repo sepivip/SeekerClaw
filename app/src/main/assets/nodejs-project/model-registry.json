@@ -32,8 +32,10 @@
       "consoleUrl": "https://console.anthropic.com",
       "keysUrl": "https://console.anthropic.com/settings/keys",
       "freeform": false,
-      "defaultModel": "claude-opus-4-7",
+      "defaultModel": "claude-opus-4-8",
       "models": [
+        { "id": "claude-fable-5",    "displayName": "Fable 5",    "reasoningSupport": "yes" },
+        { "id": "claude-opus-4-8",   "displayName": "Opus 4.8",   "reasoningSupport": "yes" },
         { "id": "claude-opus-4-7",   "displayName": "Opus 4.7",   "reasoningSupport": "yes" },
         { "id": "claude-opus-4-6",   "displayName": "Opus 4.6",   "reasoningSupport": "yes" },
         { "id": "claude-sonnet-4-6", "displayName": "Sonnet 4.6", "reasoningSupport": "yes" },

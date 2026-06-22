@@ -61,7 +61,7 @@ const { createStore } = require('./cross-process-store');
 const DEFAULTS = Object.freeze({
     provider: 'claude',
     authType: 'api_key',
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     reasoningEnabled: false,
     reasoningDisplayInChat: false,
     customEchoReasoning: false,

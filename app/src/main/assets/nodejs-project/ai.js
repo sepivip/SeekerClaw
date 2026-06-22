@@ -1012,6 +1012,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('Note: Keys in agent_settings.json persist across restarts. After saving a key, built-in tools (web_search, Jupiter, etc.) pick it up immediately — no restart needed.');
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
     lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
+    lines.push('**Custom model IDs (BAT-1032):** The Settings model picker has a "Custom model" entry — users can type ANY model ID for Anthropic/OpenAI; it persists across restarts and is NOT clamped to the known list. `/model` only accepts registry-listed IDs by design — for an off-list ID, point users to Settings > AI Provider > Model > Custom model. See DIAGNOSTICS.md "/model Rejects a Model ID That Settings Accepted".');
     lines.push('');
 
     // Environment Variables — user-set secrets accessible to tool code (BAT-495)
@@ -1111,6 +1112,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
     lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
+    lines.push('4. Model not found (404): the configured model ID is wrong — likely a custom model ID typo. /model <valid-id> or Settings > AI Provider fixes it (slash commands work even when AI turns fail).');
     const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com'
         : PROVIDER === 'openrouter' ? 'openrouter.ai/credits'
         : PROVIDER === 'custom' ? (CUSTOM_BASE_URL || 'your custom endpoint')
@@ -1119,9 +1121,9 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         : PROVIDER === 'openrouter' ? 'openrouter.ai'
         : PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().hostname || 'custom endpoint')
         : 'api.anthropic.com';
-    lines.push(`4. Billing error (402): tell user to check their billing at ${billingUrl}`);
+    lines.push(`5. Billing error (402): tell user to check their billing at ${billingUrl}`);
     const apiScheme = PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().protocol === 'http:' ? 'http' : 'https') : 'https';
-    lines.push(`5. Network error: check connectivity with js_eval using require("${apiScheme}").get("${apiScheme}://${apiHost}") or shell_exec "curl -s ${apiScheme}://${apiHost}"`);
+    lines.push(`6. Network error: check connectivity with js_eval using require("${apiScheme}").get("${apiScheme}://${apiHost}") or shell_exec "curl -s ${apiScheme}://${apiHost}"`);
     lines.push('');
 
     // OpenAI OAuth-specific playbook (only injected when running on OAuth)
@@ -1425,7 +1427,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     // Conversation Limits — hard constraints the agent should know about (BAT-232)
     lines.push('## Conversation Limits');
     lines.push('- **History window:** 35 messages per chat. Older messages are dropped from context. Sessions are auto-summarized to memory on idle/checkpoint (see Session Memory above), but individual trimmed messages are not preserved. Heavy tool-use conversations are adaptively trimmed earlier to stay within context limits.');
-    lines.push('- **Tool use per turn:** Up to 25 tool-call rounds per user message. Plan multi-step work to fit within this budget.');
+    lines.push('- **Tool use per turn:** Up to 35 tool-call rounds per user message by default (configurable 10-100 in Settings → Agent). Plan multi-step work to fit within this budget.');
     lines.push('- **Max output:** 4096 tokens per response. For long content, split across multiple messages or save to a file and share it.');
     lines.push('- **Context awareness:** Your context usage is monitored. At ~85%, older messages are automatically summarized into a compact recap before being trimmed (you will see a "[Session context summary]" message replacing them). At ~90%, remaining old messages are aggressively trimmed without summary. To preserve important context during long tool-use chains, save intermediate results to files rather than keeping them in conversation.');
     lines.push('- **Conversation reset:** On process restart, conversation history is cleared and any messages sent during downtime are flushed (the user is automatically notified to resend). Memory files persist.');
@@ -1990,6 +1992,8 @@ function sanitizeConversation(messages, turnId) {
 // Context window limits per model (input tokens). Conservative — actual limits may be
 // slightly higher, but underestimating is safer than overestimating.
 const MODEL_CONTEXT_LIMITS = {
+    'claude-fable-5':      200000, // 1M actual; conservative cap consistent with mobile memory limits
+    'claude-opus-4-8':     200000,
     'claude-opus-4-7':     200000,
     'claude-opus-4-6':     200000,
     'claude-sonnet-4-6':   200000,

@@ -172,9 +172,12 @@ object ConfigClaimImporter {
             "openai" -> "gpt-5.4"
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
-            else -> "claude-opus-4-7"
+            else -> "claude-opus-4-8"
         }
-        val model = rawModel.ifBlank { defaultModel }
+        // Trim like botToken/ownerId above: reconcile's equality gate
+        // compares trimmed values, so a padded model here would miss the
+        // gate and get clamped on the next loadConfig (BAT-1032).
+        val model = rawModel.trim().ifBlank { defaultModel }
 
         val autoStartOnBoot = firstNonNull(
             readBoolean(device, "autoStartOnBoot"),

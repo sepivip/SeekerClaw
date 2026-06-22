@@ -67,7 +67,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    Clean — no spurious prefs write or signalConfigChanged.
  *  - **Fresh-install path** (prefs absent): `prefs.getString(KEY_*,
  *    null)` returns `null`; seedFromPrefs uses defaults
- *    (`claude/api_key/claude-opus-4-7`) since no key is present;
+ *    (`claude/api_key/claude-opus-4-8`) since no key is present;
  *    the migration write puts those defaults into the file; the
  *    first observed emission compares default strings against
  *    `null` prefs values → mismatch → ONE prefs `apply()` runs +
@@ -320,7 +320,7 @@ object RuntimeStateStore {
     internal fun seedFromPrefs(prefs: SharedPreferences): RuntimeState {
         val provider = prefs.getString(KEY_PROVIDER, "claude") ?: "claude"
         val authType = prefs.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
-        val model = prefs.getString(KEY_MODEL, "claude-opus-4-7") ?: "claude-opus-4-7"
+        val model = prefs.getString(KEY_MODEL, "claude-opus-4-8") ?: "claude-opus-4-8"
         val candidate = RuntimeState(provider = provider, authType = authType, model = model)
         return if (isValidPair(candidate.provider, candidate.authType)) candidate else RuntimeState()
     }
