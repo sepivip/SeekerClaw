@@ -3349,17 +3349,43 @@ async function chat(chatId, userMessage, options = {}) {
 // ============================================================================
 
 // BAT-1039: finalize a security short-circuit — commit the deterministic block
-// to history, end the turn, and return it. Called from the tool loop the moment
-// the first security-class reject is seen, BEFORE any further model/summary call
-// could see the untrusted reason. The forensic log carries reasonLen ONLY — the
-// raw (attacker-influenced) reason is never logged (the structured tool result
-// remains the single source of truth for the deterministic display).
+// to history, do the normal end-of-turn bookkeeping, and return it. Called from
+// the tool loop the moment the first security-class reject is seen, BEFORE any
+// further model/summary call could see the untrusted reason (the failing
+// tool_result was already redacted to its code + class in the loop, so the raw
+// reason survives only in this deterministic block, shown to the user). The
+// forensic log carries reasonLen ONLY — the raw reason is never logged.
 function _finalizeSecurityReject(chatId, taskId, turnId, pending) {
     const block = buildSecurityRejectBlock(pending.rejectCode, pending.rejectReason);
     addToConversation(chatId, 'assistant', block);
+    // PR #407 R2: addToConversation's MAX_HISTORY trim shifts one message at a
+    // time and can orphan a tool_use/tool_result group at the front — and this
+    // path runs right after a tool round. Run the same sanitizer the next turn
+    // would (see line ~2438) NOW so this security exit always leaves a
+    // structurally valid history instead of relying on the next turn to repair.
+    sanitizeConversation(getConversation(chatId), turnId);
+    // This turn's task is finished — clear it + its checkpoints BEFORE the session
+    // bookkeeping (which may fire an async summary), matching the cleanup-then-
+    // track ordering of the other terminal exits.
     clearActiveTask(chatId);
     try { cleanupChatCheckpoints(chatId); }
     catch (e) { log(`[SecurityReject] checkpoint cleanup failed: ${e && e.message ? e.message : String(e)}`, 'DEBUG'); }
+    // PR #407 R2: mirror the normal/budget exits' session bookkeeping — the early
+    // return otherwise skips the idle-summary (re)arm + checkpoint-summary trigger
+    // for these turns. NOTE: if the checkpoint summary fires, it reads the
+    // deterministic block from history — the SAME bounded reason every later turn
+    // already sees — never the raw tool_result reason (redacted to code + class in
+    // the loop). So the summary surfaces nothing the block itself doesn't.
+    {
+        const trk = getSessionTrack(chatId);
+        trk.lastMessageTime = Date.now();
+        trk.messageCount++;
+        scheduleIdleSummary(chatId);
+        const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+        if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+            saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+        }
+    }
     log(`[SecurityReject] ${JSON.stringify({
         turnId,
         taskId,
