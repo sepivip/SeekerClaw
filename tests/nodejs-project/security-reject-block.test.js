@@ -96,7 +96,10 @@ check('universal bound: over-cap reason is truncated with an EXPLICIT marker (no
 check('hardening: non-string code/reason → safe defaults, never throws', () => {
     const b1 = buildSecurityRejectBlock(undefined, undefined);
     assert.ok(b1.includes('Code:      unknown_security_reject'));
-    assert.ok(b1.includes('Reason:    \n') || b1.includes('Reason:    ' ), 'empty reason renders');
+    // CodeRabbit #407: assert the Reason line is EXACTLY the empty-reason form —
+    // a substring includes('Reason:    ') would pass even with text after it.
+    const reasonLine = b1.split('\n').find(l => l.startsWith('Reason:    '));
+    assert.strictEqual(reasonLine, 'Reason:    ', 'empty reason renders as bare label');
     const b2 = buildSecurityRejectBlock(null, 12345);
     assert.ok(b2.startsWith('SECURITY POLICY BLOCK'));
 });
