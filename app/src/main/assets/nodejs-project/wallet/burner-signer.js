@@ -163,16 +163,30 @@ function _lazyDefaultSimulator() {
         // logic in the caller (Codex amendment #8.1 §5) and surfaced to the
         // policy result for diagnostics. ALSO captured for the same-RPC
         // drift check below.
+        // BAT-1027: the policy's two-pass loss invariant runs pass-2 with
+        // opts.pinnedRpcUrl (= pass-1's resolved URL) so BOTH passes resolve
+        // against the SAME RPC backing — a security comparison across passes
+        // must not see two different chain views. When pinned, use the override
+        // verbatim and skip the live-config drift check below (the override IS
+        // the pin; a mid-validation Settings flip is deliberately ignored).
+        const pinnedOverride = (opts && typeof opts.pinnedRpcUrl === 'string' && opts.pinnedRpcUrl)
+            ? opts.pinnedRpcUrl
+            : null;
         let backing = 'public';
         let urlAtStart = null;
-        try {
-            urlAtStart = _getSolanaRpcUrl();
-            if (typeof urlAtStart === 'string' && /helius/i.test(urlAtStart)) backing = 'helius';
-        } catch (e) {
-            // Q6: surface the failure in logs so production drift checks can
-            // see when the accessor threw vs returned null. Drift detection
-            // remains best-effort but is no longer silent.
-            _log(`[BurnerSigner] _getSolanaRpcUrl threw before getMultipleAccounts: ${e && e.message ? e.message : String(e)} — BOTH drift check AND URL pinning degraded (R-next-12): both RPC calls will re-read live config, restoring the original race window. Operations should still succeed via the live config; this WARN exists so production can detect when getSolanaRpcUrl is unhealthy.`, 'WARN');
+        if (pinnedOverride) {
+            urlAtStart = pinnedOverride;
+            if (/helius/i.test(urlAtStart)) backing = 'helius';
+        } else {
+            try {
+                urlAtStart = _getSolanaRpcUrl();
+                if (typeof urlAtStart === 'string' && /helius/i.test(urlAtStart)) backing = 'helius';
+            } catch (e) {
+                // Q6: surface the failure in logs so production drift checks can
+                // see when the accessor threw vs returned null. Drift detection
+                // remains best-effort but is no longer silent.
+                _log(`[BurnerSigner] _getSolanaRpcUrl threw before getMultipleAccounts: ${e && e.message ? e.message : String(e)} — BOTH drift check AND URL pinning degraded (R-next-12): both RPC calls will re-read live config, restoring the original race window. Operations should still succeed via the live config; this WARN exists so production can detect when getSolanaRpcUrl is unhealthy.`, 'WARN');
+            }
         }
 
         // 1. Pre-snapshot — same-RPC getMultipleAccounts.
@@ -277,18 +291,24 @@ function _lazyDefaultSimulator() {
         // come from different chain views. Fail closed so the caller does
         // not bridge-sign on inconsistent data. The policy wraps the throw
         // as `simulation_failed` (availability-class).
+        // BAT-1027: skip the live-config drift check when pinned — the override
+        // already forces both RPC calls to the same backing, so a deliberate
+        // pass-2 pin must not fail just because live Settings changed between
+        // the two passes.
         let urlAtEnd = null;
-        try {
-            urlAtEnd = _getSolanaRpcUrl();
-            if (typeof urlAtStart === 'string' && typeof urlAtEnd === 'string' && urlAtStart !== urlAtEnd) {
-                throw new Error('rpc_url_drift: active RPC URL changed between getMultipleAccounts and simulateTransaction');
+        if (!pinnedOverride) {
+            try {
+                urlAtEnd = _getSolanaRpcUrl();
+                if (typeof urlAtStart === 'string' && typeof urlAtEnd === 'string' && urlAtStart !== urlAtEnd) {
+                    throw new Error('rpc_url_drift: active RPC URL changed between getMultipleAccounts and simulateTransaction');
+                }
+            } catch (e) {
+                if (e && typeof e.message === 'string' && e.message.startsWith('rpc_url_drift')) throw e;
+                // Q6: _getSolanaRpcUrl() itself threw — log so we can see the
+                // degraded-drift-check case in production, instead of silently
+                // skipping.
+                _log(`[BurnerSigner] _getSolanaRpcUrl threw after simulateTransaction: ${e && e.message ? e.message : String(e)} — drift check degraded`, 'WARN');
             }
-        } catch (e) {
-            if (e && typeof e.message === 'string' && e.message.startsWith('rpc_url_drift')) throw e;
-            // Q6: _getSolanaRpcUrl() itself threw — log so we can see the
-            // degraded-drift-check case in production, instead of silently
-            // skipping.
-            _log(`[BurnerSigner] _getSolanaRpcUrl threw after simulateTransaction: ${e && e.message ? e.message : String(e)} — drift check degraded`, 'WARN');
         }
 
         // solanaRpc returns the parsed JSON body; policy expects `{ value:
@@ -324,6 +344,13 @@ function _lazyDefaultSimulator() {
             slot: simSlot || 0,
             preSlot,
             simulatorBacking: backing,
+            // BAT-1027: expose the resolved RPC URL so the policy's two-pass
+            // loss invariant can pin pass-2 to the SAME backing as pass-1.
+            // Null when the URL accessor was unavailable (export missing /
+            // threw) — the policy treats a null pinnedRpcUrl as "cannot safely
+            // run a second pass" and fails closed rather than letting the two
+            // passes hit different RPC views.
+            pinnedRpcUrl: (typeof urlAtStart === 'string' && urlAtStart) ? urlAtStart : null,
         };
     };
 }

@@ -9,6 +9,10 @@ const {
 
 const { androidBridgeCall } = require('../bridge');
 
+// BAT-1037: native-SOL-only denomination guard (pure, dependency-free module
+// so it is unit-testable without config). See tools/solana-send-guard.js.
+const { classifySolSendDenomination } = require('./solana-send-guard');
+
 const {
     solanaRpc, base58Encode, buildSolTransferTx,
     resolveToken, jupiterQuote, jupiterPrice,
@@ -36,6 +40,7 @@ const {
     signCancelViaBurner,
     signZeroCapTxViaBurner,
     recordJupiterOwnership,
+    forwardDispatchError,
 } = require('../wallet/dispatch');
 
 // BAT-697 PR B: Jupiter Trigger V2 adapter. Activated when
@@ -162,7 +167,7 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send **native SOL only** to a Solana address. This tool does NOT send SPL tokens (USDC, BONK, PYUSD, …) and does NOT take a fiat amount — do not supply ANY denomination field (`token` / `mint` / `asset` / `symbol` / `currency` / `coin` / `denom`); pass only `to` + `amount` (in SOL). For an SPL token transfer the user must use their wallet app / main wallet manually (a dedicated `solana_send_token` tool is not available yet). For a USD amount, call `solana_price` to get SOL/USD and compute the SOL amount yourself (solana_price does not convert non-USD currencies). **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -447,7 +452,7 @@ function _buildAuthSigners(walletRole) {
                     unsignedTxBase64: txB64,
                     flowName: 'trigger-v2-auth',
                 });
-                if (!r.ok) return { error: r.error, reason: r.reason };
+                if (!r.ok) return forwardDispatchError(r);
                 return r.signedTxBase64;
             },
             signMessage: null,
@@ -734,7 +739,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         const authSigners = _buildAuthSigners(walletRole);
         const authResult = await triggerV2.authenticate(walletAddress, authSigners);
         if (!authResult.ok) {
-            return { error: authResult.error, reason: authResult.reason };
+            return forwardDispatchError(authResult);
         }
         const token = authResult.token;
 
@@ -925,7 +930,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         });
 
         if (!dispatchResult.ok) {
-            return { error: dispatchResult.error, reason: dispatchResult.reason };
+            return forwardDispatchError(dispatchResult);
         }
 
         const orderResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || {};
@@ -1008,7 +1013,7 @@ async function _jupiterTriggerListV2(input, _chatId) {
         // a "sign to view your orders" prompt for users with no burner orders.
         const authSigners = _buildAuthSigners('main');
         const authResult = await triggerV2.authenticate(walletAddress, authSigners);
-        if (!authResult.ok) return { error: authResult.error, reason: authResult.reason };
+        if (!authResult.ok) return forwardDispatchError(authResult);
 
         const listResult = await triggerV2.listOrders({
             pubkey: walletAddress,
@@ -1118,7 +1123,7 @@ async function _jupiterTriggerCancelV2(input, _chatId) {
         const walletRole = creatorRole === 'burner' ? 'burner' : 'main';
         const authSigners = _buildAuthSigners(walletRole);
         const authResult = await triggerV2.authenticate(walletAddress, authSigners);
-        if (!authResult.ok) return { error: authResult.error, reason: authResult.reason };
+        if (!authResult.ok) return forwardDispatchError(authResult);
         const token = authResult.token;
 
         // 4. Cancel step 1 — get unsigned cancel tx.
@@ -1144,7 +1149,7 @@ async function _jupiterTriggerCancelV2(input, _chatId) {
                 unsignedTxBase64: step1.transaction,
                 flowName: 'jupiter_trigger_cancel_v2',
             });
-            if (!signRes.ok) return { error: signRes.error, reason: signRes.reason };
+            if (!signRes.ok) return forwardDispatchError(signRes);
             signedCancelB64 = signRes.signedTxBase64;
             signWallet = 'burner';
         } else {
@@ -1267,6 +1272,15 @@ const handlers = {
     },
 
     async solana_send(input, chatId) {
+        // BAT-1037: solana_send is native-SOL-only. Reject SPL / fiat
+        // denomination hints (field-only log — never the supplied value)
+        // before any routing or tx build, so a wrong-asset request fails fast
+        // with actionable guidance and zero downstream side effects.
+        const denomReject = classifySolSendDenomination(input);
+        if (denomReject) {
+            log(`[solana_send] REJECT field=${denomReject.field} error=${denomReject.error}`, 'WARN');
+            return { error: denomReject.error, reason: denomReject.reason };
+        }
         // BAT-582 Phase 5: route through wallet dispatch so a configured
         // burner wallet can sign autonomously when under cap, and the
         // main MWA flow stays the fallback for over-cap or uncapped assets.
@@ -1460,7 +1474,7 @@ const handlers = {
         });
 
         if (!result.ok) {
-            return { error: result.error, reason: result.reason };
+            return forwardDispatchError(result);
         }
         return { signature: result.signature, success: true, wallet: result.wallet };
     },
@@ -1954,7 +1968,7 @@ const handlers = {
             });
 
             if (!result.ok) {
-                return { error: result.error, reason: result.reason };
+                return forwardDispatchError(result);
             }
             const execResult = (result.broadcastResult && result.broadcastResult.ultra) || { signature: result.signature };
 
@@ -2283,7 +2297,7 @@ const handlers = {
             });
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error, reason: dispatchResult.reason };
+                return forwardDispatchError(dispatchResult);
             }
             const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || { signature: dispatchResult.signature };
 
@@ -2539,7 +2553,7 @@ const handlers = {
             }
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+                return { ...forwardDispatchError(dispatchResult), error: dispatchResult.error || 'cancel_failed' };
             }
 
             return {
@@ -2801,7 +2815,7 @@ const handlers = {
             });
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error, reason: dispatchResult.reason };
+                return forwardDispatchError(dispatchResult);
             }
             const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.recurring) || { signature: dispatchResult.signature };
 
@@ -3051,7 +3065,7 @@ const handlers = {
             }
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+                return { ...forwardDispatchError(dispatchResult), error: dispatchResult.error || 'cancel_failed' };
             }
 
             return {

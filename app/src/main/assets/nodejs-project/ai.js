@@ -48,6 +48,8 @@ const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbDirty, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 const loopDetector = require('./loop-detector');
+// BAT-1039: deterministic rendering of burner-policy SECURITY rejects (pure).
+const { buildSecurityRejectBlock } = require('./security-reject-block');
 // BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
 const _reasoningRecovery = require('./reasoning-recovery');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
@@ -770,12 +772,12 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     // Codex amendment #6 + v8.1 §5. Detail lives in DIAGNOSTICS.md.
     lines.push('### Burner policy (BAT-1013)');
     lines.push('Autonomous burner signs run through `wallet/burner-policy.js`. Rejects come in three classes the agent must distinguish:');
-    lines.push('1. **Security** (`drainer_*` including `drainer_burn`, `signer_*`, `burner_not_signer`, `fee_payer_not_in_allowlist`, `cosigner_not_in_allowlist`, `payer_mismatch`, `simulation_delta_mismatch`, `account_ownership_uncertain`, `simulation_mint_mismatch`, `token_2022_undeclared`, `token_2022_extension_unsupported`, `token_2022_send_unsupported`) — surface `reason` VERBATIM, refuse, do NOT suggest MWA retry. The same security rule applies to MWA; recommending bypass for a suspicious tx is unsafe. Exception: `token_2022_send_unsupported` is a known fail-closed limitation (not a suspicious tx) — for that code, tell the user to fall back to main wallet (MWA) for Token-2022 sends until autonomous per-mint fee declaration lands.');
+    lines.push('1. **Security** (`drainer_*` including `drainer_burn`, `drainer_undeclared_burner_ata`, `signer_*`, `burner_not_signer`, `fee_payer_not_in_allowlist`, `cosigner_not_in_allowlist`, `payer_mismatch`, `simulation_delta_mismatch`, `account_ownership_uncertain`, `simulation_mint_mismatch`, `token_2022_undeclared`, `token_2022_extension_unsupported`, `token_2022_send_unsupported`) — surface `reason` VERBATIM, refuse, do NOT suggest MWA retry. The same security rule applies to MWA; recommending bypass for a suspicious tx is unsafe. Exception: `token_2022_send_unsupported` is a known fail-closed limitation (not a suspicious tx) — for that code, tell the user to fall back to main wallet (MWA) for Token-2022 sends until autonomous per-mint fee declaration lands.');
     lines.push('2. **Availability** (`simulation_failed`, `simulation_returned_error`, `simulation_metadata_missing`, `tx_unparseable`, `alt_unresolved`, `policy_parse_uncertainty`) — surface `reason` (translated to plain language), then ask the user: retry burner once OR fall back to MWA. Default: ask. **Translation rules** (do NOT quote raw JSON): (a) `InsufficientFundsForFee` → "the burner is out of SOL for fees — send at least ~0.005 SOL to the burner address"; (b) `AccountLoadedTwice` → "the transaction references the same account as both sender and recipient — sending to yourself is not supported; pick a different recipient address." (c) BAT-1024: `simulation_returned_error` reasons are now pre-decoded — if the reason names a Program + Error (e.g. "SPL Token returned InsufficientFunds (code 1): ..." OR "Token-2022 returned InsufficientFunds (code 1): ..." OR "System Program returned ResultWithNegativeLamports (code 1): ..."), surface that decoded line in plain language. **For ANY decoded simulation_returned_error: do NOT claim Jupiter is down, do NOT guess at USDC ATA issues — the decoded reason is the truth.** **If the reason includes the hint "burner likely needs SOL top-up for rent" — OFFER to top up the burner from main wallet by calling `solana_send(source="main", to=<burner_pubkey>, amount=0.02)`, then retry the original action once the topup confirms.** The reason field also includes a `logs[-5..]` tail with the actual Program log lines for forensic reference; the last log line is usually the most precise. If active simulator is `public` and this is the first availability reject of the session, one-time hint: "Adding a Helius API key in Settings will give fewer of these." Note: `simulation_failed` includes the slot-drift case where account snapshots and simulation slots drift apart under public-RPC consistency pressure — the user-visible code is still `simulation_failed`.');
     lines.push('3. **Contract gap** (`expected_delta_required`, `expected_delta_invalid_kind`, `expected_delta_invalid_shape`, `payer_missing`) — internal tool bug; surface as internal error, report to user, do NOT retry or bypass.');
     lines.push('Policy-internal fields (`wsolAtaExemption`, `allowedBurnAccounts`, `tokenStandardConfig`) may appear in the policy reason log — these are forensic context only. Do NOT surface raw field names to the end user; explain in plain language. See DIAGNOSTICS.md → "burner policy (BAT-1013)" for per-code remediation and the policy-internal fields subsection.');
-    lines.push('**Jupiter deposit-destination trust (BAT-1031):** `jupiter_trigger_create_deposit`, `jupiter_dca_create_deposit`, `jupiter_swap_immediate`, and `jupiter_ultra` all TRUST `api.jup.ag` for the deposit/output destination. The policy enforces only the burner-side debit (exact mint + atomic amount + `sol_fee_headroom` on SOL inputs / `wantsBurnerSolFloor` on SPL inputs) and the drainer-opcode walk on burner-owned ATAs. The previous BAT-1025 `depositVault` destination-binding for V2 trigger was deleted in BAT-1031 because the prod-burner destination is an Anchor PDA, not a classic SPL Token Account, so SPL-decoding it produced a garbage mint. If a user asks "why was this V2 deposit accepted even though I never signed for that weird PDA?" — the answer is: it is Jupiter\'s program-owned account by design; the residual risk is bounded by the declared atomic amount + per-tx caps. Drainer opcodes on burner-owned accounts and burner-side delta mismatches still reject.');
-    lines.push('**Retired reject codes (BAT-1031):** `simulation_recipient_mismatch` was REMOVED. If you see it in logs, the device is running a stale APK (check System screen short SHA against the current commit) OR the log line predates the BAT-1031 ship. Do NOT treat it as a live security reject and do NOT advise the user to investigate the destination — the binding it enforced was deleted. REJECT_CODES locked length is now 28 (was 29).');
+    lines.push('**Jupiter deposit-destination trust (BAT-1031):** `jupiter_trigger_create_deposit`, `jupiter_dca_create_deposit`, `jupiter_swap_immediate`, and `jupiter_ultra` all TRUST `api.jup.ag` for the deposit/output destination. The policy enforces only the burner-side debit (exact mint + atomic amount + `sol_fee_headroom` on SOL inputs / `wantsBurnerSolFloor` on SPL inputs) and the drainer-opcode walk on burner-owned ATAs. The previous BAT-1025 `depositVault` destination-binding for V2 trigger was deleted in BAT-1031 because the prod-burner destination is an Anchor PDA, not a classic SPL Token Account, so SPL-decoding it produced a garbage mint. If a user asks "why was this V2 deposit accepted even though I never signed for that weird PDA?" — the answer is: it is Jupiter\'s program-owned account by design; the residual risk is bounded by the declared atomic amount + per-tx caps. Drainer opcodes on burner-owned accounts and burner-side delta mismatches still reject. **Per-account loss invariant (BAT-1027):** beyond that declared-account delta check, a two-pass complete-state scan also rejects `drainer_undeclared_burner_ata` when ANY burner-owned SPL account that is NOT the declared debit loses balance (an undeclared-static or ALT-hidden drain) on non-zero flows — it costs one extra simulateTransaction + getMultipleAccounts (~80–550ms) when a writable account was not pre-declared. See DIAGNOSTICS.md → "burner policy (BAT-1013)".');
+    lines.push('**Retired reject codes (BAT-1031):** `simulation_recipient_mismatch` was REMOVED. If you see it in logs, the device is running a stale APK (check System screen short SHA against the current commit) OR the log line predates the BAT-1031 ship. Do NOT treat it as a live security reject and do NOT advise the user to investigate the destination — the binding it enforced was deleted. REJECT_CODES locked length is now 29 (BAT-1027 re-added one security code, `drainer_undeclared_burner_ata`; BAT-1031 had taken it to 28).');
     lines.push('Kill switch (per Codex amendment #5): set both per-tx caps to zero in Settings → Burner Wallet → Caps to halt autonomous signing. Stop foreground service nukes signing instantly. Wipe burner destroys the sealed key. After wipe + reimport, the burner pubkey is re-verified against `/burner/status` on the next autonomous sign (no app restart required). See DIAGNOSTICS.md → "burner policy (BAT-1013)" for the full reject-code list with per-code remediation.');
     // BAT-1013 foundation patch: tool-handler error codes — these are DIFFERENT
     // from burner-policy reject codes above (they fire at the tool layer before
@@ -797,6 +799,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     // "from my burner" — pass `source="burner"`. Otherwise omit and
     // let cap-based routing decide (default).
     lines.push('**solana_send `source` param:** when the user says "from main" / "from my main wallet" / "via MWA" → use `source="main"` (forces MWA popup). When user says "from burner" → use `source="burner"`. Otherwise omit (default: route by cap).');
+    lines.push('**solana_send is native-SOL-only (BAT-1037):** it sends ONLY native SOL — never an SPL token (USDC/PYUSD/BONK/…) and never a fiat amount. Do NOT pass any denomination field (token/mint/asset/symbol/currency/coin/denom) to it. If the user wants to send an SPL token, explain SeekerClaw cannot send SPL tokens directly yet — they must move the token from their wallet app / main wallet manually (a dedicated `solana_send_token` tool is not available yet; do not call it). If the user gives a USD amount, call `solana_price` to get the SOL/USD price and compute the SOL amount yourself — `solana_price` does NOT convert non-USD currencies, so for EUR/GBP/etc. ask the user to supply SOL or a USD figure. A wrong-asset call is rejected with `solana_send_sol_only` (SPL/wrong token) or `solana_send_fiat_denomination` (currency) — surface the reason, do not retry the same call.');
     lines.push('**Web search:** web_search uses the search provider configured in Settings (Brave, Perplexity, Exa, Tavily, or Firecrawl). Use the provider parameter to override for a specific query. Brave/Exa/Tavily return search results as {title, url, snippet}. Perplexity returns a synthesized answer with citations. Firecrawl is optimized for deep web scraping. If web_search returns a fallback response (missing API key for the provider), use web_fetch instead — fetch information directly from known URLs (Wikipedia, official docs, news sites, APIs). Mention to the user that setting up a search provider API key in Settings would give better results, but do NOT refuse to help — always try web_fetch or use your training knowledge first.');
     lines.push('**Web fetch:** Use web_fetch to read webpages or call APIs. Supports custom headers (Bearer auth), POST/PUT/DELETE methods, and request bodies. Returns markdown (default), JSON, or plain text. Use raw=true for stripped text. Up to 50K chars.');
     lines.push('**Shell execution:** Use shell_exec to run commands on the device. Sandboxed to workspace directory with a predefined allowlist of Unix utilities and Android tools (ls, cat, grep, find, curl, sed, diff, screencap, getprop, etc.). Note: node/npm/npx are NOT available. Shell arguments cannot contain special characters ({, }, $, [, ], etc.) — for complex text processing (awk, tr patterns) use js_eval instead. 30s timeout. No chaining, redirection, or command substitution — one command at a time.');
@@ -2916,6 +2919,9 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-246: Each tool execution is individually guarded — if one tool throws,
             // the others still run and ALL tool calls get matching tool result entries.
             const toolResults = [];
+            // BAT-1039: set on the first SECURITY-class tool reject in this round
+            // so the turn short-circuits after the round (no further model call).
+            let securityRejectPending = null;
             for (let i = 0; i < parsed.toolCalls.length; i++) {
                 const toolUse = parsed.toolCalls[i];
                 // OpenClaw parity: normalize tool name before ALL gating checks
@@ -3023,6 +3029,48 @@ async function chat(chatId, userMessage, options = {}) {
                     content: truncateToolResult(JSON.stringify(result)),
                 });
 
+                // BAT-1039: short-circuit on the FIRST burner-policy security
+                // reject. The failing tool's result is already appended above;
+                // fill every remaining un-executed parallel tool_use with a
+                // skipped result (the API requires a tool_result for every
+                // tool_use — no orphans), then stop. availability / contract_gap
+                // rejects are NOT short-circuited (they continue to the model).
+                if (!securityRejectPending && result && result.policyClass === 'security') {
+                    securityRejectPending = {
+                        rejectCode: result.error,
+                        rejectReason: result.reason,
+                        toolName: toolUse.name,
+                        toolUseId: toolUse.id,
+                    };
+                    // PR #407 R1: `messages` IS the durable conversation
+                    // (getConversation returns it by reference), so the failing
+                    // tool_result — just pushed above with the raw, attacker-
+                    // influenced reason in its content — would be re-fed to the
+                    // model on EVERY later turn. Redact it to the reject code +
+                    // class NOW, before it reaches history. The reason still
+                    // reaches the USER via the deterministic block built in
+                    // _finalizeSecurityReject; the model only ever sees this
+                    // redacted result + the bounded block.
+                    for (let j = toolResults.length - 1; j >= 0; j--) {
+                        if (toolResults[j].toolCallId === toolUse.id) {
+                            toolResults[j].content = JSON.stringify({
+                                error: result.error,
+                                policyClass: 'security',
+                                note: 'reason shown to the user via the security block; omitted from history',
+                            });
+                            break;
+                        }
+                    }
+                    for (let k = i + 1; k < parsed.toolCalls.length; k++) {
+                        toolResults.push({
+                            role: 'tool',
+                            toolCallId: parsed.toolCalls[k].id,
+                            content: JSON.stringify({ error: 'skipped — prior tool blocked by security policy' }),
+                        });
+                    }
+                    break; // stop the tool-execution for-loop
+                }
+
                 // DeerFlow P1: Loop detection — track identical tool calls in sliding window
                 const loopResult = loopDetector.recordToolCall(chatId, toolUse.name, toolUse.input);
                 if (loopResult.status === 'warn') {
@@ -3047,6 +3095,17 @@ async function chat(chatId, userMessage, options = {}) {
             // Add tool results to history in neutral format — one message per result
             for (const tr of toolResults) {
                 messages.push(tr);
+            }
+
+            // BAT-1039: a security reject short-circuits the turn HERE — after the
+            // failing + skipped tool_results are committed to history (so any
+            // checkpoint / debug snapshot stays structurally valid: every
+            // tool_use has a matching tool_result), and BEFORE any further
+            // model / summary call could see the untrusted reason. Returning here
+            // also covers every downstream exit path (budget / silent / normal /
+            // exception), which a post-final-text hook would miss.
+            if (securityRejectPending) {
+                return _finalizeSecurityReject(chatId, taskId, turnId, securityRejectPending);
             }
 
             // DeerFlow P1: If loop was warned, inject guidance as user message
@@ -3289,6 +3348,55 @@ async function chat(chatId, userMessage, options = {}) {
 // ============================================================================
 // INTERNAL HELPERS
 // ============================================================================
+
+// BAT-1039: finalize a security short-circuit — commit the deterministic block
+// to history, do the normal end-of-turn bookkeeping, and return it. Called from
+// the tool loop the moment the first security-class reject is seen, BEFORE any
+// further model/summary call could see the untrusted reason (the failing
+// tool_result was already redacted to its code + class in the loop, so the raw
+// reason survives only in this deterministic block, shown to the user). The
+// forensic log carries reasonLen ONLY — the raw reason is never logged.
+function _finalizeSecurityReject(chatId, taskId, turnId, pending) {
+    const block = buildSecurityRejectBlock(pending.rejectCode, pending.rejectReason);
+    addToConversation(chatId, 'assistant', block);
+    // PR #407 R2: addToConversation's MAX_HISTORY trim shifts one message at a
+    // time and can orphan a tool_use/tool_result group at the front — and this
+    // path runs right after a tool round. Run the same sanitizer the next turn
+    // would (see line ~2438) NOW so this security exit always leaves a
+    // structurally valid history instead of relying on the next turn to repair.
+    sanitizeConversation(getConversation(chatId), turnId);
+    // This turn's task is finished — clear it + its checkpoints BEFORE the session
+    // bookkeeping (which may fire an async summary), matching the cleanup-then-
+    // track ordering of the other terminal exits.
+    clearActiveTask(chatId);
+    try { cleanupChatCheckpoints(chatId); }
+    catch (e) { log(`[SecurityReject] checkpoint cleanup failed: ${e && e.message ? e.message : String(e)}`, 'DEBUG'); }
+    // PR #407 R2: mirror the normal/budget exits' session bookkeeping — the early
+    // return otherwise skips the idle-summary (re)arm + checkpoint-summary trigger
+    // for these turns. NOTE: if the checkpoint summary fires, it reads the
+    // deterministic block from history — the SAME bounded reason every later turn
+    // already sees — never the raw tool_result reason (redacted to code + class in
+    // the loop). So the summary surfaces nothing the block itself doesn't.
+    {
+        const trk = getSessionTrack(chatId);
+        trk.lastMessageTime = Date.now();
+        trk.messageCount++;
+        scheduleIdleSummary(chatId);
+        const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+        if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+            saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+        }
+    }
+    log(`[SecurityReject] ${JSON.stringify({
+        turnId,
+        taskId,
+        chatId: String(chatId || ''),
+        tool: pending.toolName,
+        code: pending.rejectCode,
+        reasonLen: (typeof pending.rejectReason === 'string' ? pending.rejectReason.length : 0),
+    })}`, 'WARN');
+    return block;
+}
 
 /**
  * Extract the original user goal from conversation history.

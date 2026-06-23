@@ -93,21 +93,26 @@ const { readAccountInfo, tokenDelta, lamportsDelta } = require('./spl-token-layo
 // uses tokenDelta for delta computation.
 const SPL_MINT_AGNOSTIC = '__spl_mint_agnostic__';
 
-// ─── Reject codes (locked: REJECT_CODES.length must equal 28) ─────────────
+// ─── Reject codes (locked: REJECT_CODES.length must equal 29) ─────────────
 //
-// BAT-1031: locked length lowered 29 → 28. The `simulation_recipient_mismatch`
-// code was the only fire site for the prior `validateSimDelta expectedTokenOwner`
-// branch (a depositVault-destination-owner binding that did not work against
-// the prod burner — see BAT-1031). The branch is deleted, and the code goes
-// with it. If a future BAT revives same-class recipient-owner binding,
-// re-introduce the code together with the producer + tests.
-//
-// BAT-1013-followup amendment: locked length bumped 26 → 29 to accommodate
-// three new fail-closed paths shipped with producers:
-//   - drainer_burn (B2): SPL Burn / BurnChecked on burner-owned account
-//   - token_2022_extension_unsupported (B3): Token-2022 extension opcode
-//   - token_2022_send_unsupported (C6/B3): SPL-token-2022 send/pay without
-//     caller-declared tokenStandardConfig
+// Length changelog (chronological — current count is 29; the drift-guard test
+// asserts 29 and the ai.js system-prompt door states 29):
+//   - 26  baseline (BAT-1013).
+//   - 29  BAT-1013-followup: +3 fail-closed paths shipped with producers —
+//         `drainer_burn` (B2: SPL Burn/BurnChecked on a burner-owned account),
+//         `token_2022_extension_unsupported` (B3: Token-2022 extension opcode),
+//         `token_2022_send_unsupported` (C6/B3: SPL-Token-2022 send/pay without
+//         caller-declared tokenStandardConfig).
+//   - 28  BAT-1031: -1 — removed `simulation_recipient_mismatch`, the only fire
+//         site for the prior `validateSimDelta expectedTokenOwner` branch (a
+//         depositVault-destination-owner binding that did not work against the
+//         prod burner). If a future BAT revives recipient-owner binding,
+//         re-introduce the code with its producer + tests.
+//   - 29  BAT-1027: +1 — `drainer_undeclared_burner_ata` (security), the
+//         post-simulation per-account loss invariant rejecting an undeclared
+//         burner-owned SPL account that loses balance across the simulated tx
+//         (ALT-resolved or undeclared-static drain). Producer + fixtures ship
+//         in the same PR.
 
 const REJECT_CODES = Object.freeze([
     // Structural / parsing
@@ -145,6 +150,11 @@ const REJECT_CODES = Object.freeze([
     'simulation_metadata_missing',
     'simulation_delta_mismatch',
     'simulation_mint_mismatch',
+    // Post-simulation per-account loss invariant (BAT-1027): a burner-owned
+    // SPL token account that is NOT the declared permitted debit lost balance
+    // across the simulated tx — an undeclared-static or ALT-resolved burner
+    // ATA drain that the declared-account delta checks above do not cover.
+    'drainer_undeclared_burner_ata',
 ]);
 
 // Each rejection code's class — drives agent guidance in DIAGNOSTICS.md
@@ -166,6 +176,7 @@ const REJECT_CLASS = Object.freeze({
     cosigner_not_in_allowlist: 'security',
     simulation_delta_mismatch: 'security',
     simulation_mint_mismatch: 'security',
+    drainer_undeclared_burner_ata: 'security',      // NEW (BAT-1027): post-sim per-account loss invariant
     account_ownership_uncertain: 'security',
     token_2022_undeclared: 'security',
     token_2022_extension_unsupported: 'security',   // NEW (B3)
@@ -192,6 +203,9 @@ const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const ATA_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
 const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+// Wrapped-SOL native mint — used to derive the canonical burner wSOL ATA when
+// validating an expectedDelta.wsolAtaExemption (BAT-1027 hardening).
+const NATIVE_MINT_BASE58 = 'So11111111111111111111111111111111111111112';
 
 // SPL Token instruction discriminators (drainer primitives — first byte of data).
 // Source: github.com/solana-program/token, Token v3 + Token-2022 share these IDs.
@@ -1573,6 +1587,253 @@ function validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountK
     return accept();
 }
 
+// ─── BAT-1027: two-pass complete-state per-account loss invariant ──────────
+//
+// Closes the residual drain vector that the declared-account delta checks
+// (validateSimDelta) and the opcode walk do not cover: a burner-owned SPL
+// token account that is NOT the declared permitted debit losing balance across
+// the tx — whether referenced by a static index the caller never declared, or
+// resolved late via an Address Lookup Table.
+//
+// WHY TWO PASSES. The production simulator (`_lazyDefaultSimulator`) only
+// returns post-state for the addresses the policy requested up front (pass 1),
+// and the complete writable-account set is not known until pass 1 resolves
+// `loadedAddresses`. Pass 2 re-simulates requesting post-state for EVERY
+// writable account (static-writable ∪ ALT-writable). Writable-only is provably
+// complete for token loss: the Solana runtime forbids mutating a readonly
+// account, including through CPI, so a readonly account can never lose balance.
+
+// Conservative fail-closed ceiling on the candidate (writable) address count.
+// Covers every current Jupiter / trigger / DCA / send / x402 flow with wide
+// margin; anything larger fails closed rather than fanning out an unbounded
+// getMultipleAccounts on the autonomous-signing hot path.
+const MAX_CANDIDATE_ADDRESSES = 128;
+
+// Build the candidate set = every WRITABLE account key (static-writable ∪
+// ALT-writable). Static writability is derived from the parsed message header
+// per the canonical Solana layout (Codex pin #2):
+//   - signed writable:   indices [0, numRequiredSignatures - numReadonlySigned)
+//   - unsigned writable:  indices [numRequiredSignatures,
+//                                  staticAccountKeys.length - numReadonlyUnsigned)
+// All header counts/ranges are validated BEFORE slicing; a malformed
+// combination fails closed as `policy_parse_uncertainty` rather than producing
+// a truncated/garbage candidate set. Returns `{ candidateSet }` or `{ err }`.
+function buildCandidateSet(parsed, writableALT) {
+    const nSig = parsed.numRequiredSignatures;
+    const nroSigned = parsed.numReadonlySigned;
+    const nroUnsigned = parsed.numReadonlyUnsigned;
+    const staticKeys = Array.isArray(parsed.staticAccountKeys) ? parsed.staticAccountKeys : null;
+    const staticLen = staticKeys ? staticKeys.length : -1;
+
+    if (!Number.isInteger(nSig) || !Number.isInteger(nroSigned) || !Number.isInteger(nroUnsigned)
+        || staticLen < 0
+        || nSig < 0 || nroSigned < 0 || nroUnsigned < 0
+        || nroSigned > nSig                       // readonly-signed cannot exceed signers
+        || nSig > staticLen                       // signers cannot exceed static keys
+        || (nSig + nroUnsigned) > staticLen) {    // unsigned-readonly tail must fit
+        return { err: reject('policy_parse_uncertainty',
+            `malformed tx header for candidate-set derivation: numRequiredSignatures=${nSig}, numReadonlySigned=${nroSigned}, numReadonlyUnsigned=${nroUnsigned}, staticKeys=${staticLen}`) };
+    }
+
+    const candidate = new Set();
+    for (let i = 0; i < nSig - nroSigned; i++) {                 // signed writable
+        if (isNonEmptyBase58(staticKeys[i])) candidate.add(staticKeys[i]);
+    }
+    for (let i = nSig; i < staticLen - nroUnsigned; i++) {       // unsigned writable
+        if (isNonEmptyBase58(staticKeys[i])) candidate.add(staticKeys[i]);
+    }
+    for (const k of writableALT) {                              // ALT-resolved writable
+        if (isNonEmptyBase58(k)) candidate.add(k);
+    }
+
+    if (candidate.size > MAX_CANDIDATE_ADDRESSES) {
+        return { err: reject('simulation_metadata_missing',
+            `candidate writable-account count ${candidate.size} exceeds MAX ${MAX_CANDIDATE_ADDRESSES} — failing closed (BAT-1027 conservative V1 ceiling)`) };
+    }
+    return { candidateSet: [...candidate] };
+}
+
+// Exact equality of two `loadedAddresses` objects (writable + readonly arrays,
+// same order). ALT resolution MUST be identical between pass 1 and pass 2; any
+// drift means the two passes saw different lookup-table contents and the loss
+// comparison would be meaningless — fail closed.
+function loadedAddressesEqual(a, b) {
+    const aw = Array.isArray(a && a.writable) ? a.writable : [];
+    const ar = Array.isArray(a && a.readonly) ? a.readonly : [];
+    const bw = Array.isArray(b && b.writable) ? b.writable : [];
+    const br = Array.isArray(b && b.readonly) ? b.readonly : [];
+    if (aw.length !== bw.length || ar.length !== br.length) return false;
+    for (let i = 0; i < aw.length; i++) if (aw[i] !== bw[i]) return false;
+    for (let i = 0; i < ar.length; i++) if (ar[i] !== br[i]) return false;
+    return true;
+}
+
+/**
+ * BAT-1027 — run the per-account loss invariant over the complete writable set.
+ *
+ * Accept iff, for every candidate account that decodes as an SPL token account
+ * owned by the burner AND is not already validated by `validateSimDelta`
+ * (declared checks) or the declared wSOL transient exemption:
+ *   netDelta = post.amount - pre.amount  >=  0
+ * Any undeclared negative delta → reject('drainer_undeclared_burner_ata').
+ *
+ * Skipped for zero_value kinds — those already enroll every declared
+ * burner-owned account with an exact-zero check (buildAccountChecks) and gate
+ * SPL Transfer / Burn / Close through the drainer walk, so the residual
+ * undeclared-drain vector this invariant targets does not apply there (and a
+ * legitimate cancel-flow account closure would otherwise look like a loss).
+ *
+ * LIMITATION: this invariant catches token BALANCE loss. A pure SetAuthority /
+ * Approve on an undeclared burner-owned ATA (one not in burnerOwnedAccounts, so
+ * not in the drainer-walk ownedUnion) with NO immediate balance change is not
+ * caught here (netDelta 0). Callers must declare every burner-owned ATA in
+ * burnerOwnedAccounts to get drainer-walk SetAuthority/Approve protection; this
+ * is a pre-existing ownedUnion property, not introduced or worsened by BAT-1027.
+ *
+ * @returns {Promise<{ ok: boolean, error?, reason?, class? }>}
+ */
+async function validatePerAccountLoss(ctx) {
+    const {
+        parsed, writableALT, requestedAddresses, preSnapshot, sim,
+        pass1PinnedRpcUrl, pass1Loaded, burnerPubkey, expectedDelta,
+        checks, simulator, txBase64,
+    } = ctx;
+
+    if (expectedDelta.kind === 'zero_value_auth' || expectedDelta.kind === 'zero_value_cancel') {
+        return accept();
+    }
+
+    // 1. Candidate set = all writable keys (static-writable ∪ ALT-writable).
+    const built = buildCandidateSet(parsed, writableALT);
+    if (built.err) return built.err;
+    const candidateSet = built.candidateSet;
+    if (candidateSet.length === 0) return accept();
+
+    // 2. Accounts validateSimDelta already owns (declared checks) + the
+    //    declared wSOL transient exemption are validated elsewhere with their
+    //    proper per-kind tolerances; the loss invariant only scans the rest.
+    //    NOTE: declaredAddresses is intentionally built ONLY from
+    //    buildAccountChecks() entries, NOT from expectedDelta.burnerOwnedAccounts.
+    //    Only burnerDebit.account is a permitted negative delta — an account a
+    //    caller lists in burnerOwnedAccounts (for drainer-walk ownership) is
+    //    still subject to this loss invariant unless it is also the declared
+    //    debit. wsolAtaExemption.ata was already pinned to the burner's
+    //    canonical wSOL ATA in validateBurnerTx step 1b, so it cannot be an
+    //    arbitrary attacker-chosen account here.
+    const declaredAddresses = new Set(checks.map(c => c.address));
+    if (expectedDelta.kind === 'jupiter_swap_immediate'
+        && expectedDelta.wsolAtaExemption && isNonEmptyBase58(expectedDelta.wsolAtaExemption.ata)) {
+        // Kind-gated to jupiter_swap_immediate to match the drainer-walk
+        // CloseAccount exemption — a stray wsolAtaExemption on a non-swap
+        // payload cannot silently carve an account out of the loss scan.
+        declaredAddresses.add(expectedDelta.wsolAtaExemption.ata);
+    }
+
+    // 3. Resolve pre/post for every candidate. Skip pass 2 ONLY when every
+    //    candidate is already covered by pass 1 (candidateSet ⊆
+    //    requestedAddresses). The naive "skip when no ALT" is unsafe: a
+    //    static-writable burner ATA the caller never declared is absent from
+    //    pass 1's requested set, so non-zero burner flows almost always pay
+    //    pass 2.
+    const reqIndex = new Map();
+    for (let i = 0; i < requestedAddresses.length; i++) {
+        if (!reqIndex.has(requestedAddresses[i])) reqIndex.set(requestedAddresses[i], i);
+    }
+    const needPass2 = candidateSet.some(a => !reqIndex.has(a));
+
+    let preArr, postArr;
+    if (!needPass2) {
+        const post1 = (sim && sim.value && Array.isArray(sim.value.accounts)) ? sim.value.accounts : null;
+        if (!post1) return reject('simulation_metadata_missing', 'BAT-1027 pass-1 sim.value.accounts missing for candidate loss scan');
+        preArr = candidateSet.map(a => preSnapshot[reqIndex.get(a)]);
+        postArr = candidateSet.map(a => post1[reqIndex.get(a)]);
+    } else {
+        // Pass 2 required. Pinned RPC is MANDATORY (Codex pin #1): a security
+        // comparison across two passes must not resolve against different
+        // backings. A missing pinnedRpcUrl (URL accessor unavailable) fails
+        // closed rather than running an unpinned second pass.
+        if (typeof pass1PinnedRpcUrl !== 'string' || !pass1PinnedRpcUrl) {
+            return reject('simulation_failed',
+                'BAT-1027 second pass requires a pinned RPC URL from pass 1, but none was provided (URL accessor unavailable) — failing closed rather than running an unpinned second pass');
+        }
+        let pass2;
+        try {
+            pass2 = await simulator(txBase64, { addresses: candidateSet, pinnedRpcUrl: pass1PinnedRpcUrl });
+        } catch (e) {
+            return reject('simulation_failed', `BAT-1027 second pass simulation threw: ${e && e.message ? e.message : String(e)}`);
+        }
+        if (!pass2 || typeof pass2 !== 'object' || !pass2.sim || typeof pass2.sim !== 'object'
+            || !pass2.sim.value || typeof pass2.sim.value !== 'object') {
+            return reject('simulation_failed', 'BAT-1027 second pass returned no sim.value object');
+        }
+        if (pass2.sim.value.err !== null && pass2.sim.value.err !== undefined) {
+            // Decode consistently with pass 1 (formatSimulationErrorReason):
+            // human-readable program + error + a logs tail, not raw JSON.
+            const p2l = pass2.sim.value.loadedAddresses || {};
+            const p2w = Array.isArray(p2l.writable) ? p2l.writable.filter(isNonEmptyBase58) : [];
+            const p2r = Array.isArray(p2l.readonly) ? p2l.readonly.filter(isNonEmptyBase58) : [];
+            const p2Combined = [...parsed.staticAccountKeys, ...p2w, ...p2r];
+            return reject('simulation_returned_error', formatSimulationErrorReason(pass2.sim.value, parsed, p2Combined));
+        }
+        const pass2Pre = Array.isArray(pass2.preSnapshot) ? pass2.preSnapshot : null;
+        const pass2Post = Array.isArray(pass2.sim.value.accounts) ? pass2.sim.value.accounts : null;
+        if (!pass2Pre || pass2Pre.length !== candidateSet.length) {
+            return reject('simulation_metadata_missing', `BAT-1027 second pass preSnapshot length ${pass2Pre ? pass2Pre.length : 'null'} != candidate count ${candidateSet.length}`);
+        }
+        if (!pass2Post || pass2Post.length !== candidateSet.length) {
+            return reject('simulation_metadata_missing', `BAT-1027 second pass value.accounts length ${pass2Post ? pass2Post.length : 'null'} != candidate count ${candidateSet.length}`);
+        }
+        const p2Loaded = pass2.sim.value.loadedAddresses || {};
+        const p2Filtered = {
+            writable: Array.isArray(p2Loaded.writable) ? p2Loaded.writable.filter(isNonEmptyBase58) : [],
+            readonly: Array.isArray(p2Loaded.readonly) ? p2Loaded.readonly.filter(isNonEmptyBase58) : [],
+        };
+        if (!loadedAddressesEqual(pass1Loaded, p2Filtered)) {
+            return reject('simulation_metadata_missing', 'BAT-1027 loadedAddresses drifted between pass 1 and pass 2 — ALT resolution inconsistent');
+        }
+        preArr = pass2Pre;
+        postArr = pass2Post;
+    }
+
+    // 4. Per-account loss check.
+    for (let i = 0; i < candidateSet.length; i++) {
+        const addr = candidateSet[i];
+        if (declaredAddresses.has(addr)) continue;   // owned by validateSimDelta / wSOL exemption
+        // null = legitimately absent account; undefined = the simulator
+        // returned a short/holey array (metadata gap). Fail closed on undefined.
+        if (postArr[i] === undefined || preArr[i] === undefined) {
+            return reject('simulation_metadata_missing', `BAT-1027 candidate ${addr} has undefined pre/post state — metadata gap`);
+        }
+        const preAI = readAccountInfo(preArr[i]);
+        const postAI = readAccountInfo(postArr[i]);
+        // Only an account actually program-owned by the SPL Token / Token-2022
+        // runtime can hold a token balance. Without this gate a non-token
+        // Anchor PDA (e.g. a 372-byte Jupiter Trigger order PDA) whose raw
+        // bytes happen to embed the burner pubkey at data offset 32 would be
+        // misread as a burner-owned token account, and a decreasing numeric
+        // field at offset 64 would fire a FALSE-POSITIVE drainer_undeclared_
+        // burner_ata — permanently halting a legitimate non-zero flow. The
+        // on-chain program owner is authoritative; the embedded data `owner`
+        // alone is not.
+        const isSplProgramOwned = preAI.programOwner === TOKEN_PROGRAM_ID
+            || preAI.programOwner === TOKEN_2022_PROGRAM_ID
+            || postAI.programOwner === TOKEN_PROGRAM_ID
+            || postAI.programOwner === TOKEN_2022_PROGRAM_ID;
+        if (!isSplProgramOwned) continue;                  // not a token account at all
+        const burnerOwnsPre = preAI.exists && preAI.splToken && preAI.splToken.owner === burnerPubkey;
+        const burnerOwnsPost = postAI.exists && postAI.splToken && postAI.splToken.owner === burnerPubkey;
+        if (!burnerOwnsPre && !burnerOwnsPost) continue;   // not a burner-owned token account
+        const { delta } = tokenDelta(preAI, postAI);
+        if (delta < 0n) {
+            return reject('drainer_undeclared_burner_ata',
+                `burner-owned SPL account ${addr} lost ${(-delta).toString()} atomic units across the tx but is not the declared permitted debit `
+                + `(expectedDelta.kind=${expectedDelta.kind}) — undeclared burner-ATA drain; refusing to sign`);
+        }
+    }
+
+    return accept();
+}
+
 // ─── Public entry point ───────────────────────────────────────────────────
 
 /**
@@ -1633,6 +1894,34 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
     // ── 1. expectedDelta shape ──
     const deltaCheck = validateExpectedDeltaShape(expectedDelta);
     if (!deltaCheck.ok) return deltaCheck;
+
+    // ── 1b. wSOL exemption must be the burner's CANONICAL wSOL ATA ──
+    //      (BAT-1027 adversarial-review hardening) A declared wsolAtaExemption
+    //      exempts its `ata` from the per-account loss invariant AND the
+    //      drainer-walk CloseAccount gate. If a caller (or a future tool bug)
+    //      put an arbitrary burner-owned SPL ATA here, that account could be
+    //      drained without any reject firing (Transfer is not drainer-gated for
+    //      non-zero kinds, and the loss scan would skip it). Pin it to the
+    //      address actually derived from the burner + native mint; anything
+    //      else is a contract bug and fails closed. Gated to
+    //      jupiter_swap_immediate — the only kind where wsolAtaExemption is
+    //      meaningful (matches the drainer-walk CloseAccount exemption); on any
+    //      other kind a stray exemption is ignored (not verified, not exempted).
+    if (expectedDelta.kind === 'jupiter_swap_immediate'
+        && expectedDelta.wsolAtaExemption && isNonEmptyBase58(expectedDelta.wsolAtaExemption.ata)) {
+        let expectedWsolAta = null;
+        try {
+            // eslint-disable-next-line global-require
+            expectedWsolAta = require('./ata').deriveAtaBase58(options.burnerPubkey, NATIVE_MINT_BASE58);
+        } catch (e) {
+            return reject('policy_parse_uncertainty',
+                `could not derive canonical wSOL ATA to validate wsolAtaExemption: ${e && e.message ? e.message : String(e)}`);
+        }
+        if (expectedWsolAta !== expectedDelta.wsolAtaExemption.ata) {
+            return reject('expected_delta_invalid_shape',
+                `wsolAtaExemption.ata ${expectedDelta.wsolAtaExemption.ata} is not the burner's canonical wSOL ATA (${expectedWsolAta}) — refusing to exempt an arbitrary account from the loss invariant`);
+        }
+    }
 
     // ── 2. Parse tx ──
     let parsed;
@@ -1783,6 +2072,41 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
     const deltaResult = validateSimDelta(sim, preSnapshot, requestedAddresses, combinedAccountKeys, options.burnerPubkey, expectedDelta);
     if (!deltaResult.ok) return deltaResult;
 
+    // ── 13. BAT-1027: two-pass complete-state per-account loss invariant ──
+    //      Closes the residual undeclared / ALT-resolved burner-ATA drain
+    //      vector that the declared-account delta checks (step 12) and the
+    //      opcode walk do not cover. Runs a second, candidate-set simulation
+    //      (pinned to pass-1's RPC) when any writable account was not already
+    //      requested in pass 1. No-op for zero_value kinds (already covered by
+    //      the drainer-walk Transfer gating + per-account zero checks).
+    let lossResult;
+    try {
+        lossResult = await validatePerAccountLoss({
+            parsed,
+            writableALT,
+            requestedAddresses,
+            preSnapshot,
+            sim,
+            pass1PinnedRpcUrl: simResult.pinnedRpcUrl,
+            // Filtered to match the keys that actually feed the candidate set
+            // (writableALT/readonlyALT are isNonEmptyBase58-filtered above), so
+            // the pass-1↔pass-2 drift compare and the candidate set operate on
+            // the same view of loadedAddresses.
+            pass1Loaded: { writable: writableALT, readonly: readonlyALT },
+            burnerPubkey: options.burnerPubkey,
+            expectedDelta,
+            checks,
+            simulator: options.simulator,
+            txBase64,
+        });
+    } catch (e) {
+        // A throw here must NOT escape as an unstructured exception — dispatch
+        // would surface it as a class-less 'sign_failed', losing the security
+        // classification of a genuine reject. Fail closed as availability.
+        return reject('simulation_failed', `BAT-1027 per-account loss check threw: ${e && e.message ? e.message : String(e)}`);
+    }
+    if (!lossResult.ok) return lossResult;
+
     // Copilot PR #398 R15: resolve programIdIdx → base58 string using the
     // ALT-resolved combinedAccountKeys (which includes loadedAddresses from
     // the simulation response). Matches verifySwapTransaction's shape;
@@ -1805,6 +2129,8 @@ module.exports = {
     _validateDrainerOpcodes: validateDrainerOpcodes,
     _validateExpectedDeltaShape: validateExpectedDeltaShape,
     _validateSimDelta: validateSimDelta,
+    _validatePerAccountLoss: validatePerAccountLoss,   // BAT-1027 two-pass loss invariant
+    _buildCandidateSet: buildCandidateSet,             // BAT-1027 candidate (writable) set
     _buildAccountChecks: buildAccountChecks,
     _applyTolerance: applyTolerance,
     _indexOfPubkey: indexOfPubkey,

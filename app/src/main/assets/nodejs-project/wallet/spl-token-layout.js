@@ -82,6 +82,15 @@ function readAccountInfo(accountInfo) {
     if (accountInfo === null || accountInfo === undefined) return { exists: false };
     if (typeof accountInfo !== 'object') return { exists: false };
     const out = { exists: true };
+    // The on-chain program that OWNS this account — NOT the token-account
+    // `owner` field embedded in the data (that one is the wallet that owns the
+    // tokens, decoded into `splToken.owner` below). A real SPL token account
+    // is always program-owned by the SPL Token or Token-2022 program. BAT-1027
+    // uses `programOwner` to confirm an account is actually managed by the
+    // token runtime before trusting the decoded `splToken.owner`; otherwise a
+    // non-token Anchor PDA whose raw bytes happen to embed a wallet pubkey at
+    // data offset 32 would be misread as a token account.
+    out.programOwner = (typeof accountInfo.owner === 'string') ? accountInfo.owner : null;
     if (typeof accountInfo.lamports === 'number' || typeof accountInfo.lamports === 'bigint') {
         try { out.lamports = BigInt(accountInfo.lamports); }
         catch (_) { out.lamports = 0n; }
