@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // tests/nodejs-project/solana-send-guard.test.js
 //
 // BAT-1037: solana_send native-SOL-only denomination guard. Inspect ALL
