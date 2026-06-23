@@ -857,6 +857,22 @@ function _burnerOff() {
         assert.strictEqual(reserve.body.atomicAmount, '1000000');
     });
 
+    await check('solana_send_token: whitespace-padded to/mint are trimmed (CodeRabbit #408) → not rejected, reaches mint pin', async () => {
+        _burnerOn({ pubkey: _BURNER_PK });
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-pad-1' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-PAD-TX' };
+        bridgeResponses['/burner/commit'] = { ok: true };
+        // mock keys are the TRIMMED values — proves the handler uses trimmed inputs downstream
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_PROGRAM, 6) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: `  ${_RCPT}\t`, mint: ` ${_USDC} `, amount: ' 1 ', source: 'burner' });
+        assert.ok(r.success, `padded inputs must be trimmed + succeed, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner');
+        // expectedDelta must reference the ATA of the TRIMMED mint, not a padded string
+        const ed = lastValidateBurnerTxArgs && lastValidateBurnerTxArgs.expectedDelta;
+        assert.strictEqual(ed.burnerDebit.mint, _USDC, 'mint must be the trimmed value');
+        assert.strictEqual(ed.burnerDebit.atomicAmount, '1000000');
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);

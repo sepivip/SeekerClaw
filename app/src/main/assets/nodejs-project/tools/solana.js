@@ -1505,9 +1505,13 @@ const handlers = {
         const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
         const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-        const to = input.to;
-        const mint = input.mint;
-        const amountStr = (input.amount == null) ? '' : String(input.amount);
+        // CodeRabbit #408: normalize at extraction — isValidSolanaAddress trims
+        // internally, so a whitespace-padded address would pass validation but
+        // then break downstream at deriveAtaBase58 / getAccountInfo. Trim here so
+        // the validated value is the value used everywhere.
+        const to = (input.to == null) ? '' : String(input.to).trim();
+        const mint = (input.mint == null) ? '' : String(input.mint).trim();
+        const amountStr = (input.amount == null) ? '' : String(input.amount).trim();
         const sourcePref = (input.source === 'main' || input.source === 'burner') ? input.source : 'auto';
 
         // --- shape validation (no side effects) ---
