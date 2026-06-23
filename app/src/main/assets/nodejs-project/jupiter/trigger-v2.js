@@ -651,6 +651,10 @@ async function _authenticateTransaction(pubkey, signers) {
             ok: false,
             error: (signed && signed.error) || 'auth_sign_failed',
             reason: (signed && signed.reason) || 'signTransaction returned no result',
+            // BAT-1039: forward the burner-policy class so a SECURITY reject in
+            // the auth-challenge tx reaches the AI tool loop and renders the
+            // deterministic block instead of being confabulated by the model.
+            policyClass: signed && signed.policyClass,
         };
     }
     const signedB64 = typeof signed === 'string' ? signed : (signed.signedTxBase64 || signed.signedTransaction);

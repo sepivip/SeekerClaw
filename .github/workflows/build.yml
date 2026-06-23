@@ -86,6 +86,8 @@ jobs:
             solana-dca-routing \
             tx-parser \
             public-rpc-shaper \
+            security-reject-block \
+            forward-dispatch-error \
             ci-coverage-manifest
           do
             echo "── $t ──"

@@ -106,6 +106,7 @@ const LOAD_TARGETS = [
     'payment/index.js',
     'confirmation/policy.js',
     'confirmation/index.js',
+    'security-reject-block.js',   // BAT-1039: pure deterministic security-reject renderer (no config dep)
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which

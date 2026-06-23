@@ -36,6 +36,7 @@ const {
     signCancelViaBurner,
     signZeroCapTxViaBurner,
     recordJupiterOwnership,
+    forwardDispatchError,
 } = require('../wallet/dispatch');
 
 // BAT-697 PR B: Jupiter Trigger V2 adapter. Activated when
@@ -447,7 +448,7 @@ function _buildAuthSigners(walletRole) {
                     unsignedTxBase64: txB64,
                     flowName: 'trigger-v2-auth',
                 });
-                if (!r.ok) return { error: r.error, reason: r.reason };
+                if (!r.ok) return forwardDispatchError(r);
                 return r.signedTxBase64;
             },
             signMessage: null,
@@ -734,7 +735,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         const authSigners = _buildAuthSigners(walletRole);
         const authResult = await triggerV2.authenticate(walletAddress, authSigners);
         if (!authResult.ok) {
-            return { error: authResult.error, reason: authResult.reason };
+            return forwardDispatchError(authResult);
         }
         const token = authResult.token;
 
@@ -925,7 +926,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
         });
 
         if (!dispatchResult.ok) {
-            return { error: dispatchResult.error, reason: dispatchResult.reason };
+            return forwardDispatchError(dispatchResult);
         }
 
         const orderResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || {};
@@ -1008,7 +1009,7 @@ async function _jupiterTriggerListV2(input, _chatId) {
         // a "sign to view your orders" prompt for users with no burner orders.
         const authSigners = _buildAuthSigners('main');
         const authResult = await triggerV2.authenticate(walletAddress, authSigners);
-        if (!authResult.ok) return { error: authResult.error, reason: authResult.reason };
+        if (!authResult.ok) return forwardDispatchError(authResult);
 
         const listResult = await triggerV2.listOrders({
             pubkey: walletAddress,
@@ -1118,7 +1119,7 @@ async function _jupiterTriggerCancelV2(input, _chatId) {
         const walletRole = creatorRole === 'burner' ? 'burner' : 'main';
         const authSigners = _buildAuthSigners(walletRole);
         const authResult = await triggerV2.authenticate(walletAddress, authSigners);
-        if (!authResult.ok) return { error: authResult.error, reason: authResult.reason };
+        if (!authResult.ok) return forwardDispatchError(authResult);
         const token = authResult.token;
 
         // 4. Cancel step 1 — get unsigned cancel tx.
@@ -1144,7 +1145,7 @@ async function _jupiterTriggerCancelV2(input, _chatId) {
                 unsignedTxBase64: step1.transaction,
                 flowName: 'jupiter_trigger_cancel_v2',
             });
-            if (!signRes.ok) return { error: signRes.error, reason: signRes.reason };
+            if (!signRes.ok) return forwardDispatchError(signRes);
             signedCancelB64 = signRes.signedTxBase64;
             signWallet = 'burner';
         } else {
@@ -1460,7 +1461,7 @@ const handlers = {
         });
 
         if (!result.ok) {
-            return { error: result.error, reason: result.reason };
+            return forwardDispatchError(result);
         }
         return { signature: result.signature, success: true, wallet: result.wallet };
     },
@@ -1954,7 +1955,7 @@ const handlers = {
             });
 
             if (!result.ok) {
-                return { error: result.error, reason: result.reason };
+                return forwardDispatchError(result);
             }
             const execResult = (result.broadcastResult && result.broadcastResult.ultra) || { signature: result.signature };
 
@@ -2283,7 +2284,7 @@ const handlers = {
             });
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error, reason: dispatchResult.reason };
+                return forwardDispatchError(dispatchResult);
             }
             const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || { signature: dispatchResult.signature };
 
@@ -2539,7 +2540,7 @@ const handlers = {
             }
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+                return { ...forwardDispatchError(dispatchResult), error: dispatchResult.error || 'cancel_failed' };
             }
 
             return {
@@ -2801,7 +2802,7 @@ const handlers = {
             });
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error, reason: dispatchResult.reason };
+                return forwardDispatchError(dispatchResult);
             }
             const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.recurring) || { signature: dispatchResult.signature };
 
@@ -3051,7 +3052,7 @@ const handlers = {
             }
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+                return { ...forwardDispatchError(dispatchResult), error: dispatchResult.error || 'cancel_failed' };
             }
 
             return {

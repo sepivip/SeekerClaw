@@ -831,6 +831,8 @@ The burner policy gate (`wallet/burner-policy.js validateBurnerTx`) runs BEFORE 
 
 The same security rule applies on the MWA path; recommending MWA as a workaround for a suspicious transaction is unsafe. **One documented exception:** `token_2022_send_unsupported` is a known FAIL-CLOSED LIMITATION (not a suspicious-tx signal) — for that code only, MWA fallback IS the correct guidance until autonomous per-mint Token-2022 fee declaration lands. Every OTHER security-class code: refuse + surface, never suggest MWA.
 
+**Deterministic rendering (BAT-1039):** a security-class reject is rendered by CODE, not the model. The tool loop short-circuits on the first `policyClass: 'security'` reject (`wallet/dispatch.js forwardDispatchError` carries the class out of the handler; `security-reject-block.js` builds the block), commits a fixed `SECURITY POLICY BLOCK\nCode: …\nReason: …\nNext step: …` block to history, and returns it WITHOUT any further model/summary call — so an attacker-influenced reject reason can never be confabulated or re-fed to the model. The reason is capped at 1200 chars with an explicit `…[truncated N chars; full reason in logs]` marker. Forensic log line is `[SecurityReject]` carrying `reasonLen` (integer) only — never the raw reason. If you see `[SecurityReject]` in logs, the policy blocked a sign and the user already got the deterministic block; no agent action is needed beyond what the block states.
+
 | Code | What happened | Agent action |
 |---|---|---|
 | `drainer_set_authority` | An instruction tries to call SPL `SetAuthority` on a burner-owned account | Surface reason. Refuse. Suggest the user investigate or report. |

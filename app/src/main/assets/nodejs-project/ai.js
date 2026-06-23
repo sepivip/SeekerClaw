@@ -48,6 +48,8 @@ const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbDirty, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 const loopDetector = require('./loop-detector');
+// BAT-1039: deterministic rendering of burner-policy SECURITY rejects (pure).
+const { buildSecurityRejectBlock } = require('./security-reject-block');
 // BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
 const _reasoningRecovery = require('./reasoning-recovery');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
@@ -2916,6 +2918,9 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-246: Each tool execution is individually guarded — if one tool throws,
             // the others still run and ALL tool calls get matching tool result entries.
             const toolResults = [];
+            // BAT-1039: set on the first SECURITY-class tool reject in this round
+            // so the turn short-circuits after the round (no further model call).
+            let securityRejectPending = null;
             for (let i = 0; i < parsed.toolCalls.length; i++) {
                 const toolUse = parsed.toolCalls[i];
                 // OpenClaw parity: normalize tool name before ALL gating checks
@@ -3023,6 +3028,29 @@ async function chat(chatId, userMessage, options = {}) {
                     content: truncateToolResult(JSON.stringify(result)),
                 });
 
+                // BAT-1039: short-circuit on the FIRST burner-policy security
+                // reject. The failing tool's result is already appended above;
+                // fill every remaining un-executed parallel tool_use with a
+                // skipped result (the API requires a tool_result for every
+                // tool_use — no orphans), then stop. availability / contract_gap
+                // rejects are NOT short-circuited (they continue to the model).
+                if (!securityRejectPending && result && result.policyClass === 'security') {
+                    securityRejectPending = {
+                        rejectCode: result.error,
+                        rejectReason: result.reason,
+                        toolName: toolUse.name,
+                        toolUseId: toolUse.id,
+                    };
+                    for (let k = i + 1; k < parsed.toolCalls.length; k++) {
+                        toolResults.push({
+                            role: 'tool',
+                            toolCallId: parsed.toolCalls[k].id,
+                            content: JSON.stringify({ error: 'skipped — prior tool blocked by security policy' }),
+                        });
+                    }
+                    break; // stop the tool-execution for-loop
+                }
+
                 // DeerFlow P1: Loop detection — track identical tool calls in sliding window
                 const loopResult = loopDetector.recordToolCall(chatId, toolUse.name, toolUse.input);
                 if (loopResult.status === 'warn') {
@@ -3047,6 +3075,17 @@ async function chat(chatId, userMessage, options = {}) {
             // Add tool results to history in neutral format — one message per result
             for (const tr of toolResults) {
                 messages.push(tr);
+            }
+
+            // BAT-1039: a security reject short-circuits the turn HERE — after the
+            // failing + skipped tool_results are committed to history (so any
+            // checkpoint / debug snapshot stays structurally valid: every
+            // tool_use has a matching tool_result), and BEFORE any further
+            // model / summary call could see the untrusted reason. Returning here
+            // also covers every downstream exit path (budget / silent / normal /
+            // exception), which a post-final-text hook would miss.
+            if (securityRejectPending) {
+                return _finalizeSecurityReject(chatId, taskId, turnId, securityRejectPending);
             }
 
             // DeerFlow P1: If loop was warned, inject guidance as user message
@@ -3289,6 +3328,29 @@ async function chat(chatId, userMessage, options = {}) {
 // ============================================================================
 // INTERNAL HELPERS
 // ============================================================================
+
+// BAT-1039: finalize a security short-circuit — commit the deterministic block
+// to history, end the turn, and return it. Called from the tool loop the moment
+// the first security-class reject is seen, BEFORE any further model/summary call
+// could see the untrusted reason. The forensic log carries reasonLen ONLY — the
+// raw (attacker-influenced) reason is never logged (the structured tool result
+// remains the single source of truth for the deterministic display).
+function _finalizeSecurityReject(chatId, taskId, turnId, pending) {
+    const block = buildSecurityRejectBlock(pending.rejectCode, pending.rejectReason);
+    addToConversation(chatId, 'assistant', block);
+    clearActiveTask(chatId);
+    try { cleanupChatCheckpoints(chatId); }
+    catch (e) { log(`[SecurityReject] checkpoint cleanup failed: ${e && e.message ? e.message : String(e)}`, 'DEBUG'); }
+    log(`[SecurityReject] ${JSON.stringify({
+        turnId,
+        taskId,
+        chatId: String(chatId || ''),
+        tool: pending.toolName,
+        code: pending.rejectCode,
+        reasonLen: (typeof pending.rejectReason === 'string' ? pending.rejectReason.length : 0),
+    })}`, 'WARN');
+    return block;
+}
 
 /**
  * Extract the original user goal from conversation history.
