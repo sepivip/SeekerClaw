@@ -52,6 +52,7 @@ const V1_STATIC_CONFIRM = new Set([
     'android_camera_capture',
     'android_location',
     'solana_send',
+    'solana_send_token',
     'solana_swap',
     'jupiter_trigger_create',
     'jupiter_dca_create',
@@ -60,6 +61,7 @@ const V1_STATIC_CONFIRM = new Set([
 // Tools that participate in burner routing for write actions.
 const SOLANA_WRITE_TOOLS = new Set([
     'solana_send',
+    'solana_send_token',
     'solana_swap',
     'jupiter_trigger_create',
     'jupiter_dca_create',

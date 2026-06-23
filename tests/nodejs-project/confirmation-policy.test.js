@@ -69,6 +69,7 @@ const EXPECTED_V1 = [
     'jupiter_dca_create',
     'jupiter_trigger_create',
     'solana_send',
+    'solana_send_token',
     'solana_swap',
 ];
 const snapSorted = Array.from(V1_STATIC_CONFIRM).sort();

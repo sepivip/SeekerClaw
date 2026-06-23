@@ -195,6 +195,18 @@ function _principalForTool(toolName, args) {
         return null; // other SPL → uncapped (V1 boundary)
     }
 
+    if (toolName === 'solana_send_token') {
+        // BAT-1036: USDC is the only burner-cap-gated SPL; every other classic
+        // SPL is uncapped → routeFor sends it to main (MWA). The `mint` field is
+        // always a base58 mint (never a symbol), so match on it directly.
+        if (_isUsdc(a.mint)) {
+            const atomic = _decimalToAtomic(a.amount, USDC_DECIMALS);
+            if (atomic == null) return null;
+            return { capName: 'burner.pertx.usdc', dailyCapName: 'burner.daily.usdc', principalAtomic: atomic };
+        }
+        return null; // other SPL → uncapped (forces main / MWA)
+    }
+
     if (toolName === 'solana_swap') {
         const input = a.inputToken;
         const amount = a.amount;

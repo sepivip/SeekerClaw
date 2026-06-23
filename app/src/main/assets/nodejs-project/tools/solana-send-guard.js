@@ -67,9 +67,10 @@ function classifySolSendDenomination(input) {
             return {
                 field: key,
                 error: 'solana_send_sol_only',
-                reason: 'solana_send only sends native SOL. SeekerClaw cannot send SPL tokens directly yet — '
-                    + 'send the token from your wallet app / main wallet manually. '
-                    + '(When solana_send_token ships it will handle this.)',
+                reason: 'solana_send only sends native SOL. To send an SPL token (USDC, BONK, …), '
+                    + 'use the solana_send_token tool instead — pass the token `mint` + `amount`. '
+                    + '(If solana_send_token cannot route it — e.g. a Token-2022 mint — send it from '
+                    + 'your wallet app / main wallet manually.)',
             };
         }
         if (cls === 'fiat' && !sawFiat) { sawFiat = true; fiatField = key; }

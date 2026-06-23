@@ -167,7 +167,7 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send **native SOL only** to a Solana address. This tool does NOT send SPL tokens (USDC, BONK, PYUSD, …) and does NOT take a fiat amount — do not supply ANY denomination field (`token` / `mint` / `asset` / `symbol` / `currency` / `coin` / `denom`); pass only `to` + `amount` (in SOL). For an SPL token transfer the user must use their wallet app / main wallet manually (a dedicated `solana_send_token` tool is not available yet). For a USD amount, call `solana_price` to get SOL/USD and compute the SOL amount yourself (solana_price does not convert non-USD currencies). **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send **native SOL only** to a Solana address. This tool does NOT send SPL tokens (USDC, BONK, PYUSD, …) and does NOT take a fiat amount — do not supply ANY denomination field (`token` / `mint` / `asset` / `symbol` / `currency` / `coin` / `denom`); pass only `to` + `amount` (in SOL). For an SPL token transfer (USDC, BONK, any classic SPL mint) use the `solana_send_token` tool instead. For a USD amount, call `solana_price` to get SOL/USD and compute the SOL amount yourself (solana_price does not convert non-USD currencies). **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). ALWAYS confirm with the user in chat before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -176,6 +176,20 @@ const tools = [
                 source: { type: 'string', enum: ['burner', 'main', 'auto'], description: 'Which wallet to send from. "main" forces MWA popup (use when user says "from main"). "burner" forces burner. "auto" (default) routes by cap. Default: "auto".' }
             },
             required: ['to', 'amount']
+        }
+    },
+    {
+        name: 'solana_send_token',
+        description: 'Send an SPL token (USDC, USDT, BONK, any classic SPL mint) from the Burner OR Main wallet. Use this for ANY non-SOL token transfer — `solana_send` is native-SOL only. Provide the token `mint` (base58) and `amount` as a decimal STRING in token units (e.g. "1.5"). Token-2022 mints are not supported autonomously yet (they route to the main wallet / wallet app). **Routing (BAT-582 caps)**: source="auto" (default) — USDC under the burner per-tx + daily cap signs silently from the **Burner** (no popup); over cap, or ANY non-USDC token, prompts the **Main wallet** (MWA popup). Use source="main" to force MWA. Use source="burner" to force the burner (USDC only — other tokens are rejected). The recipient\'s associated token account is created automatically if missing (the sending wallet pays the ~0.002 SOL rent). ALWAYS confirm with the user in chat before calling.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                to: { type: 'string', description: 'Recipient wallet address (base58). The token is delivered to their associated token account (created automatically if it does not exist).' },
+                mint: { type: 'string', description: 'SPL token mint address (base58). For native SOL use solana_send instead.' },
+                amount: { type: 'string', description: 'Amount in token units as a decimal STRING (e.g. "0.5" = half a USDC). No scientific notation; fractional precision must not exceed the mint decimals; positive non-zero.' },
+                source: { type: 'string', enum: ['auto', 'burner', 'main'], description: 'Which wallet to send from. "auto" (default) routes USDC by burner cap and everything else to main. "main" forces the MWA popup. "burner" forces the burner (USDC only). Default: "auto".' }
+            },
+            required: ['to', 'mint', 'amount']
         }
     },
     {
@@ -1477,6 +1491,193 @@ const handlers = {
             return forwardDispatchError(result);
         }
         return { signature: result.signature, success: true, wallet: result.wallet };
+    },
+
+    // BAT-1036: autonomous classic-SPL token transfer from burner OR main.
+    // Token-2022 is fail-closed (route to main/MWA). The on-chain mint triple-pin
+    // (program-owner + decimals, + canonical-USDC decimals==6) runs BEFORE any
+    // routing / reserve / build / sign, so a bad mint costs ZERO mutating calls
+    // (read-only getAccountInfo / burner-status hydration only). Mirrors the
+    // solana_send dispatch shape; the SPL expectedDelta declares the ATAs (the
+    // accounts the burner-policy loss invariant actually scores).
+    async solana_send_token(input, chatId) {
+        const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+        const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+        const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+        const to = input.to;
+        const mint = input.mint;
+        const amountStr = (input.amount == null) ? '' : String(input.amount);
+        const sourcePref = (input.source === 'main' || input.source === 'burner') ? input.source : 'auto';
+
+        // --- shape validation (no side effects) ---
+        if (!isValidSolanaAddress(to)) return { error: 'invalid_recipient', reason: '"to" must be a base58 Solana address.' };
+        if (!isValidSolanaAddress(mint)) return { error: 'invalid_mint', reason: '"mint" must be a base58 SPL mint. For native SOL use solana_send instead.' };
+        if (!amountStr) return { error: 'invalid_amount', reason: '"amount" is required — a positive decimal string (e.g. "1.5").' };
+
+        // --- Step 1: on-chain mint triple-pin (owner program + decimals).
+        // Authoritative — never trust a cached token list for the standard/decimals.
+        const mintInfo = await solanaRpc('getAccountInfo', [mint, { encoding: 'base64' }]);
+        const mv = mintInfo && mintInfo.value;
+        if (!mv || !mv.owner || !mv.data) {
+            return { error: 'mint_not_found', reason: `Mint ${mint} was not found on-chain (or is not an initialized mint account).` };
+        }
+        if (mv.owner === TOKEN_2022_PROGRAM) {
+            return {
+                error: 'token_2022_send_unsupported',
+                reason: 'This is a Token-2022 mint. Autonomous Token-2022 transfers are not supported yet — send it from your main wallet (MWA) / wallet app instead.',
+            };
+        }
+        if (mv.owner !== TOKEN_PROGRAM) {
+            return { error: 'unsupported_mint', reason: `Mint ${mint} is owned by ${mv.owner}, not the classic SPL Token program — only classic SPL tokens are supported.` };
+        }
+        let decimals;
+        try {
+            const mintData = Buffer.from(mv.data[0], 'base64');
+            if (mintData.length < 45) return { error: 'unsupported_mint', reason: 'Mint account data is too short to be a valid SPL mint.' };
+            decimals = mintData.readUInt8(44);
+        } catch (e) {
+            return { error: 'unsupported_mint', reason: `Could not decode mint account data: ${e.message}` };
+        }
+        const isUsdc = (mint === USDC_MINT);
+        if (isUsdc && decimals !== 6) {
+            return { error: 'usdc_decimals_mismatch', reason: `Canonical USDC must report 6 decimals on-chain; this mint reports ${decimals}. Refusing (possible spoofed mint).` };
+        }
+
+        // --- Step 2: amount → atomic (exact decimal string; reuse the cap parser) ---
+        const { _decimalToAtomic, routeFor } = require('../caps/preflight');
+        const atomic = _decimalToAtomic(amountStr, decimals);
+        if (atomic == null) return { error: 'invalid_amount', reason: `"amount" must be a positive decimal with at most ${decimals} fractional digits (got "${amountStr}").` };
+        if (atomic === 0n) return { error: 'zero_amount', reason: 'Amount must be greater than zero.' };
+        if (atomic > 0xFFFFFFFFFFFFFFFFn) return { error: 'amount_overflow', reason: 'Amount exceeds the u64 maximum a single SPL transfer can carry.' };
+
+        // --- Step 3: routing (source × asset × cap). USDC is the only burner-cap
+        // asset; every other classic SPL is main-only (MWA). The handler is
+        // authoritative — its routeFor uses the pinned mint. ---
+        let routingHint;
+        if (sourcePref === 'main') {
+            routingHint = { routingDecision: 'main', underCap: true };
+        } else if (sourcePref === 'burner') {
+            if (!isUsdc) return { error: 'unsupported_cap_asset', reason: 'source="burner" only supports USDC autonomously. For other tokens omit source (routes to main) or use source="main".' };
+            routingHint = await routeFor('solana_send_token', input);
+            if (routingHint.routingDecision !== 'burner') {
+                return { error: 'burner_not_configured', reason: 'source="burner" requested but no burner is configured. Set one up in Settings > Burner Wallet, or use source="main".' };
+            }
+            if (!routingHint.underCap) {
+                return { error: 'over_burner_cap', reason: 'source="burner" requested but the amount exceeds the burner per-tx or daily USDC cap. Lower the amount or use source="main".' };
+            }
+        } else { // auto
+            if (!isUsdc) {
+                routingHint = { routingDecision: 'main', underCap: true };
+            } else {
+                routingHint = await routeFor('solana_send_token', input);
+                if (routingHint.routingDecision === 'burner' && !routingHint.underCap) {
+                    return { error: 'over_burner_cap', reason: 'Amount exceeds the burner USDC cap. Use source="main" to send this amount from your main wallet (MWA).' };
+                }
+            }
+        }
+
+        // --- Step 4: resolve the source wallet (fee payer + transfer authority) ---
+        let mainWallet = null;
+        try { mainWallet = getConnectedWalletAddress(); } catch (_) { mainWallet = null; }
+        let sourceAddress = mainWallet;
+        if (routingHint.routingDecision === 'burner') {
+            try {
+                const bs = await androidBridgeCall('/burner/status', {}, 5000);
+                sourceAddress = (bs && !bs.error && bs.configured && bs.pubkey) ? bs.pubkey : null;
+            } catch (_) { sourceAddress = null; }
+            if (!sourceAddress) return { error: 'burner_not_configured', reason: 'Burner routing selected but no burner pubkey is available. Configure a burner in Settings > Burner Wallet.' };
+        } else if (!sourceAddress) {
+            return { error: 'main_wallet_not_connected', reason: 'Main wallet is not connected. Tap the Wallet button to authorize MWA, then retry (or set up a burner for USDC).' };
+        }
+
+        // --- Step 5: self-send guard (wallet level — burner-policy mirrors it on ATAs) ---
+        if (sourceAddress === to) {
+            return { error: 'self_send_rejected', reason: `Cannot send to the same wallet that signs the transfer (${sourceAddress.slice(0, 4)}…${sourceAddress.slice(-4)}). Pick a different recipient.` };
+        }
+
+        // --- Step 6: ATA existence. Source ATA MUST exist (never created here);
+        // recipient ATA is created idempotently when missing (selected wallet pays
+        // the ~0.002 SOL rent — covered by the burner SOL-floor headroom, NOT
+        // declared in burnerDebit). ---
+        const { deriveAtaBase58 } = require('../wallet/ata');
+        const sourceAta = deriveAtaBase58(sourceAddress, mint);
+        const destAta = deriveAtaBase58(to, mint);
+        const srcInfo = await solanaRpc('getAccountInfo', [sourceAta, { encoding: 'base64' }]);
+        if (!srcInfo || !srcInfo.value) {
+            return { error: 'source_ata_missing_or_insufficient', reason: `The ${routingHint.routingDecision} wallet has no token account for this mint — nothing to send.` };
+        }
+        const destInfo = await solanaRpc('getAccountInfo', [destAta, { encoding: 'base64' }]);
+        const createRecipientAta = !(destInfo && destInfo.value);
+
+        // --- Step 7: blockhash + build the TransferChecked tx (selected wallet
+        // is fee payer + authority). ---
+        const blockhashResult = await solanaRpc('getLatestBlockhash', [{ commitment: 'finalized' }]);
+        const recentBlockhash = blockhashResult && (blockhashResult.blockhash || (blockhashResult.value && blockhashResult.value.blockhash));
+        if (!recentBlockhash) return { error: 'blockhash_failed', reason: 'Could not fetch a recent blockhash from RPC.' };
+
+        const { buildClassicSplTransferTx } = require('../payment/x402');
+        let built;
+        try {
+            built = buildClassicSplTransferTx({
+                payerAuthority: sourceAddress,
+                recipientOwner: to,
+                mint,
+                decimals,
+                amountAtomic: atomic,
+                recentBlockhash,
+                createRecipientAta,
+            });
+        } catch (e) {
+            return { error: 'tx_build_failed', reason: e.message };
+        }
+        const txBase64 = built.txBuffer.toString('base64');
+
+        // --- Step 8: expectedDelta. For SPL the accounts are the ATAs (what the
+        // burner-policy loss invariant scores): the source ATA loses exactly
+        // `atomic`, the recipient ATA gains exactly `atomic` (allowCreate). ---
+        const expectedDelta = {
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: built.sourceAta, mint, atomicAmount: String(atomic) },
+            recipient: { account: built.destAta, mint },
+            burnerOwnedAccounts: [],
+        };
+
+        // --- Step 9: route + sign + broadcast (same dispatch as solana_send) ---
+        const result = await routeAndSign({
+            toolName: 'solana_send_token',
+            toolArgs: input,
+            unsignedTxBase64: txBase64,
+            broadcastVia: 'rpc',
+            flowName: 'solana_send_token',
+            forceRouting: routingHint,
+            expectedDelta,
+            broadcast: async (txB64, _signer, ctx) => {
+                if (!ctx || !ctx.signed) {
+                    await ensureWalletAuthorized();
+                    const r = await androidBridgeCall('/solana/sign', { transaction: txB64 }, 120000);
+                    if (!r || r.error) return { error: r && r.error ? r.error : 'sign_failed' };
+                    if (!r.signature) return { error: 'No signature returned from wallet' };
+                    return { signature: base58Encode(Buffer.from(r.signature, 'base64')) };
+                }
+                const sendResult = await solanaRpc('sendTransaction', [
+                    txB64,
+                    { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' },
+                ]);
+                if (sendResult && sendResult.error) {
+                    return { error: 'rpc_send_failed', reason: typeof sendResult.error === 'string' ? sendResult.error : JSON.stringify(sendResult.error) };
+                }
+                if (typeof sendResult === 'string') return { signature: sendResult };
+                if (sendResult && sendResult.value) return { signature: sendResult.value };
+                return { error: 'rpc_send_failed', reason: 'no signature in RPC response' };
+            },
+        });
+
+        if (!result.ok) {
+            return forwardDispatchError(result);
+        }
+        return { signature: result.signature, success: true, wallet: result.wallet, mint, amount: amountStr, recipient: to, createdRecipientAta: createRecipientAta };
     },
 
     async solana_price(input, chatId) {
