@@ -19,11 +19,26 @@
 
 const SOL_DENOM_KEYS = ['token', 'mint', 'asset', 'symbol', 'currency', 'coin', 'denom'];
 
-// Local fiat set (kept local to this PR per Codex). ISO-4217 codes the agent is
-// most likely to emit when a user phrases an amount in money.
+// Fiat denomination set — a broad sweep of circulating ISO-4217 codes across
+// major economies, kept LOCAL (dependency-free, no currency-data package) per
+// Codex. This set picks the fiat-specific guidance message; it does NOT need to
+// be exhaustive. An unlisted code falls through to the 'other' branch, which is
+// still a CORRECT "solana_send is native-SOL-only" rejection — just worded for
+// SPL tokens rather than fiat. Both outcomes refuse the send; only the guidance
+// text differs, so the fall-through is harmless, never unsafe.
 const SOL_FIAT_SET = new Set([
-    'usd', 'eur', 'gbp', 'jpy', 'cny', 'cad', 'aud', 'chf', 'inr', 'krw',
-    'mxn', 'brl', 'sgd', 'hkd', 'nok', 'sek', 'dkk', 'nzd', 'zar', 'aed',
+    // Majors
+    'usd', 'eur', 'gbp', 'jpy', 'cny', 'cad', 'aud', 'chf', 'nzd',
+    // Europe / CIS
+    'nok', 'sek', 'dkk', 'pln', 'czk', 'huf', 'ron', 'bgn', 'isk', 'try', 'rub', 'uah',
+    // Middle East
+    'aed', 'sar', 'qar', 'kwd', 'bhd', 'omr', 'jod', 'ils', 'egp',
+    // Asia-Pacific
+    'inr', 'krw', 'sgd', 'hkd', 'twd', 'thb', 'idr', 'myr', 'php', 'vnd', 'pkr', 'bdt', 'lkr', 'npr',
+    // Africa
+    'zar', 'ngn', 'kes', 'ghs', 'mad', 'tnd', 'dzd',
+    // Americas
+    'mxn', 'brl', 'clp', 'cop', 'ars', 'pen', 'uyu',
 ]);
 
 // Native-SOL forms ONLY: plain 'sol' + the internal 'native_sol' marker. The

@@ -98,6 +98,18 @@ check('all 7 denomination aliases independently classify a wrong asset', () => {
     }
 });
 
+// ── broad ISO-4217 coverage: regional currencies get fiat guidance, not SPL ──
+// (PR #406 R2: the fiat set was widened beyond the original 20 majors so an
+// amount phrased in e.g. PLN/THB/RUB renders the fiat-specific guidance rather
+// than the SPL-token fall-through. A future shrink of SOL_FIAT_SET breaks this.)
+check('broad ISO-4217: regional currencies classify as fiat (not the SPL fall-through)', () => {
+    for (const c of ['PLN', 'ils', 'THB', 'rub', 'TRY', 'idr', 'NGN', 'clp', 'sar', 'twd']) {
+        assert.strictEqual(cls({ currency: c }).error, 'solana_send_fiat_denomination', `${c} must be fiat`);
+    }
+    // sanity: a real SPL symbol still dominates a fiat hint (order-invariant)
+    assert.strictEqual(cls({ currency: 'PLN', token: 'BONK' }).error, 'solana_send_sol_only');
+});
+
 // ── fiat reason must not imply solana_price performs FX ──
 check('fiat reason: tells user to convert non-USD to USD; does NOT imply solana_price converts currencies', () => {
     const r = cls({ currency: 'EUR' });
