@@ -88,6 +88,8 @@ jobs:
             tx-parser \
             public-rpc-shaper \
             skills-priority \
+            security-reject-block \
+            forward-dispatch-error \
             ci-coverage-manifest
           do
             echo "── $t ──"

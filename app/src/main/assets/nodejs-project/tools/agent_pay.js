@@ -947,6 +947,11 @@ async function _handle(input /* , chatId */) {
             return {
                 error: signed && signed.error ? signed.error : 'sign_failed',
                 reason: signed && signed.reason ? signed.reason : 'signing failed',
+                // BAT-1039: agent_pay signs the x402 tx directly via BurnerSigner
+                // (not through dispatch.js), so forward the burner-policy class
+                // inline — a SECURITY reject must reach the AI tool loop's
+                // deterministic block, not be confabulated by the model.
+                policyClass: signed && signed.policyClass,
             };
         }
         signedTxBase64 = signed.signedTxBase64;

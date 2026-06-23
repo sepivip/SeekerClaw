@@ -549,9 +549,27 @@ async function signZeroCapTxViaBurner({ unsignedTxBase64, flowName = 'zero-cap-s
     return { ok: true, signedTxBase64 };
 }
 
+// BAT-1039: forward a dispatch/sign rejection to a tool handler's return WITHOUT
+// dropping policyClass. routeAndSign / signCancelViaBurner /
+// signZeroCapTxViaBurner all return { ok:false, error, reason, policyClass } on
+// a burner-policy reject, but tool handlers historically unwrapped to a bare
+// { error, reason }, dropping the security classification before it reached the
+// AI tool loop (executeTool). This returns a STRICT SUPERSET of { error, reason }
+// so callers reading only those are unaffected. policyClass is forwarded
+// UNCHANGED — it is NEVER inferred from the error name (a security code such as
+// simulation_delta_mismatch has no drainer_* prefix yet is still security-class).
+function forwardDispatchError(result) {
+    return {
+        error: result && result.error,
+        reason: result && result.reason,
+        policyClass: result && result.policyClass,
+    };
+}
+
 module.exports = {
     routeAndSign,
     signCancelViaBurner,
     signZeroCapTxViaBurner,
     recordJupiterOwnership,
+    forwardDispatchError,
 };

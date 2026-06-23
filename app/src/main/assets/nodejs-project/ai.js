@@ -48,6 +48,8 @@ const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbDirty, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
 const loopDetector = require('./loop-detector');
+// BAT-1039: deterministic rendering of burner-policy SECURITY rejects (pure).
+const { buildSecurityRejectBlock } = require('./security-reject-block');
 // BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
 const _reasoningRecovery = require('./reasoning-recovery');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
@@ -2917,6 +2919,9 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-246: Each tool execution is individually guarded — if one tool throws,
             // the others still run and ALL tool calls get matching tool result entries.
             const toolResults = [];
+            // BAT-1039: set on the first SECURITY-class tool reject in this round
+            // so the turn short-circuits after the round (no further model call).
+            let securityRejectPending = null;
             for (let i = 0; i < parsed.toolCalls.length; i++) {
                 const toolUse = parsed.toolCalls[i];
                 // OpenClaw parity: normalize tool name before ALL gating checks
@@ -3024,6 +3029,48 @@ async function chat(chatId, userMessage, options = {}) {
                     content: truncateToolResult(JSON.stringify(result)),
                 });
 
+                // BAT-1039: short-circuit on the FIRST burner-policy security
+                // reject. The failing tool's result is already appended above;
+                // fill every remaining un-executed parallel tool_use with a
+                // skipped result (the API requires a tool_result for every
+                // tool_use — no orphans), then stop. availability / contract_gap
+                // rejects are NOT short-circuited (they continue to the model).
+                if (!securityRejectPending && result && result.policyClass === 'security') {
+                    securityRejectPending = {
+                        rejectCode: result.error,
+                        rejectReason: result.reason,
+                        toolName: toolUse.name,
+                        toolUseId: toolUse.id,
+                    };
+                    // PR #407 R1: `messages` IS the durable conversation
+                    // (getConversation returns it by reference), so the failing
+                    // tool_result — just pushed above with the raw, attacker-
+                    // influenced reason in its content — would be re-fed to the
+                    // model on EVERY later turn. Redact it to the reject code +
+                    // class NOW, before it reaches history. The reason still
+                    // reaches the USER via the deterministic block built in
+                    // _finalizeSecurityReject; the model only ever sees this
+                    // redacted result + the bounded block.
+                    for (let j = toolResults.length - 1; j >= 0; j--) {
+                        if (toolResults[j].toolCallId === toolUse.id) {
+                            toolResults[j].content = JSON.stringify({
+                                error: result.error,
+                                policyClass: 'security',
+                                note: 'reason shown to the user via the security block; omitted from history',
+                            });
+                            break;
+                        }
+                    }
+                    for (let k = i + 1; k < parsed.toolCalls.length; k++) {
+                        toolResults.push({
+                            role: 'tool',
+                            toolCallId: parsed.toolCalls[k].id,
+                            content: JSON.stringify({ error: 'skipped — prior tool blocked by security policy' }),
+                        });
+                    }
+                    break; // stop the tool-execution for-loop
+                }
+
                 // DeerFlow P1: Loop detection — track identical tool calls in sliding window
                 const loopResult = loopDetector.recordToolCall(chatId, toolUse.name, toolUse.input);
                 if (loopResult.status === 'warn') {
@@ -3048,6 +3095,17 @@ async function chat(chatId, userMessage, options = {}) {
             // Add tool results to history in neutral format — one message per result
             for (const tr of toolResults) {
                 messages.push(tr);
+            }
+
+            // BAT-1039: a security reject short-circuits the turn HERE — after the
+            // failing + skipped tool_results are committed to history (so any
+            // checkpoint / debug snapshot stays structurally valid: every
+            // tool_use has a matching tool_result), and BEFORE any further
+            // model / summary call could see the untrusted reason. Returning here
+            // also covers every downstream exit path (budget / silent / normal /
+            // exception), which a post-final-text hook would miss.
+            if (securityRejectPending) {
+                return _finalizeSecurityReject(chatId, taskId, turnId, securityRejectPending);
             }
 
             // DeerFlow P1: If loop was warned, inject guidance as user message
@@ -3290,6 +3348,55 @@ async function chat(chatId, userMessage, options = {}) {
 // ============================================================================
 // INTERNAL HELPERS
 // ============================================================================
+
+// BAT-1039: finalize a security short-circuit — commit the deterministic block
+// to history, do the normal end-of-turn bookkeeping, and return it. Called from
+// the tool loop the moment the first security-class reject is seen, BEFORE any
+// further model/summary call could see the untrusted reason (the failing
+// tool_result was already redacted to its code + class in the loop, so the raw
+// reason survives only in this deterministic block, shown to the user). The
+// forensic log carries reasonLen ONLY — the raw reason is never logged.
+function _finalizeSecurityReject(chatId, taskId, turnId, pending) {
+    const block = buildSecurityRejectBlock(pending.rejectCode, pending.rejectReason);
+    addToConversation(chatId, 'assistant', block);
+    // PR #407 R2: addToConversation's MAX_HISTORY trim shifts one message at a
+    // time and can orphan a tool_use/tool_result group at the front — and this
+    // path runs right after a tool round. Run the same sanitizer the next turn
+    // would (see line ~2438) NOW so this security exit always leaves a
+    // structurally valid history instead of relying on the next turn to repair.
+    sanitizeConversation(getConversation(chatId), turnId);
+    // This turn's task is finished — clear it + its checkpoints BEFORE the session
+    // bookkeeping (which may fire an async summary), matching the cleanup-then-
+    // track ordering of the other terminal exits.
+    clearActiveTask(chatId);
+    try { cleanupChatCheckpoints(chatId); }
+    catch (e) { log(`[SecurityReject] checkpoint cleanup failed: ${e && e.message ? e.message : String(e)}`, 'DEBUG'); }
+    // PR #407 R2: mirror the normal/budget exits' session bookkeeping — the early
+    // return otherwise skips the idle-summary (re)arm + checkpoint-summary trigger
+    // for these turns. NOTE: if the checkpoint summary fires, it reads the
+    // deterministic block from history — the SAME bounded reason every later turn
+    // already sees — never the raw tool_result reason (redacted to code + class in
+    // the loop). So the summary surfaces nothing the block itself doesn't.
+    {
+        const trk = getSessionTrack(chatId);
+        trk.lastMessageTime = Date.now();
+        trk.messageCount++;
+        scheduleIdleSummary(chatId);
+        const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+        if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+            saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+        }
+    }
+    log(`[SecurityReject] ${JSON.stringify({
+        turnId,
+        taskId,
+        chatId: String(chatId || ''),
+        tool: pending.toolName,
+        code: pending.rejectCode,
+        reasonLen: (typeof pending.rejectReason === 'string' ? pending.rejectReason.length : 0),
+    })}`, 'WARN');
+    return block;
+}
 
 /**
  * Extract the original user goal from conversation history.
