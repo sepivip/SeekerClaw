@@ -2,16 +2,20 @@
 //
 // BAT-1039: deterministic rendering of a burner-policy SECURITY reject.
 //
-// When a wallet tool returns a reject with policyClass === 'security', the agent
-// must surface the reject reason VERBATIM rather than let the model confabulate
-// a cause. The ai.js tool loop short-circuits on the first such reject (so no
-// further model / summary call ever sees the untrusted reason), then commits and
-// returns the block this module builds.
+// When a wallet tool returns a reject with policyClass === 'security', the user
+// must see the reason rendered DETERMINISTICALLY (by code) rather than let the
+// model confabulate a cause. The ai.js tool loop short-circuits on the first such
+// reject: it returns this block WITHOUT any further model / summary call this
+// turn, AND redacts the raw reason out of the failing tool_result before it
+// persists to conversation history — so on EVERY later turn the model sees only
+// this deterministic block + the reject code, never the raw, attacker-influenced
+// reason.
 //
 // Pure + dependency-free so it loads in a bare-node unit test and the output is
-// byte-for-byte assertable. The display reason is capped with an EXPLICIT
-// truncation marker (never a bare ellipsis); the full raw reason stays in the
-// structured tool result (and is NEVER logged raw — only its length).
+// byte-for-byte assertable. The display reason is bounded with an EXPLICIT
+// truncation marker (never a bare ellipsis). The raw reason reaches the user
+// ONLY via this (bounded) block; it is redacted from history and is NEVER logged
+// raw — only its length.
 
 'use strict';
 
@@ -51,7 +55,7 @@ function buildSecurityRejectBlock(code, reason) {
     if (displayReason.length > SECURITY_REJECT_REASON_CAP) {
         const dropped = displayReason.length - SECURITY_REJECT_REASON_CAP;
         displayReason = displayReason.slice(0, SECURITY_REJECT_REASON_CAP)
-            + `…[truncated ${dropped} chars; full reason in logs]`;
+            + `…[truncated ${dropped} chars]`;
     }
     return [
         'SECURITY POLICY BLOCK',

@@ -77,8 +77,11 @@ check('universal bound: reason ≤ cap is untouched (no truncation marker)', () 
 check('universal bound: over-cap reason is truncated with an EXPLICIT marker (not a bare ellipsis)', () => {
     const reason = 'y'.repeat(2000);
     const block = buildSecurityRejectBlock('simulation_delta_mismatch', reason);
-    // explicit marker text (impl note #3)
-    assert.ok(/truncated \d+ chars; full reason in logs/i.test(block), 'must state truncation explicitly');
+    // explicit marker text (impl note #3). The marker must NOT promise the full
+    // reason "in logs" — PR #407 R1: the raw reason is redacted from history and
+    // never logged raw (only reasonLen), so the truncated tail lives nowhere.
+    assert.ok(/…\[truncated \d+ chars\]/.test(block), 'must state truncation explicitly');
+    assert.ok(!/in logs/i.test(block), 'marker must not promise the full reason "in logs"');
     // displayed reason capped
     const reasonLine = block.split('\n').find(l => l.startsWith('Reason:    '));
     const shown = reasonLine.slice('Reason:    '.length);

@@ -3041,6 +3041,25 @@ async function chat(chatId, userMessage, options = {}) {
                         toolName: toolUse.name,
                         toolUseId: toolUse.id,
                     };
+                    // PR #407 R1: `messages` IS the durable conversation
+                    // (getConversation returns it by reference), so the failing
+                    // tool_result — just pushed above with the raw, attacker-
+                    // influenced reason in its content — would be re-fed to the
+                    // model on EVERY later turn. Redact it to the reject code +
+                    // class NOW, before it reaches history. The reason still
+                    // reaches the USER via the deterministic block built in
+                    // _finalizeSecurityReject; the model only ever sees this
+                    // redacted result + the bounded block.
+                    for (let j = toolResults.length - 1; j >= 0; j--) {
+                        if (toolResults[j].toolCallId === toolUse.id) {
+                            toolResults[j].content = JSON.stringify({
+                                error: result.error,
+                                policyClass: 'security',
+                                note: 'reason shown to the user via the security block; omitted from history',
+                            });
+                            break;
+                        }
+                    }
                     for (let k = i + 1; k < parsed.toolCalls.length; k++) {
                         toolResults.push({
                             role: 'tool',
