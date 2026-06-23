@@ -106,6 +106,7 @@ const LOAD_TARGETS = [
     'payment/index.js',
     'confirmation/policy.js',
     'confirmation/index.js',
+    'tools/solana-send-guard.js',   // BAT-1037: pure native-SOL-only denomination guard (no config dep)
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
