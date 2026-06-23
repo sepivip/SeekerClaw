@@ -86,6 +86,7 @@ jobs:
             solana-dca-routing \
             tx-parser \
             public-rpc-shaper \
+            skills-priority \
             ci-coverage-manifest
           do
             echo "── $t ──"
