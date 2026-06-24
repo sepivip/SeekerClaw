@@ -470,6 +470,7 @@ function _burnerOff() {
         try {
             const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
             assert.strictEqual(result.error, 'fee_payer_mismatch', JSON.stringify(result));
+            assert.strictEqual(result.retryable, true, JSON.stringify(result)); // CodeRabbit #409: pin the retryable contract
             assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve on unverifiable fee payer');
             assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'no burner sign on unverifiable fee payer');
             assert.strictEqual(jupiterUltraExecuteCalls.length, 0, 'no execute/broadcast');
