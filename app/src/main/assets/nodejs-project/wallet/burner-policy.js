@@ -207,6 +207,16 @@ const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 // validating an expectedDelta.wsolAtaExemption (BAT-1027 hardening).
 const NATIVE_MINT_BASE58 = 'So11111111111111111111111111111111111111112';
 
+// BAT-1057: cap assets the burner may autonomously hold/spend. A swap whose
+// burner DEBIT (input) is NOT one of these but whose CREDIT (output) IS one is
+// a held-token → cap-asset CONVERSION (the burner rearranging its OWN holdings,
+// not an outflow). Conversions get a dedicated policy re-gate
+// (validateExpectedDeltaShape + a credit-account==burner check in
+// validateBurnerTx) — routing is only a hint; the policy is the gate.
+const USDC_MINT_BASE58 = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const CONVERSION_MAX_PRICE_IMPACT_BPS = 100; // 1% — above this routes to main (Codex BAT-1057 v2)
+const _isCapAssetMint = (m) => m === 'native_sol' || m === USDC_MINT_BASE58;
+
 // SPL Token instruction discriminators (drainer primitives — first byte of data).
 // Source: github.com/solana-program/token, Token v3 + Token-2022 share these IDs.
 //
@@ -970,6 +980,29 @@ function validateExpectedDeltaShape(expectedDelta) {
                 }
                 if (!isNonEmptyBase58(ex.destination)) {
                     return reject('expected_delta_invalid_shape', 'wsolAtaExemption.destination must be a base58 pubkey');
+                }
+            }
+            // BAT-1057 A1 (defense-in-depth — routing is a HINT, the policy is
+            // the gate): when the burner DEBIT is a NON-cap asset, this is a
+            // held-token → cap-asset CONVERSION. Independently enforce here that
+            // (i) the credit IS a cap asset and (ii) a finite, in-bounds
+            // conversionPriceImpactBps is declared — so a forged expectedDelta
+            // (e.g. non-cap output, or no price-impact) is rejected even if
+            // routing said burner. The credit-account==burner-destination check
+            // needs the burner pubkey and lives in validateBurnerTx.
+            if (!_isCapAssetMint(expectedDelta.burnerDebit.mint)) {
+                if (!_isCapAssetMint(cm.mint)) {
+                    return reject('expected_delta_invalid_shape',
+                        'conversion swap (non-cap-asset input) must credit a cap asset (native_sol or USDC)');
+                }
+                const bps = expectedDelta.conversionPriceImpactBps;
+                if (typeof bps !== 'number' || !isFinite(bps) || bps < 0) {
+                    return reject('expected_delta_invalid_shape',
+                        'conversion swap requires a finite non-negative conversionPriceImpactBps');
+                }
+                if (bps > CONVERSION_MAX_PRICE_IMPACT_BPS) {
+                    return reject('expected_delta_invalid_shape',
+                        `conversion price impact ${bps}bps exceeds max ${CONVERSION_MAX_PRICE_IMPACT_BPS}bps — route to main wallet`);
                 }
             }
             return accept();
@@ -1920,6 +1953,34 @@ async function validateBurnerTx(txBase64, expectedDelta, options) {
         if (expectedWsolAta !== expectedDelta.wsolAtaExemption.ata) {
             return reject('expected_delta_invalid_shape',
                 `wsolAtaExemption.ata ${expectedDelta.wsolAtaExemption.ata} is not the burner's canonical wSOL ATA (${expectedWsolAta}) — refusing to exempt an arbitrary account from the loss invariant`);
+        }
+    }
+
+    // ── 1c. BAT-1057 A1: conversion credit MUST land in the burner's OWN
+    //      destination. The shape check already enforced (non-cap debit →
+    //      cap-asset credit + bounded conversionPriceImpactBps); here we bind the
+    //      credit ACCOUNT to the burner (needs the pubkey), so a forged
+    //      expectedDelta can't declare an attacker's account as the "burner
+    //      credit". native_sol → the burner pubkey itself; USDC → the burner's
+    //      canonical USDC ATA. Routing is a hint; this is the gate.
+    if (expectedDelta.kind === 'jupiter_swap_immediate'
+        && !_isCapAssetMint(expectedDelta.burnerDebit.mint)) {
+        const cm = expectedDelta.burnerCreditMin;
+        let expectedCreditAccount;
+        if (cm.mint === 'native_sol') {
+            expectedCreditAccount = options.burnerPubkey;
+        } else {
+            try {
+                // eslint-disable-next-line global-require
+                expectedCreditAccount = require('./ata').deriveAtaBase58(options.burnerPubkey, cm.mint);
+            } catch (e) {
+                return reject('policy_parse_uncertainty',
+                    `could not derive burner credit ATA for conversion: ${e && e.message ? e.message : String(e)}`);
+            }
+        }
+        if (cm.account !== expectedCreditAccount) {
+            return reject('expected_delta_invalid_shape',
+                `conversion credit account ${cm.account} is not the burner's own ${cm.mint === 'native_sol' ? 'pubkey' : 'USDC ATA'} (${expectedCreditAccount}) — refusing to credit a non-burner account`);
         }
     }
 
