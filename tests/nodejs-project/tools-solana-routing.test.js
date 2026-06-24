@@ -1022,7 +1022,9 @@ function _burnerOff() {
         assert.strictEqual(r.tokenCount, 1, JSON.stringify(r));
         assert.strictEqual(r.tokens[0].mint, _USDC_M);
         assert.strictEqual(r.tokens[0].tokenStandard, 'classic');
-        assert.ok(!r.balanceIncomplete, 'both programs read OK → not incomplete');
+        // CodeRabbit #410: stable schema — both fields ALWAYS present
+        assert.strictEqual(r.balanceIncomplete, false, 'always present, false on a full read');
+        assert.strictEqual(r.failedTokenStandards, null, 'always present, null when nothing failed');
     });
 
     await check('BAT-1055 solana_balance: Token-2022-only wallet → PYUSD visible, tokenStandard=token_2022 (the bug)', async () => {

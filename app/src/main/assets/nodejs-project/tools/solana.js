@@ -1276,15 +1276,20 @@ const handlers = {
             }
         }
 
-        const result = { address, sol: solBalance, tokens, tokenCount: tokens.length };
-        if (failedTokenStandards.length > 0) {
-            // Agent guidance: do NOT make definitive "you don't hold X" claims
-            // when balanceIncomplete is true — a token program's accounts could
-            // not be read this call.
-            result.balanceIncomplete = true;
-            result.failedTokenStandards = failedTokenStandards;
-        }
-        return result;
+        // BAT-1055 (CodeRabbit #410): emit a STABLE schema — both fields present
+        // every call so consumers never branch on presence. balanceIncomplete is
+        // always a boolean; failedTokenStandards is the array or null. Agent
+        // guidance: do NOT make definitive "you don't hold X" claims when
+        // balanceIncomplete is true — a token program's accounts could not be
+        // read this call.
+        return {
+            address,
+            sol: solBalance,
+            tokens,
+            tokenCount: tokens.length,
+            balanceIncomplete: failedTokenStandards.length > 0,
+            failedTokenStandards: failedTokenStandards.length > 0 ? failedTokenStandards : null,
+        };
     },
 
     async solana_history(input, chatId) {
