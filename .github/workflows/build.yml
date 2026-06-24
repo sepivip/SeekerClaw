@@ -90,6 +90,7 @@ jobs:
             skills-priority \
             security-reject-block \
             forward-dispatch-error \
+            spl-transfer-builder \
             ci-coverage-manifest
           do
             echo "── $t ──"

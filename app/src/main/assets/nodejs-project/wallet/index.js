@@ -189,14 +189,24 @@ async function getWalletState(toolName, args) {
     // even when null/error — wouldReserve interprets that as bridge_unreachable
     // and fails closed, which matches the live-fetch failure path exactly.
     if (SOLANA_WRITE_TOOLS.has(toolName)) {
-        try {
-            const route = await routeFor(toolName, args || {}, status);
-            state.routingDecision = route.routingDecision;
-            state.underCap = route.underCap;
-        } catch (_) {
-            // Defensive: routing failure → conservative confirm path
+        // BAT-1036: solana_send_token honors an explicit source='main' AT the gate
+        // so an over-cap source='main' USDC send confirms via MWA instead of being
+        // mis-classified burner/over-cap and BLOCKED before the handler can force
+        // main. Scoped to this tool — solana_send/solana_swap keep their existing
+        // cap-based gate (their own handlers already force main for source='main').
+        if (toolName === 'solana_send_token' && args && args.source === 'main') {
             state.routingDecision = 'main';
             state.underCap = true;
+        } else {
+            try {
+                const route = await routeFor(toolName, args || {}, status);
+                state.routingDecision = route.routingDecision;
+                state.underCap = route.underCap;
+            } catch (_) {
+                // Defensive: routing failure → conservative confirm path
+                state.routingDecision = 'main';
+                state.underCap = true;
+            }
         }
     }
 

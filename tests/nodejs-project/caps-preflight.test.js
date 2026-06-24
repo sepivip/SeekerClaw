@@ -84,6 +84,17 @@ async function check(label, fn) {
         const p = _principalForTool('solana_send', { to: 'X', amount: '1', token: 'BONK' });
         assert.strictEqual(p, null);
     });
+    // BAT-1036: solana_send_token reads the `mint` field (not `token`); USDC mint
+    // → burner USDC cap, every other classic SPL → null (uncapped → main/MWA).
+    await check('_principalForTool: solana_send_token USDC mint → burner USDC cap', () => {
+        const p = _principalForTool('solana_send_token', { to: 'X', amount: '5', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' });
+        assert.strictEqual(p.capName, 'burner.pertx.usdc');
+        assert.strictEqual(p.principalAtomic, 5_000_000n);
+    });
+    await check('_principalForTool: solana_send_token non-USDC mint → null (uncapped → main)', () => {
+        const p = _principalForTool('solana_send_token', { to: 'X', amount: '1', mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' });
+        assert.strictEqual(p, null);
+    });
     await check('_principalForTool: solana_swap SOL → USDC', () => {
         const p = _principalForTool('solana_swap', { inputToken: 'SOL', outputToken: 'USDC', amount: '0.05' });
         assert.strictEqual(p.capName, 'burner.pertx.sol');

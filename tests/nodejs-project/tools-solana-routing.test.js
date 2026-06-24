@@ -64,17 +64,36 @@ let jupiterUltraExecuteCalls = [];
 let jupiterUltraOrderResponse = null;
 let triggerCreateApiResponse = null;
 let recurringCreateApiResponse = null;
+// BAT-1036: getAccountInfo mock for solana_send_token (mint triple-pin + ATA
+// existence). Default: account missing (value:null). Tests override per-pubkey.
+const _TKN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const _TKN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+function _mintAccountInfo(owner, decimals) {
+    const data = Buffer.alloc(82);
+    data.writeUInt8(decimals & 0xff, 44);
+    return { value: { owner, data: [data.toString('base64'), 'base64'], lamports: 1461600 } };
+}
+function _tokenAccountInfo() {
+    return { value: { owner: _TKN_PROGRAM, data: ['', 'base64'], lamports: 2039280 } };
+}
+let mockAccountInfoFn = () => ({ value: null });
 require.cache[solanaPath] = {
     id: solanaPath,
     filename: solanaPath,
     loaded: true,
     exports: {
-        solanaRpc: async (method, _params) => {
+        solanaRpc: async (method, params) => {
             if (method === 'getLatestBlockhash') {
-                return { blockhash: 'BLOCKHASH-FIXTURE-' + Date.now() };
+                // Valid base58 32-byte fixture so the REAL classic-SPL builder
+                // (solana_send_token) can decode it. solana_send stubs its own
+                // tx builder, so this value is inert for those tests.
+                return { blockhash: '11111111111111111111111111111111' };
             }
             if (method === 'sendTransaction') {
                 return 'BURNER-RPC-SIG-' + Date.now();
+            }
+            if (method === 'getAccountInfo') {
+                return mockAccountInfoFn(params && params[0]);
             }
             if (method === 'getBalance') return { value: 1_000_000_000 }; // 1 SOL
             if (method === 'getTokenAccountsByOwner') return { value: [] };
@@ -223,6 +242,8 @@ let failures = 0;
 let passes = 0;
 async function check(label, fn) {
     bridgeCalls = [];
+    mockAccountInfoFn = () => ({ value: null });   // BAT-1036: reset per test
+    lastValidateBurnerTxArgs = null;
     jupiterTriggerExecuteCalls = [];
     jupiterRecurringExecuteCalls = [];
     jupiterUltraExecuteCalls = [];
@@ -736,6 +757,121 @@ function _burnerOff() {
     // TODO(BAT-1013-followup): refactor tools/solana.js to call
     // solana.getConnectedWalletAddress() via namespace, enabling cleaner
     // stub-based test of this pre-flight path.
+
+    // ── solana_send_token (BAT-1036) ─────────────────────────────────────────
+    const _USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const _BONK = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+    const _RCPT = 'So11111111111111111111111111111111111111112';
+    const _BURNER_PK = '11111111111111111111111111111112';
+
+    await check('solana_send_token: Token-2022 mint → token_2022_send_unsupported, zero side effects', async () => {
+        _burnerOn();
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_2022_PROGRAM, 6) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _USDC, amount: '1' });
+        assert.strictEqual(r.error, 'token_2022_send_unsupported', JSON.stringify(r));
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'must not reserve on Token-2022');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'must not sign on Token-2022');
+    });
+
+    await check('solana_send_token: non-Token-program mint owner → unsupported_mint', async () => {
+        _burnerOn();
+        mockAccountInfoFn = (pk) => pk === _BONK ? _mintAccountInfo('11111111111111111111111111111111', 5) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _BONK, amount: '1' });
+        assert.strictEqual(r.error, 'unsupported_mint', JSON.stringify(r));
+    });
+
+    await check('solana_send_token: mint not on-chain → mint_not_found, no reserve/sign', async () => {
+        _burnerOn();
+        mockAccountInfoFn = () => ({ value: null });
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _USDC, amount: '1' });
+        assert.strictEqual(r.error, 'mint_not_found', JSON.stringify(r));
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve on pin fail');
+    });
+
+    await check('solana_send_token: spoofed USDC decimals (8≠6) → usdc_decimals_mismatch', async () => {
+        _burnerOn();
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_PROGRAM, 8) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _USDC, amount: '1' });
+        assert.strictEqual(r.error, 'usdc_decimals_mismatch', JSON.stringify(r));
+    });
+
+    await check('solana_send_token: source="burner" + non-USDC → unsupported_cap_asset (never silent main)', async () => {
+        _burnerOn();
+        mockAccountInfoFn = (pk) => pk === _BONK ? _mintAccountInfo(_TKN_PROGRAM, 5) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _BONK, amount: '1', source: 'burner' });
+        assert.strictEqual(r.error, 'unsupported_cap_asset', JSON.stringify(r));
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve');
+    });
+
+    await check('solana_send_token: self-send (to === source wallet) → self_send_rejected', async () => {
+        _burnerOn({ pubkey: _BURNER_PK });
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_PROGRAM, 6) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: _BURNER_PK, mint: _USDC, amount: '1', source: 'burner' });
+        assert.strictEqual(r.error, 'self_send_rejected', JSON.stringify(r));
+    });
+
+    await check('solana_send_token: source ATA missing → source_ata_missing_or_insufficient (no sign)', async () => {
+        _burnerOn({ pubkey: _BURNER_PK });
+        const { deriveAtaBase58 } = require(path.join(BUNDLE, 'wallet', 'ata'));
+        const srcAta = deriveAtaBase58(_BURNER_PK, _USDC);
+        mockAccountInfoFn = (pk) => {
+            if (pk === _USDC) return _mintAccountInfo(_TKN_PROGRAM, 6);
+            if (pk === srcAta) return { value: null }; // source ATA missing
+            return _tokenAccountInfo();
+        };
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _USDC, amount: '1', source: 'burner' });
+        assert.strictEqual(r.error, 'source_ata_missing_or_insufficient', JSON.stringify(r));
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'must not sign');
+    });
+
+    await check('solana_send_token: zero amount → zero_amount', async () => {
+        _burnerOn();
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_PROGRAM, 6) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _USDC, amount: '0', source: 'burner' });
+        assert.strictEqual(r.error, 'zero_amount', JSON.stringify(r));
+    });
+
+    await check('solana_send_token: burner USDC under cap → expectedDelta declares ATAs (security invariant) + USDC cap reserve', async () => {
+        _burnerOn({ pubkey: _BURNER_PK }); // 5 USDC per-tx cap
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-tok-1' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-TOK-TX' };
+        bridgeResponses['/burner/commit'] = { ok: true };
+        const { deriveAtaBase58 } = require(path.join(BUNDLE, 'wallet', 'ata'));
+        const srcAta = deriveAtaBase58(_BURNER_PK, _USDC);
+        const dstAta = deriveAtaBase58(_RCPT, _USDC);
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_PROGRAM, 6) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _USDC, amount: '1', source: 'burner' });
+        assert.ok(r.success, `expected success, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner');
+        const ed = lastValidateBurnerTxArgs && lastValidateBurnerTxArgs.expectedDelta;
+        assert.ok(ed, 'expectedDelta must reach validateBurnerTx');
+        assert.strictEqual(ed.kind, 'solana_send');
+        assert.strictEqual(ed.burnerDebit.mint, _USDC);
+        assert.strictEqual(ed.burnerDebit.atomicAmount, '1000000'); // 1 USDC @ 6 decimals
+        assert.strictEqual(ed.burnerDebit.account, srcAta, 'burnerDebit.account must be the SOURCE ATA, not the wallet');
+        assert.strictEqual(ed.recipient.account, dstAta, 'recipient.account must be the DEST ATA, not the wallet');
+        assert.strictEqual(ed.recipient.mint, _USDC);
+        assert.notStrictEqual(ed.burnerDebit.account, ed.recipient.account, 'debit and recipient ATAs must differ');
+        const reserve = bridgeCalls.find(c => c.endpoint === '/burner/reserve');
+        assert.ok(reserve && reserve.body.name === 'burner.pertx.usdc', 'must reserve against the USDC per-tx cap');
+        assert.strictEqual(reserve.body.atomicAmount, '1000000');
+    });
+
+    await check('solana_send_token: whitespace-padded to/mint are trimmed (CodeRabbit #408) → not rejected, reaches mint pin', async () => {
+        _burnerOn({ pubkey: _BURNER_PK });
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-pad-1' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-PAD-TX' };
+        bridgeResponses['/burner/commit'] = { ok: true };
+        // mock keys are the TRIMMED values — proves the handler uses trimmed inputs downstream
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_PROGRAM, 6) : _tokenAccountInfo();
+        const r = await tools.handlers.solana_send_token({ to: `  ${_RCPT}\t`, mint: ` ${_USDC} `, amount: ' 1 ', source: 'burner' });
+        assert.ok(r.success, `padded inputs must be trimmed + succeed, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner');
+        // expectedDelta must reference the ATA of the TRIMMED mint, not a padded string
+        const ed = lastValidateBurnerTxArgs && lastValidateBurnerTxArgs.expectedDelta;
+        assert.strictEqual(ed.burnerDebit.mint, _USDC, 'mint must be the trimmed value');
+        assert.strictEqual(ed.burnerDebit.atomicAmount, '1000000');
+    });
 
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);

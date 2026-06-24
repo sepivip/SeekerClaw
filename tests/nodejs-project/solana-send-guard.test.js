@@ -126,15 +126,15 @@ check('field-only: reject names the field, never the supplied value', () => {
     assert.ok(!('value' in r), 'reject object must not carry the supplied value');
 });
 
-// ── registry guard: solana_send_token must not be recommended imperatively while unregistered ──
-check('registry guard: solana_send_token is NOT a registered tool yet; sol_only reason is conditional', () => {
+// ── registry guard: solana_send_token IS registered (BAT-1036); reason points to it ──
+check('registry guard: solana_send_token is registered (BAT-1036); sol_only reason instructs using it', () => {
     const solanaSrc = fs.readFileSync(path.join(BUNDLE, 'tools', 'solana.js'), 'utf8');
-    assert.ok(!/name:\s*['"]solana_send_token['"]/.test(solanaSrc),
-        'solana_send_token is not registered yet — update this test (and the conditional wording) when BAT-1036 ships it');
+    assert.ok(/name:\s*['"]solana_send_token['"]/.test(solanaSrc),
+        'solana_send_token must be a registered tool now that BAT-1036 shipped it');
     const reason = cls({ token: 'USDC' }).reason;
-    assert.ok(/when solana_send_token ships/i.test(reason),
-        'sol_only reason must phrase solana_send_token conditionally ("when it ships"), not instruct calling it now');
-    assert.ok(/wallet app|main wallet/i.test(reason), 'sol_only reason must give the manual fallback');
+    assert.ok(/use the solana_send_token tool/i.test(reason),
+        'sol_only reason must point the agent at solana_send_token now that it ships');
+    assert.ok(/wallet app|main wallet/i.test(reason), 'sol_only reason must still give the manual fallback (Token-2022)');
 });
 
 console.log();
