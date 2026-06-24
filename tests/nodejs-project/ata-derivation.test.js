@@ -60,6 +60,16 @@ check('invalid token program id throws — never a silent classic fallback', () 
     assert.throws(() => deriveAtaBase58(BURNER, PYUSD, 'not-base58!!'), /token program/i);
 });
 
+check('CodeRabbit #409: explicit empty-string override THROWS, not silent classic', () => {
+    // A truthy gate would treat '' as "omitted" → silently classic → phantom
+    // ATA on a Token-2022 path. Presence (!= null) gate makes it an explicit
+    // (invalid) override that must throw.
+    assert.throws(() => deriveAtaBase58(BURNER, PYUSD, ''), /token program/i);
+    // null / undefined remain "no override" → classic (back-compat).
+    assert.strictEqual(deriveAtaBase58(BURNER, PYUSD, null), deriveAtaBase58(BURNER, PYUSD));
+    assert.strictEqual(deriveAtaBase58(BURNER, PYUSD, undefined), deriveAtaBase58(BURNER, PYUSD));
+});
+
 check('invalid owner / mint still throw (unchanged)', () => {
     assert.throws(() => deriveAtaBase58('bad!!', PYUSD, TOKEN_2022_PROGRAM_ID), /owner/i);
     assert.throws(() => deriveAtaBase58(BURNER, 'bad!!', TOKEN_2022_PROGRAM_ID), /mint/i);

@@ -35,7 +35,11 @@ function deriveAtaBase58(ownerBase58, mintBase58, tokenProgramIdBase58) {
     if (!owner) throw new Error(`invalid owner pubkey: ${ownerBase58}`);
     if (!mint) throw new Error(`invalid mint pubkey: ${mintBase58}`);
     let ata;
-    if (tokenProgramIdBase58) {
+    // CodeRabbit #409: gate on PRESENCE (!= null), not truthiness. An explicit
+    // but invalid override (e.g. '') must THROW below — a truthy check would
+    // silently fall back to classic and reintroduce the phantom-ATA bug on a
+    // Token-2022 path. Omitted (undefined) / null = no override → classic.
+    if (tokenProgramIdBase58 != null) {
         const tp = x402._decodeSolanaPubkey(tokenProgramIdBase58);
         if (!tp) throw new Error(`invalid token program id: ${tokenProgramIdBase58}`);
         ata = x402._findAssociatedTokenAddressForProgram(owner, mint, tp);

@@ -2036,7 +2036,21 @@ const handlers = {
                     };
                 }
             } catch (introspectErr) {
-                log(`[Jupiter Ultra] fee-payer introspection failed: ${introspectErr.message} — proceeding with declared routing`, 'DEBUG');
+                // BAT-1038 Amendment 1 (CodeRabbit #409): on a BURNER route, an
+                // UNVERIFIABLE fee payer is the same risk class as a mismatched
+                // one — sponsored signer-mode is unwired, so we must not sign an
+                // order whose fee payer we couldn't decode. Fail closed. Main
+                // routes are unaffected (the MWA wallet signs what it's shown and
+                // is the fee payer by construction).
+                if (routingHint.routingDecision === 'burner') {
+                    log(`[Jupiter Ultra] fee-payer introspection failed on burner route: ${introspectErr.message} — failing closed`, 'WARN');
+                    return {
+                        error: 'fee_payer_mismatch',
+                        reason: `Couldn't verify this swap route's fee payer (transaction introspection failed) — the burner won't sign an unverifiable order. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                        retryable: true,
+                    };
+                }
+                log(`[Jupiter Ultra] fee-payer introspection failed: ${introspectErr.message} — proceeding (main route)`, 'DEBUG');
             }
 
             let expectedDelta = null;
