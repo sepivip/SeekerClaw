@@ -1853,6 +1853,51 @@ const handlers = {
 
             // BAT-255: Pre-swap balance check — fail fast before wallet popup / Jupiter order
             const SOL_NATIVE_MINT = 'So11111111111111111111111111111111111111112';
+
+            // BAT-1057: held-token → cap-asset CONVERSION classification (Codex
+            // v2). When the burner holds a NON-cap token (e.g. PYUSD) and the
+            // user swaps it BACK to USDC/SOL, routeFor (above) returned 'main'
+            // because the input isn't a cap asset — but the token lives in the
+            // BURNER, not main. Detect that here (AFTER token resolution, BEFORE
+            // the balance pre-check + order fetch) and, if eligible, switch the
+            // taker to the burner. Eligibility is gated hard: output IS a cap
+            // asset, input is NOT, a burner is configured, and the input mint is
+            // NOT a fee-bearing/unparseable Token-2022 (the burner's exact-debit
+            // policy can't bound a fee-skimmed spend → main). The cap-AMOUNT
+            // (minOut) + price-impact are enforced AFTER the order exists.
+            const _USDC_MINT_1057 = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+            const _isCapAssetAddr_1057 = (a) => a === SOL_NATIVE_MINT || a === _USDC_MINT_1057;
+            let isConversion = false;
+            let conversionTokenStandard = null; // 'token_2022' when the held input is Token-2022
+            if (routingHint.routingDecision !== 'burner'
+                && !_isCapAssetAddr_1057(inputToken.address)
+                && _isCapAssetAddr_1057(outputToken.address)) {
+                try {
+                    const bs = await androidBridgeCall('/burner/status', {}, 5000);
+                    if (bs && !bs.error && bs.configured && bs.pubkey) {
+                        // Codex v2 #6: fee-bearing / unparseable Token-2022 input → refuse
+                        // (main can't hold the token either, so this is a hard stop).
+                        const t2022 = require('../wallet/token2022-mint');
+                        const mintInfo = await solanaRpc('getAccountInfo', [inputToken.address, { encoding: 'base64' }]);
+                        const mOwner = mintInfo && mintInfo.value && mintInfo.value.owner;
+                        const mData = mintInfo && mintInfo.value && mintInfo.value.data && mintInfo.value.data[0];
+                        const feeInfo = t2022.readMintTransferFeeBps(mOwner, mData);
+                        if (feeInfo.feeBps === null) {
+                            return { error: `Can't safely convert ${inputToken.symbol} from the burner — its mint config couldn't be verified as fee-free. Swap it from your main wallet app instead.` };
+                        }
+                        if (feeInfo.feeBps > 0) {
+                            return { error: `Can't convert ${inputToken.symbol} from the burner — it's a Token-2022 token with a ${feeInfo.feeBps}bps transfer fee, which autonomous signing doesn't support yet. Swap it from your main wallet app instead.` };
+                        }
+                        userPublicKey = bs.pubkey; // burner is the taker for the order + pre-check
+                        isConversion = true;
+                        conversionTokenStandard = (feeInfo.standard === 'token_2022') ? 'token_2022' : null;
+                        log(`[Jupiter Ultra] BAT-1057 conversion candidate: ${inputToken.symbol}→${outputToken.symbol} via burner (input ${feeInfo.standard}, fee 0)`, 'INFO');
+                    }
+                } catch (convErr) {
+                    log(`[Jupiter Ultra] conversion classification skipped: ${convErr.message}`, 'DEBUG');
+                    // fall through — treated as a normal (main) swap, unchanged
+                }
+            }
             const isNativeSOL = inputToken.address === SOL_NATIVE_MINT;
             // BAT-582 follow-up: native SOL swaps need headroom for tx fees +
             // ATA rent on top of the swap amount. Pre-fix the check passed
@@ -1969,6 +2014,48 @@ const handlers = {
                 orderTimestamp = Date.now();
             } catch (e) {
                 return { error: e.message };
+            }
+
+            // BAT-1057: post-order CONVERSION gate. The order now exists, so we
+            // know the real minOut + price impact. Enforce the price-impact
+            // ceiling (Codex v2 #5: Ultra `priceImpact` is a percent value,
+            // `priceImpactPct` a fraction fallback; > 100 bps / 1% → refuse) and
+            // set the internal forceRouting to the burner with principalAtomic =
+            // the signed order's minOut. The /burner/reserve path enforces the
+            // cap AMOUNT (Codex v2 #3 option b); the burner-policy A1 re-gate
+            // independently enforces the conversion shape + price impact.
+            let conversionPriceImpactBps = null;
+            if (isConversion) {
+                // priceImpact (percent, e.g. 0.0648 = 0.0648%) → bps; fall back to
+                // priceImpactPct (fraction, e.g. 0.000018 = 0.0018%). Captured
+                // 2026-06-24 against real Ultra orders. Absent/non-finite → null.
+                const _piToBps = (o) => {
+                    if (o && o.priceImpact != null) {
+                        const pi = Number(o.priceImpact);
+                        if (isFinite(pi) && pi >= 0) return Math.round(pi * 100);
+                    }
+                    if (o && o.priceImpactPct != null) {
+                        const pct = Number(o.priceImpactPct);
+                        if (isFinite(pct) && pct >= 0) return Math.round(pct * 10000);
+                    }
+                    return null;
+                };
+                conversionPriceImpactBps = _piToBps(order);
+                if (conversionPriceImpactBps === null) {
+                    return { error: `Couldn't read the price impact for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner without that check. Try again, or swap from your main wallet app.` };
+                }
+                if (conversionPriceImpactBps > 100) {
+                    return { error: `This ${inputToken.symbol}→${outputToken.symbol} conversion has ${(conversionPriceImpactBps / 100).toFixed(2)}% price impact (above the 1% autonomous limit). Swap it from your main wallet app to confirm the rate.` };
+                }
+                const _convMinOut = String(order.otherAmountThreshold || order.outAmount || '0');
+                const _outIsUsdc = outputToken.address === _USDC_MINT_1057;
+                // Mutate (not reassign) the const routingHint object → burner.
+                routingHint.routingDecision = 'burner';
+                routingHint.principalAtomic = _convMinOut;
+                routingHint.capName = _outIsUsdc ? 'burner.pertx.usdc' : 'burner.pertx.sol';
+                routingHint.dailyCapName = _outIsUsdc ? 'burner.daily.usdc' : 'burner.daily.sol';
+                routingHint.reason = 'conversion';
+                delete routingHint.underCap; // let /burner/reserve decide against the real minOut
             }
 
             // BAT-582 Phase 5: route through wallet dispatch. The broadcast
@@ -2129,6 +2216,13 @@ const handlers = {
                     burnerOwnedAccounts: [debitAccount, creditAccount].filter(a => a !== burnerPubkey),
                     toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
                     ...(wsolAtaExemption ? { wsolAtaExemption } : {}),
+                    // BAT-1057: conversion declarations the burner-policy A1
+                    // re-gate requires (non-cap debit → cap-asset credit). The
+                    // price impact is bound to THIS signed order; tokenStandard
+                    // is declared when the held input is Token-2022 (so the
+                    // policy's token_2022_undeclared gate accepts it).
+                    ...(isConversion ? { conversionPriceImpactBps } : {}),
+                    ...(conversionTokenStandard ? { tokenStandard: conversionTokenStandard } : {}),
                 };
             } catch (eDelta) {
                 // Copilot PR #398 R2: a null expectedDelta is silently
