@@ -21,16 +21,28 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = x402.ASSOCIATED_TOKEN_PROGRAM_ID;
 
 /**
  * Derive the ATA pubkey (base58) for the given owner + mint, both base58.
- * Throws on invalid input. Returns the canonical base58 ATA address as a
- * string.
+ * Throws on invalid input. Returns the canonical base58 ATA address as a string.
+ *
+ * BAT-1038: the optional 3rd arg `tokenProgramIdBase58` is the mint's OWNING
+ * token program. Omitted → the classic Token Program (byte-identical to the
+ * original 2-arg behavior every existing caller relies on). A Token-2022 mint
+ * MUST pass its program (TokenzQd…) — the token program ID is an ATA seed, so
+ * the classic derivation would produce a phantom address for a Token-2022 mint.
  */
-function deriveAtaBase58(ownerBase58, mintBase58) {
+function deriveAtaBase58(ownerBase58, mintBase58, tokenProgramIdBase58) {
     const owner = x402._decodeSolanaPubkey(ownerBase58);
     const mint = x402._decodeSolanaPubkey(mintBase58);
     if (!owner) throw new Error(`invalid owner pubkey: ${ownerBase58}`);
     if (!mint) throw new Error(`invalid mint pubkey: ${mintBase58}`);
-    const ata = x402._findAssociatedTokenAddress(owner, mint);
-    // _findAssociatedTokenAddress returns { address: Buffer(32), bump: number }
+    let ata;
+    if (tokenProgramIdBase58) {
+        const tp = x402._decodeSolanaPubkey(tokenProgramIdBase58);
+        if (!tp) throw new Error(`invalid token program id: ${tokenProgramIdBase58}`);
+        ata = x402._findAssociatedTokenAddressForProgram(owner, mint, tp);
+    } else {
+        ata = x402._findAssociatedTokenAddress(owner, mint);
+    }
+    // returns { address: Buffer(32), bump: number }
     return _base58EncodeBuffer(ata.address);
 }
 

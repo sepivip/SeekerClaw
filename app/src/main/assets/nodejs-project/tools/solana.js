@@ -2019,8 +2019,21 @@ const handlers = {
             try {
                 const feePayer = _extractFeePayerBase58(order.transaction);
                 if (feePayer && feePayer !== userPublicKey && routingHint.routingDecision === 'burner') {
-                    log(`[Jupiter Ultra] Unsigned tx fee payer ${feePayer} != burner ${userPublicKey} (sponsored-fee design) — Phase 3b expectedDelta declares burner_only, defensive fallback to main wallet to avoid silent policy reject`, 'WARN');
-                    routingHint.routingDecision = 'main';
+                    // BAT-1038 Amendment 1: a burner-built Ultra order whose decoded
+                    // fee payer ≠ the burner taker must FAIL CLOSED. The previous code
+                    // re-routed to main, which reused the SAME burner-taker order on
+                    // the MWA signer — sponsored signer-mode is not wired in the swap
+                    // path, so that is unsafe. Return BEFORE routeAndSign: no reserve,
+                    // no sign, no broadcast. (Probe 2026-06-24: the real USDC→PYUSD
+                    // route DOES use the burner as fee payer, so this is a defensive
+                    // guard, not the normal path.) A real main fallback requires a NEW
+                    // jupiterUltraOrder with the main wallet as taker (separate invoke).
+                    log(`[Jupiter Ultra] fee_payer_mismatch: order fee payer ${feePayer} != burner taker ${userPublicKey}; sponsored signer-mode not wired — failing closed`, 'WARN');
+                    return {
+                        error: 'fee_payer_mismatch',
+                        reason: `This swap route's fee payer (${feePayer.slice(0, 4)}…${feePayer.slice(-4)}) differs from the burner, and a burner-built order can't be safely signed by the main wallet. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                        retryable: true,
+                    };
                 }
             } catch (introspectErr) {
                 log(`[Jupiter Ultra] fee-payer introspection failed: ${introspectErr.message} — proceeding with declared routing`, 'DEBUG');
@@ -2032,8 +2045,23 @@ const handlers = {
                 const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
                 const outputIsSol = outputToken.address === 'So11111111111111111111111111111111111111112';
                 const ata = require('../wallet/ata');
-                const debitAccount = inputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, inputToken.address);
-                const creditAccount = outputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, outputToken.address);
+                // BAT-1038: derive each side's ATA against the mint's OWNING token
+                // program (classic vs Token-2022). The classic-only derivation made a
+                // Token-2022 output (e.g. PYUSD) resolve to a PHANTOM address that the
+                // swap never touches → null post-state → false simulation_delta_mismatch.
+                // Look up the mint owner on-chain (non-native mints only). An
+                // unrecognized/failed owner lookup THROWS → caught below → forces main
+                // (fail-safe; never assume classic for an unknown mint).
+                const _T1038_TOKEN = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+                const _T1038_TOKEN_2022 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+                const _mintTokenProgram = async (mintB58) => {
+                    const info = await solanaRpc('getAccountInfo', [mintB58, { encoding: 'base64' }]);
+                    const owner = info && info.value && info.value.owner;
+                    if (owner === _T1038_TOKEN || owner === _T1038_TOKEN_2022) return owner;
+                    throw new Error(`mint ${mintB58} owner ${owner || 'unknown'} is not a recognized SPL token program`);
+                };
+                const debitAccount = inputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, inputToken.address, await _mintTokenProgram(inputToken.address));
+                const creditAccount = outputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, outputToken.address, await _mintTokenProgram(outputToken.address));
                 const minOut = String(order.otherAmountThreshold || order.outAmount || '0');
                 // B1 (BAT-1013-followup): when input OR output is native SOL,
                 // Jupiter Ultra's documented wrapping pattern is open-wSOL-ATA

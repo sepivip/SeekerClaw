@@ -66,6 +66,11 @@ const USDC_DECIMALS = 6;
 
 // Solana program IDs (base58).
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+// BAT-1038: the Token-2022 program. An ATA's seeds embed the token program ID,
+// so a Token-2022 mint's ATA derives to a DIFFERENT address than the classic
+// derivation. Used only by the parameterized derivation below; classic USDC
+// (x402) paths are unaffected.
+const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 
 const X402_VERSION = 1;
@@ -132,6 +137,7 @@ function _decodeSolanaPubkey(s) {
 // recipient pubkey + recent blockhash need runtime decoding.
 const _USDC_MINT_BYTES = _base58Decode(USDC_MINT);
 const _TOKEN_PROGRAM_ID_BYTES = _base58Decode(TOKEN_PROGRAM_ID);
+const _TOKEN_2022_PROGRAM_ID_BYTES = _base58Decode(TOKEN_2022_PROGRAM_ID); // BAT-1038
 const _ATA_PROGRAM_ID_BYTES = _base58Decode(ASSOCIATED_TOKEN_PROGRAM_ID);
 
 // ── Compact-u16 (shortvec) encoding for tx wire format ───────────────────────
@@ -281,12 +287,21 @@ function _isOnCurve(pubkeyBytes) {
     return false;
 }
 
+// BAT-1038: parameterized ATA derivation — the token program ID is the 2nd ATA
+// seed, so a Token-2022 mint MUST use _TOKEN_2022_PROGRAM_ID_BYTES here or the
+// derived address is a phantom that the swap never touches. tokenProgramBytes is
+// a 32-byte Buffer (the mint's OWNING token program).
+function _findAssociatedTokenAddressForProgram(ownerPubkeyBytes, mintPubkeyBytes, tokenProgramBytes) {
+    const seeds = [ownerPubkeyBytes, tokenProgramBytes, mintPubkeyBytes];
+    return _findProgramAddress(seeds, _ATA_PROGRAM_ID_BYTES);
+}
+
 function _findAssociatedTokenAddress(ownerPubkeyBytes, mintPubkeyBytes) {
     // BAT-582 R11: token program + ATA program pubkeys are constants — use
     // the module-level pre-decoded buffers (see _TOKEN_PROGRAM_ID_BYTES /
-    // _ATA_PROGRAM_ID_BYTES above).
-    const seeds = [ownerPubkeyBytes, _TOKEN_PROGRAM_ID_BYTES, mintPubkeyBytes];
-    return _findProgramAddress(seeds, _ATA_PROGRAM_ID_BYTES);
+    // _ATA_PROGRAM_ID_BYTES above). Classic SPL only — byte-identical to the
+    // pre-BAT-1038 behavior; the x402 USDC paths call this.
+    return _findAssociatedTokenAddressForProgram(ownerPubkeyBytes, mintPubkeyBytes, _TOKEN_PROGRAM_ID_BYTES);
 }
 
 // ── SPL Token TransferChecked instruction builder ────────────────────────────
@@ -1597,6 +1612,7 @@ module.exports = {
     // Exposed for tests:
     USDC_MINT,
     TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
     _buildUsdcTransferTx,
     buildClassicSplTransferTx,
@@ -1609,6 +1625,7 @@ module.exports = {
     COMPUTE_BUDGET_PROGRAM_ID,
     MEMO_PROGRAM_ID,
     _findAssociatedTokenAddress,
+    _findAssociatedTokenAddressForProgram,
     _isOnCurve,
     _decodeSolanaPubkey,
     _base58Encode,
