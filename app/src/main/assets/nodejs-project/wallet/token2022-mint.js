@@ -24,6 +24,7 @@ const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
 const EXT_TRANSFER_FEE_CONFIG = 1;
 const ACCOUNT_TYPE_MINT = 1;
+const MINT_BASE_LEN = 82;                // exact size of an un-extended Token-2022 mint
 const MINT_PADDED_LEN = 165;             // base mint (82) padded to Account size before the type byte
 const TRANSFER_FEE_CONFIG_MIN_LEN = 108; // authority(32)+withdraw(32)+withheld(8)+older(18)+newer(18)
 const OLDER_BPS_OFFSET = 88;             // within the extension data: 32+32+8 + (epoch8+max8) = 88
@@ -46,8 +47,12 @@ function readMintTransferFeeBps(owner, base64Data) {
     try { buf = Buffer.from(base64Data || '', 'base64'); } catch (_) { return { standard: 'token_2022', feeBps: null }; }
     if (buf.length === 0) return { standard: 'token_2022', feeBps: null };
 
-    // A base (un-extended) Token-2022 mint is 82 bytes → no extensions → no fee.
-    if (buf.length <= MINT_PADDED_LEN) return { standard: 'token_2022', feeBps: 0 };
+    // CodeRabbit #411: a valid Token-2022 mint is EITHER exactly the 82-byte
+    // base (no extensions → no fee) OR an extended mint padded to >= 166 bytes
+    // (165 pad + type byte + TLV). Any size in between (83..165) is malformed
+    // and unparseable → fail closed (null → main); never assume fee-free.
+    if (buf.length === MINT_BASE_LEN) return { standard: 'token_2022', feeBps: 0 };
+    if (buf.length <= MINT_PADDED_LEN) return { standard: 'token_2022', feeBps: null };
 
     // Extended mint: byte 165 MUST be the Mint account-type discriminator.
     if (buf[MINT_PADDED_LEN] !== ACCOUNT_TYPE_MINT) return { standard: 'token_2022', feeBps: null };

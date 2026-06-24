@@ -52,9 +52,16 @@ check('unknown owner program → standard=unknown, feeBps=null (→ main)', () =
     assert.deepStrictEqual(readMintTransferFeeBps('11111111111111111111111111111111', 'AAAA'), { standard: 'unknown', feeBps: null });
 });
 
-check('Token-2022 BASE mint (82 bytes, no extensions) → fee-free', () => {
+check('Token-2022 BASE mint (exactly 82 bytes, no extensions) → fee-free', () => {
     const data = Buffer.alloc(82).toString('base64');
     assert.deepStrictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, data), { standard: 'token_2022', feeBps: 0 });
+});
+
+check('CodeRabbit #411: malformed Token-2022 mint size (83-165 bytes) → null, not fee-free', () => {
+    for (const len of [83, 120, 165]) {
+        const data = Buffer.alloc(len).toString('base64');
+        assert.strictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, data).feeBps, null, `len ${len} must be unparseable → null`);
+    }
 });
 
 check('Token-2022 with TransferFeeConfig feeBps 0 (PYUSD-like) → fee-free, eligible', () => {

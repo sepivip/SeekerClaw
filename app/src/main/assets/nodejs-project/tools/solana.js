@@ -2030,13 +2030,16 @@ const handlers = {
                 // priceImpactPct (fraction, e.g. 0.000018 = 0.0018%). Captured
                 // 2026-06-24 against real Ultra orders. Absent/non-finite → null.
                 const _piToBps = (o) => {
+                    // CodeRabbit #411: Math.CEIL, not round — rounding down lets
+                    // 1.004% (100.4 bps) collapse to 100 and slip under the ceiling.
+                    // Any impact above the limit must fail closed.
                     if (o && o.priceImpact != null) {
                         const pi = Number(o.priceImpact);
-                        if (isFinite(pi) && pi >= 0) return Math.round(pi * 100);
+                        if (isFinite(pi) && pi >= 0) return Math.ceil(pi * 100);
                     }
                     if (o && o.priceImpactPct != null) {
                         const pct = Number(o.priceImpactPct);
-                        if (isFinite(pct) && pct >= 0) return Math.round(pct * 10000);
+                        if (isFinite(pct) && pct >= 0) return Math.ceil(pct * 10000);
                     }
                     return null;
                 };
@@ -2047,7 +2050,13 @@ const handlers = {
                 if (conversionPriceImpactBps > 100) {
                     return { error: `This ${inputToken.symbol}→${outputToken.symbol} conversion has ${(conversionPriceImpactBps / 100).toFixed(2)}% price impact (above the 1% autonomous limit). Swap it from your main wallet app to confirm the rate.` };
                 }
-                const _convMinOut = String(order.otherAmountThreshold || order.outAmount || '0');
+                // CodeRabbit #411: never manufacture a '0' minOut — reserving
+                // against zero (or building an expectedDelta with no guaranteed
+                // proceeds) must fail closed. Require a positive integer.
+                const _convMinOut = String(order.otherAmountThreshold ?? order.outAmount ?? '');
+                if (!/^[1-9]\d*$/.test(_convMinOut)) {
+                    return { error: `Couldn't read a positive minimum output for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner. Try again, or swap from your main wallet app.` };
+                }
                 const _outIsUsdc = outputToken.address === _USDC_MINT_1057;
                 // Mutate (not reassign) the const routingHint object → burner.
                 routingHint.routingDecision = 'burner';

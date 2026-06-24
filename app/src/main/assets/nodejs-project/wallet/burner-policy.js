@@ -995,6 +995,16 @@ function validateExpectedDeltaShape(expectedDelta) {
                     return reject('expected_delta_invalid_shape',
                         'conversion swap (non-cap-asset input) must credit a cap asset (native_sol or USDC)');
                 }
+                // CodeRabbit #411: a conversion with ZERO guaranteed credit must
+                // fail closed (defense-in-depth vs a forged/malformed delta that
+                // would spend the held token with no minimum proceeds). The
+                // generic shape check only requires a non-negative integer.
+                let _cmAtomic;
+                try { _cmAtomic = BigInt(cm.atomicAmount); } catch (_) { _cmAtomic = 0n; }
+                if (_cmAtomic <= 0n) {
+                    return reject('expected_delta_invalid_shape',
+                        'conversion swap requires a positive burnerCreditMin.atomicAmount (non-zero guaranteed proceeds)');
+                }
                 const bps = expectedDelta.conversionPriceImpactBps;
                 if (typeof bps !== 'number' || !isFinite(bps) || bps < 0) {
                     return reject('expected_delta_invalid_shape',
