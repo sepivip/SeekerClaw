@@ -223,7 +223,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. ALWAYS confirm with the user and show the quote first before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
