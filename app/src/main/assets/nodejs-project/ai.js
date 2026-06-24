@@ -792,7 +792,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     //   - `over_burner_cap` (solana_send when source='burner' and over cap):
     //     "Amount exceeds the burner per-tx or daily cap. Lower the amount
     //     or omit `source` (default routes to main wallet on over-cap)."
-    lines.push('**Tool-handler errors (NOT burner-policy rejects):** `main_wallet_not_connected` → tell user to authorize MWA via Settings → Solana Wallet. `self_send_rejected` → recipient equals sender; pick a different address (or use `source="main"` to send from main to burner). `over_burner_cap` → lower amount or omit `source` to use main.');
+    lines.push('**Tool-handler errors (NOT burner-policy rejects):** `main_wallet_not_connected` → tell user to authorize MWA via Settings → Solana Wallet. `self_send_rejected` → recipient equals sender; pick a different address (or use `source="main"` to send from main to burner). `over_burner_cap` → lower amount or omit `source` to use main. `fee_payer_mismatch` (BAT-1038, `solana_swap` only) → the Jupiter Ultra route\'s fee payer is not the burner taker (or could not be decoded), so a burner-built order can\'t be safely signed. This is **retryable** (Jupiter routes change between fetches) and is **NOT** the security-class `payer_mismatch` above — do NOT refuse; tell the user to retry, or run the swap from the main wallet.');
     // BAT-1013 foundation patch: solana_send `source` param awareness.
     // When user EXPLICITLY says "from my main wallet" / "from main" /
     // "via MWA" — pass `source="main"`. When user says "from burner" /
