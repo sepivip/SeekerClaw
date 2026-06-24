@@ -91,6 +91,7 @@ jobs:
             security-reject-block \
             forward-dispatch-error \
             spl-transfer-builder \
+            ata-derivation \
             ci-coverage-manifest
           do
             echo "── $t ──"

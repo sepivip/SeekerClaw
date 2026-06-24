@@ -77,6 +77,24 @@ function _tokenAccountInfo() {
     return { value: { owner: _TKN_PROGRAM, data: ['', 'base64'], lamports: 2039280 } };
 }
 let mockAccountInfoFn = () => ({ value: null });
+// BAT-1038 (CodeRabbit #409): the swap handler now FAILS CLOSED on a burner
+// route when fee-payer introspection throws. The default Ultra order must be a
+// VALID tx whose fee payer (account[0]) IS the burner, else every burner swap
+// test trips the guard. Build a real legacy tx with the burner as account[0],
+// lazily + cached. The mismatch / introspection-failure tests below override
+// jupiterUltraOrderResponse with their own (non-burner / invalid) tx.
+let _defaultUltraOrderTxCache = null;
+function _defaultUltraOrderTx() {
+    if (_defaultUltraOrderTxCache) return _defaultUltraOrderTxCache;
+    const x402b = require(path.join(BUNDLE, 'payment', 'x402'));
+    const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    _defaultUltraOrderTxCache = x402b.buildClassicSplTransferTx({
+        payerAuthority: '11111111111111111111111111111112', // burner = account[0]
+        recipientOwner: USDC, mint: USDC, decimals: 6, amountAtomic: 1n,
+        recentBlockhash: '11111111111111111111111111111111', createRecipientAta: false,
+    }).txBuffer.toString('base64');
+    return _defaultUltraOrderTxCache;
+}
 require.cache[solanaPath] = {
     id: solanaPath,
     filename: solanaPath,
@@ -99,18 +117,30 @@ require.cache[solanaPath] = {
             if (method === 'getTokenAccountsByOwner') return { value: [] };
             return {};
         },
-        base58Encode: (buf) => 'BASE58-' + Buffer.from(buf).toString('hex').slice(0, 16),
+        // BAT-1038 (CodeRabbit #409): REAL base58 so the swap handler's
+        // _extractFeePayerBase58 (which calls solana.js base58Encode) round-trips
+        // a pubkey's bytes back to its canonical base58 — the fee-payer-match
+        // check needs base58Encode(burnerBytes) === burnerPubkey to hold.
+        base58Encode: (buf) => {
+            const ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+            const b = Buffer.from(buf);
+            let zeros = 0; while (zeros < b.length && b[zeros] === 0) zeros++;
+            let value = 0n; for (let i = 0; i < b.length; i++) value = value * 256n + BigInt(b[i]);
+            let out = ''; while (value > 0n) { out = ALPHA[Number(value % 58n)] + out; value /= 58n; }
+            return '1'.repeat(zeros) + out;
+        },
         buildSolTransferTx: (_from, _to, _lam, _bh) => Buffer.from('UNSIGNED-SOL-TX-FIXTURE'),
         resolveToken: async (sym) => {
             if (!sym) return null;
             const s = String(sym).toUpperCase();
             if (s === 'SOL') return { symbol: 'SOL', address: 'So11111111111111111111111111111111111111112', decimals: 9 };
             if (s === 'USDC') return { symbol: 'USDC', address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 };
+            if (s === 'PYUSD') return { symbol: 'PYUSD', address: '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo', decimals: 6 }; // BAT-1038: Token-2022
             return null;
         },
         jupiterQuote: async () => ({ outAmount: '1000000', otherAmountThreshold: '990000', priceImpactPct: '0.1', routePlan: [] }),
         jupiterPrice: async () => ({}),
-        jupiterUltraOrder: async () => jupiterUltraOrderResponse || { transaction: 'UNSIGNED-ULTRA-TX', requestId: 'ultra-req-1' },
+        jupiterUltraOrder: async () => jupiterUltraOrderResponse || { transaction: _defaultUltraOrderTx(), requestId: 'ultra-req-1' },
         jupiterUltraExecute: async (signedTx, requestId) => {
             jupiterUltraExecuteCalls.push({ signedTx, requestId });
             return { signature: 'ULTRA-SIG-FIXTURE', status: 'Success' };
@@ -242,7 +272,10 @@ let failures = 0;
 let passes = 0;
 async function check(label, fn) {
     bridgeCalls = [];
-    mockAccountInfoFn = () => ({ value: null });   // BAT-1036: reset per test
+    // BAT-1036/1038: reset per test. Default = a CLASSIC SPL mint for any pubkey,
+    // so the swap handler's BAT-1038 mint-program lookup resolves to classic (the
+    // pre-existing swap routing). solana_send_token tests override this per case.
+    mockAccountInfoFn = () => _mintAccountInfo(_TKN_PROGRAM, 6);
     lastValidateBurnerTxArgs = null;
     jupiterTriggerExecuteCalls = [];
     jupiterRecurringExecuteCalls = [];
@@ -359,6 +392,105 @@ function _burnerOff() {
         assert.ok(signOnlyCall, 'expected /solana/sign-only call');
         // Confirm NO burner reserve happened
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'));
+    });
+
+    // ── BAT-1038: Token-2022 swap output — correct ATA derivation ───────────
+    const _PYUSD_MINT = '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo';
+    const _USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const _BURNER_DEFAULT = '11111111111111111111111111111112'; // _burnerOn() default pubkey
+    const { deriveAtaBase58: _deriveAta } = require(path.join(BUNDLE, 'wallet', 'ata'));
+
+    await check('BAT-1038: SOL→PYUSD (Token-2022 output) → credit ATA derived with Token-2022 program, NOT the phantom classic', async () => {
+        _burnerOn(); // 5 USDC cap; under-cap USDC input → burner
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-t22' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-T22-SWAP' };
+        bridgeResponses['/burner/commit'] = { ok: true };
+        // PYUSD mint is Token-2022; USDC mint is classic.
+        mockAccountInfoFn = (pk) => pk === _PYUSD_MINT ? _mintAccountInfo(_TKN_2022_PROGRAM, 6) : _mintAccountInfo(_TKN_PROGRAM, 6);
+        const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'PYUSD', amount: 0.001 });
+        if (result.error) throw new Error(`unexpected error: ${JSON.stringify(result)}`);
+        assert.strictEqual(result.wallet, 'burner');
+        const ed = lastValidateBurnerTxArgs && lastValidateBurnerTxArgs.expectedDelta;
+        assert.ok(ed, 'expectedDelta must reach validateBurnerTx');
+        const correctAta = _deriveAta(_BURNER_DEFAULT, _PYUSD_MINT, _TKN_2022_PROGRAM);
+        const phantomClassic = _deriveAta(_BURNER_DEFAULT, _PYUSD_MINT); // the OLD wrong (2-arg) derivation
+        assert.strictEqual(ed.burnerCreditMin.account, correctAta, 'credit account MUST be the Token-2022 ATA');
+        assert.notStrictEqual(ed.burnerCreditMin.account, phantomClassic, 'must NOT be the phantom classic ATA (the BAT-1038 bug)');
+        assert.strictEqual(ed.burnerCreditMin.mint, _PYUSD_MINT);
+        // debit side is native SOL (input is SOL) → the burner pubkey, not an ATA
+        assert.strictEqual(ed.burnerDebit.account, _BURNER_DEFAULT);
+        assert.strictEqual(ed.burnerDebit.mint, 'native_sol');
+    });
+
+    await check('BAT-1038: output mint with unrecognized owner program → forces main, burner NOT invoked', async () => {
+        _burnerOn();
+        bridgeResponses['/solana/sign-only'] = { signedTransaction: 'SIGNED-MAIN-UNKNOWN' };
+        // PYUSD's mint owner is some non-token program (e.g. System) → unknown → fail-safe to main.
+        mockAccountInfoFn = (pk) => pk === _PYUSD_MINT ? _mintAccountInfo('11111111111111111111111111111111', 6) : _mintAccountInfo(_TKN_PROGRAM, 6);
+        const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'PYUSD', amount: 0.001 });
+        if (result.error) throw new Error(`unexpected error: ${JSON.stringify(result)}`);
+        assert.strictEqual(result.wallet, 'main', 'unknown output mint program must force main (fail-safe)');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must NOT sign for an unknown mint program');
+        assert.ok(bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'expected MWA fallback');
+    });
+
+    await check('BAT-1038 Amendment 1: Ultra order fee payer != burner → fee_payer_mismatch, no reserve/sign/broadcast', async () => {
+        _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-fpm' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'X' };
+        // Build a VALID order tx whose fee payer (account[0]) is NOT the burner.
+        const x402b = require(path.join(BUNDLE, 'payment', 'x402'));
+        const NON_BURNER = 'So11111111111111111111111111111111111111112';
+        const built = x402b.buildClassicSplTransferTx({
+            payerAuthority: NON_BURNER, recipientOwner: _USDC_MINT, mint: _USDC_MINT,
+            decimals: 6, amountAtomic: 1n, recentBlockhash: '11111111111111111111111111111111', createRecipientAta: false,
+        });
+        jupiterUltraOrderResponse = { transaction: built.txBuffer.toString('base64'), requestId: 'ultra-fpm' };
+        try {
+            const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
+            assert.strictEqual(result.error, 'fee_payer_mismatch', JSON.stringify(result));
+            assert.strictEqual(result.retryable, true);
+            assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve on fee-payer mismatch');
+            assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'no burner sign on fee-payer mismatch');
+            assert.ok(!bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'no MWA sign — the burner order is NOT reused on main');
+            assert.strictEqual(jupiterUltraExecuteCalls.length, 0, 'no execute/broadcast');
+        } finally {
+            jupiterUltraOrderResponse = null;
+        }
+    });
+
+    await check('BAT-1038 Amendment 1: fee-payer introspection FAILS on burner route → fail closed, no reserve/sign/broadcast', async () => {
+        _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-introspect' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'X' };
+        // An undecodable order tx (invalid base64) makes _extractFeePayerBase58
+        // throw. On a burner route that's the same risk class as a mismatch —
+        // CodeRabbit #409 made it fail closed rather than proceed.
+        jupiterUltraOrderResponse = { transaction: 'not%valid%base64', requestId: 'ultra-bad' };
+        try {
+            const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
+            assert.strictEqual(result.error, 'fee_payer_mismatch', JSON.stringify(result));
+            assert.strictEqual(result.retryable, true, JSON.stringify(result)); // CodeRabbit #409: pin the retryable contract
+            assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve on unverifiable fee payer');
+            assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'no burner sign on unverifiable fee payer');
+            assert.strictEqual(jupiterUltraExecuteCalls.length, 0, 'no execute/broadcast');
+        } finally {
+            jupiterUltraOrderResponse = null;
+        }
+    });
+
+    await check('BAT-1038 Amendment 1: fee-payer introspection failure on MAIN route → proceeds (MWA is fee payer by construction)', async () => {
+        _burnerOff();
+        bridgeResponses['/solana/sign-only'] = { signedTransaction: 'SIGNED-MAIN-INTROSPECT' };
+        jupiterUltraOrderResponse = { transaction: 'not%valid%base64', requestId: 'ultra-bad-main' };
+        try {
+            const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
+            if (result.error) throw new Error(`main route must proceed, got: ${JSON.stringify(result)}`);
+            assert.strictEqual(result.wallet, 'main');
+            assert.ok(bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'main route signs via MWA despite introspection failure');
+        } finally {
+            jupiterUltraOrderResponse = null;
+        }
     });
 
     // ── jupiter_trigger_create routing + ownership ──────────────────────────
