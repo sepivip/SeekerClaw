@@ -101,6 +101,8 @@ const LOAD_TARGETS = [
     'wallet/spl-token-layout.js',
     'wallet/public-rpc-shaper.js',
     'wallet/ata.js',
+    'wallet/token2022-mint.js', // BAT-1057: pure require-safe Token-2022 fee parser
+
     'payment/protocol.js',
     'payment/x402.js',
     'payment/index.js',
