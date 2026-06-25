@@ -77,9 +77,9 @@ function _tokenAccountInfo() {
     return { value: { owner: _TKN_PROGRAM, data: ['', 'base64'], lamports: 2039280 } };
 }
 let mockAccountInfoFn = () => ({ value: null });
-// BAT-1055/1057: getTokenAccountsByOwner mock — the conversion balance pre-check
-// (and BAT-1055 solana_balance) read it. Default empty. Conversion tests set a
-// held-token balance. Signature (owner, filter).
+// BAT-1055/1057: getTokenAccountsByOwner mock — solana_balance (BAT-1055) reads
+// it per token program; the BAT-1057 conversion balance pre-check reads it too.
+// Default empty. Tests override per (owner, filter).
 let mockTokenAccountsFn = () => ({ value: [] });
 // BAT-1057: a Token-2022 mint account-info with a transfer fee (extended mint:
 // 165 pad + type byte + TransferFeeConfig type-1 TLV, newer bps at data+106).
@@ -1119,6 +1119,62 @@ function _burnerOff() {
         assert.ok(r.error, `over-cap reserve must fail the swap, got ${JSON.stringify(r)}`);
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'no sign after reserve rejection');
         assert.strictEqual(jupiterUltraExecuteCalls.length, 0, 'no execute after reserve rejection');
+    });
+
+    // ── BAT-1055: solana_balance Token-2022 visibility ──────────────────────
+    const _CLASSIC_PROG = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    const _T2022_PROG = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+    const _USDC_M = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const _PYUSD_M = '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo';
+    const _tokenAcct = (mint, uiAmount, decimals) => ({ account: { data: { parsed: { info: { mint, tokenAmount: { uiAmountString: String(uiAmount), decimals } } } } } });
+
+    await check('BAT-1055 solana_balance: classic-only wallet → token tagged tokenStandard=classic, no incomplete flag', async () => {
+        mockTokenAccountsFn = (owner, filter) => filter.programId === _CLASSIC_PROG ? { value: [_tokenAcct(_USDC_M, '5', 6)] } : { value: [] };
+        const r = await tools.handlers.solana_balance({ address: 'Wa11et1111111111111111111111111111111111111' });
+        assert.strictEqual(r.tokenCount, 1, JSON.stringify(r));
+        assert.strictEqual(r.tokens[0].mint, _USDC_M);
+        assert.strictEqual(r.tokens[0].tokenStandard, 'classic');
+        // CodeRabbit #410: stable schema — both fields ALWAYS present
+        assert.strictEqual(r.balanceIncomplete, false, 'always present, false on a full read');
+        assert.strictEqual(r.failedTokenStandards, null, 'always present, null when nothing failed');
+    });
+
+    await check('BAT-1055 solana_balance: Token-2022-only wallet → PYUSD visible, tokenStandard=token_2022 (the bug)', async () => {
+        mockTokenAccountsFn = (owner, filter) => filter.programId === _T2022_PROG ? { value: [_tokenAcct(_PYUSD_M, '0.1', 6)] } : { value: [] };
+        const r = await tools.handlers.solana_balance({ address: 'Wa11et2222222222222222222222222222222222222' });
+        assert.strictEqual(r.tokenCount, 1, 'PYUSD must now be visible (was invisible pre-fix)');
+        assert.strictEqual(r.tokens[0].mint, _PYUSD_M);
+        assert.strictEqual(r.tokens[0].tokenStandard, 'token_2022');
+        assert.ok(!r.balanceIncomplete);
+    });
+
+    await check('BAT-1055 solana_balance: mixed wallet → both standards, tokenCount=2', async () => {
+        mockTokenAccountsFn = (owner, filter) => filter.programId === _CLASSIC_PROG
+            ? { value: [_tokenAcct(_USDC_M, '5', 6)] } : { value: [_tokenAcct(_PYUSD_M, '0.1', 6)] };
+        const r = await tools.handlers.solana_balance({ address: 'Wa11et3333333333333333333333333333333333333' });
+        assert.strictEqual(r.tokenCount, 2);
+        const byStd = Object.fromEntries(r.tokens.map(t => [t.tokenStandard, t.mint]));
+        assert.strictEqual(byStd.classic, _USDC_M);
+        assert.strictEqual(byStd.token_2022, _PYUSD_M);
+        assert.ok(!r.balanceIncomplete);
+    });
+
+    await check('BAT-1055 solana_balance: one program query errors → balanceIncomplete + failedTokenStandards, other still returned', async () => {
+        mockTokenAccountsFn = (owner, filter) => filter.programId === _CLASSIC_PROG
+            ? { value: [_tokenAcct(_USDC_M, '5', 6)] } : { error: { code: -32000, message: 'rpc unavailable' } };
+        const r = await tools.handlers.solana_balance({ address: 'Wa11et4444444444444444444444444444444444444' });
+        assert.strictEqual(r.tokenCount, 1, 'classic balances still returned despite Token-2022 failure');
+        assert.strictEqual(r.tokens[0].tokenStandard, 'classic');
+        assert.strictEqual(r.balanceIncomplete, true, 'partial read MUST be signalled');
+        assert.deepStrictEqual(r.failedTokenStandards, ['token_2022']);
+    });
+
+    await check('BAT-1055 solana_balance: zero-balance accounts filtered out; empty success is NOT incomplete', async () => {
+        mockTokenAccountsFn = (owner, filter) => filter.programId === _CLASSIC_PROG
+            ? { value: [_tokenAcct(_USDC_M, '0', 6)] } : { value: [_tokenAcct(_PYUSD_M, '0', 6)] };
+        const r = await tools.handlers.solana_balance({ address: 'Wa11et5555555555555555555555555555555555555' });
+        assert.strictEqual(r.tokenCount, 0, 'zero-balance accounts dropped');
+        assert.ok(!r.balanceIncomplete, 'value:[] is a successful empty read, not a failure');
     });
 
     if (failures > 0) {
