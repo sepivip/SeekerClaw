@@ -272,6 +272,48 @@ async function runAsync(name, fn) {
         });
         assert.strictEqual(r.ok, true);
     });
+
+    // ── BAT-1057: conversion re-gate (A1) — routing is a HINT, policy is the gate ──
+    const PYUSD_T2022 = '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo';
+    const BONK_NONCAP = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+    const _convShape = (over) => ({
+        kind: 'jupiter_swap_immediate', signerMode: 'burner_only',
+        burnerDebit: { account: BURNER_USDC_ATA, mint: PYUSD_T2022, atomicAmount: '500000' },
+        burnerCreditMin: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '499000' },
+        toleranceBps: 100, conversionPriceImpactBps: 7, tokenStandard: 'token_2022',
+        ...(over || {}),
+    });
+    check('BAT-1057 re-gate: non-cap input + non-cap output → reject', () => {
+        const r = policy._validateExpectedDeltaShape(_convShape({ burnerCreditMin: { account: BURNER_USDC_ATA, mint: BONK_NONCAP, atomicAmount: '1' } }));
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /credit a cap asset/i);
+    });
+    check('BAT-1057 re-gate: non-cap input + missing conversionPriceImpactBps → reject', () => {
+        const d = _convShape(); delete d.conversionPriceImpactBps;
+        const r = policy._validateExpectedDeltaShape(d);
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /conversionPriceImpactBps/i);
+    });
+    check('BAT-1057 re-gate: conversionPriceImpactBps > 100 → reject', () => {
+        const r = policy._validateExpectedDeltaShape(_convShape({ conversionPriceImpactBps: 150 }));
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /price impact/i);
+    });
+    check('BAT-1057 re-gate (CodeRabbit #411): zero conversion credit → reject', () => {
+        const r = policy._validateExpectedDeltaShape(_convShape({ burnerCreditMin: { account: BURNER_USDC_ATA, mint: USDC, atomicAmount: '0' } }));
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /positive/i);
+    });
+    check('BAT-1057 re-gate: well-formed conversion shape accepts', () => {
+        assert.strictEqual(policy._validateExpectedDeltaShape(_convShape()).ok, true);
+    });
+    check('BAT-1057 re-gate 1c: conversion credit account != burner USDC ATA → reject (validateBurnerTx)', async () => {
+        // Valid shape, but the credit account is a synthetic ATA, NOT the burner's
+        // real derived USDC ATA → the 1c check (which runs before tx parse) rejects.
+        const r = await policy.validateBurnerTx('ZHVtbXk=', _convShape(), { burnerPubkey: BURNER });
+        assert.strictEqual(r.error, 'expected_delta_invalid_shape');
+        assert.match(r.reason, /burner's own/i);
+    });
     check('BAT-1031: jupiter_trigger_create_deposit shape accepts burnerDebit-only (no depositVault required)', () => {
         // Option A: burner-policy no longer reads depositVault. The shape
         // validator accepts purely on burnerDebit + signerMode.
