@@ -159,6 +159,14 @@ expect(
     'solana_send, burner configured but no routing decision (defensive)'
 );
 
+// ── BAT-1057: a held-token → USDC/SOL CONVERSION swap STILL requires
+//    confirmation. The burner-conversion routing is discovered INSIDE the
+//    solana_swap handler, AFTER getConfirmationPolicy runs; solana_swap is
+//    unconditionally in V1_STATIC_CONFIRM, so a conversion can never get a
+//    no-confirm fast path (Codex BAT-1057 v2 #1).
+expect('solana_swap', { inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 }, { burnerConfigured: true }, 'confirm', 'BAT-1057 PYUSD→USDC conversion still confirms (burner on)');
+expect('solana_swap', { inputToken: 'PYUSD', outputToken: 'SOL', amount: 0.5 }, { burnerConfigured: true }, 'confirm', 'BAT-1057 PYUSD→SOL conversion still confirms');
+
 if (failures > 0) {
     console.error(`\n${failures} failure(s).`);
     process.exit(1);

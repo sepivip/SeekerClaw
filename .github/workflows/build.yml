@@ -92,6 +92,7 @@ jobs:
             forward-dispatch-error \
             spl-transfer-builder \
             ata-derivation \
+            token2022-mint \
             ci-coverage-manifest
           do
             echo "── $t ──"

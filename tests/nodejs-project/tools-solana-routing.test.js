@@ -77,10 +77,23 @@ function _tokenAccountInfo() {
     return { value: { owner: _TKN_PROGRAM, data: ['', 'base64'], lamports: 2039280 } };
 }
 let mockAccountInfoFn = () => ({ value: null });
-// BAT-1055: getTokenAccountsByOwner mock — solana_balance queries it per token
-// program. Default empty (existing swap tests don't depend on it; SOL-input
-// swaps use getBalance). solana_balance tests override per (owner, filter).
+// BAT-1055/1057: getTokenAccountsByOwner mock — solana_balance (BAT-1055) reads
+// it per token program; the BAT-1057 conversion balance pre-check reads it too.
+// Default empty. Tests override per (owner, filter).
 let mockTokenAccountsFn = () => ({ value: [] });
+// BAT-1057: a Token-2022 mint account-info with a transfer fee (extended mint:
+// 165 pad + type byte + TransferFeeConfig type-1 TLV, newer bps at data+106).
+function _t2022MintInfoWithFee(feeBps) {
+    const head = Buffer.alloc(166); head[165] = 1; // Mint account type
+    const ext = Buffer.alloc(4 + 108); ext.writeUInt16LE(1, 0); ext.writeUInt16LE(108, 2); // TransferFeeConfig, len 108
+    ext.writeUInt16LE(feeBps, 4 + 106); // newer.transfer_fee_basis_points
+    const data = Buffer.concat([head, ext]).toString('base64');
+    return { value: { owner: _TKN_2022_PROGRAM, data: [data, 'base64'], lamports: 1461600 } };
+}
+// Held SPL token balance for the conversion input.
+function _heldTokenAccts(uiAmount, decimals) {
+    return { value: [{ account: { data: { parsed: { info: { tokenAmount: { uiAmountString: String(uiAmount), decimals } } } } } }] };
+}
 // BAT-1038 (CodeRabbit #409): the swap handler now FAILS CLOSED on a burner
 // route when fee-payer introspection throws. The default Ultra order must be a
 // VALID tx whose fee payer (account[0]) IS the burner, else every burner swap
@@ -140,6 +153,7 @@ require.cache[solanaPath] = {
             if (s === 'SOL') return { symbol: 'SOL', address: 'So11111111111111111111111111111111111111112', decimals: 9 };
             if (s === 'USDC') return { symbol: 'USDC', address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 };
             if (s === 'PYUSD') return { symbol: 'PYUSD', address: '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo', decimals: 6 }; // BAT-1038: Token-2022
+            if (s === 'BONK') return { symbol: 'BONK', address: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', decimals: 5 }; // BAT-1057: classic non-cap
             return null;
         },
         jupiterQuote: async () => ({ outAmount: '1000000', otherAmountThreshold: '990000', priceImpactPct: '0.1', routePlan: [] }),
@@ -280,6 +294,7 @@ async function check(label, fn) {
     // so the swap handler's BAT-1038 mint-program lookup resolves to classic (the
     // pre-existing swap routing). solana_send_token tests override this per case.
     mockAccountInfoFn = () => _mintAccountInfo(_TKN_PROGRAM, 6);
+    mockTokenAccountsFn = () => ({ value: [] });
     lastValidateBurnerTxArgs = null;
     jupiterTriggerExecuteCalls = [];
     jupiterRecurringExecuteCalls = [];
@@ -1007,6 +1022,103 @@ function _burnerOff() {
         const ed = lastValidateBurnerTxArgs && lastValidateBurnerTxArgs.expectedDelta;
         assert.strictEqual(ed.burnerDebit.mint, _USDC, 'mint must be the trimmed value');
         assert.strictEqual(ed.burnerDebit.atomicAmount, '1000000');
+    });
+
+    // ── BAT-1057: held-token → cap-asset CONVERSION swap-out ─────────────────
+    const _CONV_PYUSD = '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo';
+    const _CONV_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const _CONV_BURNER = '11111111111111111111111111111112';
+    const { deriveAtaBase58: _convDeriveAta } = require(path.join(BUNDLE, 'wallet', 'ata'));
+    const _convMints = (pk) => pk === _CONV_PYUSD ? _mintAccountInfo(_TKN_2022_PROGRAM, 6) : _mintAccountInfo(_TKN_PROGRAM, 6);
+    const _convOrder = (over = {}) => ({ transaction: _defaultUltraOrderTx(), requestId: 'ultra-conv', otherAmountThreshold: '499000', outAmount: '500000', priceImpact: 0.0648, slippageBps: 22, ...over });
+    function _convSetup(orderOver = {}) {
+        _burnerOn(); // /burner/status configured, pubkey 111..2, 5 USDC per-tx cap
+        mockAccountInfoFn = _convMints;
+        mockTokenAccountsFn = () => _heldTokenAccts('1.0', 6); // burner holds 1 PYUSD
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-conv' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-CONV' };
+        bridgeResponses['/burner/commit'] = { ok: true };
+        jupiterUltraOrderResponse = _convOrder(orderOver);
+    }
+
+    await check('BAT-1057 conversion: PYUSD→USDC routes to BURNER; expectedDelta declares conversion + Token-2022 + burner credit ATA', async () => {
+        _convSetup();
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        if (r.error) throw new Error(`unexpected error: ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner', 'conversion must route to burner');
+        const ed = lastValidateBurnerTxArgs && lastValidateBurnerTxArgs.expectedDelta;
+        assert.ok(ed, 'expectedDelta must reach validateBurnerTx');
+        assert.strictEqual(ed.burnerDebit.mint, _CONV_PYUSD);
+        assert.strictEqual(ed.burnerCreditMin.mint, _CONV_USDC);
+        assert.strictEqual(ed.burnerCreditMin.account, _convDeriveAta(_CONV_BURNER, _CONV_USDC), 'credit = burner USDC ATA');
+        assert.strictEqual(ed.burnerCreditMin.atomicAmount, '499000', 'minOut from order');
+        assert.strictEqual(ed.conversionPriceImpactBps, 7, 'ceil(0.0648 * 100) = 7 bps');
+        assert.strictEqual(ed.tokenStandard, 'token_2022', 'Token-2022 input declared');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 1, 'executed');
+    });
+
+    await check('BAT-1057 conversion: PYUSD→SOL routes to burner; credit = burner pubkey (native SOL)', async () => {
+        _convSetup({ otherAmountThreshold: '3000000' });
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'SOL', amount: 0.5 });
+        if (r.error) throw new Error(`unexpected error: ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner');
+        const ed = lastValidateBurnerTxArgs.expectedDelta;
+        assert.strictEqual(ed.burnerCreditMin.mint, 'native_sol');
+        assert.strictEqual(ed.burnerCreditMin.account, _CONV_BURNER, 'SOL credit = burner pubkey');
+    });
+
+    await check('BAT-1057 conversion: PYUSD→BONK (output non-cap) is NOT a conversion → no burner reserve', async () => {
+        _convSetup();
+        bridgeResponses['/solana/sign-only'] = { signedTransaction: 'SIGNED-MAIN-CONV' };
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'BONK', amount: 0.5 });
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'non-cap output must NOT reserve a burner conversion');
+        if (!r.error) assert.notStrictEqual(r.wallet, 'burner');
+    });
+
+    await check('BAT-1057 conversion: high price impact (>100 bps) → refuse, no reserve/sign', async () => {
+        _convSetup({ priceImpact: 1.5 });
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.ok(r.error && /price impact/i.test(r.error), `expected high-impact refusal, got ${JSON.stringify(r)}`);
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve on high impact');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 0);
+    });
+
+    await check('BAT-1057 conversion: CodeRabbit #411 ceil edge — 1.004% (100.4 bps) → refuse (round would pass)', async () => {
+        _convSetup({ priceImpact: 1.004 });
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.ok(r.error && /price impact/i.test(r.error), 'ceil(1.004*100)=101 must refuse');
+    });
+
+    await check('BAT-1057 conversion: fee-bearing Token-2022 input → refuse (→ main wallet app), no reserve', async () => {
+        _convSetup();
+        mockAccountInfoFn = (pk) => pk === _CONV_PYUSD ? _t2022MintInfoWithFee(50) : _mintAccountInfo(_TKN_PROGRAM, 6);
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.ok(r.error && /transfer fee|fee-bearing|wallet app/i.test(r.error), `expected fee-bearing refusal, got ${JSON.stringify(r)}`);
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve for fee-bearing Token-2022');
+    });
+
+    await check('BAT-1057 conversion: CodeRabbit #411 missing/zero minOut → refuse', async () => {
+        _convSetup({ otherAmountThreshold: '0', outAmount: '0' });
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.ok(r.error && /minimum output/i.test(r.error), `expected zero-minOut refusal, got ${JSON.stringify(r)}`);
+    });
+
+    await check('BAT-1057 conversion: FORGERY — agent-supplied minOut/priceImpact ignored; delta uses the signed order', async () => {
+        _convSetup();
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5, minOut: '999999999', priceImpact: 0, conversionPriceImpactBps: 0, principalAtomic: '1' });
+        if (r.error) throw new Error(`unexpected error: ${JSON.stringify(r)}`);
+        const ed = lastValidateBurnerTxArgs.expectedDelta;
+        assert.strictEqual(ed.conversionPriceImpactBps, 7, 'bps from order.priceImpact, NOT the forged 0');
+        assert.strictEqual(ed.burnerCreditMin.atomicAmount, '499000', 'minOut from order, NOT the forged 999999999');
+    });
+
+    await check('BAT-1057 conversion: reserve over-cap → fail before sign/execute (reserve = cap authority)', async () => {
+        _convSetup();
+        bridgeResponses['/burner/reserve'] = { error: 'over_cap', reason: 'exceeds daily cap' };
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.ok(r.error, `over-cap reserve must fail the swap, got ${JSON.stringify(r)}`);
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'no sign after reserve rejection');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 0, 'no execute after reserve rejection');
     });
 
     // ── BAT-1055: solana_balance Token-2022 visibility ──────────────────────
