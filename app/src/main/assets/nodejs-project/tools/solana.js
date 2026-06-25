@@ -138,7 +138,7 @@ function _extractFeePayerBase58(txBase64) {
 const tools = [
     {
         name: 'solana_balance',
-        description: 'Get SOL balance and SPL token balances for a Solana wallet address.',
+        description: 'Get SOL balance and SPL token balances (classic SPL + Token-2022 standards) for a Solana wallet address. Each token carries a tokenStandard field ("classic" | "token_2022"). Token-2022 tokens (e.g. PYUSD) are visible and swappable but CANNOT be sent via solana_send_token — route direct sends to the main wallet / wallet app. If the result has balanceIncomplete:true (failedTokenStandards lists which program could not be read), do NOT tell the user they hold none of a token — the balance is partial; suggest retrying.',
         input_schema: {
             type: 'object',
             properties: {
@@ -1233,14 +1233,34 @@ const handlers = {
 
         const solBalance = (balanceResult.value || 0) / 1e9;
 
-        const tokenResult = await solanaRpc('getTokenAccountsByOwner', [
-            address,
-            { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
-            { encoding: 'jsonParsed' }
+        // BAT-1038 follow-up: getTokenAccountsByOwner requires a token-program
+        // filter, so a single classic-only query is BLIND to Token-2022 mints
+        // (e.g. PYUSD). Once Token-2022 swaps shipped, those balances exist
+        // on-chain but were invisible here — the swap's own pre-check uses a
+        // `{ mint }` filter (program-agnostic) and DID see them, producing the
+        // "quote finds it, balance doesn't" contradiction. Query BOTH programs
+        // and merge; per-program tolerant (one erroring still returns the other).
+        const _TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+        const _TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+        const [classicRes, token2022Res] = await Promise.all([
+            solanaRpc('getTokenAccountsByOwner', [address, { programId: _TOKEN_PROGRAM }, { encoding: 'jsonParsed' }]),
+            solanaRpc('getTokenAccountsByOwner', [address, { programId: _TOKEN_2022_PROGRAM }, { encoding: 'jsonParsed' }]),
         ]);
 
         const tokens = [];
-        if (tokenResult.value) {
+        // BAT-1055 (Codex sign-off): track per-program query failures so a
+        // partial result is SIGNALLED, not silently under-reported. Without this,
+        // a failed Token-2022 query reads identically to "holds no Token-2022
+        // tokens" — the exact "you have no PYUSD" false-claim class we're fixing.
+        const failedTokenStandards = [];
+        for (const [standard, tokenResult] of [['classic', classicRes], ['token_2022', token2022Res]]) {
+            // A successful empty wallet returns { value: [] } (truthy). A failure
+            // returns { error } / no `value` → mark the standard as unread.
+            if (!tokenResult || tokenResult.error || !tokenResult.value) {
+                failedTokenStandards.push(standard);
+                if (tokenResult && tokenResult.error) log(`[Tools] solana_balance ${standard} query failed: ${JSON.stringify(tokenResult.error)}`, 'DEBUG');
+                continue;
+            }
             for (const account of tokenResult.value) {
                 try {
                     const info = account.account.data.parsed.info;
@@ -1249,13 +1269,27 @@ const handlers = {
                             mint: info.mint,
                             amount: info.tokenAmount.uiAmountString,
                             decimals: info.tokenAmount.decimals,
+                            tokenStandard: standard, // 'classic' | 'token_2022' — token_2022 can't be sent via solana_send_token
                         });
                     }
                 } catch (e) { log(`[Tools] Failed to parse token account: ${e.message}`, 'DEBUG'); }
             }
         }
 
-        return { address, sol: solBalance, tokens, tokenCount: tokens.length };
+        // BAT-1055 (CodeRabbit #410): emit a STABLE schema — both fields present
+        // every call so consumers never branch on presence. balanceIncomplete is
+        // always a boolean; failedTokenStandards is the array or null. Agent
+        // guidance: do NOT make definitive "you don't hold X" claims when
+        // balanceIncomplete is true — a token program's accounts could not be
+        // read this call.
+        return {
+            address,
+            sol: solBalance,
+            tokens,
+            tokenCount: tokens.length,
+            balanceIncomplete: failedTokenStandards.length > 0,
+            failedTokenStandards: failedTokenStandards.length > 0 ? failedTokenStandards : null,
+        };
     },
 
     async solana_history(input, chatId) {
