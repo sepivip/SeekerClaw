@@ -35,7 +35,7 @@ grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
 ### Rich Messages Falling Back to Classic Formatting (BAT-1050)
 **Symptoms:** Replies render as plain/HTML instead of rich (no tables/headings/math), or logs show `sendRichMessage` warnings.
 **Check:**
-```
+```bash
 grep -i "sendRichMessage\|systemPlain\|Plain-text fallback\|transient send" node_debug.log | tail -20
 ```
 **Diagnosis:** Rich Messages (Bot API 10.1) are gated behind the default-OFF `SEEKERCLAW_RICH` env var / `config.richMessages` flag. With the flag OFF, every reply uses the classic `parse_mode:HTML` pipeline — this is normal. With it ON, a reply falls back to classic when `sendRichMessage` does not land:

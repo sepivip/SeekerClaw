@@ -789,7 +789,10 @@ async function richTrySend(chatId, text, replyTo, buttons) {
     // means Rich did NOT land -> fall back to the classic pipeline (not a
     // duplicate). If the method itself is unsupported, stop probing this run.
     const desc = (outcome.desc || '').toLowerCase();
-    if (desc.includes('method not found') || desc.includes('not found') || (result && result.error_code === 404)) {
+    // Only disable Rich for an actual unsupported-method signal — NOT a generic
+    // "not found" (which also matches target errors like "chat not found" /
+    // "message not found", a 400 that must not kill Rich for the whole run).
+    if (desc.includes('method not found') || (result && Number(result.error_code) === 404)) {
         _richMethodAvailable = false;
         log('sendRichMessage unsupported by this Bot API — disabling Rich for this run; using classic pipeline', 'WARN');
     } else {

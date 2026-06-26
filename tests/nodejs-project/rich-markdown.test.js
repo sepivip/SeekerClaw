@@ -50,12 +50,16 @@ eq('javascript: link neutered to text', sanitizeRichMarkdown('[x](javascript:foo
 eq('relative link neutered to text', sanitizeRichMarkdown('[a](/path)'), 'a');
 eq('#anchor link neutered to text', sanitizeRichMarkdown('[b](#sec)'), 'b');
 eq('http (non-s) neutered per allowlist', sanitizeRichMarkdown('[c](http://x.com)'), 'c');
+eq('https link WITH title kept', sanitizeRichMarkdown('[ok](https://x.com "t")'), '[ok](https://x.com "t")');
+eq('tg:// link WITH title still neutered (no bypass)', sanitizeRichMarkdown('[click](tg://user?id=1 "title")'), 'click');
 
 console.log();
 console.log('── image syntax neutered (no remote fetch / custom emoji) ──');
 eq('remote image neutered to alt', sanitizeRichMarkdown('![pic](https://img.com/a.png)'), 'pic');
 eq('tg://emoji custom emoji neutered to alt', sanitizeRichMarkdown('![👍](tg://emoji?id=5)'), '👍');
 eq('empty-alt image neutered', sanitizeRichMarkdown('x ![](https://i) y'), 'x  y');
+eq('titled remote image neutered to alt (no bypass)', sanitizeRichMarkdown('![pic](https://img/x.png "a caption")'), 'pic');
+eq('titled custom-emoji image neutered to alt', sanitizeRichMarkdown('![👍](tg://emoji?id=5 "e")'), '👍');
 
 console.log();
 console.log('── allowlist export + passthrough ──');
