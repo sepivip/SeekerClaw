@@ -85,7 +85,9 @@ async function check(label, fn) {
     await check('signTransaction: calls /burner/sign-transaction with txBase64 + reservationId', async () => {
         bridgeCalls.length = 0;
         nextResponse = { signedTxBase64: 'SIGNED' };
-        const r = await signer.signTransaction('TX-BASE64', { reservationId: 'res-123' });
+        // BAT-1060: expectedDelta:null = explicit no-gate, so this exercises the
+        // bridge-call mechanics without the policy gate (gate is tested separately).
+        const r = await signer.signTransaction('TX-BASE64', { reservationId: 'res-123', expectedDelta: null });
         assert.deepStrictEqual(r, { signedTxBase64: 'SIGNED' });
         assert.strictEqual(bridgeCalls.length, 1);
         assert.strictEqual(bridgeCalls[0].endpoint, '/burner/sign-transaction');
@@ -95,7 +97,7 @@ async function check(label, fn) {
     await check('signAndSend: defaults broadcastVia=rpc + correct endpoint', async () => {
         bridgeCalls.length = 0;
         nextResponse = { signature: 'SIG' };
-        const r = await signer.signAndSend('TX-BASE64');
+        const r = await signer.signAndSend('TX-BASE64', { expectedDelta: null });
         assert.deepStrictEqual(r, { signature: 'SIG' });
         assert.strictEqual(bridgeCalls.length, 1);
         assert.strictEqual(bridgeCalls[0].endpoint, '/burner/sign-and-send');
@@ -106,7 +108,7 @@ async function check(label, fn) {
 
     await check('signAndSend: passes reservationId when provided', async () => {
         bridgeCalls.length = 0;
-        await signer.signAndSend('TX', { reservationId: 'r-999', broadcastVia: 'jupiter' });
+        await signer.signAndSend('TX', { reservationId: 'r-999', broadcastVia: 'jupiter', expectedDelta: null });
         assert.strictEqual(bridgeCalls[0].body.reservationId, 'r-999');
         assert.strictEqual(bridgeCalls[0].body.broadcastVia, 'jupiter');
     });
@@ -138,8 +140,8 @@ async function check(label, fn) {
             // Run the sign flows. The arguments include only opaque txBase64 + reservationId —
             // the test asserts that nothing key-shaped flows in, but ALSO that the bridge
             // wrapper has no path to retrieve key material (it has no API for it).
-            await signer.signTransaction('TX-BASE64', { reservationId: 'r1' });
-            await signer.signAndSend('TX-BASE64', { reservationId: 'r2', broadcastVia: 'rpc' });
+            await signer.signTransaction('TX-BASE64', { reservationId: 'r1', expectedDelta: null });
+            await signer.signAndSend('TX-BASE64', { reservationId: 'r2', broadcastVia: 'rpc', expectedDelta: null });
         } finally {
             console.log = originalLog;
             console.error = originalErr;
