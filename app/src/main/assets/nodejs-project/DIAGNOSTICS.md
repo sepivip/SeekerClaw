@@ -979,3 +979,28 @@ After BAT-1031 (PR #402), the burner policy TRUSTS `api.jup.ag` for the deposit/
 | Code | Retired in | Notes |
 |---|---|---|
 | `simulation_recipient_mismatch` | BAT-1031 (PR #402) | Was the sole fire site for the `validateSimDelta expectedTokenOwner` branch in the deleted depositVault destination-binding. **If seen in current logs:** the device is running a stale APK (verify System screen short SHA against the current commit), OR the log line predates the BAT-1031 ship. Do NOT advise the user to investigate the destination — the check is gone. The reject code is also no longer in `REJECT_CODES` (locked length was 28 after BAT-1031; it is **29 after BAT-1027** added `drainer_undeclared_burner_ata`). Note both a pre-BAT-1027 (BAT-1031) APK and a current one differ by this code — confirm the SHA, not just the count. |
+
+---
+
+## Jupiter Holdings & Balance Reads (BAT-1056)
+
+`jupiter_wallet_holdings` is a **best-effort portfolio view** (Jupiter `/ultra/v1/holdings`): tokens + native SOL, aggregated per mint, each tagged `tokenStandard` (`classic` / `token_2022` / `native_sol`). It is NOT the authoritative on-chain balance — for that, use `solana_balance` (direct RPC, also Token-2022-aware since BAT-1055).
+
+### `jupiter_wallet_holdings` returns `error: "unexpected_jupiter_holdings_shape"`
+**Symptoms:** Tool result `{ error: "unexpected_jupiter_holdings_shape", details: "...Top-level keys: ..." }`.
+**Diagnosis:** This is a **fail-loud API-drift guard, NOT an empty wallet.** Jupiter's holdings response had neither a `tokens` object nor a native-SOL line — meaning the API contract changed, or the request was rejected (e.g. invalid/expired Jupiter API key returning an error body in an unexpected shape). The tool deliberately refuses to render this as a `$0.00` empty wallet (the exact silent-failure BAT-1056 exists to kill).
+**Check:** `grep -i 'unexpected_jupiter_holdings_shape' node_debug.log | tail -5` — the `details` lists the actual top-level keys Jupiter returned.
+**Fix:**
+1. Do **not** tell the user their wallet is empty. Say holdings are temporarily unavailable (a Jupiter API issue).
+2. Verify the Jupiter API key: Settings → Configuration → Jupiter API Key (test at portal.jup.ag).
+3. Fall back to `solana_balance` for the authoritative on-chain balance — it does not depend on Jupiter.
+4. If the key is valid and `solana_balance` works, Jupiter likely changed the `/ultra/v1/holdings` contract → flag for a code update (the parser pins the documented shape).
+
+### Holdings show `"N/A"` USD values / `valuationPartial: true` / `totalValueUsd: "N/A"`
+**Symptoms:** Some rows have `valueUsd: "N/A"`; the result carries `valuationPartial: true` with `pricedCount`/`unpricedCount`; the total may be `"N/A"`.
+**Diagnosis:** **Intentional, not a bug.** USD prices are best-effort (batched Jupiter price lookup). Low-liquidity, newly-listed, or some Token-2022 tokens have no price feed → the tool shows `"N/A"` instead of a misleading `$0.00`. `totalValueUsd` is the priced **net-worth** subtotal, or `"N/A"` if nothing that counts toward net worth is priced — it is **never** reported as `$0.00` purely because prices are missing. Balances/amounts are still accurate on-chain.
+**Fix:** Explain N/A = "price unavailable", not "worth zero". Holdings excluded via `excludeFromNetWorth` are shown but omitted from the total. For a definitive balance use `solana_balance`.
+
+### Holdings vs `solana_balance` — which to trust
+- **`solana_balance`** = authoritative on-chain read (direct RPC; Token-2022-aware). Use it to confirm a balance, or when a holdings read looks wrong. Note the BAT-1000 caveat (LLM API section / RPC notes): without a Helius key the public RPC can time out and make `getTokenAccountsByOwner` look empty — that is an RPC timeout, not a zero balance.
+- **`jupiter_wallet_holdings`** = best-effort portfolio view with USD valuation + token-standard tags. Great for "what's my portfolio worth", but defer to `solana_balance` for the source of truth on any single balance.
