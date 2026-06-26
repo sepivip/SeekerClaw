@@ -1270,6 +1270,24 @@ function _burnerOff() {
         assert.strictEqual(sol.balance, '0.043', 'derived from 43000000 lamports / 1e9, not silently 0');
     });
 
+    await check('BAT-1056 holdings (CodeRabbit #412 r2): partial mint exclusion — included account still counts toward total', async () => {
+        // USDC: account A 2.0 included, account B 1.0 excluded. Display balance 3.0; total counts only 2.0.
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_USDC]: [_holdEntry({ amount: '2000000', account: 'A', excludeFromNetWorth: false }), _holdEntry({ amount: '1000000', account: 'B', excludeFromNetWorth: true })] });
+        mockJupiterPriceFn = () => ({ [_HOLD_USDC]: { usdPrice: 1 } }); // SOL unpriced
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        const row = _row(r, _HOLD_USDC);
+        assert.strictEqual(row.balance, '3', 'displayed balance = full aggregate');
+        assert.strictEqual(row.netWorthBalance, '2', 'net-worth portion = included account only');
+        assert.strictEqual(row.excludeFromNetWorth, false, 'partially-excluded mint is not fully excluded');
+        assert.strictEqual(r.totalValueUsd, '$2.00', 'total counts the included 2.0 USDC, not the excluded 1.0');
+    });
+
+    await check('BAT-1056 holdings (CodeRabbit #412 r2): negative/malformed amount skipped, not BigInt-coerced', async () => {
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_USDC]: [_holdEntry({ amount: '-5', account: 'A' }), _holdEntry({ amount: '1000000', account: 'B' })] });
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        assert.strictEqual(_row(r, _HOLD_USDC).amountRaw, '1000000', 'negative -5 dropped, only valid 1000000 summed');
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);

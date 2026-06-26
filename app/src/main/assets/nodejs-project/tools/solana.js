@@ -3709,18 +3709,27 @@ const handlers = {
                 return fracPart ? `${intPart}.${fracPart}` : intPart;
             };
 
+            // CodeRabbit #412 (r2): validate numeric JSON before balance math — a
+            // non-negative atomic integer for amounts, a non-negative decimal for ui
+            // strings. Negatives / NaN / malformed are skipped, never coerced.
+            const _isNonNegAtomic = (v) => /^\d+$/.test(String(v));
+            const _isNonNegDecimalStr = (v) => /^\d+(\.\d+)?$/.test(String(v));
+
             const rows = [];
             if (hasSolLine) {
-                // CodeRabbit #412: derive the SOL balance from `amount` (lamports) when the
-                // ui fields are absent — never silently value a non-zero SOL as 0.
-                let solBalance = (data.uiAmountString != null) ? String(data.uiAmountString)
-                    : (data.uiAmount != null) ? String(data.uiAmount) : null;
-                if (solBalance == null && data.amount != null) {
-                    try { solBalance = _atomicToDecimalStr(BigInt(data.amount), 9); } catch (_) { solBalance = '0'; }
+                // Prefer a validated ui string/number; else derive from `amount` (lamports).
+                // Never silently value a non-zero SOL as 0, and never accept a negative.
+                let solBalance = null;
+                if (data.uiAmountString != null && _isNonNegDecimalStr(data.uiAmountString)) solBalance = String(data.uiAmountString);
+                else if (data.uiAmount != null && Number.isFinite(Number(data.uiAmount)) && Number(data.uiAmount) >= 0) solBalance = String(data.uiAmount);
+                if (solBalance == null && data.amount != null && _isNonNegAtomic(data.amount)) {
+                    try { solBalance = _atomicToDecimalStr(BigInt(String(data.amount)), 9); } catch (_) { solBalance = null; }
                 }
+                if (solBalance == null) solBalance = '0';
                 rows.push({
                     address: WSOL_MINT, mint: WSOL_MINT, tokenStandard: 'native_sol', decimals: 9,
-                    amountRaw: String(data.amount ?? ''), balance: solBalance ?? '0',
+                    amountRaw: (data.amount != null && _isNonNegAtomic(data.amount)) ? String(data.amount) : '', balance: solBalance,
+                    netWorthBalance: solBalance, // native SOL always counts toward net worth
                     accountCount: 1, excludeFromNetWorth: false, accounts: [],
                 });
             }
@@ -3728,14 +3737,25 @@ const handlers = {
                 const accts = Array.isArray(entries) ? entries : (entries ? [entries] : []);
                 if (accts.length === 0) continue;
                 const decimals = _safeDecimals(accts[0] && accts[0].decimals);
-                let rawSum = 0n;
-                for (const a of accts) { try { rawSum += BigInt(a.amount); } catch (_) { /* skip unparseable */ } }
-                if (rawSum === 0n) continue; // drop zero-balance mints
+                // rawSum = full aggregate (display); netWorthRawSum = only the accounts that
+                // count toward net worth. CodeRabbit #412 (r2): one excluded account must NOT
+                // drop a same-mint included account's balance from the total.
+                let rawSum = 0n, netWorthRawSum = 0n, sawValid = false;
+                for (const a of accts) {
+                    if (!a || !_isNonNegAtomic(a.amount)) continue; // skip negative / malformed
+                    const amt = BigInt(String(a.amount));
+                    rawSum += amt;
+                    if (a.excludeFromNetWorth !== true) netWorthRawSum += amt;
+                    sawValid = true;
+                }
+                if (!sawValid || rawSum === 0n) continue; // drop zero-balance / all-malformed mints
                 rows.push({
                     address: mint, mint, tokenStandard: _stdFromProgram(accts[0] && accts[0].programId),
                     decimals, amountRaw: rawSum.toString(), balance: _atomicToDecimalStr(rawSum, decimals),
+                    netWorthAmountRaw: netWorthRawSum.toString(), netWorthBalance: _atomicToDecimalStr(netWorthRawSum, decimals),
                     accountCount: accts.length,
-                    excludeFromNetWorth: accts.some(a => a.excludeFromNetWorth === true),
+                    // A mint is "excluded" only if its ENTIRE balance is excluded.
+                    excludeFromNetWorth: netWorthRawSum === 0n,
                     // CodeRabbit #412: ?? null so JSON.stringify keeps a stable shape per holding.
                     accounts: accts.map(a => ({
                         account: a.account ?? null, amountRaw: String(a.amount), uiAmountString: a.uiAmountString ?? null,
@@ -3752,12 +3772,13 @@ const handlers = {
                 if (mints.length) priceMap = (await jupiterPrice(mints)) || {};
             } catch (e) { log(`[Jupiter Holdings] batch price lookup failed (values → N/A): ${e.message}`, 'DEBUG'); }
 
-            // CodeRabbit #412: totalValueUsd must reflect NET-WORTH-CONTRIBUTING rows
-            // (not excludeFromNetWorth). If an included holding is unpriced while only
-            // excluded rows are priced, the total is "N/A" — never a false $0.00.
+            // CodeRabbit #412: totalValueUsd reflects the NET-WORTH-CONTRIBUTING balance
+            // (netWorthBalance — partial-exclusion aware). If a contributing holding is
+            // unpriced, the total is "N/A" — never a false $0.00.
             let pricedCount = 0, unpricedCount = 0, totalUsd = 0, contributingPriced = 0, contributingUnpriced = 0;
             for (const r of rows) {
-                const contributes = !r.excludeFromNetWorth;
+                const nwBal = Number(r.netWorthBalance);
+                const contributes = isFinite(nwBal) && nwBal > 0;
                 const p = priceMap[r.address];
                 const usd = p && (p.usdPrice ?? p.price);
                 if (usd != null && isFinite(Number(usd))) {
@@ -3765,7 +3786,7 @@ const handlers = {
                     const v = Number(r.balance) * Number(usd);
                     r.valueUsd = `$${(isFinite(v) ? v : 0).toFixed(2)}`;
                     pricedCount++;
-                    if (contributes && isFinite(v)) { totalUsd += v; contributingPriced++; }
+                    if (contributes) { const nwV = nwBal * Number(usd); if (isFinite(nwV)) { totalUsd += nwV; contributingPriced++; } }
                 } else {
                     r.price = 'N/A'; r.valueUsd = 'N/A'; unpricedCount++; // never fake $0.00
                     if (contributes) contributingUnpriced++;
