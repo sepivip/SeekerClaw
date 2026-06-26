@@ -704,6 +704,29 @@ function chunkMarkdown(text) {
     return chunks;
 }
 
+// BAT-1050 P1A NO-DOUBLE-DELIVERY: classify a telegram('sendMessage') outcome to
+// decide whether a SECOND (fallback) visible send is safe. The transport layer
+// (http.js) REJECTS on socket error / timeout-after-POST (possibly delivered) and
+// RESOLVES { ok:false, ... } for any HTTP response (deterministic rejection).
+//   error (thrown)      -> 'uncertain' : possibly delivered  -> NO second send
+//   ok:true             -> 'ok'        : delivered
+//   ok:false 'too long' -> 'too_long'  : not delivered; caller may re-chunk
+//   ok:false 429 / 5xx  -> 'transient' : not delivered, but do NOT hammer a resend
+//   ok:false (other)    -> 'fallback'  : deterministic format rejection -> safe plain retry
+// Only 'fallback' (and 'too_long' for callers that don't re-chunk) permits a
+// second visible send; 'transient'/'uncertain' must NOT produce a duplicate.
+function classifyTelegramOutcome(result, error) {
+    if (error) return { verdict: 'uncertain', desc: error.message || String(error) };
+    if (result && result.ok) return { verdict: 'ok', desc: '' };
+    const desc = (result && result.description) || '';
+    const code = result && result.error_code;
+    if (desc.includes('too long')) return { verdict: 'too_long', desc };
+    if (code === 429 || (typeof code === 'number' && code >= 500)) {
+        return { verdict: 'transient', desc: desc || `error_code ${code}` };
+    }
+    return { verdict: 'fallback', desc };
+}
+
 async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = {}) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
@@ -729,10 +752,10 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = 
         const isLastChunk = i === chunks.length - 1;
         // Only attach buttons to the last chunk (they belong at the bottom)
         const replyMarkup = (isLastChunk && buttons) ? { inline_keyboard: buttons } : undefined;
-        let sent = false;
 
         // Try with HTML first (supports native blockquotes)
         const htmlText = toTelegramHtml(chunk);
+        let outcome;
         try {
             const payload = {
                 chat_id: chatId,
@@ -742,33 +765,48 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = 
             };
             if (replyMarkup) payload.reply_markup = replyMarkup;
             const result = await telegram('sendMessage', payload);
-            // Check if Telegram actually accepted the message
-            if (result && result.ok) {
-                sent = true;
-                if (result.result && result.result.message_id) {
-                    lastMessageId = result.result.message_id;
-                    recordSentMessage(chatId, result.result.message_id, chunk);
-                }
-            } else if (result && !result.ok) {
-                const desc = result.description || '';
-                // HTML expansion exceeded Telegram's 4096 limit — re-chunk at half size
-                if (desc.includes('too long')) {
-                    const half = Math.floor(chunk.length / 2);
-                    const subChunks = chunkMarkdown(chunk.slice(0, half));
-                    subChunks.push(...chunkMarkdown(chunk.slice(half)));
-                    // Insert sub-chunks after current position so they get sent in order
-                    chunks.splice(i + 1, 0, ...subChunks);
-                    sent = true; // skip plain-text fallback, sub-chunks will be sent next
-                } else {
-                    log(`HTML format rejected: ${desc}`, 'WARN');
-                }
+            outcome = classifyTelegramOutcome(result, null);
+            if (outcome.verdict === 'ok' && result.result && result.result.message_id) {
+                lastMessageId = result.result.message_id;
+                recordSentMessage(chatId, result.result.message_id, chunk);
             }
         } catch (e) {
-            log(`sendMessage HTML failed: ${e.message}`, 'WARN');
+            // Transport error (timeout/socket) AFTER the POST — the message may
+            // already be delivered. NO-DOUBLE-DELIVERY: classify as 'uncertain' so
+            // we do NOT retry as plain text (that would risk a duplicate).
+            outcome = classifyTelegramOutcome(null, e);
         }
 
-        // Only retry as plain text if the HTML attempt failed
-        if (!sent) {
+        // Decide the plain-text fallback from the classified outcome. Only a
+        // deterministic HTML rejection ('fallback') is safe to re-send as plain;
+        // 'transient' (429/5xx) and 'uncertain' (transport throw) must NOT.
+        let plainFallbackEligible = false;
+        switch (outcome.verdict) {
+            case 'too_long': {
+                // HTML expansion exceeded Telegram's 4096 limit — re-chunk at half
+                // size; the sub-chunks deliver the content (no plain fallback).
+                const half = Math.floor(chunk.length / 2);
+                const subChunks = chunkMarkdown(chunk.slice(0, half));
+                subChunks.push(...chunkMarkdown(chunk.slice(half)));
+                chunks.splice(i + 1, 0, ...subChunks);
+                break;
+            }
+            case 'fallback':
+                log(`HTML format rejected: ${outcome.desc}`, 'WARN');
+                plainFallbackEligible = true;
+                break;
+            case 'transient':
+                log(`Telegram transient send failure (${outcome.desc}) — not retrying as plain (avoid duplicate/hammer)`, 'WARN');
+                break;
+            case 'uncertain':
+                log(`sendMessage HTML transport error (possibly delivered; no plain fallback): ${outcome.desc}`, 'WARN');
+                break;
+            case 'ok':
+            default:
+                break;
+        }
+
+        if (plainFallbackEligible) {
             try {
                 const payload = {
                     chat_id: chatId,
@@ -780,9 +818,13 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = 
                 if (result && result.ok && result.result && result.result.message_id) {
                     lastMessageId = result.result.message_id;
                     recordSentMessage(chatId, result.result.message_id, chunk);
+                } else if (result && !result.ok) {
+                    log(`Plain-text fallback rejected: ${result.description || 'unknown error'}`, 'WARN');
                 }
             } catch (e) {
-                log(`Failed to send message: ${e.message}`, 'ERROR');
+                // Plain fallback also hit a transport error — give up for this chunk
+                // (no further retry, to avoid an unbounded send loop / duplicate).
+                log(`Plain-text fallback transport error: ${e.message}`, 'ERROR');
             }
         }
     }
@@ -1165,6 +1207,7 @@ module.exports = {
     recordSentMessage,
     sendMessage,
     sendMessageSystem,
+    classifyTelegramOutcome,
     sendTyping,
     deferStatus,
     deferThinkingStatus,

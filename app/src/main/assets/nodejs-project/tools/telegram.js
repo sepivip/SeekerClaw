@@ -14,7 +14,7 @@ const {
 const {
     telegram, telegramSendFile, detectTelegramFileType,
     cleanResponse, toTelegramHtml, stripMarkdown,
-    recordSentMessage,
+    recordSentMessage, classifyTelegramOutcome,
 } = require('../telegram');
 
 const tools = [
@@ -179,8 +179,10 @@ const handlers = {
         try {
             const cleaned = cleanResponse(text);
             const replyMarkup = input.buttons ? { inline_keyboard: input.buttons } : undefined;
-            // Try HTML first, fall back to plain text
-            let result, htmlFailed = false;
+            // Try HTML first; fall back to plain ONLY on a deterministic rejection.
+            // NO-DOUBLE-DELIVERY (BAT-1050): a transport throw means the message may
+            // already be delivered — do NOT resend (that would duplicate it).
+            let result = null, outcome;
             try {
                 const payload = {
                     chat_id: chatId,
@@ -189,10 +191,20 @@ const handlers = {
                 };
                 if (replyMarkup) payload.reply_markup = replyMarkup;
                 result = await telegram('sendMessage', payload);
+                outcome = classifyTelegramOutcome(result, null);
             } catch (e) {
-                htmlFailed = true;
+                outcome = classifyTelegramOutcome(null, e);
             }
-            if (htmlFailed || !result || !result.ok) {
+            if (outcome.verdict === 'uncertain') {
+                // Connection dropped after the POST — possibly delivered. Don't resend.
+                log(`telegram_send transport error (possibly delivered; not retried): ${outcome.desc}`, 'WARN');
+                return { ok: false, warning: 'Connection dropped after sending; the message may have been delivered. Not retried to avoid a duplicate.' };
+            }
+            // telegram_send doesn't chunk, so 'too_long' (HTML expanded past 4096)
+            // also falls back to the shorter plain text — both 'fallback' and
+            // 'too_long' are deterministic rejections (not delivered), so the
+            // resend is safe. 'transient' (429/5xx) is NOT resent (avoid hammer).
+            if (outcome.verdict === 'fallback' || outcome.verdict === 'too_long') {
                 const payload = {
                     chat_id: chatId,
                     text: stripMarkdown(cleaned),
