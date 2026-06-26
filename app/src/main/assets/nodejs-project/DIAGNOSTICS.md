@@ -32,6 +32,23 @@ grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
 **Diagnosis:** Telegram rate limits: ~30 messages/second to different chats, ~20 messages/minute to same chat, ~1 message/second for same chat. Bulk sending or rapid tool status updates can trigger this.
 **Fix:** Reduce message frequency. Batch status updates into single messages. If persistent, wait 30-60 seconds before retrying. This is transient — no config change needed.
 
+### Rich Messages Falling Back to Classic Formatting (BAT-1050)
+**Symptoms:** Replies render as plain/HTML instead of rich (no tables/headings/math), or logs show `sendRichMessage` warnings.
+**Check:**
+```
+grep -i "sendRichMessage\|systemPlain\|Plain-text fallback\|transient send" node_debug.log | tail -20
+```
+**Diagnosis:** Rich Messages (Bot API 10.1) are gated behind the default-OFF `SEEKERCLAW_RICH` env var / `config.richMessages` flag. With the flag OFF, every reply uses the classic `parse_mode:HTML` pipeline — this is normal. With it ON, a reply falls back to classic when `sendRichMessage` does not land:
+- `sendRichMessage unsupported by this Bot API ...` — the API does not expose Rich Messages; Rich is disabled for the rest of the run and all replies use the classic pipeline. Nothing is lost.
+- `sendRichMessage failed (fallback/transient: ...) — falling back to classic HTML` — a single rich send was rejected (malformed rich markdown, 429 rate limit, or 5xx); the classic pipeline delivers it instead (not a duplicate — the rich send did not land).
+- `sendRichMessage transport error (possibly delivered; no classic fallback)` — the connection dropped after the request was sent, so the message MAY already be delivered; it is NOT resent (NO-DOUBLE-DELIVERY). If a reply seems missing, ask the user to confirm rather than blindly resending.
+**Fix:** No action for the unsupported/fallback cases — delivery still happens via the classic path. For repeated transient failures see "Telegram Rate Limited (429)" above. To turn Rich off entirely, unset `SEEKERCLAW_RICH` (or `richMessages`) and restart.
+
+### System Notices Render Plain Even With Rich On (expected)
+**Symptoms:** Heartbeat alerts, "Back online", status/thinking bubbles, and auto-resume notices appear as plain text although Rich is enabled.
+**Diagnosis:** Intentional. Synthetic/system notices are sent via the `systemPlain` path (raw text, no `parse_mode`, never Rich) so they can never trigger rich rendering and never change BAT-558 heartbeat behavior. Only user-facing replies, cron reminders, and `telegram_send` use the Rich path. A `systemPlain send rejected/failed` WARN means that system notice hit a Telegram error (rate limit/network); it is not retried, to avoid duplicates.
+**Fix:** None — working as designed.
+
 ### Network Prolonged Outage
 **Symptoms:** No messages arrive for extended periods. Logs show many consecutive poll or WebSocket failures.
 **Check:**
