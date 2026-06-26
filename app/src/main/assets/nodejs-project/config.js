@@ -463,6 +463,19 @@ const API_TIMEOUT_RETRIES = Math.max(0, Math.min(5, _safeInt(config.apiTimeoutRe
 const API_TIMEOUT_BACKOFF_MS = Math.max(100, _safeInt(config.apiTimeoutBackoffMs ?? process.env.API_TIMEOUT_BACKOFF_MS) ?? 500);
 const API_TIMEOUT_MAX_BACKOFF_MS = Math.max(1000, _safeInt(config.apiTimeoutMaxBackoffMs ?? process.env.API_TIMEOUT_MAX_BACKOFF_MS) ?? 5000);
 
+// BAT-1050 P1A: Telegram Rich Messages (Bot API 10.1) feature flag — DEFAULT OFF.
+// Internal owner/device-test gate using the same config-or-env idiom as
+// API_TIMEOUT_* above (config.json field wins, else env var). No Settings UI
+// yet, so SEEKERCLAW_RICH is the device-test bridge until a toggle ships.
+// When false the entire Rich send path is inert: replies take the classic
+// parse_mode:HTML -> plain pipeline, byte-for-byte unchanged.
+const _boolFlag = (v) => v === true || v === 'true' || v === '1';
+const RICH_MESSAGES_ENABLED = _boolFlag(config.richMessages ?? process.env.SEEKERCLAW_RICH ?? false);
+// Bot API feature level this build targets (Rich Messages = Bot API 10.1).
+// Tracked so diagnostics / the tg-bot-api-parity check can report what we
+// build against; not a wire-protocol version (we call api.telegram.org raw).
+const BOT_API_VERSION = '10.1';
+
 // Reaction config with validation
 // FIX-2 (BAT-219): Security note — 'own' (default) restricts reaction events to the owner only.
 // Setting this to 'all' surfaces emoji reactions from ANY Telegram user to the agent as
@@ -893,6 +906,10 @@ module.exports = {
     API_TIMEOUT_RETRIES,
     API_TIMEOUT_BACKOFF_MS,
     API_TIMEOUT_MAX_BACKOFF_MS,
+
+    // BAT-1050 P1A: Telegram Rich Messages (Bot API 10.1) — default-OFF flag
+    RICH_MESSAGES_ENABLED,
+    BOT_API_VERSION,
 
     // Conversational API keys (BAT-236)
     syncAgentApiKeys,

@@ -217,6 +217,10 @@ if (CHANNEL === 'telegram') {
 
 // Convenience aliases — route through channel.js for channel-agnostic callers
 const sendMessage = (chatId, text, replyTo, buttons) => channel.sendMessage(chatId, text, replyTo);
+// BAT-1050 P1A: plain/system send for synthetic notices (heartbeat, back-online,
+// confirmation nudges, auto-resume status) — never renders Rich. User-content
+// replies (and cron reminders) keep using sendMessage above.
+const sendMessageSystem = (chatId, text) => channel.sendMessageSystem(chatId, text);
 const sendTyping = (chatId) => channel.sendTyping(chatId);
 const createStatusReactionController = (chatId, msgId) => channel.createStatusReactionController(chatId, msgId);
 
@@ -298,7 +302,7 @@ function enqueueMessage(msg) {
             pendingConfirmations.delete(chatId);
             return; // Don't enqueue — confirmation resolved
         } else {
-            channel.sendMessage(chatId, `⏳ Reply YES or NO to confirm ${pending.toolName} first.`).catch(() => {});
+            channel.sendMessageSystem(chatId, `⏳ Reply YES or NO to confirm ${pending.toolName} first.`).catch(() => {});
             return; // Don't enqueue other messages during pending confirmation
         }
     }
@@ -359,7 +363,7 @@ async function autoResumeOnStartup() {
                 // Notify user about the stuck task
                 const chatId = full.chatId;
                 if (chatId) {
-                    sendMessage(chatId, `Task ${cp.taskId} failed after ${attempts} auto-resume attempts. Use /resume to try manually, or start the task again.`).catch(() => {});
+                    sendMessageSystem(chatId, `Task ${cp.taskId} failed after ${attempts} auto-resume attempts. Use /resume to try manually, or start the task again.`).catch(() => {});
                 }
                 continue;
             }
@@ -409,7 +413,7 @@ async function autoResumeOnStartup() {
 
             // Notify user after conversation is restored
             const goalHint = goalSnippet ? `\n> ${goalSnippet}${full.originalGoal.length > 80 ? '...' : ''}` : '';
-            await sendMessage(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
+            await sendMessageSystem(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
 
             // Queue the resume through chatQueues to serialize with any incoming messages
             const prev = chatQueues.get(chatId) || Promise.resolve();
@@ -427,7 +431,7 @@ async function autoResumeOnStartup() {
                     }
                 } catch (e) {
                     log(`[AutoResume] chat() error: ${e.message}`, 'ERROR');
-                    await sendMessage(chatId, `Auto-resume failed: ${redactSecrets(e.message)}`).catch(() => {});
+                    await sendMessageSystem(chatId, `Auto-resume failed: ${redactSecrets(e.message)}`).catch(() => {});
                 }
             });
             chatQueues.set(chatId, task);
@@ -524,7 +528,7 @@ async function poll() {
                             } else {
                                 // Don't enqueue other messages during pending confirmation
                                 // to prevent overlapping tool calls from overwriting the entry
-                                sendMessage(msgChatId, `⏳ Reply YES or NO (or /approve / /deny) to confirm ${pending.toolName} first.`).catch(() => {});
+                                sendMessageSystem(msgChatId, `⏳ Reply YES or NO (or /approve / /deny) to confirm ${pending.toolName} first.`).catch(() => {});
                             }
                         } else {
                             enqueueMessage(normalizeTelegramMessage(update.message));
@@ -918,7 +922,7 @@ telegram('getMe')
         setTimeout(() => {
             const dmChatId = channel.getOwnerChatId();
             if (dmChatId) {
-                channel.sendMessage(dmChatId, 'Back online — resend anything important.').catch(e =>
+                channel.sendMessageSystem(dmChatId, 'Back online — resend anything important.').catch(e =>
                     log(`[Discord] Back-online notify failed: ${e.message}`, 'WARN')
                 );
             }
@@ -1126,7 +1130,7 @@ async function runHeartbeat() {
                 // The user sees this alert in Telegram and may reply to it — having
                 // it in conversation history lets the agent connect the dots.
                 addToConversation(ownerChatId, 'assistant', cleaned);
-                await sendMessage(ownerChatId, cleaned);
+                await sendMessageSystem(ownerChatId, cleaned);
             }
         } catch (e) {
             log(`[Heartbeat] Error: ${e.message}`, 'WARN');

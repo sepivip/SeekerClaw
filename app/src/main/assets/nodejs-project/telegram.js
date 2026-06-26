@@ -704,12 +704,21 @@ function chunkMarkdown(text) {
     return chunks;
 }
 
-async function sendMessage(chatId, text, replyTo = null, buttons = null) {
+async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = {}) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
     if (!text) return; // Nothing left after cleaning
     // Redact any leaked secrets (API keys, tokens) from outgoing messages
     text = redactSecrets(text);
+
+    // BAT-1050 P1A: systemPlain path — synthetic/system notices (heartbeat,
+    // back-online, confirmation nudges, auto-resume status) send RAW: no
+    // parse_mode, no HTML/rich transform. Keeps these messages plain so the
+    // future Rich send path and BAT-558 heartbeat behavior are unaffected.
+    // Reached via sendMessageSystem() / channel.sendMessageSystem().
+    if (opts && opts.plainOnly) {
+        return sendPlainChunks(chatId, text, replyTo, buttons);
+    }
 
     // Telegram max message length is 4096 — use markdown-aware chunking
     const chunks = chunkMarkdown(text);
@@ -780,6 +789,42 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
 
     // Return { messageId } of the last successfully sent chunk (channel interface contract)
     if (lastMessageId != null) return { messageId: lastMessageId };
+}
+
+// BAT-1050 P1A: raw plain-text chunked send — no parse_mode, no HTML/rich
+// transform. Single attempt per chunk (no HTML->plain ladder), so it carries no
+// double-send risk. `text` is already cleanResponse'd + redactSecrets'd by the
+// caller (sendMessage). Used for system/synthetic notices via sendMessageSystem.
+async function sendPlainChunks(chatId, text, replyTo, buttons) {
+    const chunks = chunkMarkdown(text);
+    let lastMessageId = null;
+    for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const isLastChunk = i === chunks.length - 1;
+        const replyMarkup = (isLastChunk && buttons) ? { inline_keyboard: buttons } : undefined;
+        try {
+            const payload = { chat_id: chatId, text: chunk, reply_to_message_id: replyTo };
+            if (replyMarkup) payload.reply_markup = replyMarkup;
+            const result = await telegram('sendMessage', payload);
+            if (result && result.ok && result.result && result.result.message_id) {
+                lastMessageId = result.result.message_id;
+                recordSentMessage(chatId, result.result.message_id, chunk);
+            } else if (result && !result.ok) {
+                log(`systemPlain send rejected: ${result.description || 'unknown error'}`, 'WARN');
+            }
+        } catch (e) {
+            log(`systemPlain send failed: ${e.message}`, 'WARN');
+        }
+    }
+    if (lastMessageId != null) return { messageId: lastMessageId };
+}
+
+// BAT-1050 P1A: explicit plain send for system/synthetic notices. The
+// channel-agnostic entry is channel.sendMessageSystem(); Telegram routes here
+// (raw plain via opts.plainOnly), Discord falls back to its normal send. This
+// path NEVER renders Rich.
+async function sendMessageSystem(chatId, text) {
+    return sendMessage(chatId, text, null, null, { plainOnly: true });
 }
 
 // OpenClaw parity: backoff on 401/403 to avoid hammering Telegram with invalid token
@@ -1119,6 +1164,7 @@ module.exports = {
     SENT_CACHE_TTL,
     recordSentMessage,
     sendMessage,
+    sendMessageSystem,
     sendTyping,
     deferStatus,
     deferThinkingStatus,
