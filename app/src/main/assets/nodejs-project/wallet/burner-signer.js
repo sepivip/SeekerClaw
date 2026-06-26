@@ -85,17 +85,17 @@ function _lazySolanaInternals() {
         if (typeof solana.getSolanaRpcUrl === 'function') {
             _getSolanaRpcUrl = solana.getSolanaRpcUrl;
         } else {
-            // null override → solanaRpcOnce uses its canonical live URL
-            // selection (see solana.js:57 `rpcUrlOverride || getSolanaRpcUrl()`).
-            // The drift-check below short-circuits on null via its
-            // `typeof === 'string'` guard, so this degrade avoids the prior
-            // crash. Caveat: in the partial export-missing case (this export
-            // gone, but solana.solanaRpc still present), the R-next-12
-            // same-RPC pinning contract is degraded — solanaRpcOnce will
-            // independently re-read live config on each call rather than
-            // honoring the pinned URL we'd normally pass through.
-            _log('[BurnerSigner] solana.getSolanaRpcUrl export missing — drift detection + backing hint degraded; _solanaRpc(..., null) will fall through to canonical live URL selection', 'ERROR');
-            _getSolanaRpcUrl = () => null;
+            // BAT-1060: missing export → fail CLOSED. Previously this set a
+            // null-returning stub and degraded open (same-RPC pinning + the
+            // end-of-call drift check dropped while the policy still returned
+            // success — getMultipleAccounts and simulateTransaction could then
+            // validate against different RPC views). A missing export is a broken
+            // build, not a transient condition, so the signing path must not
+            // proceed: the accessor throws a sentinel that the simulator re-throws,
+            // surfacing as simulation_failed. (A runtime throw from a PRESENT
+            // accessor still degrades with a WARN — see the catch blocks below.)
+            _log('[BurnerSigner] solana.getSolanaRpcUrl export missing — failing closed (simulation_failed); pinned-RPC + drift check cannot be honored', 'ERROR');
+            _getSolanaRpcUrl = () => { throw new Error('getSolanaRpcUrl_unavailable: solana.getSolanaRpcUrl export missing'); };
         }
         // R-next-13: use production isValidSolanaAddress contract (charset +
         // 32..44 length + base58Decode + 32-byte payload) for the bridge
@@ -182,6 +182,10 @@ function _lazyDefaultSimulator() {
                 urlAtStart = _getSolanaRpcUrl();
                 if (typeof urlAtStart === 'string' && /helius/i.test(urlAtStart)) backing = 'helius';
             } catch (e) {
+                // BAT-1060: missing-export sentinel → fail closed (re-throw →
+                // simulation_failed). A runtime throw from a present accessor still
+                // degrades best-effort (logged below).
+                if (e && typeof e.message === 'string' && e.message.includes('getSolanaRpcUrl_unavailable')) throw e;
                 // Q6: surface the failure in logs so production drift checks can
                 // see when the accessor threw vs returned null. Drift detection
                 // remains best-effort but is no longer silent.
@@ -304,6 +308,8 @@ function _lazyDefaultSimulator() {
                 }
             } catch (e) {
                 if (e && typeof e.message === 'string' && e.message.startsWith('rpc_url_drift')) throw e;
+                // BAT-1060: missing-export sentinel → fail closed (re-throw).
+                if (e && typeof e.message === 'string' && e.message.includes('getSolanaRpcUrl_unavailable')) throw e;
                 // Q6: _getSolanaRpcUrl() itself threw — log so we can see the
                 // degraded-drift-check case in production, instead of silently
                 // skipping.
@@ -430,8 +436,25 @@ function _log(msg, level) {
  */
 async function _runPolicyGate(txBase64, opts, methodName) {
     if (!opts || typeof opts.expectedDelta === 'undefined') {
-        // TRANSITIONAL Phase 2d → Phase 3: warn but pass through.
-        _log(`[BurnerPolicy] ${methodName} called without expectedDelta — TRANSITIONAL pass-through. Migrate caller per BAT-1013 Phase 3.`, 'WARN');
+        // BAT-1060: fail CLOSED on omission. A burner-routed caller MUST specify
+        // expectedDelta — an object (to gate) or explicit null (a no-gate flow,
+        // handled just below). Omitting it entirely is a caller bug; never sign
+        // unvalidated. routeAndSign defaults expectedDelta=null, so this fires only
+        // for a direct/unmigrated BurnerSigner caller — the gap CodeRabbit flagged.
+        _log(`[BurnerPolicy] ${methodName} called without expectedDelta — fail-closed per BAT-1013 Phase 3.`, 'WARN');
+        return {
+            error: 'missing_expected_delta',
+            reason: 'expectedDelta required for the burner policy gate (pass the expected-outcome object, or explicit null for a no-gate flow)',
+            policyClass: 'contract_gap',
+        };
+    }
+    if (opts.expectedDelta === null) {
+        // BAT-1060: explicit no-gate flow — DCA deposit (the position account is not
+        // known pre-sign, so there is no delta to validate), cancel, zero-cap. This
+        // is the deliberate "no delta to validate" signal, DISTINCT from the rejected
+        // undefined case above. Preserves the prior behavior for these flows (which
+        // formerly hit the undefined pass-through because dispatch dropped null).
+        _log(`[BurnerPolicy] ${methodName} expectedDelta=null — explicit no-gate flow (DCA deposit / cancel / zero-cap).`, 'DEBUG');
         return null;
     }
     const burnerPubkey = await _getBurnerPubkey();

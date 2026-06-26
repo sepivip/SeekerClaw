@@ -141,9 +141,19 @@ function parseCiAllowlist() {
 // Step 2: Discover all *.test.js files actually present in the directory.
 // ─────────────────────────────────────────────────────────────────
 function discoverTestFiles() {
-    return fs.readdirSync(TESTS_DIR)
-        .filter((f) => f.endsWith('.test.js'))
-        .sort();
+    // BAT-1060: recurse subdirectories so a nested *.test.js can't silently
+    // bypass the manifest + CI allowlist. Returns paths relative to TESTS_DIR
+    // (flat names for the current top-level layout — forward-compatible).
+    const files = [];
+    function recurse(dir) {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) recurse(full);
+            else if (entry.name.endsWith('.test.js')) files.push(path.relative(TESTS_DIR, full).split(path.sep).join('/'));
+        }
+    }
+    recurse(TESTS_DIR);
+    return files.sort();
 }
 
 // ─────────────────────────────────────────────────────────────────

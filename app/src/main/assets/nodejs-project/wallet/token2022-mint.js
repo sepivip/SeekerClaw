@@ -46,6 +46,12 @@ function readMintTransferFeeBps(owner, base64Data) {
     let buf;
     try { buf = Buffer.from(base64Data || '', 'base64'); } catch (_) { return { standard: 'token_2022', feeBps: null }; }
     if (buf.length === 0) return { standard: 'token_2022', feeBps: null };
+    // BAT-1060: Buffer.from tolerates malformed base64 (silently drops invalid
+    // chars). Reject anything that doesn't round-trip to the (canonical) input so
+    // unparseable mint data can't slip through and be read as feeBps:0.
+    if (typeof base64Data === 'string' && buf.toString('base64') !== base64Data) {
+        return { standard: 'token_2022', feeBps: null };
+    }
 
     // CodeRabbit #411: a valid Token-2022 mint is EITHER exactly the 82-byte
     // base (no extensions → no fee) OR an extended mint padded to >= 166 bytes

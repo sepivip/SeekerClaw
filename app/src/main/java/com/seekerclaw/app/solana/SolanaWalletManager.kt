@@ -5,6 +5,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import com.solana.mobilewalletadapter.clientlib.AdapterOperations
 import com.solana.mobilewalletadapter.clientlib.ConnectionIdentity
@@ -265,6 +266,11 @@ object SolanaWalletManager {
         }
         return try {
             core.transact(sender, signInPayload = null, block = block)
+        } catch (e: CancellationException) {
+            // BAT-1060: never swallow structured cancellation — re-throw so the
+            // caller's coroutine scope is cancelled instead of seeing a Failure
+            // (which would keep wallet operations running past cancellation).
+            throw e
         } catch (e: Exception) {
             // Preserve the original error-contract: any throw from the SDK
             // (or RealMwaCore.requireNotNull(sender), or main-thread

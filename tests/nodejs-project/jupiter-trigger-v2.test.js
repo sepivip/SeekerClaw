@@ -342,13 +342,18 @@ function _buildTransferTx(payerB58) {
 
     // ── ensureVault (contract: GET /vault → vaultPubkey; GET /vault/register) ─
     console.log('\nensureVault:');
+    // BAT-1060: ensureVault now rejects malformed (non-base58) vaultPubkey before
+    // caching, so mocks must be valid 32-byte base58 keys. Generate guaranteed-valid
+    // distinct ones rather than short placeholders.
+    const VAULT_1 = triggerV2._base58Encode(Buffer.alloc(32, 1));
+    const VAULT_2 = triggerV2._base58Encode(Buffer.alloc(32, 2));
     triggerV2._resetCachesForTests();
     _resetHttp();
-    _enqueue({ status: 200, data: { userPubkey: FIXTURE_PUBKEY, vaultPubkey: 'VauLTpk111', privyVaultId: 'pv1' } });
+    _enqueue({ status: 200, data: { userPubkey: FIXTURE_PUBKEY, vaultPubkey: VAULT_1, privyVaultId: 'pv1' } });
     await check('GET /vault returns vaultPubkey + caches', async () => {
         const r = await triggerV2.ensureVault(FIXTURE_PUBKEY, 'jwt');
         assert.strictEqual(r.ok, true);
-        assert.strictEqual(r.vaultPubkey, 'VauLTpk111');
+        assert.strictEqual(r.vaultPubkey, VAULT_1);
         // Second call must hit cache, not HTTP.
         const callsBefore = httpCalls.length;
         const r2 = await triggerV2.ensureVault(FIXTURE_PUBKEY, 'jwt');
@@ -360,12 +365,12 @@ function _buildTransferTx(payerB58) {
     triggerV2._resetCachesForTests();
     _resetHttp();
     _enqueue({ status: 404, data: { error: 'Vault not found' } });
-    _enqueue({ status: 200, data: { userPubkey: FIXTURE_PUBKEY, vaultPubkey: 'VauLTpk222', privyVaultId: 'pv2' } });
+    _enqueue({ status: 200, data: { userPubkey: FIXTURE_PUBKEY, vaultPubkey: VAULT_2, privyVaultId: 'pv2' } });
     await check('GET /vault 404 → GET /vault/register (idempotent) → vaultPubkey', async () => {
         const callsBefore = httpCalls.length;
         const r = await triggerV2.ensureVault(FIXTURE_PUBKEY, 'jwt');
         assert.strictEqual(r.ok, true);
-        assert.strictEqual(r.vaultPubkey, 'VauLTpk222');
+        assert.strictEqual(r.vaultPubkey, VAULT_2);
         assert.strictEqual(httpCalls.length, callsBefore + 2, 'GET /vault then GET /vault/register');
         // Both calls must be GET (no POST register).
         assert.ok(httpCalls.slice(-2).every(c => c.options.method === 'GET'), 'vault calls must be GET');
@@ -817,6 +822,22 @@ function _buildTransferTx(payerB58) {
         for (const tag of [0x01, 0x04]) {
             const r = triggerV2._validateComputeBudgetInstr(Buffer.from([tag, 0, 0, 0, 0]));
             assert.strictEqual(r.ok, true, `tag 0x0${tag} (no fee impact) should be accepted`);
+        }
+    });
+    await check('BAT-1060 _validateComputeBudgetInstr ACCEPTS fee-neutral 0x01/0x04 at ANY length (real Jupiter sends short ones)', async () => {
+        for (const tag of [0x01, 0x04]) {
+            // 2-byte synthetic (Jupiter real-challenge shape) AND a full 5-byte form
+            for (const data of [Buffer.from([tag, 0x02]), Buffer.from([tag, 0, 0, 0, 0])]) {
+                const r = triggerV2._validateComputeBudgetInstr(data);
+                assert.strictEqual(r.ok, true, `fee-neutral tag 0x0${tag} (len ${data.length}) must be accepted — length gate would false-reject the real auth challenge`);
+            }
+        }
+    });
+    await check('BAT-1060 _validateComputeBudgetInstr REJECTS unknown tags (fail closed)', async () => {
+        for (const tag of [0x05, 0x09, 0xff]) {
+            const r = triggerV2._validateComputeBudgetInstr(Buffer.from([tag, 0, 0, 0, 0]));
+            assert.strictEqual(r.ok, false, `unknown tag 0x${tag.toString(16)} must reject (fail closed on future/unexpected tags)`);
+            assert.ok(/unknown/i.test(r.reason || ''));
         }
     });
 

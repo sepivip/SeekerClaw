@@ -381,6 +381,12 @@ function parseTransaction(txBase64) {
         }
     }
 
+    // BAT-1060: a valid prefix with trailing garbage must fail closed — the
+    // security parser requires exact byte consumption (deterministic parse).
+    if (offset !== txBuf.length) {
+        throw new TxParseError('trailing_bytes', offset, `${txBuf.length - offset} trailing byte(s); expected exact consumption at offset ${offset} of ${txBuf.length}`);
+    }
+
     return {
         kind,
         numRequiredSignatures,

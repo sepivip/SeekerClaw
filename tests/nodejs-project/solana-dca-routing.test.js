@@ -162,10 +162,13 @@ function loadDcaProducerSlice() {
         // account is not known pre-sign), so expectedDelta MUST be null.
         // Any non-null expectedDelta in this block means a future maintainer
         // tried to fabricate a delta — fail closed.
-        const re = /expectedDelta\s*:\s*null\b/;
+        // BAT-1060: scope the assertion to the routeAndSign({...}) call itself, not
+        // anywhere in the slice — a stale comment / dead branch / helper var must not
+        // satisfy it. Require `expectedDelta: null` inside the actual call args.
+        const re = /await\s+routeAndSign\s*\(\s*\{[\s\S]*?expectedDelta\s*:\s*null\b/;
         assert.ok(
             re.test(producer.slice),
-            `expectedDelta: null is required on routeAndSign inside jupiter_dca_create. ` +
+            `expectedDelta: null is required on the routeAndSign({...}) call inside jupiter_dca_create. ` +
             `A non-null expectedDelta implies pre-sign policy validation of a deposit ` +
             `destination that cannot be verified — re-read BAT-1013 v8.3 Codex review.`
         );

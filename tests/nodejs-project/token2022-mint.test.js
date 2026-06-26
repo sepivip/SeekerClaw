@@ -110,6 +110,14 @@ check('Token-2022 TransferFeeConfig with short data (< 108) → null', () => {
     assert.strictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, data).feeBps, null);
 });
 
+check('BAT-1060: malformed base64 mint data (invalid chars) → null, not feeBps:0', () => {
+    // A valid 82-byte base mint, then inject non-base64 chars so Buffer.from
+    // silently drops them and the decoded bytes no longer round-trip → reject.
+    const good = Buffer.alloc(82).toString('base64');
+    const bad = good.slice(0, 12) + '!@# ' + good.slice(12);
+    assert.strictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, bad).feeBps, null);
+});
+
 console.log();
 console.log(`Result: ${pass} passed, ${fail} failed`);
 if (fail > 0) { console.error('FAIL: token2022-mint.test.js'); process.exit(1); }

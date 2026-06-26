@@ -36,6 +36,24 @@ const PROGRAMS = [
     { id: 'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M', label: 'Jupiter DCA' },
 ];
 
+// BAT-1060: PROVENANCE pin. On-chain "is BPF-owned" only proves deployment — a
+// wrong-but-deployed ID would still pass. Anchor each ID to the PRODUCTION trust
+// list in solana.js (the single source the burner-policy actually enforces as
+// expectedOwner), NOT to constants copied into this file. A drift between this
+// probe's IDs and production fails fast. (Official-upstream cross-verification of
+// production itself remains the documented manual step — see file header.)
+(function assertProvenanceAgainstProduction() {
+    const fs = require('fs');
+    const path = require('path');
+    const prodPath = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project', 'solana.js');
+    const prodSrc = fs.readFileSync(prodPath, 'utf8');
+    for (const p of PROGRAMS) {
+        if (!prodSrc.includes(p.id)) {
+            throw new Error(`provenance drift: ${p.label} ID ${p.id} is NOT present in production solana.js trust anchors — this probe and production disagree on the Jupiter program ID`);
+        }
+    }
+})();
+
 function jsonRpcRequest(rpcUrl, body, timeoutMs = 15_000) {
     return new Promise((resolve, reject) => {
         const url = new URL(rpcUrl);

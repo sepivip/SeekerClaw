@@ -353,6 +353,23 @@ check('admits 1232-byte tx at exact cap (size guard must NOT over-reject)', () =
     }
 });
 
+// ── BAT-1060: trailing-byte rejection (tx malleability) ──────────────────
+console.log();
+console.log('parseTransaction: trailing bytes (BAT-1060)');
+check('throws trailing_bytes on a valid legacy tx with appended garbage', () => {
+    const valid = buildLegacyTxMinimal();
+    const withTrailing = Buffer.concat([valid, Buffer.from([0xde, 0xad])]).toString('base64');
+    try { parseTransaction(withTrailing); assert.fail('expected throw on trailing bytes'); }
+    catch (e) {
+        assert.ok(e instanceof TxParseError, `expected TxParseError, got ${e.constructor.name}`);
+        assert.strictEqual(e.reason, 'trailing_bytes');
+    }
+});
+check('valid legacy tx with NO trailing bytes still parses (no over-rejection)', () => {
+    const parsed = parseTransaction(buildLegacyTxMinimal().toString('base64'));
+    assert.strictEqual(parsed.numRequiredSignatures, 1);
+});
+
 console.log();
 console.log(`Result: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
