@@ -262,9 +262,21 @@ function _validateComputeBudgetInstr(data) {
             return { ok: false, reason: `ComputeBudget SetComputeUnitPrice=${price.toString()} exceeds auth-tx cap ${_AUTH_MAX_CU_PRICE_MICROLAMPORTS.toString()} micro_lamports/CU` };
         }
     }
-    // 0x01 RequestHeapFrame, 0x04 SetLoadedAccountsDataSizeLimit → no direct
-    // SOL drain (heap frame doesn't add fee; loaded-accounts cap just limits
-    // what can be loaded). CU spent on those is bounded by 0x02 above.
+    // 0x01 RequestHeapFrame, 0x04 SetLoadedAccountsDataSizeLimit → fee-NEUTRAL
+    // (heap frame adds no fee; loaded-accounts cap only limits what can be loaded),
+    // so they carry no SOL-drain vector at ANY payload length — accept as-is. CU
+    // spent is bounded by 0x02 above. (Jupiter's real auth challenge bundles a
+    // short ComputeBudget instruction; a length gate here would false-reject it —
+    // verified by jupiter-trigger-v2.test.js "ACCEPTS Memo + ComputeBudget".)
+    else if (tag === 0x01 || tag === 0x04) {
+        // no-op — fee-neutral, length-insensitive.
+    }
+    // BAT-1060: fail CLOSED on any OTHER (unknown / future) ComputeBudget tag —
+    // the real gap was the silent fall-through to ok:true for unhandled tags,
+    // which could blind-sign a future fee-affecting instruction.
+    else {
+        return { ok: false, reason: `ComputeBudget unknown instruction tag 0x${tag.toString(16).padStart(2, '0')}` };
+    }
     return { ok: true };
 }
 
@@ -713,6 +725,11 @@ async function ensureVault(pubkey, token) {
         return { ok: false, error: 'auth_expired', reason: 'JWT rejected by /vault' };
     }
     if (getRes.status === 200 && getRes.data && getRes.data.vaultPubkey) {
+        // BAT-1060: validate before caching — never cache/return a malformed
+        // (non-base58) vaultPubkey from a drifted Jupiter response.
+        if (!_isBase58Pubkey(getRes.data.vaultPubkey)) {
+            return { ok: false, error: 'vault_unavailable', reason: `GET /vault returned a vaultPubkey that is not a valid base58 address: ${JSON.stringify(getRes.data.vaultPubkey)}` };
+        }
         _vaultCache.set(pubkey, { vaultPubkey: getRes.data.vaultPubkey });
         return { ok: true, vaultPubkey: getRes.data.vaultPubkey };
     }
@@ -739,6 +756,10 @@ async function ensureVault(pubkey, token) {
         return { ok: false, error: 'auth_expired', reason: 'JWT rejected by /vault/register' };
     }
     if (regRes.status >= 200 && regRes.status < 300 && regRes.data && regRes.data.vaultPubkey) {
+        // BAT-1060: validate before caching (see GET path above).
+        if (!_isBase58Pubkey(regRes.data.vaultPubkey)) {
+            return { ok: false, error: 'vault_unavailable', reason: `GET /vault/register returned a vaultPubkey that is not a valid base58 address: ${JSON.stringify(regRes.data.vaultPubkey)}` };
+        }
         _vaultCache.set(pubkey, { vaultPubkey: regRes.data.vaultPubkey });
         return { ok: true, vaultPubkey: regRes.data.vaultPubkey };
     }

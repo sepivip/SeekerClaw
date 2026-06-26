@@ -105,7 +105,11 @@ const { log } = require('../config');
  * here as belt-and-suspenders — if routing says under-cap=false at this
  * point, something raced or the gate was bypassed; we return an error.
  */
-async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null, expectedDelta = null, allowPartiallySigned = false }) {
+// CodeRabbit #414: `expectedDelta` has NO default — an omitted value must reach
+// the policy gate as `undefined` and fail closed (missing_expected_delta), not be
+// silently normalized to a no-gate `null`. Every current caller passes it explicitly
+// (object to gate; explicit `null` only for DCA's no-gate deposit).
+async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null, expectedDelta, allowPartiallySigned = false }) {
     // 1. Decide routing.
     let route;
     if (forceRouting && (forceRouting.routingDecision === 'burner' || forceRouting.routingDecision === 'main')) {
@@ -197,18 +201,17 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
     // returns 501; we explicitly use sign-transaction + Node-side broadcast
     // until that endpoint is finished (see file header).
     //
-    // BAT-1013 Phase 3: pass `expectedDelta` (when provided by the caller)
-    // through to BurnerSigner. The policy gate runs BEFORE the bridge call
-    // and rejects the sign if simulation reveals a delta mismatch / drainer
-    // opcode / signer-mode violation. Existing callers that haven't migrated
-    // yet pass `expectedDelta = null` and hit the transitional WARN-pass-
-    // through (will become fail-closed after all 5 callers migrate; see
-    // BurnerSigner._runPolicyGate). `allowPartiallySigned` is passed through
-    // for x402 v2 cosigned-facilitator flows.
+    // BAT-1013 Phase 3 / BAT-1060: ALWAYS forward `expectedDelta` to BurnerSigner —
+    // an object (gated: the policy gate rejects on delta mismatch / drainer opcode /
+    // signer-mode violation BEFORE the bridge call) or explicit `null` (a no-gate
+    // flow like DCA deposit / cancel / zero-cap, where there is no pre-sign delta to
+    // validate). Forwarding null explicitly (instead of dropping it) lets the gate
+    // distinguish that intentional no-gate signal from an omitted-field caller bug,
+    // which now fails closed (missing_expected_delta). `allowPartiallySigned` is
+    // passed through for x402 v2 cosigned-facilitator flows.
     let signedTxBase64;
     try {
-        const signOpts = { reservationId };
-        if (expectedDelta) signOpts.expectedDelta = expectedDelta;
+        const signOpts = { reservationId, expectedDelta };
         if (allowPartiallySigned === true) signOpts.allowPartiallySigned = true;
         const signed = await burner.signer().signTransaction(unsignedTxBase64, signOpts);
         if (!signed || signed.error) {

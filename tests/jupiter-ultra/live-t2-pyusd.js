@@ -242,8 +242,13 @@ function buildExpectedDelta(burnerPubkey, debitAccount, creditAccount, minOut, s
         console.error(`  ✗ A (corrected) did NOT accept: error=${rA.error} class=${rA.class} — the fix does not pass live policy`);
         failed = true;
     }
-    if (!rB.ok) {
-        console.log(`  ✓ B (phantom) REJECTED as expected (error=${rB.error}, class=${rB.class}) — confirms the old derivation was the false-reject cause`);
+    if (!rB.ok && rB.class === 'security') {
+        console.log(`  ✓ B (phantom) REJECTED with security-class (error=${rB.error}, reason=${rB.reason ? String(rB.reason).slice(0, 100) : '?'}) — confirms the old derivation is the false-reject cause`);
+    } else if (!rB.ok) {
+        // BAT-1060: a non-security reject (e.g. a public-RPC availability error)
+        // must NOT satisfy this gate — it can't prove the phantom ATA is the cause.
+        console.error(`  ✗ B (phantom) rejected for a NON-security reason (class=${rB.class}, error=${rB.error}) — cannot confirm the phantom ATA is the cause; re-run on a stable RPC`);
+        failed = true;
     } else {
         console.error('  ✗ B (phantom) unexpectedly ACCEPTED — the phantom ATA should not validate; A/B contrast broken');
         failed = true;

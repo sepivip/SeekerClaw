@@ -157,11 +157,16 @@ function jupiterUltraRequest(method, path, body, token) {
 // ─── Simulator factory (mirrors burner-signer.js _lazyDefaultSimulator) ────
 
 function makeLiveSimulator(rpcUrl) {
-    return async (txBase64, { addresses }) => {
+    return async (txBase64, { addresses, pinnedRpcUrl }) => {
+        // BAT-1060: honor the production two-pass pinned-RPC contract (BAT-1027) —
+        // pass 2 supplies pinnedRpcUrl so BOTH RPC calls hit the SAME backend the
+        // first pass used. Mirror it here (and return it) instead of drifting to
+        // the constructor rpcUrl.
+        const useUrl = pinnedRpcUrl || rpcUrl;
         // 1. Pre-snapshot via getMultipleAccounts (same RPC, same commitment).
         let preSnapshot = [];
         if (addresses.length > 0) {
-            const gma = await solanaRpc(rpcUrl, 'getMultipleAccounts', [
+            const gma = await solanaRpc(useUrl, 'getMultipleAccounts', [
                 addresses,
                 { commitment: 'processed', encoding: 'base64' },
             ]);
@@ -186,7 +191,7 @@ function makeLiveSimulator(rpcUrl) {
             preSnapshot = gma.value;
         }
         // 2. simulateTransaction with `accounts` config for the same addresses.
-        const sim = await solanaRpc(rpcUrl, 'simulateTransaction', [
+        const sim = await solanaRpc(useUrl, 'simulateTransaction', [
             txBase64,
             {
                 commitment: 'processed',
@@ -202,7 +207,8 @@ function makeLiveSimulator(rpcUrl) {
             sim: normalized,
             preSnapshot,
             slot: (normalized.context && normalized.context.slot) || 0,
-            simulatorBacking: /helius/i.test(rpcUrl) ? 'helius' : 'public',
+            simulatorBacking: /helius/i.test(useUrl) ? 'helius' : 'public',
+            pinnedRpcUrl: useUrl,
         };
     };
 }

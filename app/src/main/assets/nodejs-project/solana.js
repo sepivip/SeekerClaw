@@ -870,6 +870,11 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
             offset += dataLen.value;
         }
 
+        // BAT-1060: fail closed on trailing bytes — a valid prefix with extra
+        // unconsumed bytes must not pass this structural gate.
+        if (offset !== txBuf.length) {
+            return { valid: false, error: `Legacy: ${txBuf.length - offset} trailing byte(s) after a valid transaction (offset ${offset}, length ${txBuf.length}).`, programs };
+        }
         return { valid: true, programs };
     }
 
@@ -1072,6 +1077,10 @@ function verifySwapTransaction(txBase64, expectedPayerBase58, options = {}) {
         }
     }
 
+    // BAT-1060: fail closed on trailing bytes (see legacy path above).
+    if (offset !== txBuf.length) {
+        return { valid: false, error: `v0: ${txBuf.length - offset} trailing byte(s) after a valid transaction (offset ${offset}, length ${txBuf.length}).`, programs };
+    }
     return { valid: true, programs };
 }
 

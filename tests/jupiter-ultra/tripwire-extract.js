@@ -398,9 +398,15 @@ function extractTripwires(capture, opts) {
     // T1: signer-set size — capture.signerSetSize or count of accounts that
     // are sources/authorities in inner instructions. For test fixtures we
     // honor capture.signerSetSize when provided.
-    const t1Count = typeof capture.signerSetSize === 'number'
-        ? capture.signerSetSize
-        : 1;
+    // BAT-1060: fail closed — never silently assume a single signer. A capture
+    // that omits signerSetSize cannot prove burner-only; require the producer to
+    // supply it (re-capture with signer data) rather than defaulting to 1.
+    // CodeRabbit #414: must be a non-negative INTEGER — NaN/Infinity/fractions/
+    // negatives must not reach the burner-only check (a negative would falsely satisfy it).
+    if (!Number.isInteger(capture.signerSetSize) || capture.signerSetSize < 0) {
+        throw new Error('capture.signerSetSize required: must be a non-negative integer supplied by the producer (do not assume burner-only)');
+    }
+    const t1Count = capture.signerSetSize;
     const t1 = {
         pass: t1Count <= 1,
         count: t1Count,
@@ -473,6 +479,15 @@ function extractTripwires(capture, opts) {
     for (const e of ptbPre) {
         const addr = (typeof e.accountIndex === 'number' && cak[e.accountIndex]) || null;
         if (addr) preExistsByAddr.set(addr, true);
+    }
+    // BAT-1060: also seed from the EXPLICIT pre-state snapshot (getMultipleAccounts
+    // of requestedAddresses, aligned by index). preTokenBalances alone misses
+    // burner-owned token accounts that existed pre-tx but aren't represented in
+    // token-balance metadata — a non-null preSnapshot entry proves pre-existence,
+    // so applyCarveOut() can't wrongly treat a pre-existing account as "new".
+    const preSnap = Array.isArray(capture.preSnapshot) ? capture.preSnapshot : [];
+    for (let i = 0; i < preSnap.length && i < requested.length; i++) {
+        if (preSnap[i] != null && requested[i]) preExistsByAddr.set(requested[i], true);
     }
 
     // Build post-state map from sim.value.accounts (keyed by requested order).

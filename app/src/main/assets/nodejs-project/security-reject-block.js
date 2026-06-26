@@ -50,8 +50,17 @@ function securityRejectGuidance(code) {
 // Build the deterministic block. The returned string is byte-identical to what
 // ai.js commits to conversation history AND returns to the channel.
 function buildSecurityRejectBlock(code, reason) {
-    const safeCode = (typeof code === 'string' && code) ? code : 'unknown_security_reject';
+    // BAT-1060: `code` and `reason` are attacker-influenceable (a tool/MCP reason
+    // can contain newlines). Collapse newlines to spaces BEFORE interpolation so a
+    // crafted reason cannot inject fake extra lines (e.g. a second "Next step:")
+    // into this deterministic block.
+    const rawCode = (typeof code === 'string' && code) ? code : 'unknown_security_reject';
+    // CodeRabbit #414: collapse newlines THEN fall back if the result is blank /
+    // whitespace-only (e.g. code was "\n") — never render an empty Code: line.
+    let safeCode = rawCode.replace(/[\r\n]+/g, ' ');
+    if (safeCode.trim() === '') safeCode = 'unknown_security_reject';
     let displayReason = (typeof reason === 'string') ? reason : '';
+    displayReason = displayReason.replace(/[\r\n]+/g, ' ');
     if (displayReason.length > SECURITY_REJECT_REASON_CAP) {
         const dropped = displayReason.length - SECURITY_REJECT_REASON_CAP;
         displayReason = displayReason.slice(0, SECURITY_REJECT_REASON_CAP)

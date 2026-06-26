@@ -36,6 +36,36 @@ const PROGRAMS = [
     { id: 'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M', label: 'Jupiter DCA' },
 ];
 
+// BAT-1060: PROVENANCE pin. On-chain "is BPF-owned" only proves deployment — a
+// wrong-but-deployed ID would still pass. Anchor each ID to the PRODUCTION trust
+// list in solana.js (the single source the burner-policy actually enforces as
+// expectedOwner), NOT to constants copied into this file. A drift between this
+// probe's IDs and production fails fast. (Official-upstream cross-verification of
+// production itself remains the documented manual step — see file header.)
+(function assertProvenanceAgainstProduction() {
+    const fs = require('fs');
+    const path = require('path');
+    const prodPath = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project', 'solana.js');
+    const prodSrc = fs.readFileSync(prodPath, 'utf8');
+    // CodeRabbit #414: scope to the AUTHORITATIVE trust-anchor map (KNOWN_PROGRAM_NAMES)
+    // and require the ID to be an entry KEY (`['<id>',`), so a bare mention in a
+    // comment / log string / stale constant elsewhere in solana.js can't satisfy it.
+    const mapStart = prodSrc.indexOf('const KNOWN_PROGRAM_NAMES = new Map([');
+    if (mapStart === -1) throw new Error('provenance: could not locate the KNOWN_PROGRAM_NAMES map in production solana.js');
+    const mapEnd = prodSrc.indexOf('])', mapStart);
+    // CR #414: fail closed if the map terminator is missing — never slice to EOF
+    // (that would broaden the search past the map and let later mentions satisfy it).
+    if (mapEnd === -1) throw new Error('provenance: could not locate the KNOWN_PROGRAM_NAMES map terminator "])" — refusing to scan beyond the map');
+    const mapBlock = prodSrc.slice(mapStart, mapEnd);
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const p of PROGRAMS) {
+        const keyRe = new RegExp("\\[\\s*'" + esc(p.id) + "'\\s*,");
+        if (!keyRe.test(mapBlock)) {
+            throw new Error(`provenance drift: ${p.label} ID ${p.id} is NOT an entry key in production KNOWN_PROGRAM_NAMES — this probe and production's active trust anchors disagree`);
+        }
+    }
+})();
+
 function jsonRpcRequest(rpcUrl, body, timeoutMs = 15_000) {
     return new Promise((resolve, reject) => {
         const url = new URL(rpcUrl);
