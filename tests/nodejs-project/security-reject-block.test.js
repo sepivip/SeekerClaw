@@ -121,6 +121,14 @@ check('BAT-1060: a newline in code cannot inject extra lines either', () => {
     assert.strictEqual(b.split('\n').length, 4, 'code newline must not add lines');
 });
 
+check('BAT-1060 (CR #414): a whitespace-only code falls back to unknown, never a blank Code line', () => {
+    for (const code of ['\n', '   \n  ', '\r\n']) {
+        const b = buildSecurityRejectBlock(code, 'r');
+        const codeLine = b.split('\n').find((l) => l.startsWith('Code:'));
+        assert.strictEqual(codeLine, 'Code:      unknown_security_reject', `whitespace code ${JSON.stringify(code)} must fall back, got ${JSON.stringify(codeLine)}`);
+    }
+});
+
 console.log();
 console.log(`Result: ${pass} passed, ${fail} failed`);
 if (fail > 0) { console.error('FAIL: security-reject-block.test.js'); process.exit(1); }

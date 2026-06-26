@@ -401,8 +401,10 @@ function extractTripwires(capture, opts) {
     // BAT-1060: fail closed — never silently assume a single signer. A capture
     // that omits signerSetSize cannot prove burner-only; require the producer to
     // supply it (re-capture with signer data) rather than defaulting to 1.
-    if (typeof capture.signerSetSize !== 'number') {
-        throw new Error('capture.signerSetSize required: signer metadata must be supplied by the producer (do not assume burner-only)');
+    // CodeRabbit #414: must be a non-negative INTEGER — NaN/Infinity/fractions/
+    // negatives must not reach the burner-only check (a negative would falsely satisfy it).
+    if (!Number.isInteger(capture.signerSetSize) || capture.signerSetSize < 0) {
+        throw new Error('capture.signerSetSize required: must be a non-negative integer supplied by the producer (do not assume burner-only)');
     }
     const t1Count = capture.signerSetSize;
     const t1 = {

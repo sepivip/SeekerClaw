@@ -47,9 +47,18 @@ const PROGRAMS = [
     const path = require('path');
     const prodPath = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project', 'solana.js');
     const prodSrc = fs.readFileSync(prodPath, 'utf8');
+    // CodeRabbit #414: scope to the AUTHORITATIVE trust-anchor map (KNOWN_PROGRAM_NAMES)
+    // and require the ID to be an entry KEY (`['<id>',`), so a bare mention in a
+    // comment / log string / stale constant elsewhere in solana.js can't satisfy it.
+    const mapStart = prodSrc.indexOf('const KNOWN_PROGRAM_NAMES = new Map([');
+    if (mapStart === -1) throw new Error('provenance: could not locate the KNOWN_PROGRAM_NAMES map in production solana.js');
+    const mapEnd = prodSrc.indexOf('])', mapStart);
+    const mapBlock = prodSrc.slice(mapStart, mapEnd === -1 ? undefined : mapEnd);
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const p of PROGRAMS) {
-        if (!prodSrc.includes(p.id)) {
-            throw new Error(`provenance drift: ${p.label} ID ${p.id} is NOT present in production solana.js trust anchors — this probe and production disagree on the Jupiter program ID`);
+        const keyRe = new RegExp("\\[\\s*'" + esc(p.id) + "'\\s*,");
+        if (!keyRe.test(mapBlock)) {
+            throw new Error(`provenance drift: ${p.label} ID ${p.id} is NOT an entry key in production KNOWN_PROGRAM_NAMES — this probe and production's active trust anchors disagree`);
         }
     }
 })();

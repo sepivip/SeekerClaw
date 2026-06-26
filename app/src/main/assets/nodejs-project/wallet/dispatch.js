@@ -105,7 +105,11 @@ const { log } = require('../config');
  * here as belt-and-suspenders — if routing says under-cap=false at this
  * point, something raced or the gate was bypassed; we return an error.
  */
-async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null, expectedDelta = null, allowPartiallySigned = false }) {
+// CodeRabbit #414: `expectedDelta` has NO default — an omitted value must reach
+// the policy gate as `undefined` and fail closed (missing_expected_delta), not be
+// silently normalized to a no-gate `null`. Every current caller passes it explicitly
+// (object to gate; explicit `null` only for DCA's no-gate deposit).
+async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia = 'rpc', broadcast, flowName = toolName, forceRouting = null, expectedDelta, allowPartiallySigned = false }) {
     // 1. Decide routing.
     let route;
     if (forceRouting && (forceRouting.routingDecision === 'burner' || forceRouting.routingDecision === 'main')) {

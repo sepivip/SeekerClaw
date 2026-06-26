@@ -55,7 +55,10 @@ function buildSecurityRejectBlock(code, reason) {
     // crafted reason cannot inject fake extra lines (e.g. a second "Next step:")
     // into this deterministic block.
     const rawCode = (typeof code === 'string' && code) ? code : 'unknown_security_reject';
-    const safeCode = rawCode.replace(/[\r\n]+/g, ' ');
+    // CodeRabbit #414: collapse newlines THEN fall back if the result is blank /
+    // whitespace-only (e.g. code was "\n") — never render an empty Code: line.
+    let safeCode = rawCode.replace(/[\r\n]+/g, ' ');
+    if (safeCode.trim() === '') safeCode = 'unknown_security_reject';
     let displayReason = (typeof reason === 'string') ? reason : '';
     displayReason = displayReason.replace(/[\r\n]+/g, ' ');
     if (displayReason.length > SECURITY_REJECT_REASON_CAP) {
