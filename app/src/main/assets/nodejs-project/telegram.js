@@ -722,7 +722,11 @@ function classifyTelegramOutcome(result, error) {
     const desc = (result && result.description) || '';
     const code = result && result.error_code;
     if (desc.includes('too long')) return { verdict: 'too_long', desc };
-    if (code === 429 || (typeof code === 'number' && code >= 500)) {
+    // Coerce error_code (Telegram normally sends a number, but tolerate a
+    // stringified '429'/'503' so a transient is never misclassified as a
+    // deterministic 'fallback' — which would trigger a duplicate resend).
+    const numCode = Number(code);
+    if (numCode === 429 || (Number.isFinite(numCode) && numCode >= 500)) {
         return { verdict: 'transient', desc: desc || `error_code ${code}` };
     }
     return { verdict: 'fallback', desc };
@@ -732,7 +736,7 @@ function classifyTelegramOutcome(result, error) {
 // _richMethodAvailable: null=untried, true=works, false=unsupported by this Bot
 // API (stop probing for the rest of the run so we don't add latency before every
 // message).
-const RICH_MAX_CHARS = 32768; // Rich budget (vs 4096 classic), counted in UTF-8 bytes.
+const RICH_MAX_BYTES = 32768; // Rich budget (vs 4096 classic), counted in UTF-8 bytes.
 let _richMethodAvailable = null;
 
 // Try sending USER content as a Rich Message (posture A). Returns { delivered, ret? }.
@@ -743,7 +747,7 @@ let _richMethodAvailable = null;
 async function richTrySend(chatId, text, replyTo, buttons) {
     if (!RICH_MESSAGES_ENABLED || _richMethodAvailable === false) return { delivered: false };
     // Over the Rich budget -> let the classic chunked path handle it.
-    if (Buffer.byteLength(text, 'utf8') > RICH_MAX_CHARS) return { delivered: false };
+    if (Buffer.byteLength(text, 'utf8') > RICH_MAX_BYTES) return { delivered: false };
 
     const payload = {
         chat_id: chatId,
@@ -1284,6 +1288,7 @@ module.exports = {
     sendMessageSystem,
     richTrySend,
     classifyTelegramOutcome,
+    RICH_MAX_BYTES,
     sendTyping,
     deferStatus,
     deferThinkingStatus,

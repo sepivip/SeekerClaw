@@ -14,7 +14,7 @@ const {
 const {
     telegram, telegramSendFile, detectTelegramFileType,
     cleanResponse, toTelegramHtml, stripMarkdown,
-    recordSentMessage, classifyTelegramOutcome, richTrySend,
+    recordSentMessage, classifyTelegramOutcome, richTrySend, RICH_MAX_BYTES,
 } = require('../telegram');
 
 const tools = [
@@ -50,7 +50,7 @@ const tools = [
         input_schema: {
             type: 'object',
             properties: {
-                text: { type: 'string', description: 'Message text to send. Markdown formatting supported. Up to 32768 characters when Rich Messages are enabled (the classic fallback handles ~4096); for long multi-message responses, reply normally instead.' },
+                text: { type: 'string', description: 'Message text to send. Markdown formatting supported. Up to 32768 UTF-8 bytes when Rich Messages are enabled (the classic fallback handles ~4096); for long multi-message responses, reply normally instead.' },
                 buttons: {
                     type: 'array',
                     description: 'Optional inline keyboard rows. Each row is an array of button objects with "text" (display label), "callback_data" (value sent back when tapped, max 64 bytes), and optional "style" ("destructive" for red, "primary" for blue). Example: [[{"text": "\u2705 Confirm", "callback_data": "yes", "style": "primary"}, {"text": "\u274C Cancel", "callback_data": "no"}]]',
@@ -156,7 +156,7 @@ const handlers = {
     async telegram_send(input, chatId) {
         const text = input.text;
         if (!text) return { error: 'text is required' };
-        if (text.length > 32768) return { error: 'text exceeds the 32768-character Rich Message limit' };
+        if (Buffer.byteLength(text, 'utf8') > RICH_MAX_BYTES) return { error: 'text exceeds the 32768-byte Rich Message limit' };
         if (!chatId) return { error: 'No active chat' };
         // #298: Heartbeat/cron use synthetic string chatIds (e.g. "__heartbeat__",
         // "cron:abc") — not valid Telegram targets. Heartbeat alerts are sent via

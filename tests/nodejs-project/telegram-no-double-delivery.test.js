@@ -86,6 +86,9 @@ async function send(mode) {
     eq('too long -> too_long', C({ ok: false, description: 'Bad Request: message is too long' }, null).verdict, 'too_long');
     eq('429 -> transient', C({ ok: false, error_code: 429 }, null).verdict, 'transient');
     eq('503 -> transient', C({ ok: false, error_code: 503 }, null).verdict, 'transient');
+    eq("'503' stringified -> transient", C({ ok: false, error_code: '503' }, null).verdict, 'transient');
+    eq("'429' stringified -> transient", C({ ok: false, error_code: '429' }, null).verdict, 'transient');
+    eq('missing error_code -> fallback', C({ ok: false, description: 'Bad Request' }, null).verdict, 'fallback');
     eq("parse error -> fallback", C({ ok: false, description: "can't parse entities" }, null).verdict, 'fallback');
 
     // ── sendMessage: second send only on deterministic rejection ─────
