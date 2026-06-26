@@ -62,6 +62,10 @@ let jupiterTriggerExecuteCalls = [];
 let jupiterRecurringExecuteCalls = [];
 let jupiterUltraExecuteCalls = [];
 let jupiterUltraOrderResponse = null;
+// BAT-1061: count Ultra /order fetches (a slippage retry re-quotes → 2nd fetch) +
+// drive per-call execute responses (fail-then-succeed). Default null → success.
+let jupiterUltraOrderCalls = 0;
+let mockUltraExecuteFn = null;
 let triggerCreateApiResponse = null;
 let recurringCreateApiResponse = null;
 // BAT-1036: getAccountInfo mock for solana_send_token (mint triple-pin + ATA
@@ -162,10 +166,13 @@ require.cache[solanaPath] = {
         },
         jupiterQuote: async () => ({ outAmount: '1000000', otherAmountThreshold: '990000', priceImpactPct: '0.1', routePlan: [] }),
         jupiterPrice: async (mints) => mockJupiterPriceFn ? mockJupiterPriceFn(mints) : ({}),
-        jupiterUltraOrder: async () => jupiterUltraOrderResponse || { transaction: _defaultUltraOrderTx(), requestId: 'ultra-req-1' },
+        jupiterUltraOrder: async () => {
+            jupiterUltraOrderCalls += 1;
+            return jupiterUltraOrderResponse || { transaction: _defaultUltraOrderTx(), requestId: 'ultra-req-' + jupiterUltraOrderCalls };
+        },
         jupiterUltraExecute: async (signedTx, requestId) => {
             jupiterUltraExecuteCalls.push({ signedTx, requestId });
-            return { signature: 'ULTRA-SIG-FIXTURE', status: 'Success' };
+            return mockUltraExecuteFn ? mockUltraExecuteFn(jupiterUltraExecuteCalls.length) : { signature: 'ULTRA-SIG-FIXTURE', status: 'Success' };
         },
         jupiterTriggerExecute: async (signedTx, requestId) => {
             jupiterTriggerExecuteCalls.push({ signedTx, requestId });
@@ -305,6 +312,8 @@ async function check(label, fn) {
     jupiterTriggerExecuteCalls = [];
     jupiterRecurringExecuteCalls = [];
     jupiterUltraExecuteCalls = [];
+    jupiterUltraOrderCalls = 0;
+    mockUltraExecuteFn = null;
     bridgeResponses = {};
     try { await fn(); passes++; console.log(`  ✓ ${label}`); }
     catch (e) { failures++; console.error(`  ✗ ${label}\n    ${e.stack || e.message}`); }
@@ -405,6 +414,74 @@ function _burnerOff() {
         assert.strictEqual(jupiterUltraExecuteCalls[0].signedTx, 'SIGNED-BURNER-SWAP');
         // Confirm /solana/sign-only (MWA) was NOT called
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/solana/sign-only'));
+    });
+
+    // ── BAT-1061: burner swap slippage re-quote + retry ─────────────────────
+    await check('BAT-1061: slippage execute failure → re-quote a FRESH order + retry to success', async () => {
+        _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-retry' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-RETRY' };
+        bridgeResponses['/burner/release'] = { ok: true };
+        bridgeResponses['/burner/commit'] = { ok: true };
+        mockUltraExecuteFn = (n) => n === 1
+            ? { status: 'Failed', error: '0x1771 slippage tolerance exceeded' }
+            : { status: 'Success', signature: 'ULTRA-SIG-RETRY' };
+        const r = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
+        if (r.error) throw new Error(`unexpected error: ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner');
+        assert.strictEqual(jupiterUltraOrderCalls, 2, 'must re-quote a FRESH order on slippage');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 2, 'executed twice');
+        // Codex ordering: reserve → sign → execute-fail → release → reserve → sign → execute-ok → commit
+        const seq = bridgeCalls.filter(c => ['/burner/reserve', '/burner/sign-transaction', '/burner/release', '/burner/commit'].includes(c.endpoint)).map(c => c.endpoint);
+        assert.deepStrictEqual(seq, ['/burner/reserve', '/burner/sign-transaction', '/burner/release', '/burner/reserve', '/burner/sign-transaction', '/burner/commit'], `ordering: ${JSON.stringify(seq)}`);
+    });
+
+    await check('BAT-1061: NON-slippage execute failure → NO retry (terminal, not retryable)', async () => {
+        _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-noretry' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-NORETRY' };
+        bridgeResponses['/burner/release'] = { ok: true };
+        mockUltraExecuteFn = () => ({ status: 'Failed', error: 'InsufficientFunds (code 1)' });
+        const r = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
+        assert.strictEqual(r.error, 'execute_failed');
+        assert.ok(!r.retryable, 'a non-slippage failure must NOT be retryable');
+        assert.strictEqual(jupiterUltraOrderCalls, 1, 'must NOT re-quote on a non-slippage failure');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 1);
+    });
+
+    await check('BAT-1061: persistent slippage → bounded (3 attempts) then retryable:true, NEVER defers to main wallet', async () => {
+        _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-exhaust' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-EXHAUST' };
+        bridgeResponses['/burner/release'] = { ok: true };
+        mockUltraExecuteFn = () => ({ status: 'Failed', error: 'SlippageToleranceExceeded (0x1771)' });
+        const r = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
+        assert.strictEqual(r.error, 'execute_failed');
+        assert.strictEqual(r.retryable, true, 'exhausted slippage → retryable:true');
+        assert.strictEqual(r.attempts, 3, '1 + MAX_SWAP_RETRIES(2) = 3 attempts');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 3, 'bounded at 3 execute attempts');
+        assert.strictEqual(jupiterUltraOrderCalls, 3, 'fresh order each attempt');
+        assert.ok(/retry/i.test(r.next_step || ''), `next_step should advise RETRY (transient): ${r.next_step}`);
+        assert.ok(!/(use|from|via|swap.{0,12}from)\b[^.]{0,24}main wallet/i.test(r.next_step || ''), `next_step must NOT defer to the main wallet: ${r.next_step}`);
+    });
+
+    await check('BAT-1061: ambiguous execute (throws) → NO retry (double-execute risk)', async () => {
+        _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-ambig' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'SIGNED-AMBIG' };
+        bridgeResponses['/burner/release'] = { ok: true };
+        mockUltraExecuteFn = () => { throw new Error('network timeout — connection reset'); };
+        const r = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'USDC', amount: 0.001 });
+        assert.ok(r.error, 'ambiguous failure surfaces an error');
+        assert.ok(!r.retryable, 'ambiguous/transport failure must NOT be retryable');
+        assert.strictEqual(jupiterUltraOrderCalls, 1, 'must NOT re-quote on an ambiguous/transport failure');
+    });
+
+    await check('BAT-1061: ai.js carries the swap-slippage retry door (drift guard)', () => {
+        const src = require('fs').readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
+        assert.match(src, /BAT-1061/, 'ai.js must carry the BAT-1061 slippage door');
+        assert.match(src, /slippage[\s\S]{0,300}(transient|retry)/i, 'door must frame slippage as transient/retryable');
+        assert.match(src, /retryable/i, 'door must reference the retryable signal');
     });
 
     await check('solana_swap: burner OFF → MWA /solana/sign-only + Jupiter Ultra executes', async () => {

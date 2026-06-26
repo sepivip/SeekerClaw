@@ -223,7 +223,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it + confirm) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. ALWAYS confirm with the user and show the quote first before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -2043,316 +2043,346 @@ const handlers = {
                 return o;
             };
 
-            try {
-                order = await fetchAndVerifyOrder();
-                orderTimestamp = Date.now();
-            } catch (e) {
-                return { error: e.message };
-            }
+            // BAT-1061: a burner-signed Ultra swap that fails ON-CHAIN with a transient
+            // slippage / price-check error (market moved between quote and execution) is
+            // re-quoted + retried (bounded) — NEVER surfaced as a burner/Token-2022 limit.
+            // Codex-locked NARROW allowlist; vague codes deferred pending a captured response.
+            const SLIPPAGE_RETRY_PATTERNS = [
+                /\b6001\b/, /0x1771\b/i,
+                /slippage\s*tolerance\s*exceeded/i, /slippage\s*exceeded/i,
+                /min(?:imum)?\s*return\s*not\s*reached/i,
+                /\b6017\b/, /0x1781\b/i, /exact\s*out\s*amount\s*not\s*matched/i,
+            ];
+            const _isSlippageRetryable = (reason) => {
+                const _s = (typeof reason === 'string') ? reason : (reason != null ? JSON.stringify(reason) : '');
+                return SLIPPAGE_RETRY_PATTERNS.some((re) => re.test(_s));
+            };
+            const MAX_SWAP_RETRIES = 2;
+            let result;
+            for (let _swapAttempt = 1; ; _swapAttempt++) {
+                try {
+                    order = await fetchAndVerifyOrder();
+                    orderTimestamp = Date.now();
+                } catch (e) {
+                    return { error: e.message };
+                }
 
-            // BAT-1057: post-order CONVERSION gate. The order now exists, so we
-            // know the real minOut + price impact. Enforce the price-impact
-            // ceiling (Codex v2 #5: Ultra `priceImpact` is a percent value,
-            // `priceImpactPct` a fraction fallback; > 100 bps / 1% → refuse) and
-            // set the internal forceRouting to the burner with principalAtomic =
-            // the signed order's minOut. The /burner/reserve path enforces the
-            // cap AMOUNT (Codex v2 #3 option b); the burner-policy A1 re-gate
-            // independently enforces the conversion shape + price impact.
-            let conversionPriceImpactBps = null;
-            if (isConversion) {
-                // priceImpact (percent, e.g. 0.0648 = 0.0648%) → bps; fall back to
-                // priceImpactPct (fraction, e.g. 0.000018 = 0.0018%). Captured
-                // 2026-06-24 against real Ultra orders. Absent/non-finite → null.
-                const _piToBps = (o) => {
-                    // CodeRabbit #411: Math.CEIL, not round — rounding down lets
-                    // 1.004% (100.4 bps) collapse to 100 and slip under the ceiling.
-                    // Any impact above the limit must fail closed.
-                    if (o && o.priceImpact != null) {
-                        const pi = Number(o.priceImpact);
-                        if (isFinite(pi) && pi >= 0) return Math.ceil(pi * 100);
-                    }
-                    if (o && o.priceImpactPct != null) {
-                        const pct = Number(o.priceImpactPct);
-                        if (isFinite(pct) && pct >= 0) return Math.ceil(pct * 10000);
-                    }
-                    return null;
-                };
-                conversionPriceImpactBps = _piToBps(order);
-                if (conversionPriceImpactBps === null) {
-                    return { error: `Couldn't read the price impact for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner without that check. Try again, or swap from your main wallet app.` };
-                }
-                if (conversionPriceImpactBps > 100) {
-                    return { error: `This ${inputToken.symbol}→${outputToken.symbol} conversion has ${(conversionPriceImpactBps / 100).toFixed(2)}% price impact (above the 1% autonomous limit). Swap it from your main wallet app to confirm the rate.` };
-                }
-                // CodeRabbit #411: never manufacture a '0' minOut — reserving
-                // against zero (or building an expectedDelta with no guaranteed
-                // proceeds) must fail closed. Require a positive integer.
-                const _convMinOut = String(order.otherAmountThreshold ?? order.outAmount ?? '');
-                if (!/^[1-9]\d*$/.test(_convMinOut)) {
-                    return { error: `Couldn't read a positive minimum output for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner. Try again, or swap from your main wallet app.` };
-                }
-                const _outIsUsdc = outputToken.address === _USDC_MINT_1057;
-                // Mutate (not reassign) the const routingHint object → burner.
-                routingHint.routingDecision = 'burner';
-                routingHint.principalAtomic = _convMinOut;
-                routingHint.capName = _outIsUsdc ? 'burner.pertx.usdc' : 'burner.pertx.sol';
-                routingHint.dailyCapName = _outIsUsdc ? 'burner.daily.usdc' : 'burner.daily.sol';
-                routingHint.reason = 'conversion';
-                delete routingHint.underCap; // let /burner/reserve decide against the real minOut
-            }
-
-            // BAT-582 Phase 5: route through wallet dispatch. The broadcast
-            // callback handles the Jupiter Ultra TTL re-quote dance — for
-            // burner the sign step is fast (no popup) so re-quote is
-            // basically never needed; for main, MWA approval can take
-            // longer than the Ultra signed-payload TTL (~2 min) so we
-            // detect that and re-quote inside the broadcast callback.
-            //
-            // routeAndSign passes UNSIGNED tx to broadcast() for the main
-            // path (signer.signAndSend signs+broadcasts atomically via MWA)
-            // and SIGNED tx for the burner path (sign-only happened before
-            // broadcast()). We branch on which we got and handle TTL
-            // accordingly. For Phase 5 we keep the existing TTL safe-guard
-            // wired only on the main path — the burner path's reservation
-            // already enforces a 60s TTL upstream and Ultra's 2-min limit
-            // is comfortably wider.
-            const ULTRA_RPC_HINT = 'jupiter';
-
-            // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
-            // Only the burner path consumes it; main path ignores the field.
-            // Ultra is a sponsored-fee flow, so signerMode is 'sponsored' when
-            // routed through Ultra's gasless mode (Jupiter pays the fee + may
-            // co-sign). The cosigner allowlist is left empty by default — the
-            // policy's `sponsored` mode allows the fee payer to be ANY signer
-            // declared in feePayerAllowlist; for Ultra the relayer pubkey is
-            // surfaced as `order.feePayer` in some responses. When the
-            // expectedDelta fields are imprecise (sponsored mode + missing
-            // relayer pubkey), the burner-policy reject is availability-class
-            // and the agent surfaces it; in v2.1 first-ship we err on the
-            // side of fail-closed for Ultra-via-burner until the live test
-            // fixtures pin the exact field shapes.
-            // Q5 (BAT-1013-followup): fee-payer introspection on the unsigned
-            // Ultra tx. Jupiter Ultra is a sponsored-fee design — the relayer
-            // typically pays the fee, so account[0] (fee payer) will NOT equal
-            // the burner pubkey in production. The Phase 3b expectedDelta below
-            // declares signerMode='burner_only', which the policy gate
-            // interprets as "burner is fee payer" — that mismatch would either
-            // (a) fail-closed at the policy gate, or (b) silently allow a
-            // sponsored tx through if signerMode is misread. As a defensive
-            // belt-and-braces fallback: when routing was 'burner' AND the
-            // unsigned tx's fee payer differs from the burner pubkey, route to
-            // main so the user sees the MWA popup instead of an opaque
-            // burner-policy reject. The full sponsored-mode wiring (with
-            // feePayerAllowlist sourced from order.feePayer when Jupiter
-            // surfaces it) is tracked in Phase 3b-follow-up; until that lands,
-            // this defensive check prevents a silent burner-policy reject.
-            try {
-                const feePayer = _extractFeePayerBase58(order.transaction);
-                if (feePayer && feePayer !== userPublicKey && routingHint.routingDecision === 'burner') {
-                    // BAT-1038 Amendment 1: a burner-built Ultra order whose decoded
-                    // fee payer ≠ the burner taker must FAIL CLOSED. The previous code
-                    // re-routed to main, which reused the SAME burner-taker order on
-                    // the MWA signer — sponsored signer-mode is not wired in the swap
-                    // path, so that is unsafe. Return BEFORE routeAndSign: no reserve,
-                    // no sign, no broadcast. (Probe 2026-06-24: the real USDC→PYUSD
-                    // route DOES use the burner as fee payer, so this is a defensive
-                    // guard, not the normal path.) A real main fallback requires a NEW
-                    // jupiterUltraOrder with the main wallet as taker (separate invoke).
-                    log(`[Jupiter Ultra] fee_payer_mismatch: order fee payer ${feePayer} != burner taker ${userPublicKey}; sponsored signer-mode not wired — failing closed`, 'WARN');
-                    return {
-                        error: 'fee_payer_mismatch',
-                        reason: `This swap route's fee payer (${feePayer.slice(0, 4)}…${feePayer.slice(-4)}) differs from the burner, and a burner-built order can't be safely signed by the main wallet. Retry (Jupiter routes change), or run the swap from your main wallet.`,
-                        retryable: true,
-                    };
-                }
-            } catch (introspectErr) {
-                // BAT-1038 Amendment 1 (CodeRabbit #409): on a BURNER route, an
-                // UNVERIFIABLE fee payer is the same risk class as a mismatched
-                // one — sponsored signer-mode is unwired, so we must not sign an
-                // order whose fee payer we couldn't decode. Fail closed. Main
-                // routes are unaffected (the MWA wallet signs what it's shown and
-                // is the fee payer by construction).
-                if (routingHint.routingDecision === 'burner') {
-                    log(`[Jupiter Ultra] fee-payer introspection failed on burner route: ${introspectErr.message} — failing closed`, 'WARN');
-                    return {
-                        error: 'fee_payer_mismatch',
-                        reason: `Couldn't verify this swap route's fee payer (transaction introspection failed) — the burner won't sign an unverifiable order. Retry (Jupiter routes change), or run the swap from your main wallet.`,
-                        retryable: true,
-                    };
-                }
-                log(`[Jupiter Ultra] fee-payer introspection failed: ${introspectErr.message} — proceeding (main route)`, 'DEBUG');
-            }
-
-            let expectedDelta = null;
-            try {
-                const burnerPubkey = userPublicKey; // burner path uses burner as taker
-                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
-                const outputIsSol = outputToken.address === 'So11111111111111111111111111111111111111112';
-                const ata = require('../wallet/ata');
-                // BAT-1038: derive each side's ATA against the mint's OWNING token
-                // program (classic vs Token-2022). The classic-only derivation made a
-                // Token-2022 output (e.g. PYUSD) resolve to a PHANTOM address that the
-                // swap never touches → null post-state → false simulation_delta_mismatch.
-                // Look up the mint owner on-chain (non-native mints only). An
-                // unrecognized/failed owner lookup THROWS → caught below → forces main
-                // (fail-safe; never assume classic for an unknown mint).
-                const _T1038_TOKEN = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
-                const _T1038_TOKEN_2022 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
-                const _mintTokenProgram = async (mintB58) => {
-                    const info = await solanaRpc('getAccountInfo', [mintB58, { encoding: 'base64' }]);
-                    const owner = info && info.value && info.value.owner;
-                    if (owner === _T1038_TOKEN || owner === _T1038_TOKEN_2022) return owner;
-                    throw new Error(`mint ${mintB58} owner ${owner || 'unknown'} is not a recognized SPL token program`);
-                };
-                const debitAccount = inputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, inputToken.address, await _mintTokenProgram(inputToken.address));
-                const creditAccount = outputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, outputToken.address, await _mintTokenProgram(outputToken.address));
-                const minOut = String(order.otherAmountThreshold || order.outAmount || '0');
-                // B1 (BAT-1013-followup): when input OR output is native SOL,
-                // Jupiter Ultra's documented wrapping pattern is open-wSOL-ATA
-                // → swap → CloseAccount(wSOL-ATA, destination=burner). The
-                // burner-policy drainer-walk treats CloseAccount as drainer-
-                // class by default; without an explicit exemption the policy
-                // gate would reject every native-SOL Ultra swap. The
-                // exemption is encoded as an OPTIONAL field on
-                // jupiter_swap_immediate: { ata, destination } MUST both
-                // match the burner's wSOL ATA and the burner itself, validated
-                // structurally by burner-policy.js at expectedDelta-shape time.
-                // Any deviation (different destination, different ATA, ix not
-                // CloseAccount) is fail-closed.
-                //
-                // Q8 (BAT-1013-followup): burnerOwnedAccounts below declares
-                // the EXPLICIT debit + credit ATAs the burner debits/credits.
-                // Multi-hop intermediate ATAs Jupiter routes through are NOT
-                // declared here — burner-policy.js step 10 derives the
-                // multi-hop ownership set from the simulation pre-snapshot
-                // (declared ∪ sim-owned). If Jupiter inserts an intermediate
-                // ATA the burner owns but we didn't declare, sim-owned picks
-                // it up; if it inserts one we DON'T own, the policy's
-                // ownership-resolver fails closed (drainer_* or
-                // account_ownership_uncertain).
-                const NATIVE_MINT_BASE58 = 'So11111111111111111111111111111111111111112';
-                let wsolAtaExemption = null;
-                if (inputIsSol || outputIsSol) {
-                    try {
-                        const wsolAta = ata.deriveAtaBase58(burnerPubkey, NATIVE_MINT_BASE58);
-                        wsolAtaExemption = { ata: wsolAta, destination: burnerPubkey };
-                    } catch (wsolErr) {
-                        log(`[Jupiter Ultra] Could not derive wSOL ATA for exemption: ${wsolErr.message}`, 'WARN');
-                        // Fall through — exemption stays null. Policy gate
-                        // will reject CloseAccount, which routeAndSign treats
-                        // as a security failure; user sees the rejection.
-                    }
-                }
-                expectedDelta = {
-                    kind: 'jupiter_swap_immediate',
-                    signerMode: 'burner_only', // single-signer path; sponsored mode wires in Phase 3b-follow-up once Ultra fee-payer pubkey is plumbed
-                    burnerDebit: {
-                        account: debitAccount,
-                        mint: inputIsSol ? 'native_sol' : inputToken.address,
-                        atomicAmount: String(amountRaw),
-                    },
-                    burnerCreditMin: {
-                        account: creditAccount,
-                        mint: outputIsSol ? 'native_sol' : outputToken.address,
-                        atomicAmount: minOut,
-                    },
-                    burnerOwnedAccounts: [debitAccount, creditAccount].filter(a => a !== burnerPubkey),
-                    toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
-                    ...(wsolAtaExemption ? { wsolAtaExemption } : {}),
-                    // BAT-1057: conversion declarations the burner-policy A1
-                    // re-gate requires (non-cap debit → cap-asset credit). The
-                    // price impact is bound to THIS signed order; tokenStandard
-                    // is declared when the held input is Token-2022 (so the
-                    // policy's token_2022_undeclared gate accepts it).
-                    ...(isConversion ? { conversionPriceImpactBps } : {}),
-                    ...(conversionTokenStandard ? { tokenStandard: conversionTokenStandard } : {}),
-                };
-            } catch (eDelta) {
-                // Copilot PR #398 R2: a null expectedDelta is silently
-                // skipped by dispatch.js -> BurnerSigner, which would let
-                // the burner sign without the policy gate. Force main
-                // routing so the user sees the MWA popup instead.
-                log(`[Jupiter Ultra] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
-                routingHint.routingDecision = 'main';
-                expectedDelta = null;
-            }
-
-            const result = await routeAndSign({
-                toolName: 'solana_swap',
-                toolArgs: input,
-                unsignedTxBase64: order.transaction,
-                broadcastVia: ULTRA_RPC_HINT,
-                flowName: 'solana_swap',
-                // Copilot PR #398 R13: thread routingHint through forceRouting.
-                // The fee-payer introspection block (~line 1696) and the
-                // expectedDelta-build catch (~line 1772) BOTH mutate
-                // routingHint.routingDecision = 'main' to force MWA fallback.
-                // Without forceRouting, dispatch.js re-calls routeFor() from
-                // the unmodified toolArgs and proceeds on burner with
-                // expectedDelta=null — bypassing validateBurnerTx entirely
-                // (the security hole PR #398 R2 was meant to close).
-                forceRouting: routingHint,
-                expectedDelta,
-                broadcast: async (txOrUnsigned, _signer, ctx) => {
-                    // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
-                    // ctx.signed === false → main path  (txOrUnsigned is unsigned, sign via MWA)
-                    if (ctx && ctx.signed) {
-                        log('[Jupiter Ultra] Executing burner-signed tx...', 'INFO');
-                        const ex = await jupiterUltraExecute(txOrUnsigned, order.requestId);
-                        if (ex.status === 'Failed') {
-                            return { error: 'execute_failed', reason: ex.error || 'Jupiter Ultra rejected' };
+                // BAT-1057: post-order CONVERSION gate. The order now exists, so we
+                // know the real minOut + price impact. Enforce the price-impact
+                // ceiling (Codex v2 #5: Ultra `priceImpact` is a percent value,
+                // `priceImpactPct` a fraction fallback; > 100 bps / 1% → refuse) and
+                // set the internal forceRouting to the burner with principalAtomic =
+                // the signed order's minOut. The /burner/reserve path enforces the
+                // cap AMOUNT (Codex v2 #3 option b); the burner-policy A1 re-gate
+                // independently enforces the conversion shape + price impact.
+                let conversionPriceImpactBps = null;
+                if (isConversion) {
+                    // priceImpact (percent, e.g. 0.0648 = 0.0648%) → bps; fall back to
+                    // priceImpactPct (fraction, e.g. 0.000018 = 0.0018%). Captured
+                    // 2026-06-24 against real Ultra orders. Absent/non-finite → null.
+                    const _piToBps = (o) => {
+                        // CodeRabbit #411: Math.CEIL, not round — rounding down lets
+                        // 1.004% (100.4 bps) collapse to 100 and slip under the ceiling.
+                        // Any impact above the limit must fail closed.
+                        if (o && o.priceImpact != null) {
+                            const pi = Number(o.priceImpact);
+                            if (isFinite(pi) && pi >= 0) return Math.ceil(pi * 100);
                         }
-                        if (!ex.signature) {
+                        if (o && o.priceImpactPct != null) {
+                            const pct = Number(o.priceImpactPct);
+                            if (isFinite(pct) && pct >= 0) return Math.ceil(pct * 10000);
+                        }
+                        return null;
+                    };
+                    conversionPriceImpactBps = _piToBps(order);
+                    if (conversionPriceImpactBps === null) {
+                        return { error: `Couldn't read the price impact for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner without that check. Try again, or swap from your main wallet app.` };
+                    }
+                    if (conversionPriceImpactBps > 100) {
+                        return { error: `This ${inputToken.symbol}→${outputToken.symbol} conversion has ${(conversionPriceImpactBps / 100).toFixed(2)}% price impact (above the 1% autonomous limit). Swap it from your main wallet app to confirm the rate.` };
+                    }
+                    // CodeRabbit #411: never manufacture a '0' minOut — reserving
+                    // against zero (or building an expectedDelta with no guaranteed
+                    // proceeds) must fail closed. Require a positive integer.
+                    const _convMinOut = String(order.otherAmountThreshold ?? order.outAmount ?? '');
+                    if (!/^[1-9]\d*$/.test(_convMinOut)) {
+                        return { error: `Couldn't read a positive minimum output for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner. Try again, or swap from your main wallet app.` };
+                    }
+                    const _outIsUsdc = outputToken.address === _USDC_MINT_1057;
+                    // Mutate (not reassign) the const routingHint object → burner.
+                    routingHint.routingDecision = 'burner';
+                    routingHint.principalAtomic = _convMinOut;
+                    routingHint.capName = _outIsUsdc ? 'burner.pertx.usdc' : 'burner.pertx.sol';
+                    routingHint.dailyCapName = _outIsUsdc ? 'burner.daily.usdc' : 'burner.daily.sol';
+                    routingHint.reason = 'conversion';
+                    delete routingHint.underCap; // let /burner/reserve decide against the real minOut
+                }
+
+                // BAT-582 Phase 5: route through wallet dispatch. The broadcast
+                // callback handles the Jupiter Ultra TTL re-quote dance — for
+                // burner the sign step is fast (no popup) so re-quote is
+                // basically never needed; for main, MWA approval can take
+                // longer than the Ultra signed-payload TTL (~2 min) so we
+                // detect that and re-quote inside the broadcast callback.
+                //
+                // routeAndSign passes UNSIGNED tx to broadcast() for the main
+                // path (signer.signAndSend signs+broadcasts atomically via MWA)
+                // and SIGNED tx for the burner path (sign-only happened before
+                // broadcast()). We branch on which we got and handle TTL
+                // accordingly. For Phase 5 we keep the existing TTL safe-guard
+                // wired only on the main path — the burner path's reservation
+                // already enforces a 60s TTL upstream and Ultra's 2-min limit
+                // is comfortably wider.
+                const ULTRA_RPC_HINT = 'jupiter';
+
+                // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
+                // Only the burner path consumes it; main path ignores the field.
+                // Ultra is a sponsored-fee flow, so signerMode is 'sponsored' when
+                // routed through Ultra's gasless mode (Jupiter pays the fee + may
+                // co-sign). The cosigner allowlist is left empty by default — the
+                // policy's `sponsored` mode allows the fee payer to be ANY signer
+                // declared in feePayerAllowlist; for Ultra the relayer pubkey is
+                // surfaced as `order.feePayer` in some responses. When the
+                // expectedDelta fields are imprecise (sponsored mode + missing
+                // relayer pubkey), the burner-policy reject is availability-class
+                // and the agent surfaces it; in v2.1 first-ship we err on the
+                // side of fail-closed for Ultra-via-burner until the live test
+                // fixtures pin the exact field shapes.
+                // Q5 (BAT-1013-followup): fee-payer introspection on the unsigned
+                // Ultra tx. Jupiter Ultra is a sponsored-fee design — the relayer
+                // typically pays the fee, so account[0] (fee payer) will NOT equal
+                // the burner pubkey in production. The Phase 3b expectedDelta below
+                // declares signerMode='burner_only', which the policy gate
+                // interprets as "burner is fee payer" — that mismatch would either
+                // (a) fail-closed at the policy gate, or (b) silently allow a
+                // sponsored tx through if signerMode is misread. As a defensive
+                // belt-and-braces fallback: when routing was 'burner' AND the
+                // unsigned tx's fee payer differs from the burner pubkey, route to
+                // main so the user sees the MWA popup instead of an opaque
+                // burner-policy reject. The full sponsored-mode wiring (with
+                // feePayerAllowlist sourced from order.feePayer when Jupiter
+                // surfaces it) is tracked in Phase 3b-follow-up; until that lands,
+                // this defensive check prevents a silent burner-policy reject.
+                try {
+                    const feePayer = _extractFeePayerBase58(order.transaction);
+                    if (feePayer && feePayer !== userPublicKey && routingHint.routingDecision === 'burner') {
+                        // BAT-1038 Amendment 1: a burner-built Ultra order whose decoded
+                        // fee payer ≠ the burner taker must FAIL CLOSED. The previous code
+                        // re-routed to main, which reused the SAME burner-taker order on
+                        // the MWA signer — sponsored signer-mode is not wired in the swap
+                        // path, so that is unsafe. Return BEFORE routeAndSign: no reserve,
+                        // no sign, no broadcast. (Probe 2026-06-24: the real USDC→PYUSD
+                        // route DOES use the burner as fee payer, so this is a defensive
+                        // guard, not the normal path.) A real main fallback requires a NEW
+                        // jupiterUltraOrder with the main wallet as taker (separate invoke).
+                        log(`[Jupiter Ultra] fee_payer_mismatch: order fee payer ${feePayer} != burner taker ${userPublicKey}; sponsored signer-mode not wired — failing closed`, 'WARN');
+                        return {
+                            error: 'fee_payer_mismatch',
+                            reason: `This swap route's fee payer (${feePayer.slice(0, 4)}…${feePayer.slice(-4)}) differs from the burner, and a burner-built order can't be safely signed by the main wallet. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                            retryable: true,
+                        };
+                    }
+                } catch (introspectErr) {
+                    // BAT-1038 Amendment 1 (CodeRabbit #409): on a BURNER route, an
+                    // UNVERIFIABLE fee payer is the same risk class as a mismatched
+                    // one — sponsored signer-mode is unwired, so we must not sign an
+                    // order whose fee payer we couldn't decode. Fail closed. Main
+                    // routes are unaffected (the MWA wallet signs what it's shown and
+                    // is the fee payer by construction).
+                    if (routingHint.routingDecision === 'burner') {
+                        log(`[Jupiter Ultra] fee-payer introspection failed on burner route: ${introspectErr.message} — failing closed`, 'WARN');
+                        return {
+                            error: 'fee_payer_mismatch',
+                            reason: `Couldn't verify this swap route's fee payer (transaction introspection failed) — the burner won't sign an unverifiable order. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                            retryable: true,
+                        };
+                    }
+                    log(`[Jupiter Ultra] fee-payer introspection failed: ${introspectErr.message} — proceeding (main route)`, 'DEBUG');
+                }
+
+                let expectedDelta = null;
+                try {
+                    const burnerPubkey = userPublicKey; // burner path uses burner as taker
+                    const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                    const outputIsSol = outputToken.address === 'So11111111111111111111111111111111111111112';
+                    const ata = require('../wallet/ata');
+                    // BAT-1038: derive each side's ATA against the mint's OWNING token
+                    // program (classic vs Token-2022). The classic-only derivation made a
+                    // Token-2022 output (e.g. PYUSD) resolve to a PHANTOM address that the
+                    // swap never touches → null post-state → false simulation_delta_mismatch.
+                    // Look up the mint owner on-chain (non-native mints only). An
+                    // unrecognized/failed owner lookup THROWS → caught below → forces main
+                    // (fail-safe; never assume classic for an unknown mint).
+                    const _T1038_TOKEN = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+                    const _T1038_TOKEN_2022 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+                    const _mintTokenProgram = async (mintB58) => {
+                        const info = await solanaRpc('getAccountInfo', [mintB58, { encoding: 'base64' }]);
+                        const owner = info && info.value && info.value.owner;
+                        if (owner === _T1038_TOKEN || owner === _T1038_TOKEN_2022) return owner;
+                        throw new Error(`mint ${mintB58} owner ${owner || 'unknown'} is not a recognized SPL token program`);
+                    };
+                    const debitAccount = inputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, inputToken.address, await _mintTokenProgram(inputToken.address));
+                    const creditAccount = outputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, outputToken.address, await _mintTokenProgram(outputToken.address));
+                    const minOut = String(order.otherAmountThreshold || order.outAmount || '0');
+                    // B1 (BAT-1013-followup): when input OR output is native SOL,
+                    // Jupiter Ultra's documented wrapping pattern is open-wSOL-ATA
+                    // → swap → CloseAccount(wSOL-ATA, destination=burner). The
+                    // burner-policy drainer-walk treats CloseAccount as drainer-
+                    // class by default; without an explicit exemption the policy
+                    // gate would reject every native-SOL Ultra swap. The
+                    // exemption is encoded as an OPTIONAL field on
+                    // jupiter_swap_immediate: { ata, destination } MUST both
+                    // match the burner's wSOL ATA and the burner itself, validated
+                    // structurally by burner-policy.js at expectedDelta-shape time.
+                    // Any deviation (different destination, different ATA, ix not
+                    // CloseAccount) is fail-closed.
+                    //
+                    // Q8 (BAT-1013-followup): burnerOwnedAccounts below declares
+                    // the EXPLICIT debit + credit ATAs the burner debits/credits.
+                    // Multi-hop intermediate ATAs Jupiter routes through are NOT
+                    // declared here — burner-policy.js step 10 derives the
+                    // multi-hop ownership set from the simulation pre-snapshot
+                    // (declared ∪ sim-owned). If Jupiter inserts an intermediate
+                    // ATA the burner owns but we didn't declare, sim-owned picks
+                    // it up; if it inserts one we DON'T own, the policy's
+                    // ownership-resolver fails closed (drainer_* or
+                    // account_ownership_uncertain).
+                    const NATIVE_MINT_BASE58 = 'So11111111111111111111111111111111111111112';
+                    let wsolAtaExemption = null;
+                    if (inputIsSol || outputIsSol) {
+                        try {
+                            const wsolAta = ata.deriveAtaBase58(burnerPubkey, NATIVE_MINT_BASE58);
+                            wsolAtaExemption = { ata: wsolAta, destination: burnerPubkey };
+                        } catch (wsolErr) {
+                            log(`[Jupiter Ultra] Could not derive wSOL ATA for exemption: ${wsolErr.message}`, 'WARN');
+                            // Fall through — exemption stays null. Policy gate
+                            // will reject CloseAccount, which routeAndSign treats
+                            // as a security failure; user sees the rejection.
+                        }
+                    }
+                    expectedDelta = {
+                        kind: 'jupiter_swap_immediate',
+                        signerMode: 'burner_only', // single-signer path; sponsored mode wires in Phase 3b-follow-up once Ultra fee-payer pubkey is plumbed
+                        burnerDebit: {
+                            account: debitAccount,
+                            mint: inputIsSol ? 'native_sol' : inputToken.address,
+                            atomicAmount: String(amountRaw),
+                        },
+                        burnerCreditMin: {
+                            account: creditAccount,
+                            mint: outputIsSol ? 'native_sol' : outputToken.address,
+                            atomicAmount: minOut,
+                        },
+                        burnerOwnedAccounts: [debitAccount, creditAccount].filter(a => a !== burnerPubkey),
+                        toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
+                        ...(wsolAtaExemption ? { wsolAtaExemption } : {}),
+                        // BAT-1057: conversion declarations the burner-policy A1
+                        // re-gate requires (non-cap debit → cap-asset credit). The
+                        // price impact is bound to THIS signed order; tokenStandard
+                        // is declared when the held input is Token-2022 (so the
+                        // policy's token_2022_undeclared gate accepts it).
+                        ...(isConversion ? { conversionPriceImpactBps } : {}),
+                        ...(conversionTokenStandard ? { tokenStandard: conversionTokenStandard } : {}),
+                    };
+                } catch (eDelta) {
+                    // Copilot PR #398 R2: a null expectedDelta is silently
+                    // skipped by dispatch.js -> BurnerSigner, which would let
+                    // the burner sign without the policy gate. Force main
+                    // routing so the user sees the MWA popup instead.
+                    log(`[Jupiter Ultra] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+                    routingHint.routingDecision = 'main';
+                    expectedDelta = null;
+                }
+
+                result = await routeAndSign({
+                    toolName: 'solana_swap',
+                    toolArgs: input,
+                    unsignedTxBase64: order.transaction,
+                    broadcastVia: ULTRA_RPC_HINT,
+                    flowName: 'solana_swap',
+                    // Copilot PR #398 R13: thread routingHint through forceRouting.
+                    // The fee-payer introspection block (~line 1696) and the
+                    // expectedDelta-build catch (~line 1772) BOTH mutate
+                    // routingHint.routingDecision = 'main' to force MWA fallback.
+                    // Without forceRouting, dispatch.js re-calls routeFor() from
+                    // the unmodified toolArgs and proceeds on burner with
+                    // expectedDelta=null — bypassing validateBurnerTx entirely
+                    // (the security hole PR #398 R2 was meant to close).
+                    forceRouting: routingHint,
+                    expectedDelta,
+                    broadcast: async (txOrUnsigned, _signer, ctx) => {
+                        // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
+                        // ctx.signed === false → main path  (txOrUnsigned is unsigned, sign via MWA)
+                        if (ctx && ctx.signed) {
+                            log('[Jupiter Ultra] Executing burner-signed tx...', 'INFO');
+                            const ex = await jupiterUltraExecute(txOrUnsigned, order.requestId);
+                            if (ex.status === 'Failed') {
+                                // BAT-1061: carry the raw Jupiter error as a STRING so the
+                                // outer slippage classifier (and the agent) see the code/reason
+                                // even when Jupiter returns a structured error object.
+                                const _exErr = (typeof ex.error === 'string') ? ex.error : (ex.error != null ? JSON.stringify(ex.error) : 'Jupiter Ultra rejected');
+                                return { error: 'execute_failed', reason: _exErr };
+                            }
+                            if (!ex.signature) {
+                                return { error: 'execute_failed', reason: 'no signature in Ultra response' };
+                            }
+                            return { signature: ex.signature, ultra: ex };
+                        }
+                        // Main path: txOrUnsigned IS the unsigned tx. Sign via MWA + execute.
+                        await ensureWalletAuthorized();
+                        log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...', 'INFO');
+                        let signResult = await androidBridgeCall('/solana/sign-only', {
+                            transaction: txOrUnsigned,
+                        }, 120000);
+                        if (signResult.error) return { error: 'sign_failed', reason: signResult.error };
+                        if (!signResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+
+                        // TTL re-quote check — MWA can hold the popup for a long
+                        // time; if approval took >90s we re-quote to stay
+                        // within Ultra's 2-min signed-payload TTL.
+                        const elapsed = Date.now() - orderTimestamp;
+                        let finalSignedTx = signResult.signedTransaction;
+                        let finalRequestId = order.requestId;
+                        if (elapsed > ULTRA_TTL_SAFE_MS) {
+                            log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting...`, 'WARN');
+                            try {
+                                order = await fetchAndVerifyOrder();
+                                orderTimestamp = Date.now();
+                                const reSignResult = await androidBridgeCall('/solana/sign-only', {
+                                    transaction: order.transaction,
+                                }, 60000);
+                                if (reSignResult.error) return { error: 'sign_failed', reason: `re-quote sign failed: ${reSignResult.error}` };
+                                if (!reSignResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx from re-quote' };
+                                finalSignedTx = reSignResult.signedTransaction;
+                                finalRequestId = order.requestId;
+                            } catch (reQuoteErr) {
+                                log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`, 'WARN');
+                            }
+                        }
+
+                        log('[Jupiter Ultra] Executing signed transaction...', 'INFO');
+                        const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
+                        if (execResult.status === 'Failed') {
+                            return { error: 'execute_failed', reason: execResult.error || 'Jupiter Ultra rejected' };
+                        }
+                        if (!execResult.signature) {
                             return { error: 'execute_failed', reason: 'no signature in Ultra response' };
                         }
-                        return { signature: ex.signature, ultra: ex };
-                    }
-                    // Main path: txOrUnsigned IS the unsigned tx. Sign via MWA + execute.
-                    await ensureWalletAuthorized();
-                    log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...', 'INFO');
-                    let signResult = await androidBridgeCall('/solana/sign-only', {
-                        transaction: txOrUnsigned,
-                    }, 120000);
-                    if (signResult.error) return { error: 'sign_failed', reason: signResult.error };
-                    if (!signResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+                        return { signature: execResult.signature, ultra: execResult };
+                    },
+                });
 
-                    // TTL re-quote check — MWA can hold the popup for a long
-                    // time; if approval took >90s we re-quote to stay
-                    // within Ultra's 2-min signed-payload TTL.
-                    const elapsed = Date.now() - orderTimestamp;
-                    let finalSignedTx = signResult.signedTransaction;
-                    let finalRequestId = order.requestId;
-                    if (elapsed > ULTRA_TTL_SAFE_MS) {
-                        log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting...`, 'WARN');
-                        try {
-                            order = await fetchAndVerifyOrder();
-                            orderTimestamp = Date.now();
-                            const reSignResult = await androidBridgeCall('/solana/sign-only', {
-                                transaction: order.transaction,
-                            }, 60000);
-                            if (reSignResult.error) return { error: 'sign_failed', reason: `re-quote sign failed: ${reSignResult.error}` };
-                            if (!reSignResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx from re-quote' };
-                            finalSignedTx = reSignResult.signedTransaction;
-                            finalRequestId = order.requestId;
-                        } catch (reQuoteErr) {
-                            log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`, 'WARN');
-                        }
+                if (!result.ok) {
+                    const _slip = result.wallet === 'burner' && _isSlippageRetryable(result.reason);
+                    if (_slip && _swapAttempt <= MAX_SWAP_RETRIES) {
+                        log(`[Jupiter Ultra] slippage execute failure (attempt ${_swapAttempt}/${MAX_SWAP_RETRIES + 1}) — re-quoting a fresh order and retrying`, 'WARN');
+                        continue;
                     }
-
-                    log('[Jupiter Ultra] Executing signed transaction...', 'INFO');
-                    const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
-                    if (execResult.status === 'Failed') {
-                        return { error: 'execute_failed', reason: execResult.error || 'Jupiter Ultra rejected' };
-                    }
-                    if (!execResult.signature) {
-                        return { error: 'execute_failed', reason: 'no signature in Ultra response' };
-                    }
-                    return { signature: execResult.signature, ultra: execResult };
-                },
-            });
-
-            if (!result.ok) {
-                return forwardDispatchError(result);
+                    return _slip
+                        ? { ...forwardDispatchError(result), retryable: true, attempts: _swapAttempt, next_step: 'The market moved between quote and execution (slippage). Retry the swap for a fresh quote — this is transient, not a burner or Token-2022 limitation.' }
+                        : forwardDispatchError(result);
+                }
+                break; // success — exit the retry loop; result is ok
             }
             const execResult = (result.broadcastResult && result.broadcastResult.ultra) || { signature: result.signature };
 

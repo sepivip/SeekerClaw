@@ -1004,3 +1004,16 @@ After BAT-1031 (PR #402), the burner policy TRUSTS `api.jup.ag` for the deposit/
 ### Holdings vs `solana_balance` — which to trust
 - **`solana_balance`** = authoritative on-chain read (direct RPC; Token-2022-aware). Use it to confirm a balance, or when a holdings read looks wrong. Note the BAT-1000 caveat (LLM API section / RPC notes): without a Helius key the public RPC can time out and make `getTokenAccountsByOwner` look empty — that is an RPC timeout, not a zero balance.
 - **`jupiter_wallet_holdings`** = best-effort portfolio view with USD valuation + token-standard tags. Great for "what's my portfolio worth", but defer to `solana_balance` for the source of truth on any single balance.
+
+---
+
+## Jupiter Swap — slippage / `0x1771` at execution (BAT-1061)
+
+### A burner swap fails on-chain with `0x1771` / `SlippageToleranceExceeded` / `MinReturnNotReached`
+**Symptoms:** `solana_swap` returns `error: "execute_failed"`, and/or the on-chain tx shows a Jupiter slippage/price-check error (`0x1771`, Custom 6001). The burner **signed** the tx fine — it failed at *execution*.
+**Diagnosis:** **Transient, NOT a burner / PYUSD / Token-2022 limitation.** The route's price moved between the quote and the on-chain landing (normal for thin or volatile routes — e.g. some PYUSD routes). The transaction failed **atomically** — no funds moved (a failed execute changes nothing but a few lamports of fees).
+**What the tool already does (BAT-1061):** `solana_swap` **auto-re-quotes a fresh order and retries** on a definite slippage failure, bounded (3 attempts total), each retry fully re-gated by burner-policy + a fresh reservation. It does **not** retry on an *ambiguous* transport/timeout failure (can't prove the prior tx didn't land → would risk a double-execute).
+**Fix / what to tell the user:**
+- If `solana_swap` returns `retryable: true` after the internal retries, tell the user the market moved and ask if they want to **try again**. If they do, follow the normal swap workflow: fetch a **fresh `solana_quote`, show it** (the price may have moved materially over the failed attempts), confirm, and only **then** call `solana_swap` — do NOT blindly re-call `solana_swap` without a fresh quote in chat. Do **NOT** say "use your main wallet" or call it a "known issue with the burner."
+- This is distinct from a **pre-sign refusal** (fee-bearing/unverifiable Token-2022, or >1% price impact in a BAT-1057 conversion) — those genuinely route to the main wallet and are surfaced verbatim.
+- Persistent slippage usually means a thin route; retrying picks a different one (Jupiter routing is dynamic). If it never settles after several manual retries, the route is genuinely illiquid right now — suggest a smaller amount or trying later.
