@@ -223,7 +223,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it + confirm) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it + confirm) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. **Conversion quote flakiness (BAT-1062)**: error:"conversion_quote_unverifiable" with retryable:true means Jupiter returned routes without a readable price-impact/minOut (intermittent, NOT high impact) — also auto-re-quoted internally; if still returned, ask the user to retry, do NOT route to main. (A genuine readable >1% impact stays terminal → main wallet.) ALWAYS confirm with the user and show the quote first before calling this tool.',
         input_schema: {
             type: 'object',
             properties: {
@@ -2096,7 +2096,16 @@ const handlers = {
                     };
                     conversionPriceImpactBps = _piToBps(order);
                     if (conversionPriceImpactBps === null) {
-                        return { error: `Couldn't read the price impact for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner without that check. Try again, or swap from your main wallet app.` };
+                        // BAT-1062: an UNREADABLE price impact is a TRANSIENT route issue — Jupiter's
+                        // /order didn't expose priceImpact/priceImpactPct for this route (intermittent;
+                        // a fresh order almost always does). Re-quote in the shared BAT-1061 loop,
+                        // continuing BEFORE routeAndSign so there is NO reserve/sign/execute this attempt.
+                        // Each re-quote re-runs this gate → we never sign an unverifiable-impact order.
+                        if (_swapAttempt <= MAX_SWAP_RETRIES) {
+                            log(`[Jupiter Ultra] conversion price-impact unreadable (attempt ${_swapAttempt}/${MAX_SWAP_RETRIES + 1}) — re-quoting a fresh order`, 'WARN');
+                            continue;
+                        }
+                        return { error: 'conversion_quote_unverifiable', retryable: true, attempts: _swapAttempt, reason: `Couldn't read the price impact for this ${inputToken.symbol}→${outputToken.symbol} conversion across ${_swapAttempt} fresh quotes.`, next_step: 'Jupiter returned routes without a readable price-impact. Ask the user to retry for a fresh quote — this is route/market flakiness, not a burner or Token-2022 limitation.' };
                     }
                     if (conversionPriceImpactBps > 100) {
                         return { error: `This ${inputToken.symbol}→${outputToken.symbol} conversion has ${(conversionPriceImpactBps / 100).toFixed(2)}% price impact (above the 1% autonomous limit). Swap it from your main wallet app to confirm the rate.` };
@@ -2106,7 +2115,15 @@ const handlers = {
                     // proceeds) must fail closed. Require a positive integer.
                     const _convMinOut = String(order.otherAmountThreshold ?? order.outAmount ?? '');
                     if (!/^[1-9]\d*$/.test(_convMinOut)) {
-                        return { error: `Couldn't read a positive minimum output for this ${inputToken.symbol}→${outputToken.symbol} conversion — refusing to sign it from the burner. Try again, or swap from your main wallet app.` };
+                        // BAT-1062: a missing / non-positive minOut on an OTHERWISE-USABLE order is the
+                        // same transient-route class as the price-impact case → re-quote (continue before
+                        // routeAndSign). Bounded by the shared loop. (Codex #4: scoped to this field only;
+                        // no-transaction / insufficient-funds order-build errors stay terminal upstream.)
+                        if (_swapAttempt <= MAX_SWAP_RETRIES) {
+                            log(`[Jupiter Ultra] conversion minOut unreadable (attempt ${_swapAttempt}/${MAX_SWAP_RETRIES + 1}) — re-quoting a fresh order`, 'WARN');
+                            continue;
+                        }
+                        return { error: 'conversion_quote_unverifiable', retryable: true, attempts: _swapAttempt, reason: `Couldn't read a positive minimum output for this ${inputToken.symbol}→${outputToken.symbol} conversion across ${_swapAttempt} fresh quotes.`, next_step: 'Jupiter returned routes without a readable minimum-output. Ask the user to retry for a fresh quote — this is route/market flakiness, not a burner or Token-2022 limitation.' };
                     }
                     const _outIsUsdc = outputToken.address === _USDC_MINT_1057;
                     // Mutate (not reassign) the const routingHint object → burner.
