@@ -375,7 +375,7 @@ const tools = [
     },
     {
         name: 'jupiter_wallet_holdings',
-        description: 'View all tokens held by a Solana wallet address. Returns complete list with balances, USD values, and token metadata. More detailed than basic Solana RPC. Requires Jupiter API key.',
+        description: 'View tokens (and native SOL) held by a Solana wallet via Jupiter — aggregated per mint with per-account detail, each tagged tokenStandard ("classic" | "token_2022" | "native_sol"). USD values are BEST-EFFORT: rows with no price return valueUsd:"N/A" (the result carries valuationPartial + pricedCount/unpricedCount), and totalValueUsd is the priced subtotal or "N/A" — it never reports $0.00 as the portfolio. Symbol/name are best-effort from the verified token list (may be absent for unknown mints). For the authoritative on-chain balance, prefer solana_balance. Requires Jupiter API key.',
         input_schema: {
             type: 'object',
             properties: {
@@ -3679,23 +3679,91 @@ const handlers = {
             }
 
             const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-            const holdings = data.holdings || [];
-            const totalValue = holdings.reduce((sum, h) => sum + (h.valueUsd || 0), 0);
+
+            // BAT-1056: the REAL /ultra/v1/holdings shape is { amount, uiAmount,
+            // uiAmountString (native SOL), tokens: { <mint>: [ accountEntry... ] } }.
+            // The old code read `data.holdings` (never existed) → silent empty for
+            // EVERY wallet, with a misleading "$0.00" total. Parse `data.tokens`
+            // (aggregate per mint, keep account detail), include the SOL line, tag
+            // tokenStandard from programId, price via batch jupiterPrice (no N+1),
+            // and NEVER report $0.00 as the portfolio when prices are missing.
+            const tokensByMint = (data && data.tokens && typeof data.tokens === 'object' && !Array.isArray(data.tokens)) ? data.tokens : null;
+            const hasSolLine = !!(data && (data.uiAmountString != null || data.amount != null));
+            if (!tokensByMint && !hasSolLine) {
+                // Fail loud on top-level drift — do NOT regress to looking like an empty wallet.
+                return { error: 'unexpected_jupiter_holdings_shape', details: `Jupiter holdings response had neither a 'tokens' object nor a SOL balance. Top-level keys: ${data ? Object.keys(data).join(',') : '(none)'}` };
+            }
+
+            const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+            const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+            const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+            const _stdFromProgram = (pid) => pid === TOKEN_PROGRAM ? 'classic' : (pid === TOKEN_2022_PROGRAM ? 'token_2022' : 'unknown');
+            const _atomicToDecimalStr = (raw, decimals) => {
+                const s = raw.toString().padStart(decimals + 1, '0');
+                const intPart = s.slice(0, s.length - decimals) || '0';
+                const fracPart = decimals > 0 ? s.slice(s.length - decimals).replace(/0+$/, '') : '';
+                return fracPart ? `${intPart}.${fracPart}` : intPart;
+            };
+
+            const rows = [];
+            if (hasSolLine) {
+                rows.push({
+                    address: WSOL_MINT, mint: WSOL_MINT, tokenStandard: 'native_sol', decimals: 9,
+                    amountRaw: String(data.amount ?? ''), balance: String(data.uiAmountString ?? data.uiAmount ?? '0'),
+                    accountCount: 1, excludeFromNetWorth: false, accounts: [],
+                });
+            }
+            for (const [mint, entries] of Object.entries(tokensByMint || {})) {
+                const accts = Array.isArray(entries) ? entries : (entries ? [entries] : []);
+                if (accts.length === 0) continue;
+                const decimals = (accts[0] && accts[0].decimals != null) ? accts[0].decimals : 0;
+                let rawSum = 0n;
+                for (const a of accts) { try { rawSum += BigInt(a.amount); } catch (_) { /* skip unparseable */ } }
+                if (rawSum === 0n) continue; // drop zero-balance mints
+                rows.push({
+                    address: mint, mint, tokenStandard: _stdFromProgram(accts[0] && accts[0].programId),
+                    decimals, amountRaw: rawSum.toString(), balance: _atomicToDecimalStr(rawSum, decimals),
+                    accountCount: accts.length,
+                    excludeFromNetWorth: accts.some(a => a.excludeFromNetWorth === true),
+                    accounts: accts.map(a => ({
+                        account: a.account, amountRaw: String(a.amount), uiAmountString: a.uiAmountString,
+                        isFrozen: a.isFrozen, isAssociatedTokenAccount: a.isAssociatedTokenAccount,
+                        excludeFromNetWorth: a.excludeFromNetWorth, lamports: a.lamports, programId: a.programId,
+                    })),
+                });
+            }
+
+            // Batch USD prices (no N+1) + best-effort symbol/name from the cached token list.
+            let priceMap = {};
+            try {
+                const mints = rows.map(r => r.address);
+                if (mints.length) priceMap = (await jupiterPrice(mints)) || {};
+            } catch (e) { log(`[Jupiter Holdings] batch price lookup failed (values → N/A): ${e.message}`, 'DEBUG'); }
+
+            let pricedCount = 0, unpricedCount = 0, totalUsd = 0;
+            for (const r of rows) {
+                const p = priceMap[r.address];
+                const usd = p && (p.usdPrice ?? p.price);
+                if (usd != null && isFinite(Number(usd))) {
+                    r.price = `$${Number(usd)}`;
+                    const v = Number(r.balance) * Number(usd);
+                    r.valueUsd = `$${v.toFixed(2)}`;
+                    pricedCount++;
+                    if (!r.excludeFromNetWorth && isFinite(v)) totalUsd += v;
+                } else {
+                    r.price = 'N/A'; r.valueUsd = 'N/A'; unpricedCount++; // never fake $0.00
+                }
+                try { const t = await resolveToken(r.address); if (t && t.symbol && t.symbol !== '???') { r.symbol = t.symbol; r.name = t.name; } } catch (_) { /* metadata best-effort */ }
+            }
 
             return {
                 success: true,
                 wallet: walletAddress,
-                totalValueUsd: `$${totalValue.toFixed(2)}`,
-                count: holdings.length,
-                holdings: holdings.map(holding => ({
-                    symbol: holding.symbol,
-                    name: holding.name,
-                    address: holding.mint,
-                    balance: holding.balance,
-                    decimals: holding.decimals,
-                    valueUsd: `$${(holding.valueUsd || 0).toFixed(2)}`,
-                    price: (holding.price !== null && holding.price !== undefined) ? `$${holding.price}` : 'N/A'
-                }))
+                count: rows.length,
+                totalValueUsd: pricedCount > 0 ? `$${totalUsd.toFixed(2)}` : 'N/A',
+                valuationPartial: unpricedCount > 0,
+                pricedCount, unpricedCount,
+                holdings: rows,
             };
         } catch (e) {
             return { error: e.message };

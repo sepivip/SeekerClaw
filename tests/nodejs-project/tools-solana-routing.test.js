@@ -81,6 +81,10 @@ let mockAccountInfoFn = () => ({ value: null });
 // it per token program; the BAT-1057 conversion balance pre-check reads it too.
 // Default empty. Tests override per (owner, filter).
 let mockTokenAccountsFn = () => ({ value: [] });
+// BAT-1056: jupiter_wallet_holdings — control the /ultra/v1/holdings response +
+// batch prices. Default null → harness defaults.
+let mockJupiterRequestFn = null;
+let mockJupiterPriceFn = null;
 // BAT-1057: a Token-2022 mint account-info with a transfer fee (extended mint:
 // 165 pad + type byte + TransferFeeConfig type-1 TLV, newer bps at data+106).
 function _t2022MintInfoWithFee(feeBps) {
@@ -157,7 +161,7 @@ require.cache[solanaPath] = {
             return null;
         },
         jupiterQuote: async () => ({ outAmount: '1000000', otherAmountThreshold: '990000', priceImpactPct: '0.1', routePlan: [] }),
-        jupiterPrice: async () => ({}),
+        jupiterPrice: async (mints) => mockJupiterPriceFn ? mockJupiterPriceFn(mints) : ({}),
         jupiterUltraOrder: async () => jupiterUltraOrderResponse || { transaction: _defaultUltraOrderTx(), requestId: 'ultra-req-1' },
         jupiterUltraExecute: async (signedTx, requestId) => {
             jupiterUltraExecuteCalls.push({ signedTx, requestId });
@@ -172,7 +176,7 @@ require.cache[solanaPath] = {
             return { signature: 'DCA-SIG-FIXTURE', order: 'order-dca-456', status: 'Success' };
         },
         verifySwapTransaction: () => ({ valid: true }),
-        jupiterRequest: async () => ({ status: 200, data: '{}' }),
+        jupiterRequest: async (opts) => mockJupiterRequestFn ? mockJupiterRequestFn(opts) : ({ status: 200, data: '{}' }),
         // R-next-10: match production's isValidSolanaAddress more closely.
         // Production checks charset+length AND base58-decodes + asserts the
         // decoded payload is exactly 32 bytes. The previous lightweight stub
@@ -295,6 +299,8 @@ async function check(label, fn) {
     // pre-existing swap routing). solana_send_token tests override this per case.
     mockAccountInfoFn = () => _mintAccountInfo(_TKN_PROGRAM, 6);
     mockTokenAccountsFn = () => ({ value: [] });
+    mockJupiterRequestFn = null;
+    mockJupiterPriceFn = null;
     lastValidateBurnerTxArgs = null;
     jupiterTriggerExecuteCalls = [];
     jupiterRecurringExecuteCalls = [];
@@ -1175,6 +1181,77 @@ function _burnerOff() {
         const r = await tools.handlers.solana_balance({ address: 'Wa11et5555555555555555555555555555555555555' });
         assert.strictEqual(r.tokenCount, 0, 'zero-balance accounts dropped');
         assert.ok(!r.balanceIncomplete, 'value:[] is a successful empty read, not a failure');
+    });
+
+    // ── BAT-1056: jupiter_wallet_holdings real-shape parse ───────────────────
+    const _HOLD_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const _HOLD_PYUSD = '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo';
+    const _WSOL = 'So11111111111111111111111111111111111111112';
+    const _holdEntry = (over) => ({ account: 'Acc', amount: '1000000', uiAmount: 1, uiAmountString: '1', isFrozen: false, isAssociatedTokenAccount: true, decimals: 6, programId: _TKN_PROGRAM, excludeFromNetWorth: false, lamports: 2039280, ...(over || {}) });
+    const _holdingsResp = (tokens) => ({ status: 200, data: JSON.stringify({ amount: '43000000', uiAmount: 0.043, uiAmountString: '0.043', tokens }) });
+    const _row = (r, mint) => r.holdings.find(h => h.address === mint);
+
+    await check('BAT-1056 holdings: {tokens:{mint:[entry]}} parses into non-empty holdings (was always empty)', async () => {
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_USDC]: [_holdEntry()] });
+        mockJupiterPriceFn = () => ({ [_HOLD_USDC]: { usdPrice: 1 } });
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        assert.ok(r.success && r.count >= 1, JSON.stringify(r).slice(0, 200));
+        assert.ok(_row(r, _HOLD_USDC), 'USDC row present');
+    });
+
+    await check('BAT-1056 holdings: multi-account same mint sums raw amount', async () => {
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_USDC]: [_holdEntry({ amount: '1000000', account: 'A1' }), _holdEntry({ amount: '500000', account: 'A2' })] });
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        const row = _row(r, _HOLD_USDC);
+        assert.strictEqual(row.amountRaw, '1500000');
+        assert.strictEqual(row.balance, '1.5');
+        assert.strictEqual(row.accountCount, 2);
+    });
+
+    await check('BAT-1056 holdings: Token-2022 programId → tokenStandard token_2022', async () => {
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_PYUSD]: [_holdEntry({ programId: _TKN_2022_PROGRAM })] });
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        assert.strictEqual(_row(r, _HOLD_PYUSD).tokenStandard, 'token_2022');
+    });
+
+    await check('BAT-1056 holdings: native SOL row included (tokenStandard native_sol)', async () => {
+        mockJupiterRequestFn = () => _holdingsResp({});
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        const sol = r.holdings.find(h => h.tokenStandard === 'native_sol');
+        assert.ok(sol, 'SOL row present');
+        assert.strictEqual(sol.balance, '0.043');
+    });
+
+    await check('BAT-1056 holdings: missing price → valueUsd N/A + valuationPartial, NOT $0.00', async () => {
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_USDC]: [_holdEntry()] });
+        mockJupiterPriceFn = () => ({}); // no prices
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        assert.strictEqual(_row(r, _HOLD_USDC).valueUsd, 'N/A');
+        assert.strictEqual(r.totalValueUsd, 'N/A', 'never $0.00 when nothing priced');
+        assert.strictEqual(r.valuationPartial, true);
+        assert.ok(r.unpricedCount >= 1);
+    });
+
+    await check('BAT-1056 holdings: excludeFromNetWorth shown but excluded from total', async () => {
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_USDC]: [_holdEntry({ excludeFromNetWorth: true })] });
+        mockJupiterPriceFn = () => ({ [_HOLD_USDC]: { usdPrice: 1 }, [_WSOL]: { usdPrice: 100 } });
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        const row = _row(r, _HOLD_USDC);
+        assert.ok(row && row.excludeFromNetWorth === true, 'excluded token still shown');
+        assert.strictEqual(r.totalValueUsd, '$4.30', 'total = SOL (0.043*100) only, excluded USDC omitted');
+    });
+
+    await check('BAT-1056 holdings: top-level drift ({holdings:[]}) → error, NOT silent empty', async () => {
+        mockJupiterRequestFn = () => ({ status: 200, data: JSON.stringify({ holdings: [] }) });
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        assert.strictEqual(r.error, 'unexpected_jupiter_holdings_shape');
+    });
+
+    await check('BAT-1056 holdings: tool description drops the guaranteed-USD promise (D8)', () => {
+        const src = require('fs').readFileSync(path.join(BUNDLE, 'tools', 'solana.js'), 'utf8');
+        const m = src.match(/name: 'jupiter_wallet_holdings',\s*\n\s*description: '([^']*)'/);
+        assert.ok(m, 'found description');
+        assert.match(m[1], /best-effort|N\/A|never reports/i);
     });
 
     if (failures > 0) {
