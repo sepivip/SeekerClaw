@@ -66,6 +66,9 @@ let jupiterUltraOrderResponse = null;
 // drive per-call execute responses (fail-then-succeed). Default null → success.
 let jupiterUltraOrderCalls = 0;
 let mockUltraExecuteFn = null;
+// BAT-1062: drive per-call ORDER responses (e.g. unreadable price-impact on
+// attempt 1, readable on attempt 2). Default null → jupiterUltraOrderResponse.
+let mockUltraOrderFn = null;
 let triggerCreateApiResponse = null;
 let recurringCreateApiResponse = null;
 // BAT-1036: getAccountInfo mock for solana_send_token (mint triple-pin + ATA
@@ -168,6 +171,7 @@ require.cache[solanaPath] = {
         jupiterPrice: async (mints) => mockJupiterPriceFn ? mockJupiterPriceFn(mints) : ({}),
         jupiterUltraOrder: async () => {
             jupiterUltraOrderCalls += 1;
+            if (mockUltraOrderFn) return mockUltraOrderFn(jupiterUltraOrderCalls);
             return jupiterUltraOrderResponse || { transaction: _defaultUltraOrderTx(), requestId: 'ultra-req-' + jupiterUltraOrderCalls };
         },
         jupiterUltraExecute: async (signedTx, requestId) => {
@@ -314,6 +318,7 @@ async function check(label, fn) {
     jupiterUltraExecuteCalls = [];
     jupiterUltraOrderCalls = 0;
     mockUltraExecuteFn = null;
+    mockUltraOrderFn = null;
     bridgeResponses = {};
     try { await fn(); passes++; console.log(`  ✓ ${label}`); }
     catch (e) { failures++; console.error(`  ✗ ${label}\n    ${e.stack || e.message}`); }
@@ -477,11 +482,12 @@ function _burnerOff() {
         assert.strictEqual(jupiterUltraOrderCalls, 1, 'must NOT re-quote on an ambiguous/transport failure');
     });
 
-    await check('BAT-1061: ai.js carries the swap-slippage retry door (drift guard)', () => {
+    await check('BAT-1061/1062: ai.js carries the swap-slippage + conversion-quote retry doors (drift guard)', () => {
         const src = require('fs').readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
         assert.match(src, /BAT-1061/, 'ai.js must carry the BAT-1061 slippage door');
         assert.match(src, /slippage[\s\S]{0,300}(transient|retry)/i, 'door must frame slippage as transient/retryable');
         assert.match(src, /retryable/i, 'door must reference the retryable signal');
+        assert.match(src, /conversion_quote_unverifiable/, 'door must carry the BAT-1062 conversion quote-gate retry guidance');
     });
 
     await check('solana_swap: burner OFF → MWA /solana/sign-only + Jupiter Ultra executes', async () => {
@@ -1180,10 +1186,64 @@ function _burnerOff() {
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve for fee-bearing Token-2022');
     });
 
-    await check('BAT-1057 conversion: CodeRabbit #411 missing/zero minOut → refuse', async () => {
+    await check('BAT-1062: persistent zero/missing minOut → re-quote (bounded) → conversion_quote_unverifiable, never signs (CR#411 fail-closed preserved)', async () => {
         _convSetup({ otherAmountThreshold: '0', outAmount: '0' });
         const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
-        assert.ok(r.error && /minimum output/i.test(r.error), `expected zero-minOut refusal, got ${JSON.stringify(r)}`);
+        assert.strictEqual(r.error, 'conversion_quote_unverifiable');
+        assert.strictEqual(r.retryable, true);
+        assert.strictEqual(r.attempts, 3, 'bounded: 1 + MAX_SWAP_RETRIES(2)');
+        assert.strictEqual(jupiterUltraOrderCalls, 3, 'fresh order each attempt');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'NO reserve — continue before routeAndSign');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'NEVER signs with zero minOut (CR#411 invariant)');
+        assert.ok(!/main wallet/i.test(r.next_step || ''), `next_step must not defer to main wallet: ${r.next_step}`);
+    });
+
+    await check('BAT-1062: price-impact unreadable on attempt 1 → re-quote → readable attempt 2 → ACCEPT + execute', async () => {
+        _convSetup();
+        const readable = jupiterUltraOrderResponse;
+        const unreadable = { ...readable, priceImpact: undefined, priceImpactPct: undefined };
+        mockUltraOrderFn = (n) => n === 1 ? unreadable : readable;
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        if (r.error) throw new Error(`unexpected error: ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner');
+        assert.strictEqual(jupiterUltraOrderCalls, 2, 're-quoted once on the unreadable price-impact');
+        assert.strictEqual(bridgeCalls.filter(c => c.endpoint === '/burner/reserve').length, 1, 'attempt 1 (unreadable) did NOT reserve — continued before routeAndSign');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 1, 'executed once (on the readable attempt)');
+    });
+
+    await check('BAT-1062: persistent unreadable price-impact → bounded → conversion_quote_unverifiable, no sign', async () => {
+        _convSetup();
+        const readable = jupiterUltraOrderResponse;
+        mockUltraOrderFn = () => ({ ...readable, priceImpact: undefined, priceImpactPct: undefined });
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.strictEqual(r.error, 'conversion_quote_unverifiable');
+        assert.strictEqual(r.retryable, true);
+        assert.strictEqual(r.attempts, 3);
+        assert.strictEqual(jupiterUltraOrderCalls, 3, 'fresh order each attempt');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'never signs an unverifiable-impact order');
+        assert.ok(!/main wallet/i.test(r.next_step || ''));
+    });
+
+    await check('BAT-1062: >1% price impact stays TERMINAL — no retry (genuine market signal)', async () => {
+        _convSetup({ priceImpact: 1.5, priceImpactPct: '0.015' }); // 1.5% > 1% limit
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.ok(r.error && /price impact/i.test(r.error), `expected >1% terminal refusal, got ${JSON.stringify(r)}`);
+        assert.ok(!r.retryable, '>1% impact must NOT be retryable');
+        assert.strictEqual(jupiterUltraOrderCalls, 1, '>1% must NOT re-quote');
+    });
+
+    await check('BAT-1062+1061: MIXED path — unreadable quote → readable → slippage execute fail → fresh success (ONE shared bounded loop)', async () => {
+        _convSetup();
+        const readable = jupiterUltraOrderResponse;
+        mockUltraOrderFn = (n) => n === 1 ? { ...readable, priceImpact: undefined, priceImpactPct: undefined } : readable;
+        bridgeResponses['/burner/release'] = { ok: true };
+        mockUltraExecuteFn = (n) => n === 1 ? { status: 'Failed', error: '0x1771 slippage' } : { status: 'Success', signature: 'MIXED-SIG' };
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        if (r.error) throw new Error(`unexpected error: ${JSON.stringify(r)}`);
+        assert.strictEqual(r.wallet, 'burner');
+        // attempt1: unreadable quote → continue (no execute); attempt2: readable → slippage execute fail → continue; attempt3: readable → success
+        assert.strictEqual(jupiterUltraOrderCalls, 3, '3 order fetches (unreadable + slippage + success) — shared 3-attempt budget');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 2, '2 executes (slippage fail + success); the unreadable attempt never executed');
     });
 
     await check('BAT-1057 conversion: FORGERY — agent-supplied minOut/priceImpact ignored; delta uses the signed order', async () => {
