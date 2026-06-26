@@ -162,14 +162,24 @@ function loadDcaProducerSlice() {
         // account is not known pre-sign), so expectedDelta MUST be null.
         // Any non-null expectedDelta in this block means a future maintainer
         // tried to fabricate a delta — fail closed.
-        // BAT-1060: scope the assertion to the routeAndSign({...}) call itself, not
-        // anywhere in the slice — a stale comment / dead branch / helper var must not
-        // satisfy it. Require `expectedDelta: null` inside the actual call args.
-        const re = /await\s+routeAndSign\s*\(\s*\{[\s\S]*?expectedDelta\s*:\s*null\b/;
+        // BAT-1060 / CR #414: extract the routeAndSign({...}) call's argument object
+        // by brace-matching (it contains a nested broadcast callback), then require
+        // expectedDelta:null WITHIN it. A `[\s\S]*?` regex could cross the call's
+        // closing }) and match a later expectedDelta:null elsewhere in the slice.
+        const callIdx = producer.slice.indexOf('routeAndSign(');
+        assert.notStrictEqual(callIdx, -1, 'routeAndSign(...) call must exist in the DCA producer');
+        let depth = 0, end = -1;
+        for (let i = producer.slice.indexOf('{', callIdx); i >= 0 && i < producer.slice.length; i++) {
+            const ch = producer.slice[i];
+            if (ch === '{') depth++;
+            else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        assert.notStrictEqual(end, -1, 'routeAndSign call object must be brace-balanced');
+        const callArgs = producer.slice.slice(callIdx, end + 1);
         assert.ok(
-            re.test(producer.slice),
-            `expectedDelta: null is required on the routeAndSign({...}) call inside jupiter_dca_create. ` +
-            `A non-null expectedDelta implies pre-sign policy validation of a deposit ` +
+            /expectedDelta\s*:\s*null\b/.test(callArgs),
+            `expectedDelta: null is required INSIDE the routeAndSign({...}) call in jupiter_dca_create. ` +
+            `A non-null (or missing) expectedDelta implies pre-sign policy validation of a deposit ` +
             `destination that cannot be verified — re-read BAT-1013 v8.3 Codex review.`
         );
     });

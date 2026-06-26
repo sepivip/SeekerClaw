@@ -43,13 +43,18 @@ function readMintTransferFeeBps(owner, base64Data) {
     if (owner === TOKEN_PROGRAM_ID) return { standard: 'classic', feeBps: 0 }; // classic SPL has no transfer fee
     if (owner !== TOKEN_2022_PROGRAM_ID) return { standard: 'unknown', feeBps: null };
 
+    // BAT-1060 / CR #414: only a base64 STRING is a valid mint payload. Reject
+    // non-strings (Uint8Array / number[] / etc.) — Buffer.from IGNORES the 'base64'
+    // arg for those and treats the input as raw bytes, which would bypass the
+    // round-trip check below and could be read as feeBps:0.
+    if (typeof base64Data !== 'string') return { standard: 'token_2022', feeBps: null };
     let buf;
-    try { buf = Buffer.from(base64Data || '', 'base64'); } catch (_) { return { standard: 'token_2022', feeBps: null }; }
+    try { buf = Buffer.from(base64Data, 'base64'); } catch (_) { return { standard: 'token_2022', feeBps: null }; }
     if (buf.length === 0) return { standard: 'token_2022', feeBps: null };
     // BAT-1060: Buffer.from tolerates malformed base64 (silently drops invalid
-    // chars). Reject anything that doesn't round-trip to the (canonical) input so
+    // chars). Reject anything that doesn't round-trip to the canonical input so
     // unparseable mint data can't slip through and be read as feeBps:0.
-    if (typeof base64Data === 'string' && buf.toString('base64') !== base64Data) {
+    if (buf.toString('base64') !== base64Data) {
         return { standard: 'token_2022', feeBps: null };
     }
 

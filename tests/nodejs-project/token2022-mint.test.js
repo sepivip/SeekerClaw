@@ -118,6 +118,14 @@ check('BAT-1060: malformed base64 mint data (invalid chars) → null, not feeBps
     assert.strictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, bad).feeBps, null);
 });
 
+check('BAT-1060 (CR #414): non-string mint payload → null (Buffer.from ignores base64 arg for byte arrays)', () => {
+    // A raw 82-byte Uint8Array would, if Buffer.from treated it as bytes, look like
+    // a valid base mint and resolve to feeBps:0 — must fail closed to null instead.
+    assert.strictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, Buffer.alloc(82)).feeBps, null);
+    assert.strictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, [1, 2, 3]).feeBps, null);
+    assert.strictEqual(readMintTransferFeeBps(TOKEN_2022_PROGRAM_ID, null).feeBps, null);
+});
+
 console.log();
 console.log(`Result: ${pass} passed, ${fail} failed`);
 if (fail > 0) { console.error('FAIL: token2022-mint.test.js'); process.exit(1); }

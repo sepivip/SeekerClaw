@@ -53,7 +53,10 @@ const PROGRAMS = [
     const mapStart = prodSrc.indexOf('const KNOWN_PROGRAM_NAMES = new Map([');
     if (mapStart === -1) throw new Error('provenance: could not locate the KNOWN_PROGRAM_NAMES map in production solana.js');
     const mapEnd = prodSrc.indexOf('])', mapStart);
-    const mapBlock = prodSrc.slice(mapStart, mapEnd === -1 ? undefined : mapEnd);
+    // CR #414: fail closed if the map terminator is missing — never slice to EOF
+    // (that would broaden the search past the map and let later mentions satisfy it).
+    if (mapEnd === -1) throw new Error('provenance: could not locate the KNOWN_PROGRAM_NAMES map terminator "])" — refusing to scan beyond the map');
+    const mapBlock = prodSrc.slice(mapStart, mapEnd);
     const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const p of PROGRAMS) {
         const keyRe = new RegExp("\\[\\s*'" + esc(p.id) + "'\\s*,");
