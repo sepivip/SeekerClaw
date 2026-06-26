@@ -7,9 +7,10 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 
-const { BOT_TOKEN, log, workDir, getOwnerId } = require('./config');
+const { BOT_TOKEN, log, workDir, getOwnerId, RICH_MESSAGES_ENABLED } = require('./config');
 const { redactSecrets } = require('./security');
 const { httpRequest } = require('./http');
+const { sanitizeRichMarkdown } = require('./rich-markdown');
 
 // ============================================================================
 // TELEGRAM API
@@ -727,6 +728,72 @@ function classifyTelegramOutcome(result, error) {
     return { verdict: 'fallback', desc };
 }
 
+// BAT-1050 P1A: Rich Messages (Bot API 10.1) budget + method-availability cache.
+// _richMethodAvailable: null=untried, true=works, false=unsupported by this Bot
+// API (stop probing for the rest of the run so we don't add latency before every
+// message).
+const RICH_MAX_CHARS = 32768; // Rich budget (vs 4096 classic), counted in UTF-8 bytes.
+let _richMethodAvailable = null;
+
+// Try sending USER content as a Rich Message (posture A). Returns { delivered, ret? }.
+//   delivered:false -> caller falls back to the classic chunked HTML pipeline (the
+//                      rollout source of truth); not a duplicate (Rich didn't land).
+//   delivered:true  -> sent OR possibly-delivered (transport error) — caller must
+//                      NOT also send via classic (NO-DOUBLE-DELIVERY).
+async function richTrySend(chatId, text, replyTo, buttons) {
+    if (!RICH_MESSAGES_ENABLED || _richMethodAvailable === false) return { delivered: false };
+    // Over the Rich budget -> let the classic chunked path handle it.
+    if (Buffer.byteLength(text, 'utf8') > RICH_MAX_CHARS) return { delivered: false };
+
+    const payload = {
+        chat_id: chatId,
+        // Posture A: sanitize agent markdown (escape raw HTML, neuter bad-scheme
+        // links + images) before it reaches the server-side Rich parser.
+        rich_message: { markdown: sanitizeRichMarkdown(text), skip_entity_detection: true },
+    };
+    // reply_parameters (not the deprecated reply_to_message_id) for the Rich path;
+    // allow_sending_without_reply so a deleted reply target never loses the message.
+    if (replyTo != null) payload.reply_parameters = { message_id: replyTo, allow_sending_without_reply: true };
+    if (buttons) payload.reply_markup = { inline_keyboard: buttons };
+
+    let outcome, result = null;
+    try {
+        result = await telegram('sendRichMessage', payload);
+        outcome = classifyTelegramOutcome(result, null);
+    } catch (e) {
+        outcome = classifyTelegramOutcome(null, e);
+    }
+
+    if (outcome.verdict === 'ok') {
+        _richMethodAvailable = true;
+        const mid = result.result && result.result.message_id;
+        if (mid != null) {
+            recordSentMessage(chatId, mid, text);
+            return { delivered: true, ret: { messageId: mid } };
+        }
+        return { delivered: true };
+    }
+
+    if (outcome.verdict === 'uncertain') {
+        // Transport error after the POST — possibly delivered. NO-DOUBLE-DELIVERY:
+        // do NOT fall back to classic (would risk a duplicate).
+        log(`sendRichMessage transport error (possibly delivered; no classic fallback): ${outcome.desc}`, 'WARN');
+        return { delivered: true };
+    }
+
+    // Any other non-delivery (deterministic rejection, 429/5xx, unsupported method)
+    // means Rich did NOT land -> fall back to the classic pipeline (not a
+    // duplicate). If the method itself is unsupported, stop probing this run.
+    const desc = (outcome.desc || '').toLowerCase();
+    if (desc.includes('method not found') || desc.includes('not found') || (result && result.error_code === 404)) {
+        _richMethodAvailable = false;
+        log('sendRichMessage unsupported by this Bot API — disabling Rich for this run; using classic pipeline', 'WARN');
+    } else {
+        log(`sendRichMessage failed (${outcome.verdict}: ${outcome.desc}) — falling back to classic HTML`, 'WARN');
+    }
+    return { delivered: false };
+}
+
 async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = {}) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
@@ -742,6 +809,14 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = 
     if (opts && opts.plainOnly) {
         return sendPlainChunks(chatId, text, replyTo, buttons);
     }
+
+    // BAT-1050 P1A: try Rich Messages first (flag-gated; OFF by default). On any
+    // non-delivery it returns { delivered:false } and we fall through to the
+    // classic chunked HTML pipeline below (the rollout source of truth). A
+    // possibly-delivered transport error returns { delivered:true } so we do NOT
+    // duplicate it on the classic path.
+    const rich = await richTrySend(chatId, text, replyTo, buttons);
+    if (rich.delivered) return rich.ret;
 
     // Telegram max message length is 4096 — use markdown-aware chunking
     const chunks = chunkMarkdown(text);
@@ -1207,6 +1282,7 @@ module.exports = {
     recordSentMessage,
     sendMessage,
     sendMessageSystem,
+    richTrySend,
     classifyTelegramOutcome,
     sendTyping,
     deferStatus,

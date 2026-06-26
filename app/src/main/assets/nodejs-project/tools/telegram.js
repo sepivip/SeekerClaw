@@ -8,13 +8,13 @@ const {
 } = require('../config');
 
 const {
-    safePath,
+    safePath, redactSecrets,
 } = require('../security');
 
 const {
     telegram, telegramSendFile, detectTelegramFileType,
     cleanResponse, toTelegramHtml, stripMarkdown,
-    recordSentMessage, classifyTelegramOutcome,
+    recordSentMessage, classifyTelegramOutcome, richTrySend,
 } = require('../telegram');
 
 const tools = [
@@ -50,7 +50,7 @@ const tools = [
         input_schema: {
             type: 'object',
             properties: {
-                text: { type: 'string', description: 'Message text to send (Markdown formatting supported; converted to Telegram HTML). Max 4096 characters — for long responses use the default sendMessage().' },
+                text: { type: 'string', description: 'Message text to send. Markdown formatting supported. Up to 32768 characters when Rich Messages are enabled (the classic fallback handles ~4096); for long multi-message responses, reply normally instead.' },
                 buttons: {
                     type: 'array',
                     description: 'Optional inline keyboard rows. Each row is an array of button objects with "text" (display label), "callback_data" (value sent back when tapped, max 64 bytes), and optional "style" ("destructive" for red, "primary" for blue). Example: [[{"text": "\u2705 Confirm", "callback_data": "yes", "style": "primary"}, {"text": "\u274C Cancel", "callback_data": "no"}]]',
@@ -156,7 +156,7 @@ const handlers = {
     async telegram_send(input, chatId) {
         const text = input.text;
         if (!text) return { error: 'text is required' };
-        if (text.length > 4096) return { error: 'text exceeds Telegram 4096 character limit' };
+        if (text.length > 32768) return { error: 'text exceeds the 32768-character Rich Message limit' };
         if (!chatId) return { error: 'No active chat' };
         // #298: Heartbeat/cron use synthetic string chatIds (e.g. "__heartbeat__",
         // "cron:abc") — not valid Telegram targets. Heartbeat alerts are sent via
@@ -177,8 +177,22 @@ const handlers = {
             }
         }
         try {
-            const cleaned = cleanResponse(text);
+            // Redaction parity with sendMessage (BAT-1050): scrub leaked secrets
+            // before either the Rich or the classic send.
+            const cleaned = redactSecrets(cleanResponse(text));
             const replyMarkup = input.buttons ? { inline_keyboard: input.buttons } : undefined;
+
+            // BAT-1050 P1A: try Rich Messages first (flag-gated; shares richTrySend
+            // with sendMessage). On non-delivery, fall through to classic HTML/plain.
+            const rich = await richTrySend(chatId, cleaned, null, input.buttons);
+            if (rich.delivered) {
+                if (rich.ret && rich.ret.messageId != null) {
+                    log(`telegram_send: sent rich message ${rich.ret.messageId}`, 'DEBUG');
+                    return { ok: true, message_id: rich.ret.messageId, chat_id: chatId };
+                }
+                return { ok: false, warning: 'Rich message sent but no message_id was returned (or the connection dropped after sending); not retried to avoid a duplicate.' };
+            }
+
             // Try HTML first; fall back to plain ONLY on a deterministic rejection.
             // NO-DOUBLE-DELIVERY (BAT-1050): a transport throw means the message may
             // already be delivered — do NOT resend (that would duplicate it).
