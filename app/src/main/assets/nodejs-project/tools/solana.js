@@ -3698,25 +3698,36 @@ const handlers = {
             const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
             const WSOL_MINT = 'So11111111111111111111111111111111111111112';
             const _stdFromProgram = (pid) => pid === TOKEN_PROGRAM ? 'classic' : (pid === TOKEN_2022_PROGRAM ? 'token_2022' : 'unknown');
+            // CodeRabbit #412: guard `decimals` from JSON (string / NaN / negative / huge →
+            // malformed balance or a padStart over-allocation). Clamp to a sane [0,18] integer.
+            const _safeDecimals = (d) => (typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= 18) ? d : 0;
             const _atomicToDecimalStr = (raw, decimals) => {
-                const s = raw.toString().padStart(decimals + 1, '0');
-                const intPart = s.slice(0, s.length - decimals) || '0';
-                const fracPart = decimals > 0 ? s.slice(s.length - decimals).replace(/0+$/, '') : '';
+                const dec = _safeDecimals(decimals);
+                const s = raw.toString().padStart(dec + 1, '0');
+                const intPart = s.slice(0, s.length - dec) || '0';
+                const fracPart = dec > 0 ? s.slice(s.length - dec).replace(/0+$/, '') : '';
                 return fracPart ? `${intPart}.${fracPart}` : intPart;
             };
 
             const rows = [];
             if (hasSolLine) {
+                // CodeRabbit #412: derive the SOL balance from `amount` (lamports) when the
+                // ui fields are absent — never silently value a non-zero SOL as 0.
+                let solBalance = (data.uiAmountString != null) ? String(data.uiAmountString)
+                    : (data.uiAmount != null) ? String(data.uiAmount) : null;
+                if (solBalance == null && data.amount != null) {
+                    try { solBalance = _atomicToDecimalStr(BigInt(data.amount), 9); } catch (_) { solBalance = '0'; }
+                }
                 rows.push({
                     address: WSOL_MINT, mint: WSOL_MINT, tokenStandard: 'native_sol', decimals: 9,
-                    amountRaw: String(data.amount ?? ''), balance: String(data.uiAmountString ?? data.uiAmount ?? '0'),
+                    amountRaw: String(data.amount ?? ''), balance: solBalance ?? '0',
                     accountCount: 1, excludeFromNetWorth: false, accounts: [],
                 });
             }
             for (const [mint, entries] of Object.entries(tokensByMint || {})) {
                 const accts = Array.isArray(entries) ? entries : (entries ? [entries] : []);
                 if (accts.length === 0) continue;
-                const decimals = (accts[0] && accts[0].decimals != null) ? accts[0].decimals : 0;
+                const decimals = _safeDecimals(accts[0] && accts[0].decimals);
                 let rawSum = 0n;
                 for (const a of accts) { try { rawSum += BigInt(a.amount); } catch (_) { /* skip unparseable */ } }
                 if (rawSum === 0n) continue; // drop zero-balance mints
@@ -3725,10 +3736,11 @@ const handlers = {
                     decimals, amountRaw: rawSum.toString(), balance: _atomicToDecimalStr(rawSum, decimals),
                     accountCount: accts.length,
                     excludeFromNetWorth: accts.some(a => a.excludeFromNetWorth === true),
+                    // CodeRabbit #412: ?? null so JSON.stringify keeps a stable shape per holding.
                     accounts: accts.map(a => ({
-                        account: a.account, amountRaw: String(a.amount), uiAmountString: a.uiAmountString,
-                        isFrozen: a.isFrozen, isAssociatedTokenAccount: a.isAssociatedTokenAccount,
-                        excludeFromNetWorth: a.excludeFromNetWorth, lamports: a.lamports, programId: a.programId,
+                        account: a.account ?? null, amountRaw: String(a.amount), uiAmountString: a.uiAmountString ?? null,
+                        isFrozen: a.isFrozen ?? null, isAssociatedTokenAccount: a.isAssociatedTokenAccount ?? null,
+                        excludeFromNetWorth: a.excludeFromNetWorth ?? null, lamports: a.lamports ?? null, programId: a.programId ?? null,
                     })),
                 });
             }
@@ -3740,18 +3752,23 @@ const handlers = {
                 if (mints.length) priceMap = (await jupiterPrice(mints)) || {};
             } catch (e) { log(`[Jupiter Holdings] batch price lookup failed (values → N/A): ${e.message}`, 'DEBUG'); }
 
-            let pricedCount = 0, unpricedCount = 0, totalUsd = 0;
+            // CodeRabbit #412: totalValueUsd must reflect NET-WORTH-CONTRIBUTING rows
+            // (not excludeFromNetWorth). If an included holding is unpriced while only
+            // excluded rows are priced, the total is "N/A" — never a false $0.00.
+            let pricedCount = 0, unpricedCount = 0, totalUsd = 0, contributingPriced = 0, contributingUnpriced = 0;
             for (const r of rows) {
+                const contributes = !r.excludeFromNetWorth;
                 const p = priceMap[r.address];
                 const usd = p && (p.usdPrice ?? p.price);
                 if (usd != null && isFinite(Number(usd))) {
                     r.price = `$${Number(usd)}`;
                     const v = Number(r.balance) * Number(usd);
-                    r.valueUsd = `$${v.toFixed(2)}`;
+                    r.valueUsd = `$${(isFinite(v) ? v : 0).toFixed(2)}`;
                     pricedCount++;
-                    if (!r.excludeFromNetWorth && isFinite(v)) totalUsd += v;
+                    if (contributes && isFinite(v)) { totalUsd += v; contributingPriced++; }
                 } else {
                     r.price = 'N/A'; r.valueUsd = 'N/A'; unpricedCount++; // never fake $0.00
+                    if (contributes) contributingUnpriced++;
                 }
                 try { const t = await resolveToken(r.address); if (t && t.symbol && t.symbol !== '???') { r.symbol = t.symbol; r.name = t.name; } } catch (_) { /* metadata best-effort */ }
             }
@@ -3760,8 +3777,8 @@ const handlers = {
                 success: true,
                 wallet: walletAddress,
                 count: rows.length,
-                totalValueUsd: pricedCount > 0 ? `$${totalUsd.toFixed(2)}` : 'N/A',
-                valuationPartial: unpricedCount > 0,
+                totalValueUsd: contributingPriced > 0 ? `$${totalUsd.toFixed(2)}` : 'N/A',
+                valuationPartial: contributingUnpriced > 0,
                 pricedCount, unpricedCount,
                 holdings: rows,
             };

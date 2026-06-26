@@ -1254,6 +1254,22 @@ function _burnerOff() {
         assert.match(m[1], /best-effort|N\/A|never reports/i);
     });
 
+    await check('BAT-1056 holdings (CodeRabbit #412): included holding unpriced + only excluded row priced → total N/A, not $0.00', async () => {
+        // USDC excluded+priced, PYUSD included+unpriced, SOL included+unpriced.
+        mockJupiterRequestFn = () => _holdingsResp({ [_HOLD_USDC]: [_holdEntry({ excludeFromNetWorth: true })], [_HOLD_PYUSD]: [_holdEntry({ programId: _TKN_2022_PROGRAM })] });
+        mockJupiterPriceFn = () => ({ [_HOLD_USDC]: { usdPrice: 1 } }); // only the excluded row is priced
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        assert.strictEqual(r.totalValueUsd, 'N/A', 'a net-worth holding is unpriced → total must be N/A, never a false $0.00');
+        assert.strictEqual(r.valuationPartial, true);
+    });
+
+    await check('BAT-1056 holdings (CodeRabbit #412): SOL balance derived from amount when uiAmountString absent', async () => {
+        mockJupiterRequestFn = () => ({ status: 200, data: JSON.stringify({ amount: '43000000', tokens: {} }) }); // no uiAmountString/uiAmount
+        const r = await tools.handlers.jupiter_wallet_holdings({ address: 'Wa11et1111111111111111111111111111111111111' });
+        const sol = r.holdings.find(h => h.tokenStandard === 'native_sol');
+        assert.strictEqual(sol.balance, '0.043', 'derived from 43000000 lamports / 1e9, not silently 0');
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} failure(s).`);
         process.exit(1);
