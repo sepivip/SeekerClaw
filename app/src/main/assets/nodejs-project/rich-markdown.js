@@ -19,7 +19,10 @@
 // builder (posture B / P1B) replaces this with allowlisted InputRichMessage.html.
 //
 // Known P1A limitations (acceptable for the flag-gated probe; tightened in P1B):
-//   - link/image URLs containing ')' are not matched by the simple regex;
+//   - link/image URLs may contain balanced single-level parens (e.g.
+//     javascript:alert(1) -> still neutered, .../Foo_(disambiguation) -> kept);
+//     only deeply NESTED parens still truncate (rare — author with the
+//     <angle-bracket> URL form upstream if ever needed);
 //   - indented (4-space) code blocks are not protected (fenced + inline only).
 
 'use strict';
@@ -61,13 +64,13 @@ function sanitizeRichMarkdown(input) {
     //    keep the alt text as plain prose — no remote fetch, no custom emoji.
     //    Also consume an optional quoted title/caption (Bot API 10.1 allows
     //    ![alt](url "caption")) so a titled image can't slip past.
-    s = s.replace(/!\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');
+    s = s.replace(/!\[([^\]]*)\]\((?:[^()\s]+|\([^()\s]*\))*(?:\s+"[^"]*")?\)/g, '$1');
 
     // 3. Neuter links whose scheme is outside {https, mailto}: keep the link only
     //    if allowed, otherwise drop it to its visible text. The optional quoted
     //    title (Bot API 10.1: [text](url "title")) is matched but not captured,
     //    so a bad-scheme link with a title can't bypass the allowlist.
-    s = s.replace(/\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (full, text, url) => {
+    s = s.replace(/\[([^\]]*)\]\(((?:[^()\s]+|\([^()\s]*\))+)(?:\s+"[^"]*")?\)/g, (full, text, url) => {
         const scheme = schemeOf(url);
         return scheme && ALLOWED_LINK_SCHEMES.has(scheme) ? full : text;
     });

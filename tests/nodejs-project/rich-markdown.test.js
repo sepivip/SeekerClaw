@@ -54,6 +54,23 @@ eq('https link WITH title kept', sanitizeRichMarkdown('[ok](https://x.com "t")')
 eq('tg:// link WITH title still neutered (no bypass)', sanitizeRichMarkdown('[click](tg://user?id=1 "title")'), 'click');
 
 console.log();
+console.log('── parenthesized URLs (BAT-1050 device-test regression) ──');
+// A bad-scheme URL with balanced parens (e.g. javascript:alert(1)) must neuter
+// CLEANLY — the original [^)\s]+ regex stopped at the first inner ')' and leaked
+// a dangling ')'. Device test (safety scenario) surfaced this as "a js link)".
+eq('js link w/ inner parens neutered, no stray paren',
+    sanitizeRichMarkdown('a [js link](javascript:alert(1)) b'), 'a js link b');
+eq('js link w/ deeper inner parens neutered',
+    sanitizeRichMarkdown('[x](javascript:alert(document.cookie))'), 'x');
+// A legit https URL with balanced parens (Wikipedia disambiguation, etc.) must be
+// KEPT intact — not truncated at the first inner ')'.
+eq('https URL w/ balanced parens kept intact',
+    sanitizeRichMarkdown('[Mercury](https://en.wikipedia.org/wiki/Mercury_(planet))'),
+    '[Mercury](https://en.wikipedia.org/wiki/Mercury_(planet))');
+eq('image w/ paren URL neutered to alt',
+    sanitizeRichMarkdown('![pic](https://e.com/a_(b).png)'), 'pic');
+
+console.log();
 console.log('── image syntax neutered (no remote fetch / custom emoji) ──');
 eq('remote image neutered to alt', sanitizeRichMarkdown('![pic](https://img.com/a.png)'), 'pic');
 eq('tg://emoji custom emoji neutered to alt', sanitizeRichMarkdown('![👍](tg://emoji?id=5)'), '👍');
