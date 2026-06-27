@@ -183,7 +183,7 @@ const handlers = {
                     // short/ambiguous keywords — \b does NOT work across '_' (underscore is a
                     // \w char, so \border\b never matches "cancel_order"). Long unambiguous
                     // keywords stay plain substrings.
-                    if (/(^|[\s_\-])(confirm|approve|cancel|deny|reject|authori[sz]e|proceed)/.test(_hay)
+                    if (/(^|[\s_\-])(confirm|approve|cancel|deny|reject|authori[sz]e|proceed|retry)/.test(_hay)
                         && /(swap|send|transfer|payment|usdc|usdt|pyusd|token|trade|transaction|burner|wallet|trigger|withdraw|deposit)|(?<![a-z0-9])(pay|sol|tx|caps?|dca|order|limit|sign)(?![a-z0-9])/.test(_hay)) {
                         return { error: 'confirmation_buttons_not_allowed', detail: `Button "${(btn.text || btn.callback_data).slice(0, 40)}" looks like a confirmation for a fund-moving action. Inline buttons cannot authorize swaps/sends/payments/wallet changes — the system confirmation gate handles that (it asks the user for YES). Call the gated tool directly; do not add your own Confirm/Cancel buttons.` };
                     }

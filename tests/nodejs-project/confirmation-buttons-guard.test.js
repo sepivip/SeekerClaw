@@ -78,7 +78,7 @@ async function runGuard() {
     const REJECT = 'confirmation_buttons_not_allowed';
 
     // Rejected: confirm/approve/cancel of a fund action (the observed device cases)
-    for (const cb of ['confirm_swap', 'confirm_usdc_send', 'confirm_pyusd_swap', 'confirm_swap_back', 'approve_send', 'cancel_order']) {
+    for (const cb of ['confirm_swap', 'confirm_usdc_send', 'confirm_pyusd_swap', 'confirm_swap_back', 'approve_send', 'cancel_order', 'retry_swap', 'confirm_pyusd_retry']) {
         await check(`guard: rejects callback_data "${cb}"`, async () => {
             const r = await send([[{ text: 'tap', callback_data: cb }]]);
             assert.strictEqual(r.error, REJECT, JSON.stringify(r));

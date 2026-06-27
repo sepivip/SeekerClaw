@@ -832,7 +832,7 @@ The confirmation gate (`confirmation/policy.js getConfirmationPolicy`, called in
 | Action | Gate outcome |
 |---|---|
 | Burner SPENDS USDC or native SOL, routes to burner, **under cap** | **Silent** (no prompt) — the cap pre-authorizes it |
-| Burner SPENDS USDC/SOL **over cap** | Block (`burner_cap_exceeded`) — raise caps, lower amount, or use main (MWA) |
+| Burner spend of USDC/SOL **over cap** | Default/auto flow falls back to the **main wallet (MWA) confirmation**. A *forced* burner (`source="burner"`, or a swap that doesn't opt into main fallback) returns `burner_cap_exceeded` instead → raise caps, lower amount, or use main. |
 | Spend any **non-USDC/SOL token** (e.g. PYUSD, BONK) — including **converting a held token back** to USDC/SOL (BAT-1057) | **Confirm** — disposing of a non-cap asset is not pre-authorized by the USDC/SOL caps |
 | **Main-routed** (MWA) action | **Confirm** (the wallet app's own approval) |
 | `wallet_set_caps`, `agent_pay` POST, android_sms/call/camera/location | **Confirm** (always) |
