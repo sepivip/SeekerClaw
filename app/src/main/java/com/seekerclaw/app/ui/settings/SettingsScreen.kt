@@ -94,6 +94,7 @@ import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.solana.SolanaAuthActivity
+import com.seekerclaw.app.solana.SolanaWalletManager
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
@@ -700,6 +701,12 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedButton(
                         onClick = {
+                            // BAT-1021: clear the process-local MWA auth-token cache in
+                            // lockstep with the persisted wallet address so the next
+                            // connect attempt reliably triggers a fresh consent popup
+                            // (instead of silently reusing a stale token against a
+                            // wallet the user just disconnected from).
+                            SolanaWalletManager.clearAuthToken()
                             ConfigManager.clearWalletAddress(context)
                             walletAddress = null
                             walletError = null
@@ -879,15 +886,20 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.JUPITER_API_KEY,
                 )
 
-                // ── Helius API Key (NFT holdings) ─────────────────────────────
+                // ── Helius API Key (Solana RPC + NFT holdings — BAT-1000) ─────
+                // BAT-1000: re-framed as RPC-first. Key drives both the
+                // general Solana RPC URL (balances, swaps, jupiter, agent_pay,
+                // etc.) AND NFT holdings. "Not set" hint warns about public-
+                // RPC unreliability since that's the actual failure mode
+                // users see (timeouts → empty balance reads).
                 Spacer(modifier = Modifier.height(20.dp))
                 ConfigField(
                     label = "Helius API Key",
                     value = config?.heliusApiKey?.let { key ->
-                        if (key.isBlank()) "Not set — NFT holdings disabled"
-                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)}"
-                        else "*".repeat(key.length)
-                    } ?: "Not set — NFT holdings disabled",
+                        if (key.isBlank()) "Not set — using public Solana RPC (slow, rate-limited). NFT holdings disabled."
+                        else if (key.length > 12) "${key.take(8)}${"*".repeat(8)}${key.takeLast(4)} — Solana RPC + NFT holdings"
+                        else "${"*".repeat(key.length)} — Solana RPC + NFT holdings"
+                    } ?: "Not set — using public Solana RPC (slow, rate-limited). NFT holdings disabled.",
                     onClick = {
                         editField = "heliusApiKey"
                         editLabel = "Helius API Key"
@@ -1186,6 +1198,11 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    // BAT-1021 same-class sweep: clearConfig clears the wallet
+                    // address as a side effect of clearing all prefs, so the
+                    // MWA auth-token cache must be cleared in lockstep — same
+                    // invariant as the Disconnect Wallet button.
+                    SolanaWalletManager.clearAuthToken()
                     SeekerClawService.stop(context)
                     ConfigManager.clearConfig(context)
                     Analytics.featureUsed("config_reset")

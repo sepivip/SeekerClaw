@@ -178,3 +178,47 @@ if (synthIssues.length === 0) {
     process.exit(1);
 }
 console.log(`✓ Meta-check: validator correctly flags the BAT-664 bug shape (${synthIssues.length} issue${synthIssues.length === 1 ? '' : 's'})`);
+
+// ── PR #388 R9: flag-on schema smoke (Jupiter Trigger V2) ───────────────────
+// The jupiter_trigger_create schema is constructed flag-aware at module load
+// (see tools/solana.js IIFE around line 145). The default flag-off pass above
+// only validates the V1 schema. Reload tools/index.js with
+// `config.useTriggerV2: true` so the V2 schema (incl. its `anyOf` expiry
+// disjunction) goes through findSchemaIssues. Without this, a flag-on
+// rollout could ship a malformed V2 schema undetected — the whole toolset
+// would be rejected by the Anthropic API on first agent turn.
+require.cache[configPath].exports.config = { useTriggerV2: true };
+for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(BUNDLE) && key !== configPath) delete require.cache[key];
+}
+const { TOOLS: TOOLS_V2 } = require(path.join(BUNDLE, 'tools', 'index.js'));
+const triggerCreateV2 = TOOLS_V2.find(t => t.name === 'jupiter_trigger_create');
+assert.ok(triggerCreateV2, 'jupiter_trigger_create must be present in flag-on load');
+assert.ok(Array.isArray(triggerCreateV2.input_schema.anyOf),
+    'V2 schema must declare an anyOf for the expiry disjunction (PR #388 R7 contract)');
+assert.ok(triggerCreateV2.input_schema.required.includes('triggerPriceUsd'),
+    'V2 schema must require triggerPriceUsd (PR #388 R6 contract)');
+const v2Issues = findSchemaIssues(triggerCreateV2.input_schema, '[jupiter_trigger_create.V2].input_schema');
+if (v2Issues.length > 0) {
+    console.error('\n✗ V2 jupiter_trigger_create schema has issues (flag-on load):');
+    for (const issue of v2Issues) console.error(`    - ${issue}`);
+    console.error('\nThis would take down the entire agent on a flag-on rollout.');
+    process.exit(1);
+}
+// Walk the full flag-on TOOLS set too — any other tool that conditions its
+// schema on the flag is now covered.
+let v2Failed = 0;
+const v2AllIssues = [];
+for (const tool of TOOLS_V2) {
+    const issues = findSchemaIssues(tool.input_schema, `[V2][${tool.name}].input_schema`);
+    if (issues.length > 0) { v2Failed++; v2AllIssues.push({ tool: tool.name, issues }); }
+}
+if (v2Failed > 0) {
+    console.error(`\n✗ ${v2Failed} tool(s) have schema issues under useTriggerV2=true:\n`);
+    for (const { tool, issues } of v2AllIssues) {
+        console.error(`  ${tool}:`);
+        for (const issue of issues) console.error(`    - ${issue}`);
+    }
+    process.exit(1);
+}
+console.log(`✓ Flag-on (useTriggerV2=true): all ${TOOLS_V2.length} schemas pass + V2 jupiter_trigger_create has anyOf expiry + requires triggerPriceUsd`);

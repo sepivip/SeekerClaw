@@ -72,13 +72,14 @@ const tools = [
             'main wallet (MWA-backed; pubkey null until user authorizes). Network is Solana mainnet. ' +
             'Burner shape: { pubkey, balance: { sol, usdc }, balanceAvailable, spentToday: { sol, usdc }, ' +
             'caps: { perTxSol, perTxUsdc, dailySol, dailyUsdc }, remainingDaily: { sol, usdc }, display: {...}, network }. ' +
-            'BALANCE NOTE: `burner.balance.sol` and `burner.balance.usdc` are currently always `null` ' +
-            '(and `display.balanceSol` / `display.balanceUsdc` are the literal string "unavailable") — ' +
-            'the burner balance RPC fetch is a known follow-up, not wired yet. `balanceAvailable: false` ' +
-            'flags this. Caps, today\'s spend, and remainingDaily ARE real (atomic-unit strings; matching ' +
-            'decimals appear under display.*). Main wallet `balance` is fetched live from RPC and IS real. ' +
-            'When asked about the burner balance, say "burner balance is temporarily unavailable" or fetch ' +
-            'the main wallet via solana_balance — never read burner.balance.* and report it as "0". ' +
+            'BALANCE NOTE (BAT-1001): `burner.balance.sol` and `burner.balance.usdc` are now live-fetched ' +
+            'from mainnet RPC by the Android bridge (via the same SolanaBalanceFetcher the Settings UI uses). ' +
+            'Atomic-unit decimal strings when present. When `balanceAvailable: false` (and balance.sol / balance.usdc ' +
+            'are null + display.balanceSol / display.balanceUsdc are "unavailable"), that means the RPC call ' +
+            'transiently failed — NOT that the wallet holds zero. Say "burner balance is temporarily unavailable" ' +
+            'and suggest a retry (or that the user add a Helius API key in Settings for more reliable RPC); ' +
+            'NEVER report `null` as "0". Caps, today\'s spend, and remainingDaily ARE real (atomic-unit strings; ' +
+            'matching decimals appear under display.*). Main wallet `balance` is fetched live from RPC and IS real. ' +
             'Use this before deciding burner-vs-main routing or when the user asks "what wallets do I have." ' +
             'Read-only — no confirmation needed.',
         input_schema: {
@@ -120,11 +121,16 @@ const handlers = {
      * pubkey + balance from existing helpers. Output schema documented in
      * BAT-582 Phase 4 spec.
      *
-     * BAT-582 R2: balance fields surface as null + a "balance unavailable"
-     * display string until the RPC fetch is wired (the previous "0"-stub
-     * was misleading: a configured-but-funded burner read like an empty
-     * one). Caps and spend totals are still real numbers — they live in
-     * Android-local state and don't need an RPC fetch.
+     * BAT-1001 PR-B: balance fields are now live-fetched. /burner/status
+     * emits balanceSol / balanceUsdc as atomic-unit decimal strings when
+     * SolanaBalanceFetcher succeeds, OMITS both fields on fetcher null
+     * OR RPC failure (never sent as "0" or null on the wire). This
+     * handler distinguishes the two cases via `status.balanceSol != null`:
+     * present → use the value; absent → balance.sol stays null +
+     * balanceAvailable becomes false → wallet description prompt teaches
+     * the agent to surface "balance temporarily unavailable" rather
+     * than fabricating "0". Caps and spend totals are still Android-
+     * local state — no RPC fetch.
      */
     async wallet_status(_input, _chatId) {
         // 1) Burner — read /burner/status directly so we can include cap fields.
@@ -138,10 +144,15 @@ const handlers = {
                 const capDailyUsdc = String(status.capDailyUsdc || '0');
                 const spentTodaySol  = String(status.spentTodaySol  || '0');
                 const spentTodayUsdc = String(status.spentTodayUsdc || '0');
-                // BAT-582 R2: /burner/status no longer emits balanceSol /
-                // balanceUsdc until the RPC fetch lands. Use null to mark
-                // "unavailable" rather than fabricating "0" — the agent
-                // and UI both check for null and surface the right copy.
+                // BAT-1001 PR-B: /burner/status emits balanceSol /
+                // balanceUsdc as atomic-unit decimal strings when the
+                // RPC fetch succeeds, OMITS both fields when the
+                // SolanaBalanceFetcher returns null (RPC failure /
+                // timeout / parse error). Field-absent → balance.sol
+                // stays null + balanceAvailable=false → "balance
+                // temporarily unavailable" prompt copy fires.
+                // Field-present → use the value as-is. Never emit "0"
+                // for unknown — that would silently lie to the user.
                 const hasSolBalance  = (status.balanceSol  != null);
                 const hasUsdcBalance = (status.balanceUsdc != null);
                 burnerOut = {

@@ -53,7 +53,7 @@ const tools = [
                 text: { type: 'string', description: 'Message text to send. Markdown formatting supported. Up to 32768 UTF-8 bytes when Rich Messages are enabled (the classic fallback handles ~4096); for long multi-message responses, reply normally instead.' },
                 buttons: {
                     type: 'array',
-                    description: 'Optional inline keyboard rows. Each row is an array of button objects with "text" (display label), "callback_data" (value sent back when tapped, max 64 bytes), and optional "style" ("destructive" for red, "primary" for blue). Example: [[{"text": "\u2705 Confirm", "callback_data": "yes", "style": "primary"}, {"text": "\u274C Cancel", "callback_data": "no"}]]',
+                    description: 'Optional inline keyboard rows for NAVIGATION / non-sensitive choices ONLY. Each button: "text" (display label), "callback_data" (value sent back when tapped, max 64 bytes), optional "style" ("destructive" red / "primary" blue). A button tap is just an ordinary chat message \u2014 it does NOT authorize anything. Do NOT use buttons to confirm/approve/cancel fund-moving or confirmation-gated actions (swaps, sends, payments, wallet/cap changes) \u2014 those have a dedicated system confirmation gate that asks for YES. Example: [[{"text": "\uD83D\uDCCA Show more", "callback_data": "show_more", "style": "primary"}, {"text": "\uD83D\uDD04 Refresh", "callback_data": "refresh"}]]',
                     items: {
                         type: 'array',
                         items: {
@@ -170,6 +170,23 @@ const handlers = {
                 for (const btn of row) {
                     if (!btn.text || !btn.callback_data) return { error: 'Each button must have "text" and "callback_data"' };
                     if (Buffer.byteLength(btn.callback_data, 'utf8') > 64) return { error: `callback_data "${btn.callback_data.slice(0, 20)}..." exceeds Telegram 64-byte limit` };
+                    // BAT-1067: deterministic backstop — inline buttons must NEVER act as a
+                    // confirmation for a fund-moving / gated action. A tap is just a chat
+                    // message and can't satisfy the system confirmation gate (which owns
+                    // confirm/cancel for those tools); a "Confirm swap" button only creates a
+                    // confusing double-confirm. Reject a button whose callback_data OR label is
+                    // a confirm/approve/cancel of a fund action. Narrow by design: BOTH a
+                    // confirm-verb AND a fund keyword must be present, so navigation buttons
+                    // (show_more, refresh, pick_token) are unaffected.
+                    const _hay = `${btn.callback_data} ${btn.text || ''}`.toLowerCase();
+                    // NB: use a separator-aware boundary (?<![a-z0-9])…(?![a-z0-9]) for the
+                    // short/ambiguous keywords — \b does NOT work across '_' (underscore is a
+                    // \w char, so \border\b never matches "cancel_order"). Long unambiguous
+                    // keywords stay plain substrings.
+                    if (/(^|[\s_\-])(confirm|approve|cancel|deny|reject|authori[sz]e|proceed|retry)/.test(_hay)
+                        && /(swap|send|transfer|payment|usdc|usdt|pyusd|token|trade|transaction|burner|wallet|trigger|withdraw|deposit)|(?<![a-z0-9])(pay|sol|tx|caps?|dca|order|limit|sign)(?![a-z0-9])/.test(_hay)) {
+                        return { error: 'confirmation_buttons_not_allowed', detail: `Button "${(btn.text || btn.callback_data).slice(0, 40)}" looks like a confirmation for a fund-moving action. Inline buttons cannot authorize swaps/sends/payments/wallet changes — the system confirmation gate handles that (it asks the user for YES). Call the gated tool directly; do not add your own Confirm/Cancel buttons.` };
+                    }
                     if (btn.style && btn.style !== 'destructive' && btn.style !== 'primary') {
                         delete btn.style; // Strip invalid style rather than failing
                     }

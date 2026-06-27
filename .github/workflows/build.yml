@@ -66,14 +66,35 @@ jobs:
             agent-pay-preflight-balance \
             burner-cancel-zero-amount \
             burner-signer \
+            burner-signer-simulator \
             caps-preflight \
             confirmation-policy \
             confirmation-policy-burner \
+            confirmation-buttons-guard \
             system-prompt-wallets \
             wallet-registry \
             wallet-set-caps-errors \
             x402 \
-            x402-v2-tx
+            x402-v2-tx \
+            internal-control-server \
+            internal-control-server-token-rotation \
+            internal-control-server-proxy-passthrough \
+            bridge-token-reload \
+            verify-swap-transaction \
+            burner-policy \
+            burner-policy-carveout \
+            tools-solana-routing \
+            solana-send-guard \
+            solana-dca-routing \
+            tx-parser \
+            public-rpc-shaper \
+            skills-priority \
+            security-reject-block \
+            forward-dispatch-error \
+            spl-transfer-builder \
+            ata-derivation \
+            token2022-mint \
+            ci-coverage-manifest
           do
             echo "── $t ──"
             node "tests/nodejs-project/${t}.test.js"

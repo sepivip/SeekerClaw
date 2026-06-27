@@ -15,7 +15,14 @@ const {
     getOwnerId, setOwnerId,
     workDir, config, debugLog,
     USER_ENV_KEYS,
-    BRIDGE_TOKEN, // BAT-514: passed to internal-control-server for X-Bridge-Token auth
+    // BAT-1001 PR-B: replaces the startup-frozen BRIDGE_TOKEN import.
+    // internal-control-server.start receives a getter so the server's
+    // per-request token compare re-reads `filesDir/bridge_token` from
+    // disk and authenticates Kotlin POSTs against the CURRENT token
+    // even after a service-restart rotation. NodeControlClient.kt
+    // already sends the live ServiceState.bridgeToken per call; this
+    // brings the Node side to parity.
+    getBridgeToken,
 } = require('./config');
 
 process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err), 'ERROR'));
@@ -759,7 +766,9 @@ telegram('getMe')
             // requestReconcile callback is wired before the listener
             // accepts connections.
             internalControlServer.start({
-                bridgeToken: BRIDGE_TOKEN,
+                // BAT-1001 PR-B: getter, not snapshot. See config.js
+                // getBridgeToken + internal-control-server.js _route auth gate.
+                getBridgeToken: () => getBridgeToken(),
                 getDbSummary,
                 requestReconcile: (id) => mcpManager.requestReconcile(id),
                 flushShutdown: flushForShutdown,
@@ -900,7 +909,11 @@ telegram('getMe')
         startDbSummaryInterval();
         // BAT-514: see Telegram path comment above.
         internalControlServer.start({
-            bridgeToken: BRIDGE_TOKEN,
+            // BAT-1001 PR-B: getter, not snapshot. Matches the Telegram
+            // path above; both wire `() => getBridgeToken()` so a
+            // Kotlin-side token rotation is honored on the next call
+            // without restarting the server.
+            getBridgeToken: () => getBridgeToken(),
             getDbSummary,
             requestReconcile: (id) => mcpManager.requestReconcile(id),
             flushShutdown: flushForShutdown,

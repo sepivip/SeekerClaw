@@ -4,7 +4,23 @@
 
 const path = require('path');
 
-const { BRIDGE_TOKEN, config, log, workDir } = require('./config');
+// BAT-1001 PR-B: per-call getBridgeToken (not the startup-frozen
+// BRIDGE_TOKEN constant) so log redaction tracks Kotlin-side token
+// rotations. Pre-fix, a rotation mid-session left the redactor
+// matching the OLD token forever — any log line containing the NEW
+// token would leak it. The getter call is gated at the call site
+// (redactSecrets) on `msg.length >= _BRIDGE_TOKEN_MIN_LEN` so
+// messages too short to contain a UUID never hit the disk; longer
+// messages pay the fs.readFileSync (a 36-byte file from the OS
+// page cache, so cheap but not free).
+const { getBridgeToken, config, log, workDir } = require('./config');
+
+// Minimum length of a bridge_token (UUID, 36 chars: 32 hex + 4
+// dashes). Messages shorter than this can't contain a token, so we
+// skip the getter (avoids the fs.readFileSync entirely on short log
+// lines, which are the common case — most log lines are status
+// messages, not bridge call dumps).
+const _BRIDGE_TOKEN_MIN_LEN = 36;
 
 // ============================================================================
 // SECRET REDACTION
@@ -102,8 +118,14 @@ function redactSecrets(msg) {
     // Redact OpenAI API keys (sk-proj-..., sk-...)
     msg = msg.replace(/sk-proj-[a-zA-Z0-9_-]{20,}/g, 'sk-proj-***');
     msg = msg.replace(/sk-[a-zA-Z0-9_-]{20,}/g, 'sk-***');
-    // Redact bridge tokens (UUID format)
-    if (BRIDGE_TOKEN) msg = msg.replace(new RegExp(_escRx(BRIDGE_TOKEN), 'g'), '***bridge-token***');
+    // Redact bridge tokens (UUID format). BAT-1001: per-call read so a
+    // mid-session rotation doesn't leak the new token in any log line.
+    // Length-gate the getter call: msgs shorter than the UUID min
+    // length can't contain a token, so we skip the fs.readFileSync.
+    if (msg.length >= _BRIDGE_TOKEN_MIN_LEN) {
+        const bridgeToken = getBridgeToken();
+        if (bridgeToken) msg = msg.replace(new RegExp(_escRx(bridgeToken), 'g'), '***bridge-token***');
+    }
     // Redact Jupiter API key + MCP auth tokens (cached literal patterns)
     for (const { rx, replacement } of _dynamicPatterns) {
         msg = msg.replace(rx, replacement);
