@@ -2058,6 +2058,16 @@ const handlers = {
                 return SLIPPAGE_RETRY_PATTERNS.some((re) => re.test(_s));
             };
             const MAX_SWAP_RETRIES = 2;
+            // BAT-1066 (CodeRabbit #419): remediation text for the transient/retryable
+            // burner signing-gate errors below (fee_payer_mismatch, expected_delta_unbuildable)
+            // must be ROUTE-AWARE. A BAT-1057 conversion's input asset is held in the BURNER
+            // (that's why it routes there), so "run it from your main wallet" is NOT a valid
+            // fallback — the main wallet doesn't hold the token. These errors are transient,
+            // so the real remediation is to retry. For an ordinary burner swap, suggesting the
+            // main wallet IS valid (the user can redo the swap with main-wallet funds).
+            const _burnerSignFallbackHint = isConversion
+                ? 'This is transient (Jupiter routes / mint lookups vary between fetches) — ask the user to retry. The token being converted is held in the burner, so this can\'t be run from the main wallet.'
+                : 'Retry (Jupiter routes change), or run the swap from your main wallet.';
             let result;
             for (let _swapAttempt = 1; ; _swapAttempt++) {
                 try {
@@ -2195,7 +2205,7 @@ const handlers = {
                         log(`[Jupiter Ultra] fee_payer_mismatch: order fee payer ${feePayer} != burner taker ${userPublicKey}; sponsored signer-mode not wired — failing closed`, 'WARN');
                         return {
                             error: 'fee_payer_mismatch',
-                            reason: `This swap route's fee payer (${feePayer.slice(0, 4)}…${feePayer.slice(-4)}) differs from the burner, and a burner-built order can't be safely signed by the main wallet. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                            reason: `This swap route's fee payer (${feePayer.slice(0, 4)}…${feePayer.slice(-4)}) differs from the burner, and a burner-built order can't be safely signed by the main wallet. ${_burnerSignFallbackHint}`,
                             retryable: true,
                         };
                     }
@@ -2210,7 +2220,7 @@ const handlers = {
                         log(`[Jupiter Ultra] fee-payer introspection failed on burner route: ${introspectErr.message} — failing closed`, 'WARN');
                         return {
                             error: 'fee_payer_mismatch',
-                            reason: `Couldn't verify this swap route's fee payer (transaction introspection failed) — the burner won't sign an unverifiable order. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                            reason: `Couldn't verify this swap route's fee payer (transaction introspection failed) — the burner won't sign an unverifiable order. ${_burnerSignFallbackHint}`,
                             retryable: true,
                         };
                     }
@@ -2315,7 +2325,7 @@ const handlers = {
                         log(`[Jupiter Ultra] expected_delta_unbuildable on burner route: ${eDelta.message} — failing closed (won't sign a burner-taker order via MWA)`, 'WARN');
                         return {
                             error: 'expected_delta_unbuildable',
-                            reason: `Couldn't build the burner's safety check for this ${inputToken.symbol}→${outputToken.symbol} swap (${eDelta.message}) — the burner won't sign an order it can't gate. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                            reason: `Couldn't build the burner's safety check for this ${inputToken.symbol}→${outputToken.symbol} swap (${eDelta.message}) — the burner won't sign an order it can't gate. ${_burnerSignFallbackHint}`,
                             retryable: true,
                         };
                     }

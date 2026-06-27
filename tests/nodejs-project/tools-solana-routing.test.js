@@ -544,6 +544,9 @@ function _burnerOff() {
         const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'PYUSD', amount: 0.001 });
         assert.strictEqual(result.error, 'expected_delta_unbuildable', JSON.stringify(result));
         assert.strictEqual(result.retryable, true, JSON.stringify(result));
+        // SOL→PYUSD is NOT a conversion (input SOL is a cap asset), so the remediation SHOULD
+        // offer the main wallet (the user can redo the swap with main-wallet funds).
+        assert.ok(/run the swap from your main wallet/i.test(result.reason), `non-conversion remediation should offer the main wallet: ${result.reason}`);
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve when the safety check is unbuildable');
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must NOT sign an ungated order');
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'MWA must NOT sign the burner-taker order (no unsafe main fallback)');
@@ -1166,6 +1169,27 @@ function _burnerOff() {
         assert.strictEqual(ed.conversionPriceImpactBps, 7, 'ceil(0.0648 * 100) = 7 bps');
         assert.strictEqual(ed.tokenStandard, 'token_2022', 'Token-2022 input declared');
         assert.strictEqual(jupiterUltraExecuteCalls.length, 1, 'executed');
+    });
+
+    await check('BAT-1066 + BAT-1057 (CodeRabbit #419): expected_delta_unbuildable on a CONVERSION → route-aware remediation (retry; the held token is in the burner, so NOT "use the main wallet")', async () => {
+        _convSetup();
+        // PYUSD (input) stays a valid fee-free Token-2022 so the swap classifies as a burner
+        // conversion; USDC (output) mint owner is unrecognized → _mintTokenProgram(USDC) throws
+        // during the expectedDelta build → expected_delta_unbuildable on a burner CONVERSION.
+        mockAccountInfoFn = (pk) => pk === _CONV_PYUSD ? _mintAccountInfo(_TKN_2022_PROGRAM, 6)
+            : pk === _CONV_USDC ? _mintAccountInfo('11111111111111111111111111111111', 6)
+            : _mintAccountInfo(_TKN_PROGRAM, 6);
+        const r = await tools.handlers.solana_swap({ inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 });
+        assert.strictEqual(r.error, 'expected_delta_unbuildable', JSON.stringify(r));
+        assert.strictEqual(r.retryable, true, JSON.stringify(r));
+        // The conversion's input asset is held in the burner — the remediation must NOT
+        // SUGGEST the main wallet (it doesn't hold the token); it must say retry. (It may
+        // still mention the main wallet to explain why it's NOT an option.)
+        assert.ok(!/run the swap from your main wallet/i.test(r.reason), `conversion remediation must NOT suggest running it from the main wallet: ${r.reason}`);
+        assert.ok(/burner/i.test(r.reason) && /retry/i.test(r.reason), `conversion remediation should say retry (token held in burner): ${r.reason}`);
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve on unbuildable safety check');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must NOT sign an ungated order');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 0, 'no execute/broadcast');
     });
 
     await check('BAT-1057 conversion: PYUSD→SOL routes to burner; credit = burner pubkey (native SOL)', async () => {
