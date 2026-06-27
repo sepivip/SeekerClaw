@@ -9,6 +9,10 @@ const {
 
 const { androidBridgeCall } = require('../bridge');
 
+// BAT-1037: native-SOL-only denomination guard (pure, dependency-free module
+// so it is unit-testable without config). See tools/solana-send-guard.js.
+const { classifySolSendDenomination } = require('./solana-send-guard');
+
 const {
     solanaRpc, base58Encode, buildSolTransferTx,
     resolveToken, jupiterQuote, jupiterPrice,
@@ -34,17 +38,107 @@ const {
 const {
     routeAndSign,
     signCancelViaBurner,
+    signZeroCapTxViaBurner,
     recordJupiterOwnership,
+    forwardDispatchError,
 } = require('../wallet/dispatch');
+
+// BAT-697 PR B: Jupiter Trigger V2 adapter. Activated when
+// `config.useTriggerV2 === true` (default false). V1 paths in
+// jupiter_trigger_* handlers remain the shipping default until the staged
+// rollout (live smoke → default flip → V1 deletion) lands in subsequent PRs.
+const triggerV2 = require('../jupiter/trigger-v2');
 
 // BAT-255: Safe number-to-decimal-string conversion (imported from index.js shared state)
 let numberToDecimalString;
 function _setNumberToDecimalString(fn) { numberToDecimalString = fn; }
 
+// Q5 (BAT-1013-followup): minimal fee-payer extractor for unsigned txs. Used
+// by solana_swap to detect sponsored-fee Ultra txs where account[0] is the
+// Jupiter relayer (not the burner) — those would land a silent burner-policy
+// reject under Phase 3b's burner_only signerMode, so we route to main as a
+// defensive fallback. Parses just enough of the wire format to read message
+// account[0]; throws on malformed input so the caller can choose to proceed
+// (debug-log) or fail closed. Mirrors the strictness of solana.js
+// verifySwapTransaction's preamble (base64 charset + length check + signature
+// section skip + v0 prefix detect) without re-walking the instruction tree.
+function _extractFeePayerBase58(txBase64) {
+    if (typeof txBase64 !== 'string' || txBase64.length === 0) {
+        throw new Error('empty or non-string tx');
+    }
+    // R-next-6 same-class sweep: Solana caps tx packets at 1232 bytes. Pre-
+    // decode reject so we never materialize an oversized buffer (DoS guard).
+    // 1232 bytes encodes to at most ceil(1232/3)*4 = 1644 chars in base64.
+    //
+    // R-next-16: length cap MUST run before the charset regex — otherwise
+    // a malicious multi-MB string of valid base64 chars forces the regex
+    // to scan the full buffer before rejection, defeating the DoS guard.
+    if (txBase64.length > 1644) {
+        throw new Error(`tx_oversize: ~${Math.floor(txBase64.length * 3 / 4)} bytes exceeds Solana's 1232-byte packet cap`);
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(txBase64) || txBase64.length % 4 !== 0) {
+        throw new Error('invalid base64');
+    }
+    const buf = Buffer.from(txBase64, 'base64');
+    if (buf.length === 0) throw new Error('empty decoded buffer');
+    if (buf.length > 1232) {
+        throw new Error(`tx_oversize: ${buf.length} bytes exceeds Solana's 1232-byte packet cap`);
+    }
+    // Decode compact-u16 inline (small helper — solana.js's readCompactU16
+    // is not exported through tools/solana.js's import surface).
+    let off = 0;
+    function readCompactU16At(b, o) {
+        let v = 0, s = 0, end = o;
+        for (let i = 0; i < 3; i++) {
+            if (end >= b.length) throw new Error('compactu16 truncated');
+            const byte = b[end];
+            end++;
+            v |= (byte & 0x7f) << s;
+            s += 7;
+            if ((byte & 0x80) === 0) return { value: v, offset: end };
+        }
+        throw new Error('compactu16 too long');
+    }
+    const numSigs = readCompactU16At(buf, off);
+    off = numSigs.offset;
+    if (off + numSigs.value * 64 > buf.length) {
+        throw new Error('signature bytes truncated');
+    }
+    off += numSigs.value * 64;
+    if (off >= buf.length) throw new Error('message truncated');
+    // Detect versioned vs legacy. Solana versioned-message prefix has the
+    // high bit set: (prefix & 0x80) !== 0; the lower 7 bits encode the
+    // version number. Today only v0 (prefix = 0x80) exists; future versions
+    // (v1, v2, ...) would set prefix = 0x81, 0x82, etc. Copilot PR #398 R13:
+    // do NOT strict-equal 0x80 — a future v1 (0x81) would silently skip
+    // nothing and parse the version number as numRequiredSignatures, yielding
+    // the wrong fee-payer with no error signal. Fail closed on any version
+    // we don't understand.
+    const versionPrefix = buf[off];
+    const isVersioned = (versionPrefix & 0x80) !== 0;
+    if (isVersioned) {
+        const version = versionPrefix & 0x7F;
+        if (version !== 0) {
+            throw new Error(`unsupported_tx_version: v${version} (only v0 is supported)`);
+        }
+        off++; // consume v0 prefix byte
+    }
+    // 3-byte header
+    if (off + 3 > buf.length) throw new Error('header truncated');
+    off += 3;
+    // Account keys count
+    const numAccts = readCompactU16At(buf, off);
+    off = numAccts.offset;
+    if (numAccts.value === 0) throw new Error('zero accounts');
+    if (off + 32 > buf.length) throw new Error('account[0] truncated');
+    // account[0] = fee payer in legacy AND v0 transactions
+    return base58Encode(buf.slice(off, off + 32));
+}
+
 const tools = [
     {
         name: 'solana_balance',
-        description: 'Get SOL balance and SPL token balances for a Solana wallet address.',
+        description: 'Get SOL balance and SPL token balances (classic SPL + Token-2022 standards) for a Solana wallet address. Each token carries a tokenStandard field ("classic" | "token_2022"). Token-2022 tokens (e.g. PYUSD) are visible and swappable but CANNOT be sent via solana_send_token — route direct sends to the main wallet / wallet app. If the result has balanceIncomplete:true (failedTokenStandards lists which program could not be read), do NOT tell the user they hold none of a token — the balance is partial; suggest retrying.',
         input_schema: {
             type: 'object',
             properties: {
@@ -73,14 +167,29 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send SOL to a Solana address. **Routing (BAT-582)**: under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). ALWAYS confirm with the user in chat before calling this tool.',
+        description: 'Send **native SOL only** to a Solana address. This tool does NOT send SPL tokens (USDC, BONK, PYUSD, …) and does NOT take a fiat amount — do not supply ANY denomination field (`token` / `mint` / `asset` / `symbol` / `currency` / `coin` / `denom`); pass only `to` + `amount` (in SOL). For an SPL token transfer (USDC, BONK, any classic SPL mint) use the `solana_send_token` tool instead. For a USD amount, call `solana_price` to get SOL/USD and compute the SOL amount yourself (solana_price does not convert non-USD currencies). **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
         input_schema: {
             type: 'object',
             properties: {
-                to: { type: 'string', description: 'Recipient Solana address (base58)' },
-                amount: { type: 'number', description: 'Amount of SOL to send' }
+                to: { type: 'string', description: 'Recipient Solana address (base58). Must NOT equal the source wallet — self-sends are rejected.' },
+                amount: { type: 'number', description: 'Amount of SOL to send' },
+                source: { type: 'string', enum: ['burner', 'main', 'auto'], description: 'Which wallet to send from. "main" forces MWA popup (use when user says "from main"). "burner" forces burner. "auto" (default) routes by cap. Default: "auto".' }
             },
             required: ['to', 'amount']
+        }
+    },
+    {
+        name: 'solana_send_token',
+        description: 'Send an SPL token (USDC, USDT, BONK, any classic SPL mint) from the Burner OR Main wallet. Use this for ANY non-SOL token transfer — `solana_send` is native-SOL only. Provide the token `mint` (base58) and `amount` as a decimal STRING in token units (e.g. "1.5"). Token-2022 mints are not supported autonomously yet (they route to the main wallet / wallet app). **Routing (BAT-582 caps)**: source="auto" (default) — USDC under the burner per-tx + daily cap signs silently from the **Burner** (no popup); over cap, or ANY non-USDC token, prompts the **Main wallet** (MWA popup). Use source="main" to force MWA. Use source="burner" to force the burner (USDC only — other tokens are rejected). The recipient\'s associated token account is created automatically if missing (the sending wallet pays the ~0.002 SOL rent). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                to: { type: 'string', description: 'Recipient wallet address (base58). The token is delivered to their associated token account (created automatically if it does not exist).' },
+                mint: { type: 'string', description: 'SPL token mint address (base58). For native SOL use solana_send instead.' },
+                amount: { type: 'string', description: 'Amount in token units as a decimal STRING (e.g. "0.5" = half a USDC). No scientific notation; fractional precision must not exceed the mint decimals; positive non-zero.' },
+                source: { type: 'string', enum: ['auto', 'burner', 'main'], description: 'Which wallet to send from. "auto" (default) routes USDC by burner cap and everything else to main. "main" forces the MWA popup. "burner" forces the burner (USDC only). Default: "auto".' }
+            },
+            required: ['to', 'mint', 'amount']
         }
     },
     {
@@ -114,7 +223,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. ALWAYS confirm with the user and show the quote first before calling this tool.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it, then call solana_swap — the system gate handles approval per policy) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. **Conversion quote flakiness (BAT-1062)**: error:"conversion_quote_unverifiable" with retryable:true means Jupiter returned routes without a readable price-impact/minOut (intermittent, NOT high impact) — also auto-re-quoted internally; if still returned, ask the user to retry, do NOT route to main. (A genuine readable >1% impact stays terminal → main wallet.) Always show the quote first; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
         input_schema: {
             type: 'object',
             properties: {
@@ -125,21 +234,61 @@ const tools = [
             required: ['inputToken', 'outputToken', 'amount']
         }
     },
-    {
-        name: 'jupiter_trigger_create',
-        description: 'Create a trigger (limit) order on Jupiter. Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when price condition is met. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
-        input_schema: {
+    // PR #388 R6: the jupiter_trigger_create schema is flag-aware. V1 (default
+    // when config.useTriggerV2 is false) requires `triggerPrice`; V2 (when the
+    // flag is true) requires `triggerPriceUsd`. Pre-fix the schema relaxed
+    // `required` to allow BOTH callers, but that meant the model/gate would
+    // accept a V1 call missing triggerPrice and only fail at runtime with
+    // "Invalid trigger price". Build the schema once at module load against
+    // the active flag so the schema validator rejects bad calls upstream of
+    // the handler. Flag changes require a process restart (already true for
+    // most flag-gated paths here).
+    (() => {
+        const v2Enabled = config.useTriggerV2 === true;
+        const baseProperties = {
+            inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
+            outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
+            inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
+        };
+        const v1Properties = {
+            triggerPrice: { type: 'number', description: 'Price as outputToken-per-inputToken ratio (e.g., 90 = "1 SOL = 90 USDC"). REQUIRED.' },
+            expiryTime: { type: 'number', description: 'Order expiration as Unix seconds. Optional; defaults to 30 days from now.' },
+        };
+        const v2Properties = {
+            triggerPriceUsd: { type: 'number', description: 'USD price where the trigger fires (e.g., 80.50 for $80.50). REQUIRED.' },
+            expiresAt: { type: 'number', description: 'Order expiration as Unix seconds OR milliseconds (auto-detected). REQUIRED (no silent default in V2).' },
+            expiryTime: { type: 'number', description: 'Legacy alias for `expiresAt` (Unix seconds). Accepted if `expiresAt` not provided. One of the two IS required.' },
+            triggerCondition: { type: 'string', enum: ['above', 'below'], description: 'When to fire: "above" (price rises to trigger) or "below" (price drops to trigger). Auto-inferred when one side of the pair is a stablecoin; required for non-stable pairs.' },
+            slippageBps: { type: 'number', description: 'Slippage tolerance in basis points (1-10000). Optional; defaults to 100 (1%).' },
+            triggerMint: { type: 'string', description: 'Mint address of the asset whose USD price the trigger watches. Auto-inferred when exactly one side of the pair is a stablecoin (SOL↔USDC → SOL is watched). REQUIRED for non-stable↔non-stable pairs (SOL↔JUP) and both-stable pairs (USDC↔USDT).' },
+        };
+        const v2Schema = {
             type: 'object',
-            properties: {
-                inputToken: { type: 'string', description: 'Token to sell — symbol (e.g., "SOL") or mint address' },
-                outputToken: { type: 'string', description: 'Token to buy — symbol (e.g., "USDC") or mint address' },
-                inputAmount: { type: 'number', description: 'Amount of inputToken to sell (in human units)' },
-                triggerPrice: { type: 'number', description: 'Price at which order triggers (outputToken per inputToken, e.g., 90 means 1 SOL = 90 USDC)' },
-                expiryTime: { type: 'number', description: 'Order expiration timestamp (Unix seconds). Optional, defaults to 30 days from now.' }
-            },
-            required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice']
-        }
-    },
+            properties: { ...baseProperties, ...v2Properties },
+            required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPriceUsd'],
+            // PR #388 R7: V2 handler hard-rejects with `expires_at_required`
+            // if NEITHER `expiresAt` nor `expiryTime` is provided. Encode
+            // that disjunction in the schema (anyOf) so the model/gate
+            // rejects the missing-expiry case at validation time rather than
+            // letting it reach the user-confirmation card and dying later.
+            anyOf: [
+                { required: ['expiresAt'] },
+                { required: ['expiryTime'] },
+            ],
+        };
+        const v1Schema = {
+            type: 'object',
+            properties: { ...baseProperties, ...v1Properties },
+            required: ['inputToken', 'outputToken', 'inputAmount', 'triggerPrice'],
+        };
+        return {
+            name: 'jupiter_trigger_create',
+            description: v2Enabled
+                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
+                : 'Create a trigger (limit) order on Jupiter (V1 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the output/input price ratio reaches `triggerPrice`. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
+            input_schema: v2Enabled ? v2Schema : v1Schema,
+        };
+    })(),
     {
         name: 'jupiter_trigger_list',
         description: 'List your active or historical limit/stop orders on Jupiter. Shows order status, prices, amounts, and expiration. Requires Jupiter API key.',
@@ -226,7 +375,7 @@ const tools = [
     },
     {
         name: 'jupiter_wallet_holdings',
-        description: 'View all tokens held by a Solana wallet address. Returns complete list with balances, USD values, and token metadata. More detailed than basic Solana RPC. Requires Jupiter API key.',
+        description: 'View tokens (and native SOL) held by a Solana wallet via Jupiter — aggregated per mint with per-account detail, each tagged tokenStandard ("classic" | "token_2022" | "native_sol"). USD values are BEST-EFFORT: rows with no price return valueUsd:"N/A" (the result carries valuationPartial + pricedCount/unpricedCount), and totalValueUsd is the priced subtotal or "N/A" — it never reports $0.00 as the portfolio. Symbol/name are best-effort from the verified token list (may be absent for unknown mints). For the authoritative on-chain balance, prefer solana_balance. Requires Jupiter API key.',
         input_schema: {
             type: 'object',
             properties: {
@@ -250,6 +399,810 @@ const tools = [
         }
     },
 ];
+
+// ============================================================================
+// JUPITER TRIGGER V2 HELPERS (BAT-697 PR B)
+// ============================================================================
+//
+// V2 endpoints are gated behind `config.useTriggerV2`. The V1 handlers below
+// branch at the top: if the flag is true, delegate to the helper below;
+// otherwise continue the existing V1 path unchanged.
+//
+// V2 flow (create):
+//   1. authenticate(walletPubkey, signers)        → JWT (cached 24h-60s)
+//   2. ensureVault(walletPubkey, token)           → lazy register on first use
+//   3. depositCraft(...)                          → unsigned deposit tx + depositRequestId
+//   4. routeAndSign with broadcast callback that:
+//        - signs deposit (main MWA or burner-with-reservation, both via routeAndSign)
+//        - POSTs signed deposit to /trigger/v2/orders/price via submitCreateOrder
+//        - returns { signature } on create success, { error } on hard failure
+//      routeAndSign handles burner reserve/sign/commit-or-release atomically.
+//   5. recordJupiterOwnership(id, wallet) — fire-and-forget bookkeeping
+//
+// V2 flow (cancel):
+//   1. ownership lookup (same as V1) → creatorRole
+//   2. authenticate that wallet                    → JWT
+//   3. cancelStep1(orderId, pubkey, token)         → unsigned cancel tx + cancelRequestId
+//   4. sign:
+//        - burner-owned → signCancelViaBurner (zero-cap reservation, ownership-gated)
+//        - main/unknown → /solana/sign-only via MWA
+//   5. confirmCancel(orderId, pubkey, token, signedTx, cancelRequestId)
+//
+// V2 flow (list):
+//   1. main wallet only (scope cut — burner-routed orders need separate auth)
+//   2. authenticate main → JWT
+//   3. listOrders(pubkey, token, status, page)
+//
+// AMBIGUOUS-CREATE RECOVERY (Codex round-2 §5)
+// --------------------------------------------
+// The adapter's submitCreateOrder() runs recovery on 5xx / network drop /
+// missing-id-after-200. Recovery queries /orders/history; if a matching
+// order is found, returns success with `recovered: true`. If not found,
+// returns `create_ambiguous_no_recovery` — the deposit MAY have moved
+// funds into the Jupiter vault. We treat this as broadcast success
+// (commits the burner cap conservatively) and surface a warning to the
+// user with the depositRequestId for manual recovery via Jupiter UI.
+// Rationale: cap over-count > under-count for user safety.
+//
+// MESSAGE-CHALLENGE DEFERRED
+// --------------------------
+// PR B uses transaction-challenge for both wallets — there is no
+// `/burner/sign-message` or `/solana/sign-message` bridge endpoint yet.
+// The adapter's signers.signMessage parameter is `null` for both wallets;
+// the adapter falls through to transaction-challenge per Codex round-2 #3
+// ("unsupported-method/capability error"). A follow-up BAT can add the
+// bridge endpoints and pass a non-null signMessage to take the cheaper
+// message-only path.
+
+/**
+ * Build signers object for trigger-v2.authenticate() based on wallet role.
+ * signMessage is null in PR B (see "MESSAGE-CHALLENGE DEFERRED" above).
+ */
+function _buildAuthSigners(walletRole) {
+    if (walletRole === 'burner') {
+        return {
+            signTransaction: async (txB64) => {
+                const r = await signZeroCapTxViaBurner({
+                    unsignedTxBase64: txB64,
+                    flowName: 'trigger-v2-auth',
+                });
+                if (!r.ok) return forwardDispatchError(r);
+                return r.signedTxBase64;
+            },
+            signMessage: null,
+        };
+    }
+    return {
+        signTransaction: async (txB64) => {
+            try { await ensureWalletAuthorized(); }
+            catch (e) { return { error: 'wallet_not_authorized', reason: e.message }; }
+            const r = await androidBridgeCall('/solana/sign-only', { transaction: txB64 }, 120000);
+            if (r.error) return { error: 'sign_failed', reason: r.error };
+            if (!r.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+            return r.signedTransaction;
+        },
+        signMessage: null,
+    };
+}
+
+/**
+ * Resolve `triggerCondition` for V2 from explicit input or from the
+ * input/output token relationship. Returns 'above' | 'below' | null
+ * (null only when both are unstable, e.g., a custom altcoin pair without
+ * an obvious stable side).
+ *
+ * Rules:
+ *   - Explicit input wins.
+ *   - input is a stablecoin (USDC/USDT) → buying outputToken → 'below'
+ *     (trigger when output price drops to triggerPriceUsd or lower)
+ *   - output is a stablecoin → selling inputToken → 'above'
+ *     (trigger when input price rises to triggerPriceUsd or higher)
+ *   - neither obvious → null; caller must pass explicit triggerCondition
+ */
+const _STABLE_MINTS = new Set([
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+]);
+function _inferTriggerCondition(inputMint, outputMint, explicit) {
+    if (explicit === 'above' || explicit === 'below') return explicit;
+    if (_STABLE_MINTS.has(inputMint) && !_STABLE_MINTS.has(outputMint)) return 'below';
+    if (_STABLE_MINTS.has(outputMint) && !_STABLE_MINTS.has(inputMint)) return 'above';
+    return null;
+}
+
+/**
+ * Resolve which mint Jupiter should watch the USD price of (the
+ * `triggerMint` body field). The non-stable side of the pair — that's
+ * the asset whose USD price actually moves around the trigger value:
+ *   - Buying a non-stable with a stable (USDC → SOL, "below $80"):
+ *     trigger reads SOL's price → triggerMint = outputMint.
+ *   - Selling a non-stable for a stable (SOL → USDC, "above $90"):
+ *     trigger reads SOL's price → triggerMint = inputMint.
+ *   - Non-stable ↔ non-stable (rare, e.g. SOL ↔ JUP) OR both-stable
+ *     (USDC ↔ USDT): NO inference is safe — Jupiter would watch the
+ *     wrong asset's USD price and either fire on the wrong side or
+ *     never fire. Caller must pass explicit `input.triggerMint`.
+ *     Returns null to signal "ambiguous" so the handler can fail
+ *     closed with a clear `triggerMint_required` error instead of
+ *     silently routing to outputMint (PR #388 R5 finding).
+ *
+ * The pre-fix shipped `triggerMint = outputMint` unconditionally, which
+ * for a sell-into-stable (e.g. SOL → USDC) made Jupiter watch USDC at
+ * ~$1 — the documented "SOL ≥ $90" limit-sell would never trigger
+ * (PR #388 R2 finding). R5 hardens the degenerate-pair path the same
+ * way: never let the wrong asset slip through silently.
+ */
+function _inferTriggerMint(inputMint, outputMint, explicit) {
+    if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+    if (_STABLE_MINTS.has(inputMint) && !_STABLE_MINTS.has(outputMint)) return outputMint;
+    if (_STABLE_MINTS.has(outputMint) && !_STABLE_MINTS.has(inputMint)) return inputMint;
+    return null; // both-stable or both-non-stable: degenerate. Caller MUST pass explicit triggerMint.
+}
+
+async function _jupiterTriggerCreateV2(input, _chatId) {
+    if (!config.jupiterApiKey) {
+        return {
+            error: 'Jupiter API key required',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+        };
+    }
+    try {
+        // 1. Resolve tokens (mirrors V1).
+        const inputToken = await resolveToken(input.inputToken);
+        const outputToken = await resolveToken(input.outputToken);
+        if (!inputToken || inputToken.ambiguous) {
+            return { error: 'Could not resolve input token', details: inputToken?.ambiguous
+                ? `Multiple tokens match "${input.inputToken}". Use the full mint address.`
+                : `Token "${input.inputToken}" not found.` };
+        }
+        if (inputToken.warning && inputToken.decimals == null) {
+            return { error: 'Unverified input token with missing metadata', details: inputToken.warning };
+        }
+        if (!outputToken || outputToken.ambiguous) {
+            return { error: 'Could not resolve output token', details: outputToken?.ambiguous
+                ? `Multiple tokens match "${input.outputToken}". Use the full mint address.`
+                : `Token "${input.outputToken}" not found.` };
+        }
+        if (outputToken.warning && outputToken.decimals == null) {
+            return { error: 'Unverified output token with missing metadata', details: outputToken.warning };
+        }
+
+        // 2. Token-2022 shield check (Trigger V2 also rejects Token-2022).
+        try {
+            const mints = [inputToken.address, outputToken.address].join(',');
+            const shieldRes = await jupiterRequest({
+                hostname: 'api.jup.ag',
+                path: `/ultra/v1/shield?mints=${encodeURIComponent(mints)}`,
+                method: 'GET',
+                headers: { 'x-api-key': config.jupiterApiKey },
+            });
+            if (shieldRes.status === 200) {
+                const shieldData = typeof shieldRes.data === 'string' ? JSON.parse(shieldRes.data) : shieldRes.data;
+                for (const [mint, info] of Object.entries(shieldData || {})) {
+                    if (info && (info.tokenType === 'token-2022' || info.isToken2022)) {
+                        const sym = mint === inputToken.address ? inputToken.symbol : outputToken.symbol;
+                        return {
+                            error: 'Token-2022 not supported for limit orders',
+                            details: `${sym} (${mint}) is a Token-2022 token. Use a regular swap instead.`,
+                        };
+                    }
+                }
+            }
+        } catch (shieldErr) {
+            log(`[Jupiter Trigger V2] Token-2022 check skipped: ${shieldErr.message}`, 'DEBUG');
+        }
+
+        // 3. Routing decision (V1 parity — same caps/preflight call).
+        const { routeFor: _routeForTriggerV2 } = require('../caps/preflight');
+        const routingHint = await _routeForTriggerV2('jupiter_trigger_create', input);
+
+        // PR #388 R9: over-cap fail-fast. routeFor returns
+        // {routingDecision:'burner', underCap:false} when the principal would
+        // breach a cap. Pre-fix, the V2 handler continued through burner
+        // pubkey lookup, Jupiter auth (server-side session), vault register
+        // (server-side vault row), AND deposit/craft (server-side deposit
+        // request id) before routeAndSign finally surfaced burner_over_cap.
+        // All of those side effects were wasted server state for an order
+        // that would never sign. Handle it here:
+        //   - With `input._allowMainFallback === true`: flip routing to
+        //     'main' BEFORE step 4 so the rest of the flow proceeds against
+        //     the MWA wallet (mirrors V1 routing semantics).
+        //   - Otherwise: refuse immediately with the same shape dispatch.js
+        //     would return, but before any Jupiter or burner-bridge state
+        //     is touched.
+        if (routingHint.routingDecision === 'burner' && routingHint.underCap === false) {
+            if (input._allowMainFallback === true) {
+                routingHint.routingDecision = 'main';
+                log(`[Jupiter Trigger V2] over-cap (${routingHint.reason || 'unknown'}) — _allowMainFallback set, flipping route to main BEFORE side effects`, 'INFO');
+            } else {
+                return {
+                    error: 'burner_over_cap',
+                    reason:
+                        `Burner over cap (${routingHint.reason || 'unknown'}). ` +
+                        'Raise the cap with wallet_set_caps, or retry with _allowMainFallback: true to use the main wallet (popup required).',
+                    capName: routingHint.capName,
+                };
+            }
+        }
+
+        // 4. Resolve wallet address — burner pubkey if routing=burner, MWA pubkey otherwise.
+        // If burner routing was chosen but the burner pubkey is unavailable
+        // (bridge unreachable, not configured, etc.), we MUST also flip the
+        // routing decision to 'main' before proceeding. Otherwise routeAndSign
+        // would re-evaluate routing as 'burner' and attempt to sign a tx
+        // whose fee payer is the MWA wallet — cap state and signer mismatch.
+        let walletAddress;
+        if (routingHint.routingDecision === 'burner') {
+            try {
+                const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                    walletAddress = burnerStatus.pubkey;
+                }
+            } catch (_) { /* fall through */ }
+            if (!walletAddress) {
+                log('[Jupiter Trigger V2] burner routing chosen but pubkey unavailable — falling back to main wallet', 'WARN');
+                routingHint.routingDecision = 'main';
+            }
+        }
+        if (!walletAddress) {
+            try { walletAddress = getConnectedWalletAddress(); }
+            catch (e) { return { error: e.message }; }
+        }
+
+        // 5. Parse inputAmount → raw atomic units (BigInt-safe).
+        let inputAmountAtomic;
+        try {
+            inputAmountAtomic = parseInputAmountToLamports(numberToDecimalString(input.inputAmount), inputToken.decimals);
+        } catch (e) {
+            return { error: 'Invalid input amount', details: e.message };
+        }
+
+        // 6. Compute USD value of inputAmount via jupiterPrice for the $10 min check.
+        let inputUsdValue;
+        try {
+            const priceData = await jupiterPrice([inputToken.address]);
+            const priceEntry = priceData && (priceData[inputToken.address] || priceData.data?.[inputToken.address]);
+            const usdPrice = priceEntry && (priceEntry.usdPrice ?? priceEntry.price);
+            if (!Number.isFinite(Number(usdPrice)) || Number(usdPrice) <= 0) {
+                return { error: 'price_unavailable', reason: `Could not fetch USD price for ${inputToken.symbol} — required for $10 minimum check.` };
+            }
+            inputUsdValue = Number(input.inputAmount) * Number(usdPrice);
+        } catch (e) {
+            return { error: 'price_lookup_failed', reason: e.message };
+        }
+
+        // 7. Resolve V2-specific args. PR #388 R4 hardened the contract:
+        // V2 REQUIRES explicit triggerPriceUsd and explicit expiry. No silent
+        // fallbacks — they were causing two real failure modes:
+        //   (a) Falling back to the V1 `triggerPrice` field silently reused a
+        //       ratio value (V1 semantic) as if it were a USD price (V2
+        //       semantic). For most pairs the order would fire at the wrong
+        //       price; for a stablecoin-to-asset buy where the ratio
+        //       coincidentally lands near $X, the user would never notice.
+        //   (b) Defaulting expiresAt to "30 days from now" silently locked
+        //       funds into a much longer order than the caller intended.
+        // Both fail loudly now; consumers MUST migrate to V2 field names.
+        if (input.triggerPriceUsd == null) {
+            return {
+                error: 'trigger_price_usd_required',
+                reason: 'V2 requires explicit `triggerPriceUsd` (USD price; e.g. 80.5). The V1 `triggerPrice` field was a token ratio with a different meaning and is not accepted by the V2 path — see PR #388.',
+            };
+        }
+        const triggerPriceUsd = Number(input.triggerPriceUsd);
+        const slippageBps = input.slippageBps != null ? Number(input.slippageBps) : triggerV2.DEFAULT_SLIPPAGE_BPS;
+        // expiresAt MUST be provided (in seconds OR ms — heuristic still
+        // accepts either unit) OR expiryTime (legacy V1 alias, Unix seconds).
+        // No silent default — fail loud if neither is set.
+        let expiresAtMs;
+        if (input.expiresAt != null) {
+            const n = Number(input.expiresAt);
+            expiresAtMs = n * (n < 10_000_000_000 ? 1000 : 1);
+        } else if (input.expiryTime != null) {
+            expiresAtMs = Number(input.expiryTime) * 1000; // legacy V1 alias (seconds)
+        } else {
+            return {
+                error: 'expires_at_required',
+                reason: 'V2 requires explicit `expiresAt` (Unix seconds OR ms) or legacy `expiryTime` (Unix seconds). No silent default — pass an explicit expiration timestamp. See PR #388.',
+            };
+        }
+        const triggerCondition = _inferTriggerCondition(inputToken.address, outputToken.address, input.triggerCondition);
+        if (!triggerCondition) {
+            return {
+                error: 'trigger_condition_required',
+                reason: 'Could not infer triggerCondition from token pair. Pass triggerCondition: "above" or "below" explicitly.',
+            };
+        }
+        // PR #388 R6: resolve triggerMint and fail closed for ambiguous pairs
+        // BEFORE any Jupiter side effects (auth / vault register / deposit
+        // craft). Pre-fix this check ran after depositCraft, so an ambiguous
+        // pair without explicit triggerMint could leave a server-side vault
+        // + a wasted /deposit/craft request before returning the error.
+        const triggerMint = _inferTriggerMint(inputToken.address, outputToken.address, input.triggerMint);
+        if (!triggerMint) {
+            return {
+                error: 'trigger_mint_required',
+                reason: 'For non-stable↔non-stable pairs (e.g. SOL↔JUP) and both-stable pairs (e.g. USDC↔USDT), the trigger asset cannot be inferred safely — Jupiter would watch the wrong asset\'s USD price. Pass `triggerMint` explicitly to disambiguate.',
+                inputMint: inputToken.address,
+                outputMint: outputToken.address,
+            };
+        }
+        // PR #388 R8: validate the resolved triggerMint as a real Solana
+        // base58 address (32-byte Ed25519 pubkey). The auto-inferred path
+        // uses inputMint/outputMint which were already validated by upstream
+        // token resolution, so this only fires when the caller supplied an
+        // EXPLICIT `input.triggerMint` override — pre-fix a whitespace-only
+        // or otherwise malformed non-empty string passed the null-check and
+        // would only fail later at Jupiter's create endpoint (after auth +
+        // vault register + signed deposit). Fail closed here BEFORE any side
+        // effects.
+        if (!isValidSolanaAddress(triggerMint)) {
+            return {
+                error: 'trigger_mint_invalid',
+                reason: 'Explicit `triggerMint` is not a valid Solana base58 address (must base58-decode to 32 bytes). Pass a real mint pubkey.',
+            };
+        }
+
+        // 8. Semantic validation (pure — fail fast before any network work).
+        const validation = triggerV2.validateOrderArgs({ inputUsdValue, expiresAtMs, triggerPriceUsd, slippageBps });
+        if (!validation.ok) {
+            return { error: validation.error, reason: validation.reason };
+        }
+
+        // 9. Authenticate (cached 24h-60s per pubkey).
+        const walletRole = routingHint.routingDecision === 'burner' ? 'burner' : 'main';
+        const authSigners = _buildAuthSigners(walletRole);
+        const authResult = await triggerV2.authenticate(walletAddress, authSigners);
+        if (!authResult.ok) {
+            return forwardDispatchError(authResult);
+        }
+        const token = authResult.token;
+
+        // 10. Ensure vault (lazy — registered via idempotent GET on first use).
+        const vaultResult = await triggerV2.ensureVault(walletAddress, token);
+        if (!vaultResult.ok) {
+            return { error: vaultResult.error, reason: vaultResult.reason };
+        }
+        const vaultAddress = vaultResult.vaultPubkey;
+        // BAT-1013: tighten vaultPubkey validation at the call site.
+        // trigger-v2.ensureVault checks only that the field is truthy (a
+        // string like 'undefined' or 'true' from a malformed Jupiter
+        // response would pass). Validate as a real base58 Solana pubkey.
+        // After BAT-1031 the policy no longer binds to vaultAddress, but
+        // the value still flows back to the caller (and into logs as
+        // diagnostic context), so a malformed pubkey here is still a
+        // fail-closed condition — the V2 deposit flow depends on
+        // vaultPubkey being correct, and there is no equivalent main-MWA
+        // recovery (vault is Privy-custodial), so fail closed with a clear
+        // error and let the agent surface it to the user.
+        if (!isValidSolanaAddress(vaultAddress)) {
+            log(`[Jupiter Trigger V2] ensureVault returned non-base58 vaultPubkey: ${JSON.stringify(vaultAddress)} — failing closed`, 'WARN');
+            return {
+                error: 'vault_unavailable',
+                reason: `Jupiter /vault response vaultPubkey is not a valid Solana base58 address: ${JSON.stringify(vaultAddress)}`,
+            };
+        }
+
+        // 11. Craft deposit (outputMint is required by /deposit/craft).
+        const craftResult = await triggerV2.depositCraft({
+            pubkey: walletAddress,
+            token,
+            inputMint: inputToken.address,
+            outputMint: outputToken.address,
+            inputAmount: String(inputAmountAtomic),
+        });
+        if (!craftResult.ok) {
+            return { error: craftResult.error, reason: craftResult.reason };
+        }
+        const {
+            transaction: unsignedDepositTx,
+            depositRequestId,
+            recoveryContext,
+        } = craftResult;
+
+        // BAT-1031 (Option A): no producer-side destination cross-check.
+        // The previous binding (receiverAddress === vaultAddress and
+        // depositVault.expectedTokenOwner === receiverAddress) was
+        // structurally broken on the prod burner — Jupiter routes to an
+        // Anchor PDA whose SPL decode produces a garbage mint and rejected
+        // every deposit. burner-policy now relies on burnerDebit exact-
+        // delta + sol_fee_headroom for the burner-side safety bound;
+        // destination shape is Jupiter's responsibility. See Linear
+        // BAT-1031 v1.1 + v1.2 + Appendix A.
+
+        // 12. Verify deposit tx fee payer matches active wallet — guard against
+        // a malicious craft response that would route funds from the wrong wallet.
+        try {
+            const verification = verifySwapTransaction(unsignedDepositTx, walletAddress);
+            if (!verification.valid) {
+                return { error: `Deposit tx rejected: ${verification.error}` };
+            }
+        } catch (verifyErr) {
+            return { error: `Could not verify deposit tx: ${verifyErr.message}` };
+        }
+
+        // 13. routeAndSign for the deposit signing + orders/price POST.
+        // triggerMint was resolved + validated in step 7 (above) BEFORE any
+        // Jupiter side effects. See PR #388 R2 (sell-into-stable bug) and
+        // R5/R6 (ambiguous-pair fail-closed + early-fail ordering).
+        const orderArgs = {
+            inputMint: inputToken.address,
+            inputAmount: String(inputAmountAtomic),
+            outputMint: outputToken.address,
+            triggerMint,
+            triggerPriceUsd,
+            triggerCondition,
+            slippageBps,
+            expiresAtMs,
+        };
+        let submitWarning = null;
+        // PR #388 R2: if our local burner-fallback fired above (we couldn't
+        // reach burner pubkey so flipped routingHint to 'main'), pass that
+        // override into routeAndSign so it does NOT re-route to burner and
+        // try to sign with a burner the deposit tx isn't paying from.
+        // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
+        // Trigger V2 deposits move `inputAmountAtomic` of `inputToken` from
+        // the burner's input ATA into the Jupiter Limit Order V2 vault. There's
+        // NO credit at deposit time (output happens at fill time in a separate
+        // tx the burner doesn't sign — see DELTA_KINDS doc).
+        let expectedDelta = null;
+        try {
+            const burnerPubkey = walletAddress;
+            const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+            const ataMod = require('../wallet/ata');
+            const debitAccount = inputIsSol ? burnerPubkey : ataMod.deriveAtaBase58(burnerPubkey, inputToken.address);
+            expectedDelta = {
+                kind: 'jupiter_trigger_create_deposit',
+                signerMode: 'burner_only',
+                burnerDebit: {
+                    account: debitAccount,
+                    mint: inputIsSol ? 'native_sol' : inputToken.address,
+                    atomicAmount: String(inputAmountAtomic),
+                },
+                // BAT-1031 + BAT-1027: burnerOwnedAccounts declares only
+                // the EXPLICIT input debit ATA. Other burner-owned ATAs the
+                // deposit flow may touch — the freshly-created output WSOL
+                // ATA (when input is SPL), wrap/unwrap intermediaries — are
+                // NOT enumerated here.
+                //
+                // What is and isn't caught today:
+                //   • Drainer walker (burner-policy validateDrainerOpcodes)
+                //     still blocks SetAuthority / Approve / CloseAccount /
+                //     Burn / Assign / AdvanceNonce on any account
+                //     resolvable as burner-owned, AND blocks plain Transfer
+                //     in `zero_value_*` kinds.
+                //   • For `jupiter_trigger_create_deposit` (a non-zero-value
+                //     deposit), a plain SPL Transfer out of an UNDECLARED
+                //     burner-owned ATA is NOT currently rejected.
+                //     Generalized undeclared-ATA per-account delta
+                //     enforcement lands in BAT-1027.
+                //   • The same-tx-create-init-with-zero-balance pattern
+                //     (Jupiter creating the burner's WSOL output ATA at
+                //     deposit time, paying rent from the burner inside the
+                //     existing sol_fee_headroom) is documented in the
+                //     BAT-1031 v1.2 Gate 0 carve-out rubric and exercised
+                //     by tests/nodejs-project/burner-policy-carveout.test.js.
+                burnerOwnedAccounts: [debitAccount].filter(a => a !== burnerPubkey),
+            };
+        } catch (eDelta) {
+            // Copilot PR #398 R2 finding: a falsy expectedDelta is NOT
+            // forwarded to BurnerSigner by dispatch.js, which would let
+            // the burner sign without the policy gate running. Force
+            // routing to main so the user sees an MWA popup instead.
+            log(`[Jupiter Trigger V2] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+            routingHint.routingDecision = 'main';
+            expectedDelta = null;
+        }
+
+        const dispatchResult = await routeAndSign({
+            toolName: 'jupiter_trigger_create',
+            toolArgs: input,
+            unsignedTxBase64: unsignedDepositTx,
+            broadcastVia: 'jupiter',
+            flowName: 'jupiter_trigger_create_v2',
+            forceRouting: routingHint,
+            expectedDelta,
+            broadcast: async (txOrUnsigned, _signer, ctx) => {
+                let signedDeposit;
+                if (ctx && ctx.signed) {
+                    signedDeposit = txOrUnsigned;
+                } else {
+                    try { await ensureWalletAuthorized(); }
+                    catch (e) { return { error: 'wallet_not_authorized', reason: e.message }; }
+                    const signRes = await androidBridgeCall('/solana/sign-only', { transaction: txOrUnsigned }, 120000);
+                    if (signRes.error) return { error: 'sign_failed', reason: signRes.error };
+                    if (!signRes.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+                    signedDeposit = signRes.signedTransaction;
+                }
+                const submitRes = await triggerV2.submitCreateOrder({
+                    token,
+                    recoveryContext,
+                    depositSignedTx: signedDeposit,
+                    order: orderArgs,
+                });
+                if (submitRes.ok) {
+                    if (submitRes.recovered) {
+                        submitWarning = submitRes.recoveryNote || 'Order recovered from /orders/history after lost create response.';
+                    }
+                    return { signature: submitRes.txSignature, trigger: submitRes };
+                }
+                // Ambiguous-no-recovery: deposit MAY have moved funds. Conservative —
+                // treat as broadcast success so the burner cap is committed
+                // (over-count is safer than under-count). Surface a clear warning
+                // including the depositRequestId so the user can reconcile via
+                // Jupiter UI.
+                if (submitRes.error === 'create_ambiguous_no_recovery') {
+                    submitWarning =
+                        `Trigger V2 create response was lost AND /orders/history showed no matching order. ` +
+                        `Deposit may still be in flight in Jupiter's vault. Check Jupiter UI for ` +
+                        `depositRequestId=${depositRequestId}. ` +
+                        `Your wallet's burner cap has been committed conservatively — if the deposit ` +
+                        `did NOT land on-chain, the cap will regenerate at the next daily window.`;
+                    return { signature: null, trigger: submitRes };
+                }
+                return { error: submitRes.error, reason: submitRes.reason };
+            },
+        });
+
+        if (!dispatchResult.ok) {
+            return forwardDispatchError(dispatchResult);
+        }
+
+        const orderResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || {};
+        const orderId = orderResult.id || null;
+
+        // 14. Record ownership (fire-and-forget; failure logs only, doesn't unwind).
+        if (orderId) {
+            await recordJupiterOwnership(orderId, dispatchResult.wallet, 'jupiter_trigger_create_v2');
+        } else {
+            log('[Jupiter Trigger V2] No orderId from create — ownership not recorded', 'WARN');
+        }
+
+        const warnings = [];
+        if (inputToken.warning) warnings.push(`⚠️ ${inputToken.symbol}: ${inputToken.warning}`);
+        if (outputToken.warning) warnings.push(`⚠️ ${outputToken.symbol}: ${outputToken.warning}`);
+        if (submitWarning) warnings.push(submitWarning);
+
+        // PR #388 R2: V1 alias for `signature` (V1 returned `signature`, V2
+        // canonical is `txSignature`). PR #388 R3: also surface V1's
+        // `triggerPrice` and `expiryTime` field names so consumers that
+        // parse the V1 shape don't see undefined when the flag flips.
+        //
+        // SEMANTIC NOTE on `triggerPrice`: V1's `triggerPrice` was a token
+        // ratio (e.g. 90 meaning "1 SOL = 90 USDC"). V2's `triggerPriceUsd`
+        // is a USD price. We alias `triggerPrice` to the USD value (not the
+        // ratio) because that's what the underlying order actually uses now —
+        // a consumer that interprets it as a ratio is already broken
+        // semantically by the V1→V2 cutover; preserving the field name at
+        // least keeps the field present so the consumer's parse doesn't blow
+        // up. Consumers SHOULD migrate to `triggerPriceUsd`.
+        const _sig = orderResult.txSignature || dispatchResult.signature || null;
+        const _expiresAtSec = Math.floor(expiresAtMs / 1000);
+        return {
+            success: true,
+            orderId,
+            txSignature: _sig,
+            signature: _sig,
+            depositRequestId,
+            inputToken: `${inputToken.symbol} (${inputToken.address})`,
+            outputToken: `${outputToken.symbol} (${outputToken.address})`,
+            inputAmount: input.inputAmount,
+            triggerPriceUsd,
+            triggerPrice: triggerPriceUsd, // V1 alias (semantic shifted ratio→USD; see comment above)
+            triggerCondition,
+            slippageBps,
+            expiresAt: _expiresAtSec,
+            expiryTime: _expiresAtSec, // V1 alias (both Unix seconds)
+            wallet: dispatchResult.wallet,
+            vaultAddress,
+            recovered: orderResult.recovered === true || undefined,
+            warnings: warnings.length > 0 ? warnings : undefined,
+        };
+    } catch (e) {
+        return { error: e.message };
+    }
+}
+
+async function _jupiterTriggerListV2(input, _chatId) {
+    if (!config.jupiterApiKey) {
+        return {
+            error: 'Jupiter API key required',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+        };
+    }
+    try {
+        let walletAddress;
+        try { walletAddress = getConnectedWalletAddress(); }
+        catch (e) { return { error: e.message }; }
+
+        if (input.status && !['active', 'history'].includes(input.status)) {
+            return { error: 'Invalid status value', details: 'status must be either "active" or "history"' };
+        }
+        if (input.page != null && (!Number.isInteger(Number(input.page)) || Number(input.page) <= 0)) {
+            return { error: 'Invalid page value', details: 'page must be a positive integer' };
+        }
+
+        // Scope cut for PR B: V2 list authenticates the MAIN wallet only.
+        // Listing burner-routed orders requires authenticating the burner
+        // pubkey separately — deferred to a follow-up BAT to avoid surfacing
+        // a "sign to view your orders" prompt for users with no burner orders.
+        const authSigners = _buildAuthSigners('main');
+        const authResult = await triggerV2.authenticate(walletAddress, authSigners);
+        if (!authResult.ok) return forwardDispatchError(authResult);
+
+        const listResult = await triggerV2.listOrders({
+            pubkey: walletAddress,
+            token: authResult.token,
+            status: input.status,
+            page: input.page != null ? Number(input.page) : undefined,
+        });
+        if (!listResult.ok) return { error: listResult.error, reason: listResult.reason };
+
+        return {
+            success: true,
+            count: listResult.orders.length,
+            wallet: walletAddress,
+            note: 'V2 list shows main-wallet orders only. Burner-routed orders need separate auth (follow-up).',
+            // Field names verified live 2026-05-30: real rows use orderState,
+            // rawState, initialInputAmount, remainingInputAmount, fillPercent.
+            // The first-draft status/vaultState/inputAmount fields don't exist
+            // on the API — mapping them would return three `undefined`s per row.
+            // PR #388 R2 added inputToken/outputToken aliases. R3: also add
+            // V1's `inputAmount`, `triggerPrice`, `status`, `expiryTime`
+            // aliases so consumers that parse the V1 list shape don't see
+            // undefined when the flag flips. SEMANTIC NOTES:
+            //   - `inputAmount` ← initialInputAmount (same atomic-string semantic).
+            //   - `triggerPrice` ← triggerPriceUsd (V1 was a token ratio,
+            //     V2 is USD — see same comment on the create response above;
+            //     consumers SHOULD migrate to `triggerPriceUsd`).
+            //   - `status` ← orderState (same lowercase state vocabulary:
+            //     active/cancelled/expired/etc).
+            //   - `expiryTime` ← expiresAt converted ms→sec (V1 unit was
+            //     Unix seconds; V2 `expiresAt` is milliseconds).
+            orders: listResult.orders.map(order => ({
+                orderId: order.id || order.orderId,
+                orderType: order.orderType,
+                inputMint: order.inputMint,
+                outputMint: order.outputMint,
+                inputToken: order.inputMint,
+                outputToken: order.outputMint,
+                initialInputAmount: order.initialInputAmount,
+                remainingInputAmount: order.remainingInputAmount,
+                inputAmount: order.initialInputAmount, // V1 alias
+                triggerPriceUsd: order.triggerPriceUsd,
+                triggerPrice: order.triggerPriceUsd, // V1 alias (semantic shifted ratio→USD)
+                triggerCondition: order.triggerCondition,
+                slippageBps: order.slippageBps,
+                orderState: order.orderState,
+                rawState: order.rawState,
+                status: order.orderState, // V1 alias
+                fillPercent: order.fillPercent,
+                expiresAt: order.expiresAt,
+                expiryTime: (typeof order.expiresAt === 'number' && order.expiresAt > 1e12)
+                    ? Math.floor(order.expiresAt / 1000)
+                    : order.expiresAt, // V1 alias in Unix SECONDS (V2 expiresAt is ms)
+                createdAt: order.createdAt,
+            })),
+        };
+    } catch (e) {
+        return { error: e.message };
+    }
+}
+
+async function _jupiterTriggerCancelV2(input, _chatId) {
+    if (!config.jupiterApiKey) {
+        return {
+            error: 'Jupiter API key required',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+        };
+    }
+    try {
+        if (!input.orderId || String(input.orderId).trim() === '') {
+            return { error: 'orderId is required' };
+        }
+        const orderId = String(input.orderId).trim();
+
+        // 1. Ownership lookup (same as V1).
+        let creatorRole = 'unknown';
+        try {
+            const lookup = await androidBridgeCall(
+                '/jupiter/order-owner/get',
+                { orderId },
+                5000,
+            );
+            if (lookup && !lookup.error && (lookup.creatorWalletRole === 'burner' || lookup.creatorWalletRole === 'main')) {
+                creatorRole = lookup.creatorWalletRole;
+            }
+        } catch (_) { /* fall through to MWA path */ }
+
+        // 2. Resolve wallet address per creator role.
+        let walletAddress;
+        if (creatorRole === 'burner') {
+            try {
+                const burnerStatus = await androidBridgeCall('/burner/status', {}, 5000);
+                if (burnerStatus && !burnerStatus.error && burnerStatus.configured && burnerStatus.pubkey) {
+                    walletAddress = burnerStatus.pubkey;
+                }
+            } catch (_) { /* fall through */ }
+            if (!walletAddress) {
+                log('[Jupiter Trigger V2] burner-owned cancel but burner pubkey unavailable — falling back to MWA', 'WARN');
+                creatorRole = 'main';
+            }
+        }
+        if (!walletAddress) {
+            try { walletAddress = getConnectedWalletAddress(); }
+            catch (e) { return { error: e.message }; }
+        }
+
+        // 3. Authenticate the relevant wallet (cached per-pubkey).
+        const walletRole = creatorRole === 'burner' ? 'burner' : 'main';
+        const authSigners = _buildAuthSigners(walletRole);
+        const authResult = await triggerV2.authenticate(walletAddress, authSigners);
+        if (!authResult.ok) return forwardDispatchError(authResult);
+        const token = authResult.token;
+
+        // 4. Cancel step 1 — get unsigned cancel tx.
+        const step1 = await triggerV2.cancelStep1({ orderId, pubkey: walletAddress, token });
+        if (!step1.ok) return { error: step1.error, reason: step1.reason };
+
+        // 5. Verify cancel tx fee payer.
+        try {
+            const verification = verifySwapTransaction(step1.transaction, walletAddress);
+            if (!verification.valid) return { error: `Cancel tx rejected: ${verification.error}` };
+        } catch (e) {
+            return { error: `Could not verify cancel tx: ${e.message}` };
+        }
+
+        // 6. Sign + confirm-cancel — routed to burner or main path.
+        let signedCancelB64;
+        let signWallet;
+        if (creatorRole === 'burner') {
+            // Use signZeroCapTxViaBurner (cancel doesn't consume cap principal,
+            // and signCancelViaBurner is broadcast-coupled). We POST confirm-cancel
+            // separately below — so this is sign-only, then explicit POST.
+            const signRes = await signZeroCapTxViaBurner({
+                unsignedTxBase64: step1.transaction,
+                flowName: 'jupiter_trigger_cancel_v2',
+            });
+            if (!signRes.ok) return forwardDispatchError(signRes);
+            signedCancelB64 = signRes.signedTxBase64;
+            signWallet = 'burner';
+        } else {
+            try { await ensureWalletAuthorized(); }
+            catch (e) { return { error: 'wallet_not_authorized', reason: e.message }; }
+            const signRes = await androidBridgeCall('/solana/sign-only', { transaction: step1.transaction }, 120000);
+            if (signRes.error) return { error: signRes.error, reason: signRes.reason };
+            if (!signRes.signedTransaction) return { error: 'sign_failed', reason: 'No signed transaction returned from wallet' };
+            signedCancelB64 = signRes.signedTransaction;
+            signWallet = 'main';
+        }
+
+        // 7. Confirm cancel.
+        const confirmRes = await triggerV2.confirmCancel({
+            orderId,
+            pubkey: walletAddress,
+            token,
+            signedTransaction: signedCancelB64,
+            cancelRequestId: step1.cancelRequestId,
+        });
+        if (!confirmRes.ok) return { error: confirmRes.error, reason: confirmRes.reason };
+
+        return {
+            success: true,
+            orderId: confirmRes.id,
+            txSignature: confirmRes.txSignature,
+            // PR #388 R2: V1's `signature` alias kept so downstream parsers
+            // don't break when the flag flips.
+            signature: confirmRes.txSignature,
+            status: 'cancelled',
+            wallet: signWallet,
+            creatorRole,
+        };
+    } catch (e) {
+        return { error: e.message };
+    }
+}
+
+// ============================================================================
 
 const handlers = {
     async solana_address(input, chatId) {
@@ -280,14 +1233,34 @@ const handlers = {
 
         const solBalance = (balanceResult.value || 0) / 1e9;
 
-        const tokenResult = await solanaRpc('getTokenAccountsByOwner', [
-            address,
-            { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
-            { encoding: 'jsonParsed' }
+        // BAT-1038 follow-up: getTokenAccountsByOwner requires a token-program
+        // filter, so a single classic-only query is BLIND to Token-2022 mints
+        // (e.g. PYUSD). Once Token-2022 swaps shipped, those balances exist
+        // on-chain but were invisible here — the swap's own pre-check uses a
+        // `{ mint }` filter (program-agnostic) and DID see them, producing the
+        // "quote finds it, balance doesn't" contradiction. Query BOTH programs
+        // and merge; per-program tolerant (one erroring still returns the other).
+        const _TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+        const _TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+        const [classicRes, token2022Res] = await Promise.all([
+            solanaRpc('getTokenAccountsByOwner', [address, { programId: _TOKEN_PROGRAM }, { encoding: 'jsonParsed' }]),
+            solanaRpc('getTokenAccountsByOwner', [address, { programId: _TOKEN_2022_PROGRAM }, { encoding: 'jsonParsed' }]),
         ]);
 
         const tokens = [];
-        if (tokenResult.value) {
+        // BAT-1055 (Codex sign-off): track per-program query failures so a
+        // partial result is SIGNALLED, not silently under-reported. Without this,
+        // a failed Token-2022 query reads identically to "holds no Token-2022
+        // tokens" — the exact "you have no PYUSD" false-claim class we're fixing.
+        const failedTokenStandards = [];
+        for (const [standard, tokenResult] of [['classic', classicRes], ['token_2022', token2022Res]]) {
+            // A successful empty wallet returns { value: [] } (truthy). A failure
+            // returns { error } / no `value` → mark the standard as unread.
+            if (!tokenResult || tokenResult.error || !tokenResult.value) {
+                failedTokenStandards.push(standard);
+                if (tokenResult && tokenResult.error) log(`[Tools] solana_balance ${standard} query failed: ${JSON.stringify(tokenResult.error)}`, 'DEBUG');
+                continue;
+            }
             for (const account of tokenResult.value) {
                 try {
                     const info = account.account.data.parsed.info;
@@ -296,13 +1269,27 @@ const handlers = {
                             mint: info.mint,
                             amount: info.tokenAmount.uiAmountString,
                             decimals: info.tokenAmount.decimals,
+                            tokenStandard: standard, // 'classic' | 'token_2022' — token_2022 can't be sent via solana_send_token
                         });
                     }
                 } catch (e) { log(`[Tools] Failed to parse token account: ${e.message}`, 'DEBUG'); }
             }
         }
 
-        return { address, sol: solBalance, tokens, tokenCount: tokens.length };
+        // BAT-1055 (CodeRabbit #410): emit a STABLE schema — both fields present
+        // every call so consumers never branch on presence. balanceIncomplete is
+        // always a boolean; failedTokenStandards is the array or null. Agent
+        // guidance: do NOT make definitive "you don't hold X" claims when
+        // balanceIncomplete is true — a token program's accounts could not be
+        // read this call.
+        return {
+            address,
+            sol: solBalance,
+            tokens,
+            tokenCount: tokens.length,
+            balanceIncomplete: failedTokenStandards.length > 0,
+            failedTokenStandards: failedTokenStandards.length > 0 ? failedTokenStandards : null,
+        };
     },
 
     async solana_history(input, chatId) {
@@ -333,33 +1320,66 @@ const handlers = {
     },
 
     async solana_send(input, chatId) {
+        // BAT-1037: solana_send is native-SOL-only. Reject SPL / fiat
+        // denomination hints (field-only log — never the supplied value)
+        // before any routing or tx build, so a wrong-asset request fails fast
+        // with actionable guidance and zero downstream side effects.
+        const denomReject = classifySolSendDenomination(input);
+        if (denomReject) {
+            log(`[solana_send] REJECT field=${denomReject.field} error=${denomReject.error}`, 'WARN');
+            return { error: denomReject.error, reason: denomReject.reason };
+        }
         // BAT-582 Phase 5: route through wallet dispatch so a configured
         // burner wallet can sign autonomously when under cap, and the
         // main MWA flow stays the fallback for over-cap or uncapped assets.
         // Behavior when burner is unconfigured matches v1.0 exactly: MWA
         // popup via /solana/sign.
+        //
+        // BAT-1013 foundation patch: added `source` param so the agent can
+        // explicitly route to main (user said "from main") or burner. When
+        // omitted, behavior is exactly the previous cap-based routing.
         let from;
         try {
             from = getConnectedWalletAddress();
         } catch (e) {
-            // Main wallet not connected — burner can still sign on its own
-            // pubkey if configured, but the existing tool semantics are
-            // "send FROM the connected wallet". Burner-as-source is a
-            // future-Phase change (Phase 5 keeps the MWA-from semantics
-            // even on the burner path: agent signs as the burner, but the
-            // tx pays from the burner's address — the burner pubkey IS
-            // the from address in that case).
-            //
-            // For Phase 5: if main wallet isn't connected and burner is
-            // configured, surface the clearer error from the bridge after
-            // routeAndSign returns. Don't pre-fail here.
             from = null;
         }
         const to = input.to;
         const amount = input.amount;
+        const sourcePref = (input.source === 'main' || input.source === 'burner') ? input.source : 'auto';
 
         if (!to || !amount || amount <= 0) {
             return { error: 'Both "to" address and a positive "amount" are required.' };
+        }
+
+        // BAT-1013 pre-flight: when the user explicitly said "from main"
+        // (source='main') but main wallet isn't connected, fail fast with
+        // a clear actionable message. Without this, the handler would fall
+        // through to the burner path and surface AccountLoadedTwice on a
+        // burner→burner self-send.
+        if (sourcePref === 'main' && from === null) {
+            return {
+                error: 'main_wallet_not_connected',
+                reason: 'Main wallet is not connected. Tap the Wallet button in the SeekerClaw app to authorize MWA, then retry.',
+            };
+        }
+
+        // BAT-1013 pre-flight: when no source preference is given AND main
+        // isn't connected, check if a burner is available — if neither is
+        // available, return the clear error instead of letting the handler
+        // tunnel into a broken tx build.
+        if (sourcePref === 'auto' && from === null) {
+            let burnerAvailable = false;
+            try {
+                const bs = await androidBridgeCall('/burner/status', {}, 3000);
+                burnerAvailable = !!(bs && !bs.error && bs.configured && bs.pubkey);
+            } catch (_) { /* treat as unavailable */ }
+            if (!burnerAvailable) {
+                return {
+                    error: 'main_wallet_not_connected',
+                    reason: 'Main wallet is not connected and no burner is configured. Tap the Wallet button to authorize MWA, or set up a burner in Settings > Burner Wallet.',
+                };
+            }
         }
 
         // Step 1: Get latest blockhash (shared by both wallets — RPC call,
@@ -369,15 +1389,33 @@ const handlers = {
         const recentBlockhash = blockhashResult.blockhash || (blockhashResult.value && blockhashResult.value.blockhash);
         if (!recentBlockhash) return { error: 'No blockhash returned from RPC' };
 
-        // Step 2: Determine the source address. Burner pubkey if routing
-        // says burner; otherwise the connected MWA wallet.
+        // Step 2: Determine the source address. BAT-1013: respect explicit
+        // `source` preference; otherwise fall back to cap-based routing.
+        // Burner pubkey if routing says burner; otherwise the connected MWA wallet.
         // We need the source BEFORE building the tx because Solana
         // transactions encode the fee payer in the message.
-        // routeFor decides routing based on amount + caps; we read it once
-        // here and reuse the decision for the broadcast path so the source
-        // matches the signer.
         const { routeFor } = require('../caps/preflight');
-        const routingHint = await routeFor('solana_send', input);
+        let routingHint;
+        if (sourcePref === 'main') {
+            // User explicitly said "from main" — force MWA routing regardless
+            // of caps. forceRouting is the same plumbing PR #398 R13 fixed
+            // for the Ultra-swap path; routeAndSign will skip routeFor() and
+            // use this decision directly.
+            routingHint = { routingDecision: 'main', underCap: true };
+        } else if (sourcePref === 'burner') {
+            // Explicit burner — still subject to cap math (over-cap → reject).
+            routingHint = await routeFor('solana_send', input);
+            if (routingHint.routingDecision !== 'burner') {
+                return {
+                    error: 'over_burner_cap',
+                    reason: 'source="burner" requested but amount exceeds burner per-tx or daily cap. Either lower the amount or use source="main".',
+                };
+            }
+        } else {
+            // 'auto' (default): existing behavior — cap-based routing.
+            routingHint = await routeFor('solana_send', input);
+        }
+
         let sourceAddress = from;
         if (routingHint.routingDecision === 'burner') {
             // Pull the burner pubkey from /burner/status. If burner is
@@ -391,6 +1429,20 @@ const handlers = {
         }
         if (!sourceAddress) {
             return { error: 'No source wallet available — connect a wallet (Settings > Solana Wallet) or configure a burner (Settings > Burner Wallet).' };
+        }
+
+        // BAT-1013 self-send guard: reject burner→burner (or main→main)
+        // transfers BEFORE building the tx. Without this the simulator returns
+        // AccountLoadedTwice — a cryptic error the user can't act on. This
+        // handler-level check complements the defense-in-depth shape check
+        // in burner-policy.validateExpectedDeltaShape so the main-wallet
+        // path also gets the friendly error (the policy gate runs only on
+        // burner signs).
+        if (sourceAddress === to) {
+            return {
+                error: 'self_send_rejected',
+                reason: `Cannot send to the same address that pays the transaction (${sourceAddress.slice(0, 4)}…${sourceAddress.slice(-4)}). Pick a different recipient, or use source="main" to send from your main wallet to the burner.`,
+            };
         }
 
         // Step 3: Build unsigned transaction.
@@ -409,12 +1461,35 @@ const handlers = {
         // atomically via /solana/sign (existing MWA behavior); burner
         // signs only, then we broadcast the signed bytes via RPC
         // sendTransaction.
+        // BAT-1013 Phase 3b: solana_send for native SOL only (this code path
+        // is the SOL transfer branch — SPL goes through a different handler).
+        const sendExpectedDelta = {
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: {
+                account: sourceAddress,
+                mint: 'native_sol',
+                atomicAmount: String(lamports),
+            },
+            recipient: {
+                account: to,
+                mint: 'native_sol',
+            },
+            burnerOwnedAccounts: [],
+        };
+
         const result = await routeAndSign({
             toolName: 'solana_send',
             toolArgs: input,
             unsignedTxBase64: txBase64,
             broadcastVia: 'rpc',
             flowName: 'solana_send',
+            // BAT-1013: thread routingHint via forceRouting so dispatch.js
+            // honors the explicit source preference (especially source='main')
+            // instead of re-calling routeFor(toolArgs) which would ignore the
+            // 'source' field. Same plumbing as PR #398 R13 fixed for solana_swap.
+            forceRouting: routingHint,
+            expectedDelta: sendExpectedDelta,
             broadcast: async (txBase64, _signer, ctx) => {
                 // ctx.signed === false for main path (unsigned tx → sign+broadcast via MWA)
                 // ctx.signed === true  for burner path (signed bytes → RPC sendTransaction)
@@ -447,9 +1522,200 @@ const handlers = {
         });
 
         if (!result.ok) {
-            return { error: result.error, reason: result.reason };
+            return forwardDispatchError(result);
         }
         return { signature: result.signature, success: true, wallet: result.wallet };
+    },
+
+    // BAT-1036: autonomous classic-SPL token transfer from burner OR main.
+    // Token-2022 is fail-closed (route to main/MWA). The on-chain mint triple-pin
+    // (program-owner + decimals, + canonical-USDC decimals==6) runs BEFORE any
+    // routing / reserve / build / sign, so a bad mint costs ZERO mutating calls
+    // (read-only getAccountInfo / burner-status hydration only). Mirrors the
+    // solana_send dispatch shape; the SPL expectedDelta declares the ATAs (the
+    // accounts the burner-policy loss invariant actually scores).
+    async solana_send_token(input, chatId) {
+        const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+        const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+        const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+        // CodeRabbit #408: normalize at extraction — isValidSolanaAddress trims
+        // internally, so a whitespace-padded address would pass validation but
+        // then break downstream at deriveAtaBase58 / getAccountInfo. Trim here so
+        // the validated value is the value used everywhere.
+        const to = (input.to == null) ? '' : String(input.to).trim();
+        const mint = (input.mint == null) ? '' : String(input.mint).trim();
+        const amountStr = (input.amount == null) ? '' : String(input.amount).trim();
+        const sourcePref = (input.source === 'main' || input.source === 'burner') ? input.source : 'auto';
+
+        // --- shape validation (no side effects) ---
+        if (!isValidSolanaAddress(to)) return { error: 'invalid_recipient', reason: '"to" must be a base58 Solana address.' };
+        if (!isValidSolanaAddress(mint)) return { error: 'invalid_mint', reason: '"mint" must be a base58 SPL mint. For native SOL use solana_send instead.' };
+        if (!amountStr) return { error: 'invalid_amount', reason: '"amount" is required — a positive decimal string (e.g. "1.5").' };
+
+        // --- Step 1: on-chain mint triple-pin (owner program + decimals).
+        // Authoritative — never trust a cached token list for the standard/decimals.
+        const mintInfo = await solanaRpc('getAccountInfo', [mint, { encoding: 'base64' }]);
+        const mv = mintInfo && mintInfo.value;
+        if (!mv || !mv.owner || !mv.data) {
+            return { error: 'mint_not_found', reason: `Mint ${mint} was not found on-chain (or is not an initialized mint account).` };
+        }
+        if (mv.owner === TOKEN_2022_PROGRAM) {
+            return {
+                error: 'token_2022_send_unsupported',
+                reason: 'This is a Token-2022 mint. Autonomous Token-2022 transfers are not supported yet — send it from your main wallet (MWA) / wallet app instead.',
+            };
+        }
+        if (mv.owner !== TOKEN_PROGRAM) {
+            return { error: 'unsupported_mint', reason: `Mint ${mint} is owned by ${mv.owner}, not the classic SPL Token program — only classic SPL tokens are supported.` };
+        }
+        let decimals;
+        try {
+            const mintData = Buffer.from(mv.data[0], 'base64');
+            if (mintData.length < 45) return { error: 'unsupported_mint', reason: 'Mint account data is too short to be a valid SPL mint.' };
+            decimals = mintData.readUInt8(44);
+        } catch (e) {
+            return { error: 'unsupported_mint', reason: `Could not decode mint account data: ${e.message}` };
+        }
+        const isUsdc = (mint === USDC_MINT);
+        if (isUsdc && decimals !== 6) {
+            return { error: 'usdc_decimals_mismatch', reason: `Canonical USDC must report 6 decimals on-chain; this mint reports ${decimals}. Refusing (possible spoofed mint).` };
+        }
+
+        // --- Step 2: amount → atomic (exact decimal string; reuse the cap parser) ---
+        const { _decimalToAtomic, routeFor } = require('../caps/preflight');
+        const atomic = _decimalToAtomic(amountStr, decimals);
+        if (atomic == null) return { error: 'invalid_amount', reason: `"amount" must be a positive decimal with at most ${decimals} fractional digits (got "${amountStr}").` };
+        if (atomic === 0n) return { error: 'zero_amount', reason: 'Amount must be greater than zero.' };
+        if (atomic > 0xFFFFFFFFFFFFFFFFn) return { error: 'amount_overflow', reason: 'Amount exceeds the u64 maximum a single SPL transfer can carry.' };
+
+        // --- Step 3: routing (source × asset × cap). USDC is the only burner-cap
+        // asset; every other classic SPL is main-only (MWA). The handler is
+        // authoritative — its routeFor uses the pinned mint. ---
+        let routingHint;
+        if (sourcePref === 'main') {
+            routingHint = { routingDecision: 'main', underCap: true };
+        } else if (sourcePref === 'burner') {
+            if (!isUsdc) return { error: 'unsupported_cap_asset', reason: 'source="burner" only supports USDC autonomously. For other tokens omit source (routes to main) or use source="main".' };
+            routingHint = await routeFor('solana_send_token', input);
+            if (routingHint.routingDecision !== 'burner') {
+                return { error: 'burner_not_configured', reason: 'source="burner" requested but no burner is configured. Set one up in Settings > Burner Wallet, or use source="main".' };
+            }
+            if (!routingHint.underCap) {
+                return { error: 'over_burner_cap', reason: 'source="burner" requested but the amount exceeds the burner per-tx or daily USDC cap. Lower the amount or use source="main".' };
+            }
+        } else { // auto
+            if (!isUsdc) {
+                routingHint = { routingDecision: 'main', underCap: true };
+            } else {
+                routingHint = await routeFor('solana_send_token', input);
+                if (routingHint.routingDecision === 'burner' && !routingHint.underCap) {
+                    return { error: 'over_burner_cap', reason: 'Amount exceeds the burner USDC cap. Use source="main" to send this amount from your main wallet (MWA).' };
+                }
+            }
+        }
+
+        // --- Step 4: resolve the source wallet (fee payer + transfer authority) ---
+        let mainWallet = null;
+        try { mainWallet = getConnectedWalletAddress(); } catch (_) { mainWallet = null; }
+        let sourceAddress = mainWallet;
+        if (routingHint.routingDecision === 'burner') {
+            try {
+                const bs = await androidBridgeCall('/burner/status', {}, 5000);
+                sourceAddress = (bs && !bs.error && bs.configured && bs.pubkey) ? bs.pubkey : null;
+            } catch (_) { sourceAddress = null; }
+            if (!sourceAddress) return { error: 'burner_not_configured', reason: 'Burner routing selected but no burner pubkey is available. Configure a burner in Settings > Burner Wallet.' };
+        } else if (!sourceAddress) {
+            return { error: 'main_wallet_not_connected', reason: 'Main wallet is not connected. Tap the Wallet button to authorize MWA, then retry (or set up a burner for USDC).' };
+        }
+
+        // --- Step 5: self-send guard (wallet level — burner-policy mirrors it on ATAs) ---
+        if (sourceAddress === to) {
+            return { error: 'self_send_rejected', reason: `Cannot send to the same wallet that signs the transfer (${sourceAddress.slice(0, 4)}…${sourceAddress.slice(-4)}). Pick a different recipient.` };
+        }
+
+        // --- Step 6: ATA existence. Source ATA MUST exist (never created here);
+        // recipient ATA is created idempotently when missing (selected wallet pays
+        // the ~0.002 SOL rent — covered by the burner SOL-floor headroom, NOT
+        // declared in burnerDebit). ---
+        const { deriveAtaBase58 } = require('../wallet/ata');
+        const sourceAta = deriveAtaBase58(sourceAddress, mint);
+        const destAta = deriveAtaBase58(to, mint);
+        const srcInfo = await solanaRpc('getAccountInfo', [sourceAta, { encoding: 'base64' }]);
+        if (!srcInfo || !srcInfo.value) {
+            return { error: 'source_ata_missing_or_insufficient', reason: `The ${routingHint.routingDecision} wallet has no token account for this mint — nothing to send.` };
+        }
+        const destInfo = await solanaRpc('getAccountInfo', [destAta, { encoding: 'base64' }]);
+        const createRecipientAta = !(destInfo && destInfo.value);
+
+        // --- Step 7: blockhash + build the TransferChecked tx (selected wallet
+        // is fee payer + authority). ---
+        const blockhashResult = await solanaRpc('getLatestBlockhash', [{ commitment: 'finalized' }]);
+        const recentBlockhash = blockhashResult && (blockhashResult.blockhash || (blockhashResult.value && blockhashResult.value.blockhash));
+        if (!recentBlockhash) return { error: 'blockhash_failed', reason: 'Could not fetch a recent blockhash from RPC.' };
+
+        const { buildClassicSplTransferTx } = require('../payment/x402');
+        let built;
+        try {
+            built = buildClassicSplTransferTx({
+                payerAuthority: sourceAddress,
+                recipientOwner: to,
+                mint,
+                decimals,
+                amountAtomic: atomic,
+                recentBlockhash,
+                createRecipientAta,
+            });
+        } catch (e) {
+            return { error: 'tx_build_failed', reason: e.message };
+        }
+        const txBase64 = built.txBuffer.toString('base64');
+
+        // --- Step 8: expectedDelta. For SPL the accounts are the ATAs (what the
+        // burner-policy loss invariant scores): the source ATA loses exactly
+        // `atomic`, the recipient ATA gains exactly `atomic` (allowCreate). ---
+        const expectedDelta = {
+            kind: 'solana_send',
+            signerMode: 'burner_only',
+            burnerDebit: { account: built.sourceAta, mint, atomicAmount: String(atomic) },
+            recipient: { account: built.destAta, mint },
+            burnerOwnedAccounts: [],
+        };
+
+        // --- Step 9: route + sign + broadcast (same dispatch as solana_send) ---
+        const result = await routeAndSign({
+            toolName: 'solana_send_token',
+            toolArgs: input,
+            unsignedTxBase64: txBase64,
+            broadcastVia: 'rpc',
+            flowName: 'solana_send_token',
+            forceRouting: routingHint,
+            expectedDelta,
+            broadcast: async (txB64, _signer, ctx) => {
+                if (!ctx || !ctx.signed) {
+                    await ensureWalletAuthorized();
+                    const r = await androidBridgeCall('/solana/sign', { transaction: txB64 }, 120000);
+                    if (!r || r.error) return { error: r && r.error ? r.error : 'sign_failed' };
+                    if (!r.signature) return { error: 'No signature returned from wallet' };
+                    return { signature: base58Encode(Buffer.from(r.signature, 'base64')) };
+                }
+                const sendResult = await solanaRpc('sendTransaction', [
+                    txB64,
+                    { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed' },
+                ]);
+                if (sendResult && sendResult.error) {
+                    return { error: 'rpc_send_failed', reason: typeof sendResult.error === 'string' ? sendResult.error : JSON.stringify(sendResult.error) };
+                }
+                if (typeof sendResult === 'string') return { signature: sendResult };
+                if (sendResult && sendResult.value) return { signature: sendResult.value };
+                return { error: 'rpc_send_failed', reason: 'no signature in RPC response' };
+            },
+        });
+
+        if (!result.ok) {
+            return forwardDispatchError(result);
+        }
+        return { signature: result.signature, success: true, wallet: result.wallet, mint, amount: amountStr, recipient: to, createdRecipientAta: createRecipientAta };
     },
 
     async solana_price(input, chatId) {
@@ -621,6 +1887,51 @@ const handlers = {
 
             // BAT-255: Pre-swap balance check — fail fast before wallet popup / Jupiter order
             const SOL_NATIVE_MINT = 'So11111111111111111111111111111111111111112';
+
+            // BAT-1057: held-token → cap-asset CONVERSION classification (Codex
+            // v2). When the burner holds a NON-cap token (e.g. PYUSD) and the
+            // user swaps it BACK to USDC/SOL, routeFor (above) returned 'main'
+            // because the input isn't a cap asset — but the token lives in the
+            // BURNER, not main. Detect that here (AFTER token resolution, BEFORE
+            // the balance pre-check + order fetch) and, if eligible, switch the
+            // taker to the burner. Eligibility is gated hard: output IS a cap
+            // asset, input is NOT, a burner is configured, and the input mint is
+            // NOT a fee-bearing/unparseable Token-2022 (the burner's exact-debit
+            // policy can't bound a fee-skimmed spend → main). The cap-AMOUNT
+            // (minOut) + price-impact are enforced AFTER the order exists.
+            const _USDC_MINT_1057 = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+            const _isCapAssetAddr_1057 = (a) => a === SOL_NATIVE_MINT || a === _USDC_MINT_1057;
+            let isConversion = false;
+            let conversionTokenStandard = null; // 'token_2022' when the held input is Token-2022
+            if (routingHint.routingDecision !== 'burner'
+                && !_isCapAssetAddr_1057(inputToken.address)
+                && _isCapAssetAddr_1057(outputToken.address)) {
+                try {
+                    const bs = await androidBridgeCall('/burner/status', {}, 5000);
+                    if (bs && !bs.error && bs.configured && bs.pubkey) {
+                        // Codex v2 #6: fee-bearing / unparseable Token-2022 input → refuse
+                        // (main can't hold the token either, so this is a hard stop).
+                        const t2022 = require('../wallet/token2022-mint');
+                        const mintInfo = await solanaRpc('getAccountInfo', [inputToken.address, { encoding: 'base64' }]);
+                        const mOwner = mintInfo && mintInfo.value && mintInfo.value.owner;
+                        const mData = mintInfo && mintInfo.value && mintInfo.value.data && mintInfo.value.data[0];
+                        const feeInfo = t2022.readMintTransferFeeBps(mOwner, mData);
+                        if (feeInfo.feeBps === null) {
+                            return { error: `Can't safely convert ${inputToken.symbol} from the burner — its mint config couldn't be verified as fee-free. Swap it from your main wallet app instead.` };
+                        }
+                        if (feeInfo.feeBps > 0) {
+                            return { error: `Can't convert ${inputToken.symbol} from the burner — it's a Token-2022 token with a ${feeInfo.feeBps}bps transfer fee, which autonomous signing doesn't support yet. Swap it from your main wallet app instead.` };
+                        }
+                        userPublicKey = bs.pubkey; // burner is the taker for the order + pre-check
+                        isConversion = true;
+                        conversionTokenStandard = (feeInfo.standard === 'token_2022') ? 'token_2022' : null;
+                        log(`[Jupiter Ultra] BAT-1057 conversion candidate: ${inputToken.symbol}→${outputToken.symbol} via burner (input ${feeInfo.standard}, fee 0)`, 'INFO');
+                    }
+                } catch (convErr) {
+                    log(`[Jupiter Ultra] conversion classification skipped: ${convErr.message}`, 'DEBUG');
+                    // fall through — treated as a normal (main) swap, unchanged
+                }
+            }
             const isNativeSOL = inputToken.address === SOL_NATIVE_MINT;
             // BAT-582 follow-up: native SOL swaps need headroom for tx fees +
             // ATA rent on top of the swap amount. Pre-fix the check passed
@@ -732,96 +2043,391 @@ const handlers = {
                 return o;
             };
 
-            try {
-                order = await fetchAndVerifyOrder();
-                orderTimestamp = Date.now();
-            } catch (e) {
-                return { error: e.message };
-            }
+            // BAT-1061: a burner-signed Ultra swap that fails ON-CHAIN with a transient
+            // slippage / price-check error (market moved between quote and execution) is
+            // re-quoted + retried (bounded) — NEVER surfaced as a burner/Token-2022 limit.
+            // Codex-locked NARROW allowlist; vague codes deferred pending a captured response.
+            const SLIPPAGE_RETRY_PATTERNS = [
+                /\b6001\b/, /0x1771\b/i,
+                /slippage\s*tolerance\s*exceeded/i, /slippage\s*exceeded/i,
+                /min(?:imum)?\s*return\s*not\s*reached/i,
+                /\b6017\b/, /0x1781\b/i, /exact\s*out\s*amount\s*not\s*matched/i,
+            ];
+            const _isSlippageRetryable = (reason) => {
+                const _s = (typeof reason === 'string') ? reason : (reason != null ? JSON.stringify(reason) : '');
+                return SLIPPAGE_RETRY_PATTERNS.some((re) => re.test(_s));
+            };
+            const MAX_SWAP_RETRIES = 2;
+            // BAT-1066 (CodeRabbit #419): remediation text for the transient/retryable
+            // burner signing-gate errors below (fee_payer_mismatch, expected_delta_unbuildable)
+            // must be ROUTE-AWARE. A BAT-1057 conversion's input asset is held in the BURNER
+            // (that's why it routes there), so "run it from your main wallet" is NOT a valid
+            // fallback — the main wallet doesn't hold the token. These errors are transient,
+            // so the real remediation is to retry. For an ordinary burner swap, suggesting the
+            // main wallet IS valid (the user can redo the swap with main-wallet funds).
+            const _burnerSignFallbackHint = isConversion
+                ? 'This is transient (Jupiter routes / mint lookups vary between fetches) — ask the user to retry. The token being converted is held in the burner, so this can\'t be run from the main wallet.'
+                : 'Retry (Jupiter routes change), or run the swap from your main wallet.';
+            let result;
+            for (let _swapAttempt = 1; ; _swapAttempt++) {
+                try {
+                    order = await fetchAndVerifyOrder();
+                    orderTimestamp = Date.now();
+                } catch (e) {
+                    return { error: e.message };
+                }
 
-            // BAT-582 Phase 5: route through wallet dispatch. The broadcast
-            // callback handles the Jupiter Ultra TTL re-quote dance — for
-            // burner the sign step is fast (no popup) so re-quote is
-            // basically never needed; for main, MWA approval can take
-            // longer than the Ultra signed-payload TTL (~2 min) so we
-            // detect that and re-quote inside the broadcast callback.
-            //
-            // routeAndSign passes UNSIGNED tx to broadcast() for the main
-            // path (signer.signAndSend signs+broadcasts atomically via MWA)
-            // and SIGNED tx for the burner path (sign-only happened before
-            // broadcast()). We branch on which we got and handle TTL
-            // accordingly. For Phase 5 we keep the existing TTL safe-guard
-            // wired only on the main path — the burner path's reservation
-            // already enforces a 60s TTL upstream and Ultra's 2-min limit
-            // is comfortably wider.
-            const ULTRA_RPC_HINT = 'jupiter';
-
-            const result = await routeAndSign({
-                toolName: 'solana_swap',
-                toolArgs: input,
-                unsignedTxBase64: order.transaction,
-                broadcastVia: ULTRA_RPC_HINT,
-                flowName: 'solana_swap',
-                broadcast: async (txOrUnsigned, _signer, ctx) => {
-                    // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
-                    // ctx.signed === false → main path  (txOrUnsigned is unsigned, sign via MWA)
-                    if (ctx && ctx.signed) {
-                        log('[Jupiter Ultra] Executing burner-signed tx...', 'INFO');
-                        const ex = await jupiterUltraExecute(txOrUnsigned, order.requestId);
-                        if (ex.status === 'Failed') {
-                            return { error: 'execute_failed', reason: ex.error || 'Jupiter Ultra rejected' };
+                // BAT-1057: post-order CONVERSION gate. The order now exists, so we
+                // know the real minOut + price impact. Enforce the price-impact
+                // ceiling (Codex v2 #5: Ultra `priceImpact` is a percent value,
+                // `priceImpactPct` a fraction fallback; > 100 bps / 1% → refuse) and
+                // set the internal forceRouting to the burner with principalAtomic =
+                // the signed order's minOut. The /burner/reserve path enforces the
+                // cap AMOUNT (Codex v2 #3 option b); the burner-policy A1 re-gate
+                // independently enforces the conversion shape + price impact.
+                let conversionPriceImpactBps = null;
+                if (isConversion) {
+                    // priceImpact (percent, e.g. 0.0648 = 0.0648%) → bps; fall back to
+                    // priceImpactPct (fraction, e.g. 0.000018 = 0.0018%). Captured
+                    // 2026-06-24 against real Ultra orders. Absent/non-finite → null.
+                    const _piToBps = (o) => {
+                        // CodeRabbit #411: Math.CEIL, not round — rounding down lets
+                        // 1.004% (100.4 bps) collapse to 100 and slip under the ceiling.
+                        // Any impact above the limit must fail closed.
+                        if (o && o.priceImpact != null) {
+                            const pi = Number(o.priceImpact);
+                            if (isFinite(pi) && pi >= 0) return Math.ceil(pi * 100);
                         }
-                        if (!ex.signature) {
+                        if (o && o.priceImpactPct != null) {
+                            const pct = Number(o.priceImpactPct);
+                            if (isFinite(pct) && pct >= 0) return Math.ceil(pct * 10000);
+                        }
+                        return null;
+                    };
+                    conversionPriceImpactBps = _piToBps(order);
+                    if (conversionPriceImpactBps === null) {
+                        // BAT-1062: an UNREADABLE price impact is a TRANSIENT route issue — Jupiter's
+                        // /order didn't expose priceImpact/priceImpactPct for this route (intermittent;
+                        // a fresh order almost always does). Re-quote in the shared BAT-1061 loop,
+                        // continuing BEFORE routeAndSign so there is NO reserve/sign/execute this attempt.
+                        // Each re-quote re-runs this gate → we never sign an unverifiable-impact order.
+                        if (_swapAttempt <= MAX_SWAP_RETRIES) {
+                            log(`[Jupiter Ultra] conversion price-impact unreadable (attempt ${_swapAttempt}/${MAX_SWAP_RETRIES + 1}) — re-quoting a fresh order`, 'WARN');
+                            continue;
+                        }
+                        return { error: 'conversion_quote_unverifiable', retryable: true, attempts: _swapAttempt, reason: `Couldn't read the price impact for this ${inputToken.symbol}→${outputToken.symbol} conversion across ${_swapAttempt} fresh quotes.`, next_step: 'Jupiter returned routes without a readable price-impact. Ask the user to retry for a fresh quote — this is route/market flakiness, not a burner or Token-2022 limitation.' };
+                    }
+                    if (conversionPriceImpactBps > 100) {
+                        return { error: `This ${inputToken.symbol}→${outputToken.symbol} conversion has ${(conversionPriceImpactBps / 100).toFixed(2)}% price impact (above the 1% autonomous limit). Swap it from your main wallet app to confirm the rate.` };
+                    }
+                    // CodeRabbit #411: never manufacture a '0' minOut — reserving
+                    // against zero (or building an expectedDelta with no guaranteed
+                    // proceeds) must fail closed. Require a positive integer.
+                    const _convMinOut = String(order.otherAmountThreshold ?? order.outAmount ?? '');
+                    if (!/^[1-9]\d*$/.test(_convMinOut)) {
+                        // BAT-1062: a missing / non-positive minOut on an OTHERWISE-USABLE order is the
+                        // same transient-route class as the price-impact case → re-quote (continue before
+                        // routeAndSign). Bounded by the shared loop. (Codex #4: scoped to this field only;
+                        // no-transaction / insufficient-funds order-build errors stay terminal upstream.)
+                        if (_swapAttempt <= MAX_SWAP_RETRIES) {
+                            log(`[Jupiter Ultra] conversion minOut unreadable (attempt ${_swapAttempt}/${MAX_SWAP_RETRIES + 1}) — re-quoting a fresh order`, 'WARN');
+                            continue;
+                        }
+                        return { error: 'conversion_quote_unverifiable', retryable: true, attempts: _swapAttempt, reason: `Couldn't read a positive minimum output for this ${inputToken.symbol}→${outputToken.symbol} conversion across ${_swapAttempt} fresh quotes.`, next_step: 'Jupiter returned routes without a readable minimum-output. Ask the user to retry for a fresh quote — this is route/market flakiness, not a burner or Token-2022 limitation.' };
+                    }
+                    const _outIsUsdc = outputToken.address === _USDC_MINT_1057;
+                    // Mutate (not reassign) the const routingHint object → burner.
+                    routingHint.routingDecision = 'burner';
+                    routingHint.principalAtomic = _convMinOut;
+                    routingHint.capName = _outIsUsdc ? 'burner.pertx.usdc' : 'burner.pertx.sol';
+                    routingHint.dailyCapName = _outIsUsdc ? 'burner.daily.usdc' : 'burner.daily.sol';
+                    routingHint.reason = 'conversion';
+                    delete routingHint.underCap; // let /burner/reserve decide against the real minOut
+                }
+
+                // BAT-582 Phase 5: route through wallet dispatch. The broadcast
+                // callback handles the Jupiter Ultra TTL re-quote dance — for
+                // burner the sign step is fast (no popup) so re-quote is
+                // basically never needed; for main, MWA approval can take
+                // longer than the Ultra signed-payload TTL (~2 min) so we
+                // detect that and re-quote inside the broadcast callback.
+                //
+                // routeAndSign passes UNSIGNED tx to broadcast() for the main
+                // path (signer.signAndSend signs+broadcasts atomically via MWA)
+                // and SIGNED tx for the burner path (sign-only happened before
+                // broadcast()). We branch on which we got and handle TTL
+                // accordingly. For Phase 5 we keep the existing TTL safe-guard
+                // wired only on the main path — the burner path's reservation
+                // already enforces a 60s TTL upstream and Ultra's 2-min limit
+                // is comfortably wider.
+                const ULTRA_RPC_HINT = 'jupiter';
+
+                // BAT-1013 Phase 3b: build expectedDelta for the burner-policy gate.
+                // Only the burner path consumes it; main path ignores the field.
+                // Ultra is a sponsored-fee flow, so signerMode is 'sponsored' when
+                // routed through Ultra's gasless mode (Jupiter pays the fee + may
+                // co-sign). The cosigner allowlist is left empty by default — the
+                // policy's `sponsored` mode allows the fee payer to be ANY signer
+                // declared in feePayerAllowlist; for Ultra the relayer pubkey is
+                // surfaced as `order.feePayer` in some responses. When the
+                // expectedDelta fields are imprecise (sponsored mode + missing
+                // relayer pubkey), the burner-policy reject is availability-class
+                // and the agent surfaces it; in v2.1 first-ship we err on the
+                // side of fail-closed for Ultra-via-burner until the live test
+                // fixtures pin the exact field shapes.
+                // Q5 (BAT-1013-followup): fee-payer introspection on the unsigned
+                // Ultra tx. Jupiter Ultra is a sponsored-fee design — the relayer
+                // typically pays the fee, so account[0] (fee payer) will NOT equal
+                // the burner pubkey in production. The Phase 3b expectedDelta below
+                // declares signerMode='burner_only', which the policy gate
+                // interprets as "burner is fee payer" — that mismatch would either
+                // (a) fail-closed at the policy gate, or (b) silently allow a
+                // sponsored tx through if signerMode is misread. As a defensive
+                // belt-and-braces fallback: when routing was 'burner' AND the
+                // unsigned tx's fee payer differs from the burner pubkey, route to
+                // main so the user sees the MWA popup instead of an opaque
+                // burner-policy reject. The full sponsored-mode wiring (with
+                // feePayerAllowlist sourced from order.feePayer when Jupiter
+                // surfaces it) is tracked in Phase 3b-follow-up; until that lands,
+                // this defensive check prevents a silent burner-policy reject.
+                try {
+                    const feePayer = _extractFeePayerBase58(order.transaction);
+                    if (feePayer && feePayer !== userPublicKey && routingHint.routingDecision === 'burner') {
+                        // BAT-1038 Amendment 1: a burner-built Ultra order whose decoded
+                        // fee payer ≠ the burner taker must FAIL CLOSED. The previous code
+                        // re-routed to main, which reused the SAME burner-taker order on
+                        // the MWA signer — sponsored signer-mode is not wired in the swap
+                        // path, so that is unsafe. Return BEFORE routeAndSign: no reserve,
+                        // no sign, no broadcast. (Probe 2026-06-24: the real USDC→PYUSD
+                        // route DOES use the burner as fee payer, so this is a defensive
+                        // guard, not the normal path.) A real main fallback requires a NEW
+                        // jupiterUltraOrder with the main wallet as taker (separate invoke).
+                        log(`[Jupiter Ultra] fee_payer_mismatch: order fee payer ${feePayer} != burner taker ${userPublicKey}; sponsored signer-mode not wired — failing closed`, 'WARN');
+                        return {
+                            error: 'fee_payer_mismatch',
+                            reason: `This swap route's fee payer (${feePayer.slice(0, 4)}…${feePayer.slice(-4)}) differs from the burner, and a burner-built order can't be safely signed by the main wallet. ${_burnerSignFallbackHint}`,
+                            retryable: true,
+                        };
+                    }
+                } catch (introspectErr) {
+                    // BAT-1038 Amendment 1 (CodeRabbit #409): on a BURNER route, an
+                    // UNVERIFIABLE fee payer is the same risk class as a mismatched
+                    // one — sponsored signer-mode is unwired, so we must not sign an
+                    // order whose fee payer we couldn't decode. Fail closed. Main
+                    // routes are unaffected (the MWA wallet signs what it's shown and
+                    // is the fee payer by construction).
+                    if (routingHint.routingDecision === 'burner') {
+                        log(`[Jupiter Ultra] fee-payer introspection failed on burner route: ${introspectErr.message} — failing closed`, 'WARN');
+                        return {
+                            error: 'fee_payer_mismatch',
+                            reason: `Couldn't verify this swap route's fee payer (transaction introspection failed) — the burner won't sign an unverifiable order. ${_burnerSignFallbackHint}`,
+                            retryable: true,
+                        };
+                    }
+                    log(`[Jupiter Ultra] fee-payer introspection failed: ${introspectErr.message} — proceeding (main route)`, 'DEBUG');
+                }
+
+                let expectedDelta = null;
+                try {
+                    const burnerPubkey = userPublicKey; // burner path uses burner as taker
+                    const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                    const outputIsSol = outputToken.address === 'So11111111111111111111111111111111111111112';
+                    const ata = require('../wallet/ata');
+                    // BAT-1038: derive each side's ATA against the mint's OWNING token
+                    // program (classic vs Token-2022). The classic-only derivation made a
+                    // Token-2022 output (e.g. PYUSD) resolve to a PHANTOM address that the
+                    // swap never touches → null post-state → false simulation_delta_mismatch.
+                    // Look up the mint owner on-chain (non-native mints only). An
+                    // unrecognized/failed owner lookup THROWS → caught below → forces main
+                    // (fail-safe; never assume classic for an unknown mint).
+                    const _T1038_TOKEN = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+                    const _T1038_TOKEN_2022 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+                    const _mintTokenProgram = async (mintB58) => {
+                        const info = await solanaRpc('getAccountInfo', [mintB58, { encoding: 'base64' }]);
+                        const owner = info && info.value && info.value.owner;
+                        if (owner === _T1038_TOKEN || owner === _T1038_TOKEN_2022) return owner;
+                        throw new Error(`mint ${mintB58} owner ${owner || 'unknown'} is not a recognized SPL token program`);
+                    };
+                    const debitAccount = inputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, inputToken.address, await _mintTokenProgram(inputToken.address));
+                    const creditAccount = outputIsSol ? burnerPubkey : ata.deriveAtaBase58(burnerPubkey, outputToken.address, await _mintTokenProgram(outputToken.address));
+                    const minOut = String(order.otherAmountThreshold || order.outAmount || '0');
+                    // B1 (BAT-1013-followup): when input OR output is native SOL,
+                    // Jupiter Ultra's documented wrapping pattern is open-wSOL-ATA
+                    // → swap → CloseAccount(wSOL-ATA, destination=burner). The
+                    // burner-policy drainer-walk treats CloseAccount as drainer-
+                    // class by default; without an explicit exemption the policy
+                    // gate would reject every native-SOL Ultra swap. The
+                    // exemption is encoded as an OPTIONAL field on
+                    // jupiter_swap_immediate: { ata, destination } MUST both
+                    // match the burner's wSOL ATA and the burner itself, validated
+                    // structurally by burner-policy.js at expectedDelta-shape time.
+                    // Any deviation (different destination, different ATA, ix not
+                    // CloseAccount) is fail-closed.
+                    //
+                    // Q8 (BAT-1013-followup): burnerOwnedAccounts below declares
+                    // the EXPLICIT debit + credit ATAs the burner debits/credits.
+                    // Multi-hop intermediate ATAs Jupiter routes through are NOT
+                    // declared here — burner-policy.js step 10 derives the
+                    // multi-hop ownership set from the simulation pre-snapshot
+                    // (declared ∪ sim-owned). If Jupiter inserts an intermediate
+                    // ATA the burner owns but we didn't declare, sim-owned picks
+                    // it up; if it inserts one we DON'T own, the policy's
+                    // ownership-resolver fails closed (drainer_* or
+                    // account_ownership_uncertain).
+                    const NATIVE_MINT_BASE58 = 'So11111111111111111111111111111111111111112';
+                    let wsolAtaExemption = null;
+                    if (inputIsSol || outputIsSol) {
+                        try {
+                            const wsolAta = ata.deriveAtaBase58(burnerPubkey, NATIVE_MINT_BASE58);
+                            wsolAtaExemption = { ata: wsolAta, destination: burnerPubkey };
+                        } catch (wsolErr) {
+                            log(`[Jupiter Ultra] Could not derive wSOL ATA for exemption: ${wsolErr.message}`, 'WARN');
+                            // Fall through — exemption stays null. Policy gate
+                            // will reject CloseAccount, which routeAndSign treats
+                            // as a security failure; user sees the rejection.
+                        }
+                    }
+                    expectedDelta = {
+                        kind: 'jupiter_swap_immediate',
+                        signerMode: 'burner_only', // single-signer path; sponsored mode wires in Phase 3b-follow-up once Ultra fee-payer pubkey is plumbed
+                        burnerDebit: {
+                            account: debitAccount,
+                            mint: inputIsSol ? 'native_sol' : inputToken.address,
+                            atomicAmount: String(amountRaw),
+                        },
+                        burnerCreditMin: {
+                            account: creditAccount,
+                            mint: outputIsSol ? 'native_sol' : outputToken.address,
+                            atomicAmount: minOut,
+                        },
+                        burnerOwnedAccounts: [debitAccount, creditAccount].filter(a => a !== burnerPubkey),
+                        toleranceBps: Math.min((order.slippageBps || 100) + 25, 200),
+                        ...(wsolAtaExemption ? { wsolAtaExemption } : {}),
+                        // BAT-1057: conversion declarations the burner-policy A1
+                        // re-gate requires (non-cap debit → cap-asset credit). The
+                        // price impact is bound to THIS signed order; tokenStandard
+                        // is declared when the held input is Token-2022 (so the
+                        // policy's token_2022_undeclared gate accepts it).
+                        ...(isConversion ? { conversionPriceImpactBps } : {}),
+                        ...(conversionTokenStandard ? { tokenStandard: conversionTokenStandard } : {}),
+                    };
+                } catch (eDelta) {
+                    // BAT-1066 (CodeRabbit #413) + BAT-1038 Amendment 1: order.transaction
+                    // was built by the order step with userPublicKey as taker. On a BURNER
+                    // route that taker IS the burner, so flipping routingHint to 'main' and
+                    // signing via MWA would hand the SAME burner-taker order to the main
+                    // wallet — the exact unsafe fallback the fee-payer guard above fails
+                    // closed on (sponsored signer-mode is unwired). Fail CLOSED on a burner
+                    // route instead of re-routing a stale burner-taker order to MWA. A real
+                    // main fallback needs a NEW order with the main wallet as taker (separate
+                    // invoke), so we don't fabricate one here.
+                    if (routingHint.routingDecision === 'burner') {
+                        log(`[Jupiter Ultra] expected_delta_unbuildable on burner route: ${eDelta.message} — failing closed (won't sign a burner-taker order via MWA)`, 'WARN');
+                        return {
+                            error: 'expected_delta_unbuildable',
+                            reason: `Couldn't build the burner's safety check for this ${inputToken.symbol}→${outputToken.symbol} swap (${eDelta.message}) — the burner won't sign an order it can't gate. ${_burnerSignFallbackHint}`,
+                            retryable: true,
+                        };
+                    }
+                    // Non-burner route: order.transaction was built for the main-wallet
+                    // taker, so signing via MWA with a null expectedDelta is safe (MWA is the
+                    // taker by construction; Copilot PR #398 R2: dispatch skips a null
+                    // expectedDelta). Keep the original force-main fail-safe so any non-burner
+                    // routing state still resolves to the MWA popup unchanged.
+                    log(`[Jupiter Ultra] Could not build expectedDelta (non-burner route) — proceeding via MWA: ${eDelta.message}`, 'WARN');
+                    routingHint.routingDecision = 'main';
+                    expectedDelta = null;
+                }
+
+                result = await routeAndSign({
+                    toolName: 'solana_swap',
+                    toolArgs: input,
+                    unsignedTxBase64: order.transaction,
+                    broadcastVia: ULTRA_RPC_HINT,
+                    flowName: 'solana_swap',
+                    // Copilot PR #398 R13: thread routingHint through forceRouting.
+                    // The fee-payer introspection block (~line 1696) and the
+                    // expectedDelta-build catch (~line 1772) BOTH mutate
+                    // routingHint.routingDecision = 'main' to force MWA fallback.
+                    // Without forceRouting, dispatch.js re-calls routeFor() from
+                    // the unmodified toolArgs and proceeds on burner with
+                    // expectedDelta=null — bypassing validateBurnerTx entirely
+                    // (the security hole PR #398 R2 was meant to close).
+                    forceRouting: routingHint,
+                    expectedDelta,
+                    broadcast: async (txOrUnsigned, _signer, ctx) => {
+                        // ctx.signed === true  → burner path (txOrUnsigned is already signed by burner)
+                        // ctx.signed === false → main path  (txOrUnsigned is unsigned, sign via MWA)
+                        if (ctx && ctx.signed) {
+                            log('[Jupiter Ultra] Executing burner-signed tx...', 'INFO');
+                            const ex = await jupiterUltraExecute(txOrUnsigned, order.requestId);
+                            if (ex.status === 'Failed') {
+                                // BAT-1061: carry the raw Jupiter error as a STRING so the
+                                // outer slippage classifier (and the agent) see the code/reason
+                                // even when Jupiter returns a structured error object.
+                                const _exErr = (typeof ex.error === 'string') ? ex.error : (ex.error != null ? JSON.stringify(ex.error) : 'Jupiter Ultra rejected');
+                                return { error: 'execute_failed', reason: _exErr };
+                            }
+                            if (!ex.signature) {
+                                return { error: 'execute_failed', reason: 'no signature in Ultra response' };
+                            }
+                            return { signature: ex.signature, ultra: ex };
+                        }
+                        // Main path: txOrUnsigned IS the unsigned tx. Sign via MWA + execute.
+                        await ensureWalletAuthorized();
+                        log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...', 'INFO');
+                        let signResult = await androidBridgeCall('/solana/sign-only', {
+                            transaction: txOrUnsigned,
+                        }, 120000);
+                        if (signResult.error) return { error: 'sign_failed', reason: signResult.error };
+                        if (!signResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+
+                        // TTL re-quote check — MWA can hold the popup for a long
+                        // time; if approval took >90s we re-quote to stay
+                        // within Ultra's 2-min signed-payload TTL.
+                        const elapsed = Date.now() - orderTimestamp;
+                        let finalSignedTx = signResult.signedTransaction;
+                        let finalRequestId = order.requestId;
+                        if (elapsed > ULTRA_TTL_SAFE_MS) {
+                            log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting...`, 'WARN');
+                            try {
+                                order = await fetchAndVerifyOrder();
+                                orderTimestamp = Date.now();
+                                const reSignResult = await androidBridgeCall('/solana/sign-only', {
+                                    transaction: order.transaction,
+                                }, 60000);
+                                if (reSignResult.error) return { error: 'sign_failed', reason: `re-quote sign failed: ${reSignResult.error}` };
+                                if (!reSignResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx from re-quote' };
+                                finalSignedTx = reSignResult.signedTransaction;
+                                finalRequestId = order.requestId;
+                            } catch (reQuoteErr) {
+                                log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`, 'WARN');
+                            }
+                        }
+
+                        log('[Jupiter Ultra] Executing signed transaction...', 'INFO');
+                        const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
+                        if (execResult.status === 'Failed') {
+                            return { error: 'execute_failed', reason: execResult.error || 'Jupiter Ultra rejected' };
+                        }
+                        if (!execResult.signature) {
                             return { error: 'execute_failed', reason: 'no signature in Ultra response' };
                         }
-                        return { signature: ex.signature, ultra: ex };
-                    }
-                    // Main path: txOrUnsigned IS the unsigned tx. Sign via MWA + execute.
-                    await ensureWalletAuthorized();
-                    log('[Jupiter Ultra] Sending to wallet for approval (sign-only)...', 'INFO');
-                    let signResult = await androidBridgeCall('/solana/sign-only', {
-                        transaction: txOrUnsigned,
-                    }, 120000);
-                    if (signResult.error) return { error: 'sign_failed', reason: signResult.error };
-                    if (!signResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx returned from wallet' };
+                        return { signature: execResult.signature, ultra: execResult };
+                    },
+                });
 
-                    // TTL re-quote check — MWA can hold the popup for a long
-                    // time; if approval took >90s we re-quote to stay
-                    // within Ultra's 2-min signed-payload TTL.
-                    const elapsed = Date.now() - orderTimestamp;
-                    let finalSignedTx = signResult.signedTransaction;
-                    let finalRequestId = order.requestId;
-                    if (elapsed > ULTRA_TTL_SAFE_MS) {
-                        log(`[Jupiter Ultra] MWA approval took ${Math.round(elapsed / 1000)}s (>90s) — re-quoting...`, 'WARN');
-                        try {
-                            order = await fetchAndVerifyOrder();
-                            orderTimestamp = Date.now();
-                            const reSignResult = await androidBridgeCall('/solana/sign-only', {
-                                transaction: order.transaction,
-                            }, 60000);
-                            if (reSignResult.error) return { error: 'sign_failed', reason: `re-quote sign failed: ${reSignResult.error}` };
-                            if (!reSignResult.signedTransaction) return { error: 'sign_failed', reason: 'no signed tx from re-quote' };
-                            finalSignedTx = reSignResult.signedTransaction;
-                            finalRequestId = order.requestId;
-                        } catch (reQuoteErr) {
-                            log(`[Jupiter Ultra] Re-quote failed, attempting original: ${reQuoteErr.message}`, 'WARN');
-                        }
+                if (!result.ok) {
+                    const _slip = result.wallet === 'burner' && _isSlippageRetryable(result.reason);
+                    if (_slip && _swapAttempt <= MAX_SWAP_RETRIES) {
+                        log(`[Jupiter Ultra] slippage execute failure (attempt ${_swapAttempt}/${MAX_SWAP_RETRIES + 1}) — re-quoting a fresh order and retrying`, 'WARN');
+                        continue;
                     }
-
-                    log('[Jupiter Ultra] Executing signed transaction...', 'INFO');
-                    const execResult = await jupiterUltraExecute(finalSignedTx, finalRequestId);
-                    if (execResult.status === 'Failed') {
-                        return { error: 'execute_failed', reason: execResult.error || 'Jupiter Ultra rejected' };
-                    }
-                    if (!execResult.signature) {
-                        return { error: 'execute_failed', reason: 'no signature in Ultra response' };
-                    }
-                    return { signature: execResult.signature, ultra: execResult };
-                },
-            });
-
-            if (!result.ok) {
-                return { error: result.error, reason: result.reason };
+                    return _slip
+                        ? { ...forwardDispatchError(result), retryable: true, attempts: _swapAttempt, next_step: 'The market moved between quote and execution (slippage). Retry the swap for a fresh quote — this is transient, not a burner or Token-2022 limitation.' }
+                        : forwardDispatchError(result);
+                }
+                break; // success — exit the retry loop; result is ok
             }
             const execResult = (result.broadcastResult && result.broadcastResult.ultra) || { signature: result.signature };
 
@@ -856,6 +2462,12 @@ const handlers = {
     // ========== JUPITER API TOOLS ==========
 
     async jupiter_trigger_create(input, chatId) {
+        // BAT-697 PR B: gate on useTriggerV2 flag. Default false → V1 path
+        // below. Flag flips in commit 4 of the staged rollout.
+        if (config.useTriggerV2 === true) {
+            return _jupiterTriggerCreateV2(input, chatId);
+        }
+
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
@@ -1050,6 +2662,65 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
+            // BAT-1013 Phase 3b: V1 trigger create deposit shape.
+            let v1ExpectedDelta = null;
+            let v1ForceRouting = null;
+            try {
+                const inputIsSol = inputToken.address === 'So11111111111111111111111111111111111111112';
+                const ataMod = require('../wallet/ata');
+                const debitAccount = inputIsSol ? walletAddress : ataMod.deriveAtaBase58(walletAddress, inputToken.address);
+                // V1 createOrder response includes the order PDA in `data.order`
+                // when present. expectedOwner is Jupiter Limit Order V1 — cross-
+                // verified against jup-ag/platform-list (jupiterLimitContract),
+                // @jup-ag/limit-order-sdk@0.1.10 (PROGRAM_ID_BY_CLUSTER), and
+                // Solscan label 'Jupiter Limit Order V1'.
+                //
+                // Contract v8.3 (per Codex review): depositVault is REQUIRED
+                // for autonomous burner signing of deposit flows. If Jupiter
+                // omits `data.order` from its response (older API shape),
+                // we cannot verify the destination — fail closed by routing
+                // to main wallet (MWA popup) rather than silently signing
+                // without destination verification.
+                // C2 (BAT-1013-followup): tighten data.order validation. Pre-
+                // fix only checked truthiness — a Jupiter response with
+                // data.order='undefined' (string) or 'pending' or any other
+                // truthy non-pubkey would pass and then be tunneled into
+                // expectedDelta.depositVault.pubkey, where burner-policy would
+                // either reject with a confusing shape error or (if base58
+                // decoded to garbage) treat an arbitrary 32-byte blob as the
+                // deposit destination. Validate as a real Solana base58
+                // address and route to main if absent OR malformed.
+                if (!data.order || !isValidSolanaAddress(data.order)) {
+                    const reason = data.order
+                        ? `data.order=${JSON.stringify(data.order)} is not a valid Solana base58 address`
+                        : 'data.order missing from Jupiter response';
+                    log(`[Jupiter Trigger V1] ${reason} — autonomous burner cannot verify deposit destination; routing to main wallet`, 'WARN');
+                    v1ForceRouting = { routingDecision: 'main' };
+                } else {
+                    v1ExpectedDelta = {
+                        kind: 'jupiter_trigger_create_deposit',
+                        signerMode: 'burner_only',
+                        burnerDebit: {
+                            account: debitAccount,
+                            mint: inputIsSol ? 'native_sol' : inputToken.address,
+                            atomicAmount: String(makingAmount),
+                        },
+                        depositVault: {
+                            pubkey: data.order,
+                            expectedOwner: 'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu',
+                        },
+                        burnerOwnedAccounts: [debitAccount].filter(a => a !== walletAddress),
+                    };
+                }
+            } catch (eDelta) {
+                // Copilot PR #398 R2 (same class as V2/Ultra): null
+                // expectedDelta is skipped by dispatch.js -> BurnerSigner;
+                // force main routing so policy gate isn't silently bypassed.
+                log(`[Jupiter Trigger V1] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+                v1ForceRouting = { routingDecision: 'main' };
+                v1ExpectedDelta = null;
+            }
+
             // 8 + 9. Sign + execute via wallet dispatch. Jupiter Trigger
             // broadcasts the tx itself (we never hit RPC sendTransaction);
             // the broadcast callback always calls jupiterTriggerExecute on
@@ -1060,6 +2731,8 @@ const handlers = {
                 unsignedTxBase64: data.transaction,
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_trigger_create',
+                expectedDelta: v1ExpectedDelta,
+                forceRouting: v1ForceRouting,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {
@@ -1083,7 +2756,7 @@ const handlers = {
             });
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error, reason: dispatchResult.reason };
+                return forwardDispatchError(dispatchResult);
             }
             const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.trigger) || { signature: dispatchResult.signature };
 
@@ -1121,6 +2794,10 @@ const handlers = {
     },
 
     async jupiter_trigger_list(input, chatId) {
+        if (config.useTriggerV2 === true) {
+            return _jupiterTriggerListV2(input, chatId);
+        }
+
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
@@ -1204,6 +2881,10 @@ const handlers = {
     },
 
     async jupiter_trigger_cancel(input, chatId) {
+        if (config.useTriggerV2 === true) {
+            return _jupiterTriggerCancelV2(input, chatId);
+        }
+
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
@@ -1331,7 +3012,7 @@ const handlers = {
             }
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+                return { ...forwardDispatchError(dispatchResult), error: dispatchResult.error || 'cancel_failed' };
             }
 
             return {
@@ -1547,6 +3228,20 @@ const handlers = {
                 return { error: `Could not verify transaction: ${verifyErr.message}` };
             }
 
+            // BAT-1013 contract v8.3 (per Codex review): Jupiter Recurring
+            // createOrder response does NOT include the DCA position account
+            // pubkey before sign (orderId only surfaces on execResult after
+            // broadcast). Without a verified deposit destination, autonomous
+            // burner signing cannot prove the burner's debit lands in a
+            // DCA-controlled account vs an attacker-controlled token account.
+            // Per Codex: route DCA create to main wallet (MWA popup) until
+            // the equivalent destination assertion is implemented as
+            // follow-up work (BAT-XXXX: derive DCA position account from
+            // tx instruction set or scan simulation pre-snapshot for
+            // accounts owned by DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M).
+            const dcaForceRouting = { routingDecision: 'main' };
+            log('[Jupiter DCA] Autonomous burner unsupported for DCA create until vault discovery ships — routing to main wallet', 'INFO');
+
             // 7 + 8. Sign + execute via wallet dispatch.
             const dispatchResult = await routeAndSign({
                 toolName: 'jupiter_dca_create',
@@ -1554,6 +3249,8 @@ const handlers = {
                 unsignedTxBase64: data.transaction,
                 broadcastVia: 'jupiter',
                 flowName: 'jupiter_dca_create',
+                expectedDelta: null,
+                forceRouting: dcaForceRouting,
                 broadcast: async (txOrUnsigned, _signer, ctx) => {
                     let signedTx;
                     if (ctx && ctx.signed) {
@@ -1577,7 +3274,7 @@ const handlers = {
             });
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error, reason: dispatchResult.reason };
+                return forwardDispatchError(dispatchResult);
             }
             const execResult = (dispatchResult.broadcastResult && dispatchResult.broadcastResult.recurring) || { signature: dispatchResult.signature };
 
@@ -1827,7 +3524,7 @@ const handlers = {
             }
 
             if (!dispatchResult.ok) {
-                return { error: dispatchResult.error || 'cancel_failed', reason: dispatchResult.reason };
+                return { ...forwardDispatchError(dispatchResult), error: dispatchResult.error || 'cancel_failed' };
             }
 
             return {
@@ -2057,23 +3754,129 @@ const handlers = {
             }
 
             const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-            const holdings = data.holdings || [];
-            const totalValue = holdings.reduce((sum, h) => sum + (h.valueUsd || 0), 0);
+
+            // BAT-1056: the REAL /ultra/v1/holdings shape is { amount, uiAmount,
+            // uiAmountString (native SOL), tokens: { <mint>: [ accountEntry... ] } }.
+            // The old code read `data.holdings` (never existed) → silent empty for
+            // EVERY wallet, with a misleading "$0.00" total. Parse `data.tokens`
+            // (aggregate per mint, keep account detail), include the SOL line, tag
+            // tokenStandard from programId, price via batch jupiterPrice (no N+1),
+            // and NEVER report $0.00 as the portfolio when prices are missing.
+            const tokensByMint = (data && data.tokens && typeof data.tokens === 'object' && !Array.isArray(data.tokens)) ? data.tokens : null;
+            const hasSolLine = !!(data && (data.uiAmountString != null || data.amount != null));
+            if (!tokensByMint && !hasSolLine) {
+                // Fail loud on top-level drift — do NOT regress to looking like an empty wallet.
+                return { error: 'unexpected_jupiter_holdings_shape', details: `Jupiter holdings response had neither a 'tokens' object nor a SOL balance. Top-level keys: ${data ? Object.keys(data).join(',') : '(none)'}` };
+            }
+
+            const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+            const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+            const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+            const _stdFromProgram = (pid) => pid === TOKEN_PROGRAM ? 'classic' : (pid === TOKEN_2022_PROGRAM ? 'token_2022' : 'unknown');
+            // CodeRabbit #412: guard `decimals` from JSON (string / NaN / negative / huge →
+            // malformed balance or a padStart over-allocation). Clamp to a sane [0,18] integer.
+            const _safeDecimals = (d) => (typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= 18) ? d : 0;
+            const _atomicToDecimalStr = (raw, decimals) => {
+                const dec = _safeDecimals(decimals);
+                const s = raw.toString().padStart(dec + 1, '0');
+                const intPart = s.slice(0, s.length - dec) || '0';
+                const fracPart = dec > 0 ? s.slice(s.length - dec).replace(/0+$/, '') : '';
+                return fracPart ? `${intPart}.${fracPart}` : intPart;
+            };
+
+            // CodeRabbit #412 (r2): validate numeric JSON before balance math — a
+            // non-negative atomic integer for amounts, a non-negative decimal for ui
+            // strings. Negatives / NaN / malformed are skipped, never coerced.
+            const _isNonNegAtomic = (v) => /^\d+$/.test(String(v));
+            const _isNonNegDecimalStr = (v) => /^\d+(\.\d+)?$/.test(String(v));
+
+            const rows = [];
+            if (hasSolLine) {
+                // Prefer a validated ui string/number; else derive from `amount` (lamports).
+                // Never silently value a non-zero SOL as 0, and never accept a negative.
+                let solBalance = null;
+                if (data.uiAmountString != null && _isNonNegDecimalStr(data.uiAmountString)) solBalance = String(data.uiAmountString);
+                else if (data.uiAmount != null && Number.isFinite(Number(data.uiAmount)) && Number(data.uiAmount) >= 0) solBalance = String(data.uiAmount);
+                if (solBalance == null && data.amount != null && _isNonNegAtomic(data.amount)) {
+                    try { solBalance = _atomicToDecimalStr(BigInt(String(data.amount)), 9); } catch (_) { solBalance = null; }
+                }
+                if (solBalance == null) solBalance = '0';
+                rows.push({
+                    address: WSOL_MINT, mint: WSOL_MINT, tokenStandard: 'native_sol', decimals: 9,
+                    amountRaw: (data.amount != null && _isNonNegAtomic(data.amount)) ? String(data.amount) : '', balance: solBalance,
+                    netWorthBalance: solBalance, // native SOL always counts toward net worth
+                    accountCount: 1, excludeFromNetWorth: false, accounts: [],
+                });
+            }
+            for (const [mint, entries] of Object.entries(tokensByMint || {})) {
+                const accts = Array.isArray(entries) ? entries : (entries ? [entries] : []);
+                if (accts.length === 0) continue;
+                const decimals = _safeDecimals(accts[0] && accts[0].decimals);
+                // rawSum = full aggregate (display); netWorthRawSum = only the accounts that
+                // count toward net worth. CodeRabbit #412 (r2): one excluded account must NOT
+                // drop a same-mint included account's balance from the total.
+                let rawSum = 0n, netWorthRawSum = 0n, sawValid = false;
+                for (const a of accts) {
+                    if (!a || !_isNonNegAtomic(a.amount)) continue; // skip negative / malformed
+                    const amt = BigInt(String(a.amount));
+                    rawSum += amt;
+                    if (a.excludeFromNetWorth !== true) netWorthRawSum += amt;
+                    sawValid = true;
+                }
+                if (!sawValid || rawSum === 0n) continue; // drop zero-balance / all-malformed mints
+                rows.push({
+                    address: mint, mint, tokenStandard: _stdFromProgram(accts[0] && accts[0].programId),
+                    decimals, amountRaw: rawSum.toString(), balance: _atomicToDecimalStr(rawSum, decimals),
+                    netWorthAmountRaw: netWorthRawSum.toString(), netWorthBalance: _atomicToDecimalStr(netWorthRawSum, decimals),
+                    accountCount: accts.length,
+                    // A mint is "excluded" only if its ENTIRE balance is excluded.
+                    excludeFromNetWorth: netWorthRawSum === 0n,
+                    // CodeRabbit #412: ?? null so JSON.stringify keeps a stable shape per holding.
+                    accounts: accts.map(a => ({
+                        account: a.account ?? null, amountRaw: String(a.amount), uiAmountString: a.uiAmountString ?? null,
+                        isFrozen: a.isFrozen ?? null, isAssociatedTokenAccount: a.isAssociatedTokenAccount ?? null,
+                        excludeFromNetWorth: a.excludeFromNetWorth ?? null, lamports: a.lamports ?? null, programId: a.programId ?? null,
+                    })),
+                });
+            }
+
+            // Batch USD prices (no N+1) + best-effort symbol/name from the cached token list.
+            let priceMap = {};
+            try {
+                const mints = rows.map(r => r.address);
+                if (mints.length) priceMap = (await jupiterPrice(mints)) || {};
+            } catch (e) { log(`[Jupiter Holdings] batch price lookup failed (values → N/A): ${e.message}`, 'DEBUG'); }
+
+            // CodeRabbit #412: totalValueUsd reflects the NET-WORTH-CONTRIBUTING balance
+            // (netWorthBalance — partial-exclusion aware). If a contributing holding is
+            // unpriced, the total is "N/A" — never a false $0.00.
+            let pricedCount = 0, unpricedCount = 0, totalUsd = 0, contributingPriced = 0, contributingUnpriced = 0;
+            for (const r of rows) {
+                const nwBal = Number(r.netWorthBalance);
+                const contributes = isFinite(nwBal) && nwBal > 0;
+                const p = priceMap[r.address];
+                const usd = p && (p.usdPrice ?? p.price);
+                if (usd != null && isFinite(Number(usd))) {
+                    r.price = `$${Number(usd)}`;
+                    const v = Number(r.balance) * Number(usd);
+                    r.valueUsd = `$${(isFinite(v) ? v : 0).toFixed(2)}`;
+                    pricedCount++;
+                    if (contributes) { const nwV = nwBal * Number(usd); if (isFinite(nwV)) { totalUsd += nwV; contributingPriced++; } }
+                } else {
+                    r.price = 'N/A'; r.valueUsd = 'N/A'; unpricedCount++; // never fake $0.00
+                    if (contributes) contributingUnpriced++;
+                }
+                try { const t = await resolveToken(r.address); if (t && t.symbol && t.symbol !== '???') { r.symbol = t.symbol; r.name = t.name; } } catch (_) { /* metadata best-effort */ }
+            }
 
             return {
                 success: true,
                 wallet: walletAddress,
-                totalValueUsd: `$${totalValue.toFixed(2)}`,
-                count: holdings.length,
-                holdings: holdings.map(holding => ({
-                    symbol: holding.symbol,
-                    name: holding.name,
-                    address: holding.mint,
-                    balance: holding.balance,
-                    decimals: holding.decimals,
-                    valueUsd: `$${(holding.valueUsd || 0).toFixed(2)}`,
-                    price: (holding.price !== null && holding.price !== undefined) ? `$${holding.price}` : 'N/A'
-                }))
+                count: rows.length,
+                totalValueUsd: contributingPriced > 0 ? `$${totalUsd.toFixed(2)}` : 'N/A',
+                valuationPartial: contributingUnpriced > 0,
+                pricedCount, unpricedCount,
+                holdings: rows,
             };
         } catch (e) {
             return { error: e.message };
@@ -2151,4 +3954,4 @@ const handlers = {
     },
 };
 
-module.exports = { tools, handlers, _setNumberToDecimalString };
+module.exports = { tools, handlers, _setNumberToDecimalString, _inferTriggerMint, _extractFeePayerBase58 };

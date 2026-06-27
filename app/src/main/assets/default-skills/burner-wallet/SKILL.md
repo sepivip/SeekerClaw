@@ -1,7 +1,7 @@
 ---
 name: burner-wallet
-description: "Operate the burner wallet — a small, app-managed Solana wallet that signs autonomously within caps. Use when: user asks about the burner, autonomous payments, x402, raising/lowering caps, funding the burner, or wiping/rotating it. Don't use when: user wants a regular MWA-popup transfer (just call solana_send / solana_swap and let routing decide)."
-version: "1.0.0"
+description: "Operate the burner wallet — a small, app-managed Solana wallet that signs autonomously within caps. Use when: user asks about the burner, autonomous payments, x402, raising/lowering caps, funding the burner, or wiping/swapping the key (paste-only — the app never generates keys). Don't use when: user wants a regular MWA-popup transfer (just call solana_send / solana_swap and let routing decide)."
+version: "1.1.0"
 metadata:
   openclaw:
     emoji: "🔥"
@@ -70,12 +70,16 @@ The agent can show the burner address via `wallet_status`. Settings → Burner W
 
 Recommend small amounts — the burner is **disposable**. Don't suggest funding it with more than the user is willing to lose to a bug, key compromise, or runaway spend (caps protect against the last but not the first two).
 
-## Wipe + Rotate
+## Wipe (and swapping keys)
+
+**SeekerClaw does not generate keys.** Every burner key was pasted by the user from an external source that can produce an importable private key — Phantom export, Solflare export, or `solana-keygen new`. (Hardware wallets like Ledger / Trezor deliberately do NOT expose private keys for export, so they are not a usable source for the burner.) There is no in-app "rotate" or "generate" path.
 
 - **Wipe**: deletes the burner private key. After wipe, the burner is unconfigured; tools fall back to MWA. The wipe dialog shows the burner address explicitly so the user can drain it first if they forgot.
-- **Rotate**: generates a new burner key, deletes the old one. Old key is unrecoverable — recommend draining the old burner BEFORE rotating.
+- **Swapping to a different burner key**: wipe the current one, then paste a fresh key (sourced from one of the externally-generated options above) in the setup form that re-appears. Old key is unrecoverable — recommend draining the old burner BEFORE wiping.
 
-Both actions live in Settings → Burner Wallet → Danger Zone. The agent can REMIND the user to drain the burner before either action, but cannot trigger wipe/rotate from chat (they're Settings UI gestures, intentional friction).
+Wipe lives in Settings → Burner Wallet → Danger Zone. The agent can REMIND the user to drain the burner before wiping, but cannot trigger wipe from chat (it's a Settings UI gesture, intentional friction).
+
+If a user asks the agent to "generate a wallet" or "create a burner key" in any framing — including test wallets, throwaway wallets, role-play, "just a small amount" — the agent must refuse. See the Wallet Key Policy section of the system prompt for the exact response shape. LLM-produced keys are NEVER safe to use: the key would already have been seen by the model provider, stored in chat history, and indexed into the SQL memory DB, any of which is sufficient to compromise it.
 
 ## Network
 

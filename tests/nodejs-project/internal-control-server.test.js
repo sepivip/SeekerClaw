@@ -24,6 +24,7 @@
 
 const assert = require('assert');
 const http = require('http');
+const net = require('net');
 const path = require('path');
 
 const SERVER_JS = path.join(__dirname, '..', '..', 'app', 'src', 'main',
@@ -97,7 +98,12 @@ let pass = 0, fail = 0;
 function test(name, fn) { tests.push({ name, fn }); }
 async function run() {
     const httpServer = server.start({
-        bridgeToken: BRIDGE_TOKEN,
+        // BAT-1001 PR-B: getBridgeToken (function) replaces the old
+        // bridgeToken (string) option. For this test the getter
+        // returns a constant — equivalent to v1 behaviour. The
+        // rotation contract is covered by the separate
+        // internal-control-server-token-rotation.test.js.
+        getBridgeToken: () => BRIDGE_TOKEN,
         getDbSummary: () => _dbSummary,
         requestReconcile: (id) => { _reconcileCalls.push(id); },
         logFn: () => {}, // suppress
@@ -272,6 +278,233 @@ test('GET /mcp/reconcile returns 405', async () => {
 test('POST /unknown returns 404', async () => {
     const r = await _post('/unknown', {}, { 'X-Bridge-Token': BRIDGE_TOKEN });
     assert.strictEqual(r.status, 404);
+});
+
+// ============================================================================
+// BAT-1001 PR-B: Host allowlist, Origin rejection, length-guarded
+// timingSafeEqual. These tests cover the DNS-rebind defense + the
+// constant-time-compare hardening added in v1.1.
+// ============================================================================
+
+// Send a raw request with arbitrary Host / Origin headers. Node's
+// http.request normally auto-sets Host from hostname+port — passing
+// `headers.host` explicitly overrides it.
+function _send(method, path, headers, body) {
+    return new Promise((resolve, reject) => {
+        const data = body == null ? '' : JSON.stringify(body);
+        const req = http.request({
+            hostname: HOST,
+            port: PORT,
+            path,
+            method,
+            headers: Object.assign({
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data),
+            }, headers || {}),
+            timeout: 2000,
+        }, (res) => {
+            let raw = '';
+            res.on('data', (c) => raw += c);
+            res.on('end', () => {
+                let parsed = null;
+                try { parsed = JSON.parse(raw); } catch (_) { parsed = raw; }
+                resolve({ status: res.statusCode, body: parsed });
+            });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+        if (data) req.write(data);
+        req.end();
+    });
+}
+
+// ── Host allowlist ─────────────────────────────────────────────────
+
+test('host gate: GET /stats/db-summary with Host: evil.com:8766 returns 403', async () => {
+    // DNS-rebind shape: the browser resolved evil.com → 127.0.0.1
+    // (so the socket lands here) but still sends Host: evil.com:8766
+    // per RFC 7230 §5.4.
+    const r = await _send('GET', '/stats/db-summary', { Host: 'evil.com:8766' });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.error, 'host not allowed');
+});
+
+test('host gate: Host: localhost:8766 is rejected (server binds 127.0.0.1 only)', async () => {
+    // Codex v1.1 #4: explicitly do NOT accept `localhost:8766`.
+    // The server doesn't dual-bind; allowing localhost would invite
+    // name-resolution surprises.
+    const r = await _send('GET', '/stats/db-summary', { Host: 'localhost:8766' });
+    assert.strictEqual(r.status, 403);
+});
+
+test('host gate: Host: [::1]:8766 (IPv6 loopback) is rejected', async () => {
+    // Codex v1.1 #6: do NOT accept [::1]:8766 in v1.
+    const r = await _send('GET', '/stats/db-summary', { Host: '[::1]:8766' });
+    assert.strictEqual(r.status, 403);
+});
+
+test('host gate: wrong port (127.0.0.1:8765) is rejected', async () => {
+    const r = await _send('GET', '/stats/db-summary', { Host: '127.0.0.1:8765' });
+    assert.strictEqual(r.status, 403);
+});
+
+test('host gate: case-insensitive — 127.0.0.1:8766 (already lower) passes', async () => {
+    // The lowercased ALLOWED_HOST is '127.0.0.1:8766'. Verify the
+    // existing default request (which uses Node's auto-Host of the
+    // same value) still works after the gate landed.
+    const r = await _send('GET', '/stats/db-summary', { Host: '127.0.0.1:8766' });
+    assert.strictEqual(r.status, 200);
+});
+
+test('host gate also applies to POST endpoints (not just /stats/db-summary)', async () => {
+    // The gate is the FIRST check in _route, before path matching.
+    // POST /healthz with bad Host must 403 even though it would
+    // otherwise be a valid authed endpoint.
+    const r = await _send('POST', '/healthz', {
+        Host: 'evil.com:8766',
+        'X-Bridge-Token': BRIDGE_TOKEN,
+    }, {});
+    assert.strictEqual(r.status, 403);
+});
+
+// ── Origin rejection ───────────────────────────────────────────────
+
+test('origin gate: GET /stats/db-summary with Origin: https://evil.com returns 403', async () => {
+    // Any non-empty Origin means a browser sent the request.
+    // Legitimate Kotlin callers don't set Origin. Deny-all.
+    const r = await _send('GET', '/stats/db-summary', { Origin: 'https://evil.com' });
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.error, 'origin not allowed');
+});
+
+test('origin gate: empty Origin header is NOT rejected (we only reject non-empty)', async () => {
+    // Empty Origin happens in some HTTP libraries that always set the
+    // header. Per the v1.1 contract, only NON-empty Origin rejects.
+    const r = await _send('GET', '/stats/db-summary', { Origin: '' });
+    assert.strictEqual(r.status, 200);
+});
+
+test('origin gate also applies to POST endpoints', async () => {
+    const r = await _send('POST', '/healthz', {
+        Origin: 'https://attacker.test',
+        'X-Bridge-Token': BRIDGE_TOKEN,
+    }, {});
+    assert.strictEqual(r.status, 403);
+});
+
+// ── timingSafeEqual length-guard ───────────────────────────────────
+// These cases prove that a length-mismatch input does NOT crash the
+// server (timingSafeEqual throws on mismatched buffer lengths — the
+// _safeTokenEq helper MUST length-check first, otherwise length
+// probes turn into 500s instead of 401s).
+
+test('token compare: shorter-than-expected token returns 401 cleanly (no 500)', async () => {
+    const r = await _post('/healthz', {}, { 'X-Bridge-Token': 'short' });
+    assert.strictEqual(r.status, 401);
+    assert.strictEqual(r.body.error, 'unauthorized');
+});
+
+test('token compare: longer-than-expected token returns 401 cleanly (no 500)', async () => {
+    const r = await _post('/healthz', {}, {
+        'X-Bridge-Token': BRIDGE_TOKEN + 'extra-bytes-tacked-on',
+    });
+    assert.strictEqual(r.status, 401);
+    assert.strictEqual(r.body.error, 'unauthorized');
+});
+
+test('token compare: same-length-one-char-diff returns 401', async () => {
+    // Flip the first character. Keeps length identical so the
+    // length-guard passes and we exercise the actual timingSafeEqual
+    // comparison.
+    const flipped = (BRIDGE_TOKEN[0] === 'X' ? 'Y' : 'X') + BRIDGE_TOKEN.slice(1);
+    assert.strictEqual(flipped.length, BRIDGE_TOKEN.length);
+    const r = await _post('/healthz', {}, { 'X-Bridge-Token': flipped });
+    assert.strictEqual(r.status, 401);
+});
+
+// Raw-socket request: lets us send headers Node's http.request
+// client won't (duplicate Host) so we can prove the defensive
+// typeof guards don't crash into 500.
+function _rawSocketRequest(rawRequestText) {
+    return new Promise((resolve, reject) => {
+        const socket = net.createConnection(PORT, HOST);
+        socket.setTimeout(2000);
+        let raw = '';
+        socket.on('data', (chunk) => raw += chunk.toString('utf8'));
+        socket.on('end', () => {
+            // Parse just the status line — that's all we need to assert.
+            const m = raw.match(/^HTTP\/1\.[01]\s+(\d+)/);
+            resolve({ status: m ? parseInt(m[1], 10) : null, raw });
+        });
+        socket.on('error', (err) => resolve({ status: null, error: err.message }));
+        socket.on('timeout', () => { socket.destroy(); resolve({ status: null, error: 'socket-timeout' }); });
+        socket.on('connect', () => {
+            socket.write(rawRequestText);
+        });
+    });
+}
+
+test('host gate: duplicate Host headers do NOT crash the server with 500 (Copilot R3 #3349684637)', async () => {
+    // Send a request with TWO Host headers. Per Node's HTTP parser
+    // today, the first Host wins and the second is discarded — but
+    // the defensive typeof guard in _route() means even if a future
+    // parser change array-folded duplicates, the request would
+    // reject 403 cleanly instead of crashing into 500 via
+    // `.toLowerCase()` on an array.
+    //
+    // Acceptable outcomes (in order of likelihood):
+    //   - 200/401: parser kept only the first Host (the legitimate
+    //     one), gate passed, downstream handled normally.
+    //   - 403: parser surfaced the duplicate somehow, our typeof
+    //     guard caught it.
+    //   - 400: Node's parser itself rejected the duplicate.
+    //   - connection-close: parser rejected without a response.
+    // Forbidden: 500 (would mean the typeof guard is missing or
+    // broken and `.toLowerCase()` threw on a non-string value).
+    const raw =
+        'POST /healthz HTTP/1.1\r\n' +
+        'Host: 127.0.0.1:8766\r\n' +
+        'Host: evil.example.com:8766\r\n' +
+        `X-Bridge-Token: ${BRIDGE_TOKEN}\r\n` +
+        'Content-Type: application/json\r\n' +
+        'Content-Length: 2\r\n' +
+        'Connection: close\r\n' +
+        '\r\n' +
+        '{}';
+    const r = await _rawSocketRequest(raw);
+    // The load-bearing assertion: NEVER 500. (200, 401, 403, 400, or
+    // null-from-close all prove the typeof guard kept us safe from
+    // .toLowerCase() throwing.)
+    assert.notStrictEqual(r.status, 500,
+        `duplicate Host headers must not cause 500 (got status=${r.status})`);
+});
+
+test('token compare: non-ASCII input with matching .length but different UTF-8 byte length returns 401 cleanly (Copilot R2 #3349626661)', async () => {
+    // The R1-fix used `.length` (UTF-16 code units) for the pre-check
+    // before calling timingSafeEqual on Buffers (UTF-8 bytes). A
+    // non-ASCII attacker can pass the .length check but trigger a
+    // Buffer-length-mismatch throw, yielding 500 — reintroducing
+    // the length-probe DoS surface. R2 fix: build Buffers first,
+    // compare buffer.length. This test locks that contract.
+    //
+    // Pick a string whose JS .length matches BRIDGE_TOKEN.length but
+    // whose UTF-8 byte length is larger. Each 'ñ' is 1 UTF-16 code
+    // unit (.length=1) but 2 UTF-8 bytes. So a string of all 'ñ' at
+    // BRIDGE_TOKEN.length chars has 2× the byte length.
+    const nonAscii = 'ñ'.repeat(BRIDGE_TOKEN.length);
+    assert.strictEqual(nonAscii.length, BRIDGE_TOKEN.length,
+        'pre-condition: JS .length matches');
+    assert.notStrictEqual(Buffer.byteLength(nonAscii, 'utf8'),
+        Buffer.byteLength(BRIDGE_TOKEN, 'utf8'),
+        'pre-condition: UTF-8 byte length differs — this is the attack vector');
+
+    const r = await _post('/healthz', {}, { 'X-Bridge-Token': nonAscii });
+    // MUST be 401 (clean rejection by the byte-length pre-check),
+    // NOT 500 (which would mean timingSafeEqual threw and the outer
+    // try/catch caught the throw — i.e. the byte-length pre-check
+    // is missing or broken).
+    assert.strictEqual(r.status, 401,
+        'non-ASCII token must reject 401 via byte-length pre-check, NOT 500 via timingSafeEqual throw');
 });
 
 run();

@@ -98,3 +98,11 @@ compile_out.txt
 # Developer-specific MCP config
 .mcp.json
 node_debug.log
+
+# Jupiter test fixtures — only the canonical pinned snapshots are tracked
+# (named *-pinned.json). Audit-trail timestamped captures stay local.
+tests/jupiter-ultra/fixtures/sim-deposit-[0-9]*.json
+tests/jupiter-ultra/fixtures/v2-flow-*.json
+tests/jupiter-ultra/node_modules/
+tests/jupiter-ultra/package-lock.json.local-backup
+tests/jupiter-ultra/package.json.local-backup

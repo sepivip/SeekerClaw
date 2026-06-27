@@ -20,16 +20,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.components.DangerButton
-import com.seekerclaw.app.ui.components.DangerOutlineButton
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.ui.theme.Spacing
 
 /**
- * DangerZoneSection — Wipe + Rotate buttons for the Burner Wallet
- * screen (BAT-582). Owns its own confirm dialogs so the parent screen
- * doesn't have to manage dialog state.
+ * DangerZoneSection — Wipe button for the Burner Wallet screen.
+ * Owns its own confirm dialog so the parent screen doesn't have to
+ * manage dialog state.
  *
  * **Critical UX**: the Wipe confirm dialog DISPLAYS the burner address
  * explicitly before erasure. This is the user's last chance to drain
@@ -37,19 +36,22 @@ import com.seekerclaw.app.ui.theme.Spacing
  * cannot recover the key. Per the BAT-582 contract: "Wipe confirm
  * dialog shows burner address explicitly".
  *
- * Rotate = wipe + immediately re-prompt for new key. The parent owns
- * the re-prompt UI; this component just signals via [onRotateClick].
+ * **BAT-936**: previous "Rotate key" button removed. Rotate was
+ * functionally just Wipe-then-reopen-paste-form (one-tap shortcut), but
+ * the label implied the app could generate a new key for the user — the
+ * exact mental model SeekerClaw is paste-only and never produces key
+ * material. Users who want to swap keys now wipe explicitly, then paste
+ * a fresh externally-generated key in the setup form that re-appears.
+ * That extra step is the right friction for a security-sensitive action.
  */
 @Composable
 fun DangerZoneSection(
     burnerAddress: String,
     onWipeClick: () -> Unit,
-    onRotateClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
     var showWipeDialog by remember { mutableStateOf(false) }
-    var showRotateDialog by remember { mutableStateOf(false) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
         SectionLabel("Danger zone")
@@ -59,11 +61,6 @@ fun DangerZoneSection(
             fontFamily = RethinkSans,
             fontSize = 12.sp,
             color = SeekerClawColors.TextDim,
-        )
-        DangerOutlineButton(
-            onClick = { showRotateDialog = true },
-            label = "Rotate key",
-            enabled = enabled,
         )
         DangerButton(
             onClick = { showWipeDialog = true },
@@ -83,20 +80,6 @@ fun DangerZoneSection(
                 onWipeClick()
             },
             onDismiss = { showWipeDialog = false },
-        )
-    }
-
-    if (showRotateDialog) {
-        WipeConfirmDialog(
-            burnerAddress = burnerAddress,
-            actionLabel = "Rotate",
-            title = "Rotate burner key?",
-            body = "This wipes the current burner and prompts you to set up a new one. Drain any remaining funds first — the existing key cannot be recovered.",
-            onConfirm = {
-                showRotateDialog = false
-                onRotateClick()
-            },
-            onDismiss = { showRotateDialog = false },
         )
     }
 }
@@ -176,6 +159,5 @@ private fun DangerZoneSectionPreview() {
     DangerZoneSection(
         burnerAddress = "7xKXTg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
         onWipeClick = {},
-        onRotateClick = {},
     )
 }

@@ -178,8 +178,34 @@ object SettingsHelpTexts {
         "Get a free key at portal.jup.ag (free tier: 60 req/min). " +
         "Without this, swap and quote tools will not work."
 
+    // BAT-1000: framing is RPC-first. The Helius API Key now drives BOTH
+    // general Solana RPC reads (balances, swaps, simulations, jupiter
+    // trigger pre-flight, agent_pay) AND NFT holdings. Without it the app
+    // falls back to the public mainnet RPC which is rate-limited and
+    // unreliable — the user-visible failure mode is `solana_balance`
+    // returning empty token lists on timeout, which the agent then reads
+    // as "wallet has 0 USDC" (real device incident 2026-06-03, root cause
+    // for the BAT-995 V2 trigger device-test confusion).
     const val HELIUS_API_KEY =
-        "Optional. Required for viewing NFT holdings (including compressed NFTs). " +
+        "Powers all Solana RPC reads (balances, swaps, simulations, " +
+        "Jupiter trigger orders, agent_pay) AND NFT holdings. " +
         "Get a free key at helius.dev (free tier: 50k requests/day). " +
-        "Without this, the NFT holdings tool will not work."
+        "Without it the app falls back to Solana's public mainnet RPC, " +
+        "which is rate-limited and frequently times out — wallet reads " +
+        "may silently return empty results. " +
+        // BAT-1013 v8.1 amendment #3 (Codex 2026-06-04): wording precision
+        // for the burner-policy interaction. Helius is recommended for
+        // reliability; without it, autonomous burner signing may fail
+        // closed under public RPC rate-limit pressure (safe — the policy
+        // refuses rather than signing without verification — but the UX
+        // is friction).
+        "Recommended for reliable autonomous trading (burner wallet). " +
+        "Without it, autonomous signing may fail closed at the " +
+        "simulation validation step under public RPC rate-limit " +
+        "pressure. The policy fails closed rather than signing without " +
+        "verification. Specifically, when account snapshots and " +
+        "simulation slots drift apart (a public-RPC consistency " +
+        "failure), the policy surfaces it as `simulation_failed` in " +
+        "the availability bucket — adding a Helius key removes most " +
+        "slot-drift triggers."
 }

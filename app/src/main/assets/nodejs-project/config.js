@@ -411,6 +411,55 @@ function getSearchProvider() {
     return _agentPreferencesModule.DEFAULTS.searchProvider;
 }
 
+// BAT-1001 PR-B: per-call read of the bridge token so a Kotlin-side
+// rotation (SeekerClawService writes a fresh UUID on every service
+// start, see ServiceState.writeBridgeToken at ServiceState.kt:185-201)
+// is picked up on the very next bridge / control-server request
+// without restarting Node. Mirrors the BAT-515 hot-reload shape
+// (getAgentName / getSearchProvider above) but reads a
+// sibling-of-workspace file via path.dirname(workDir) — same
+// precedent as runtime-state.js:113, mcp-servers.js, agent-preferences.js.
+// Kotlin writes the token at `filesDir/bridge_token`, NOT under
+// `workspace/`.
+//
+// Return semantics (sweep w09eqq11s blockers #4 + #5 fix):
+//   - Disk read succeeds AND value passes UUID-shape validation →
+//     return the live token (the happy path).
+//   - Disk read fails (ENOENT, perm denied, IOError) OR value fails
+//     the UUID-shape check (blank, truncated from a mid-write crash,
+//     wrong format) → fall back to BRIDGE_TOKEN (the cold-start
+//     snapshot from config.json). This fallback may be STALE — if
+//     Kotlin rotated and crashed the write, the cold value is the
+//     PRIOR boot's token. In that case the auth gate either accepts
+//     (if AndroidBridge is still on the cold value) or 401s (if
+//     AndroidBridge picked up the new one). bridge.js's 403 retry
+//     re-reads disk and gets one more chance.
+//   - Empty BRIDGE_TOKEN cold value → return '' → auth gates reject
+//     401/403 cleanly.
+//
+// UUID validation guards against the truncated-write case:
+// Kotlin's writeText is NOT atomic, so a mid-write power-loss can
+// leave a partial UUID on disk. Without the shape check, a 1-char
+// file would be accepted as the live token and every request would
+// 401 against AndroidBridge's full UUID — with no path to recovery
+// until the next service restart writes a new full UUID. The shape
+// check makes that case fall through to BRIDGE_TOKEN, which at
+// least matches what AndroidBridge has if it never rotated.
+//
+// Never throws. Worst case returns ''.
+function getBridgeToken() {
+    try {
+        const tokenPath = path.join(path.dirname(workDir), 'bridge_token');
+        const raw = fs.readFileSync(tokenPath, 'utf8').trim();
+        // UUID v4 shape: 36 chars, hex+dash only. ServiceState.kt
+        // writes UUID.randomUUID().toString() which produces exactly
+        // this format. Reject anything else (truncated, corrupt,
+        // wrong file content) by falling through to the cold value.
+        if (raw && raw.length === 36 && /^[0-9a-f-]+$/i.test(raw)) return raw;
+    } catch (_) { /* fall through to cold-start fallback */ }
+    return BRIDGE_TOKEN;
+}
+
 /**
  * Resolve the currently-active model — the agent_settings.json overlay
  * wins over the startup MODEL const. The `/model` Telegram command and
@@ -489,6 +538,23 @@ if (config.searchProvider) config.searchProvider = String(config.searchProvider)
 if (config.exaApiKey) config.exaApiKey = normalizeSecret(config.exaApiKey);
 if (config.tavilyApiKey) config.tavilyApiKey = normalizeSecret(config.tavilyApiKey);
 if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.firecrawlApiKey);
+
+// BAT-697 PR B: Jupiter Trigger V2 adapter feature flag. Default false —
+// V1 remains the shipping path until the staged-rollout commits (live smoke
+// → default flip → V1 removal) land in subsequent PRs. Normalize to a real
+// boolean so handlers can branch on `config.useTriggerV2 === true` without
+// truthy-coercing a string "false".
+//
+// PR #388 R7: Kotlin's writeConfigJson() does not yet emit a `useTriggerV2`
+// field (that arrives with PR C's Settings toggle), so the JSON-load path
+// always normalizes to false in the live runtime. To make PR B actually
+// enable-able for the PR C live-smoke phase WITHOUT shipping the UI early,
+// also accept SEEKERCLAW_USE_TRIGGER_V2=true via the env-var bridge (Settings
+// → Env Vars), which is already plumbed Kotlin → Node and merged into
+// process.env at line ~142 above. PR C migrates this to a proper Config
+// field + Settings toggle and can drop the env-var path.
+config.useTriggerV2 = config.useTriggerV2 === true
+    || process.env.SEEKERCLAW_USE_TRIGGER_V2 === 'true';
 
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
 const MCP_SERVERS = (config.mcpServers || [])
@@ -846,6 +912,14 @@ module.exports = {
     // edit takes effect on the next AI turn without a service restart.
     getAgentName,
     getSearchProvider,
+    // BAT-1001 PR-B: per-call bridge-token getter replaces the
+    // startup-frozen BRIDGE_TOKEN read in every live request path
+    // (bridge.js, internal-control-server.js wiring in main.js,
+    // security.js redaction). BRIDGE_TOKEN below remains exported as
+    // the cold-start fallback — never depend on it for a live auth
+    // decision; always call getBridgeToken() per request so a
+    // mid-session Kotlin rotation takes effect on the next call.
+    getBridgeToken,
     BRIDGE_TOKEN,
     USER_AGENT,
     MCP_SERVERS,

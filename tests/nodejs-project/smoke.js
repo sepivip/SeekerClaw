@@ -93,11 +93,23 @@ const LOAD_TARGETS = [
     // calls to localhost:8765 happen later when androidBridgeCall() runs.
     'wallet/signer.js',
     'wallet/wallet.js',
+    // BAT-1013: pure modules — no top-level IO, no config dependency.
+    // tx-parser.js is a hand-rolled binary parser + base58 helpers.
+    // burner-policy.js depends only on tx-parser.js for parser primitives.
+    'wallet/tx-parser.js',
+    'wallet/burner-policy.js',
+    'wallet/spl-token-layout.js',
+    'wallet/public-rpc-shaper.js',
+    'wallet/ata.js',
+    'wallet/token2022-mint.js', // BAT-1057: pure require-safe Token-2022 fee parser
+
     'payment/protocol.js',
     'payment/x402.js',
     'payment/index.js',
     'confirmation/policy.js',
     'confirmation/index.js',
+    'tools/solana-send-guard.js',   // BAT-1037: pure native-SOL-only denomination guard (no config dep)
+    'security-reject-block.js',   // BAT-1039: pure deterministic security-reject renderer (no config dep)
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which
@@ -163,6 +175,9 @@ const SKIP_REASONS = {
     'wallet/index.js': 'singleton registry; requires burner-wallet.js + main-wallet.js',
     'wallet/dispatch.js': 'requires bridge.js + caps/preflight (BAT-582 Phase 5 routing helper)',
     'caps/preflight.js': 'requires bridge.js for /burner/status reads',
+    // BAT-697 PR B — Jupiter Trigger V2 adapter requires http.js (which
+    // requires config.js). Pure JS otherwise; --check covers parse errors.
+    'jupiter/trigger-v2.js': 'requires http.js → config.js (BAT-697 Trigger V2 adapter)',
 };
 
 const GREEN = '\x1b[32m';

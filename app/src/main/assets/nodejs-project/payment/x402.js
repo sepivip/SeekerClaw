@@ -66,6 +66,11 @@ const USDC_DECIMALS = 6;
 
 // Solana program IDs (base58).
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+// BAT-1038: the Token-2022 program. An ATA's seeds embed the token program ID,
+// so a Token-2022 mint's ATA derives to a DIFFERENT address than the classic
+// derivation. Used only by the parameterized derivation below; classic USDC
+// (x402) paths are unaffected.
+const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 
 const X402_VERSION = 1;
@@ -132,6 +137,7 @@ function _decodeSolanaPubkey(s) {
 // recipient pubkey + recent blockhash need runtime decoding.
 const _USDC_MINT_BYTES = _base58Decode(USDC_MINT);
 const _TOKEN_PROGRAM_ID_BYTES = _base58Decode(TOKEN_PROGRAM_ID);
+const _TOKEN_2022_PROGRAM_ID_BYTES = _base58Decode(TOKEN_2022_PROGRAM_ID); // BAT-1038
 const _ATA_PROGRAM_ID_BYTES = _base58Decode(ASSOCIATED_TOKEN_PROGRAM_ID);
 
 // ── Compact-u16 (shortvec) encoding for tx wire format ───────────────────────
@@ -281,12 +287,21 @@ function _isOnCurve(pubkeyBytes) {
     return false;
 }
 
+// BAT-1038: parameterized ATA derivation — the token program ID is the 2nd ATA
+// seed, so a Token-2022 mint MUST use _TOKEN_2022_PROGRAM_ID_BYTES here or the
+// derived address is a phantom that the swap never touches. tokenProgramBytes is
+// a 32-byte Buffer (the mint's OWNING token program).
+function _findAssociatedTokenAddressForProgram(ownerPubkeyBytes, mintPubkeyBytes, tokenProgramBytes) {
+    const seeds = [ownerPubkeyBytes, tokenProgramBytes, mintPubkeyBytes];
+    return _findProgramAddress(seeds, _ATA_PROGRAM_ID_BYTES);
+}
+
 function _findAssociatedTokenAddress(ownerPubkeyBytes, mintPubkeyBytes) {
     // BAT-582 R11: token program + ATA program pubkeys are constants — use
     // the module-level pre-decoded buffers (see _TOKEN_PROGRAM_ID_BYTES /
-    // _ATA_PROGRAM_ID_BYTES above).
-    const seeds = [ownerPubkeyBytes, _TOKEN_PROGRAM_ID_BYTES, mintPubkeyBytes];
-    return _findProgramAddress(seeds, _ATA_PROGRAM_ID_BYTES);
+    // _ATA_PROGRAM_ID_BYTES above). Classic SPL only — byte-identical to the
+    // pre-BAT-1038 behavior; the x402 USDC paths call this.
+    return _findAssociatedTokenAddressForProgram(ownerPubkeyBytes, mintPubkeyBytes, _TOKEN_PROGRAM_ID_BYTES);
 }
 
 // ── SPL Token TransferChecked instruction builder ────────────────────────────
@@ -469,6 +484,137 @@ function _buildUsdcTransferTx(burnerPubkey58, recipientPubkey58, amountAtomic, r
             blockhash: recentBlockhash58,
             mint: USDC_MINT,
         },
+    };
+}
+
+// ── Generic classic-SPL TransferChecked builder (BAT-1036) ───────────────────
+// Generalizes _buildUsdcTransferTx to an arbitrary classic-SPL mint + on-chain
+// decimals + a selected fee-payer/authority (burner or main) + an optional
+// idempotent recipient-ATA-create. The caller MUST have already verified the
+// mint's on-chain owner is the classic Token Program (Token-2022 is fail-closed
+// upstream) and pinned `decimals` from chain.
+//
+// Codex v2.2 sign-off constraints honored here:
+//   1. No wallet/ata.js import — uses x402's own _decodeSolanaPubkey +
+//      _findAssociatedTokenAddress (ata.js already imports x402.js; importing
+//      back would be circular).
+//   3. Validate decimals (int 0..255) + amountAtomic (1..2^64-1) BEFORE any byte
+//      coercion; reject malformed pubkeys before serialization — a bad input
+//      throws before any partial tx buffer is emitted (builder test 6).
+//   5. No-create path is byte-for-byte identical to _buildUsdcTransferTx (the
+//      x402 hot path is untouched; test 1 pins the parity).
+//
+// SYSTEM_PROGRAM is the canonical all-zeros pubkey, used only on the create path
+// (the ATA program needs it to allocate the new account).
+const _SYSTEM_PROGRAM_ID_BYTES = Buffer.alloc(32, 0);
+
+function buildClassicSplTransferTx({
+    payerAuthority,
+    recipientOwner,
+    mint,
+    decimals,
+    amountAtomic,
+    recentBlockhash,
+    createRecipientAta = false,
+}) {
+    // ── Validate everything BEFORE any serialization (no partial tx on error).
+    const payerBytes = _decodeSolanaPubkey(payerAuthority);
+    if (!payerBytes) throw new Error('buildClassicSplTransferTx: invalid payerAuthority pubkey');
+    const recipientBytes = _decodeSolanaPubkey(recipientOwner);
+    if (!recipientBytes) throw new Error('buildClassicSplTransferTx: invalid recipientOwner pubkey');
+    const mintBytes = _decodeSolanaPubkey(mint);
+    if (!mintBytes) throw new Error('buildClassicSplTransferTx: invalid mint pubkey');
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) {
+        throw new Error(`buildClassicSplTransferTx: decimals must be an integer 0..255, got ${String(decimals)}`);
+    }
+    let amt;
+    try { amt = BigInt(amountAtomic); }
+    catch (_) { throw new Error(`buildClassicSplTransferTx: amountAtomic must be integer-coercible, got ${String(amountAtomic)}`); }
+    if (amt < 1n || amt > 0xFFFFFFFFFFFFFFFFn) {
+        throw new Error(`buildClassicSplTransferTx: amountAtomic must be 1..2^64-1, got ${amt.toString()}`);
+    }
+    const blockhashBytes = _base58Decode(recentBlockhash);
+    if (!blockhashBytes || blockhashBytes.length !== 32) throw new Error('buildClassicSplTransferTx: invalid recentBlockhash');
+
+    const sourceAta = _findAssociatedTokenAddress(payerBytes, mintBytes).address;
+    const destAta = _findAssociatedTokenAddress(recipientBytes, mintBytes).address;
+    const tokenProgramBytes = _TOKEN_PROGRAM_ID_BYTES;
+    const ixData = _buildSplTransferCheckedData(amt, decimals);
+
+    let accountKeys, header, instructions, instructionCount;
+
+    if (!createRecipientAta) {
+        // ── No-create path — byte-for-byte identical to _buildUsdcTransferTx.
+        //   idx 0: payer (signer, writable — fee-payer + transfer authority)
+        //   idx 1: source ATA (writable)   idx 2: dest ATA (writable)
+        //   idx 3: mint (readonly)         idx 4: token program (readonly)
+        accountKeys = [payerBytes, sourceAta, destAta, mintBytes, tokenProgramBytes];
+        header = Buffer.from([1, 0, 2]); // 1 signer, 0 ro-signed, 2 ro-unsigned
+        const ixAccounts = Buffer.from([1, 3, 2, 0]); // source, mint, dest, owner
+        instructions = [Buffer.concat([
+            Buffer.from([4]),                     // programIdIndex = token program (idx 4)
+            _encodeCompactU16(ixAccounts.length),
+            ixAccounts,
+            _encodeCompactU16(ixData.length),
+            ixData,
+        ])];
+        instructionCount = 1;
+    } else {
+        // ── Create + transfer path. Account ordering follows the Solana legacy
+        // convention (writable-signers, then writable-non-signers, then
+        // readonly-non-signers); no readonly signers here.
+        //   idx 0: payer (signer, writable — fee-payer, ATA funder, authority)
+        //   idx 1: source ATA (writable)        idx 2: dest ATA (writable)
+        //   idx 3: recipient owner (readonly)   idx 4: mint (readonly)
+        //   idx 5: system program (readonly)    idx 6: token program (readonly)
+        //   idx 7: ATA program (readonly)
+        accountKeys = [
+            payerBytes, sourceAta, destAta, recipientBytes, mintBytes,
+            _SYSTEM_PROGRAM_ID_BYTES, tokenProgramBytes, _ATA_PROGRAM_ID_BYTES,
+        ];
+        header = Buffer.from([1, 0, 5]); // 1 signer; ro-unsigned = owner, mint, sys, token, ata
+        // Instruction 1 — CreateAssociatedTokenAccountIdempotent.
+        //   ATA program instruction discriminator 1 = CreateIdempotent (0=Create,
+        //   1=CreateIdempotent, 2=RecoverNested per spl-associated-token-account).
+        //   Accounts (Codex-pinned order): funder=payer(0), assoc=destAta(2),
+        //   owner=recipient(3), mint(4), system(5), token(6).
+        const createAccounts = Buffer.from([0, 2, 3, 4, 5, 6]);
+        const createData = Buffer.from([1]);
+        const createIx = Buffer.concat([
+            Buffer.from([7]),                     // programIdIndex = ATA program (idx 7)
+            _encodeCompactU16(createAccounts.length),
+            createAccounts,
+            _encodeCompactU16(createData.length),
+            createData,
+        ]);
+        // Instruction 2 — TransferChecked. mint is at idx 4 on this path.
+        //   accounts: source(1), mint(4), dest(2), owner(0).
+        const ixAccounts = Buffer.from([1, 4, 2, 0]);
+        const transferIx = Buffer.concat([
+            Buffer.from([6]),                     // programIdIndex = token program (idx 6)
+            _encodeCompactU16(ixAccounts.length),
+            ixAccounts,
+            _encodeCompactU16(ixData.length),
+            ixData,
+        ]);
+        instructions = [createIx, transferIx];
+        instructionCount = 2;
+    }
+
+    const accountKeysBuf = Buffer.concat([_encodeCompactU16(accountKeys.length), ...accountKeys]);
+    const instructionsBuf = Buffer.concat([_encodeCompactU16(instructions.length), ...instructions]);
+    const message = Buffer.concat([header, accountKeysBuf, blockhashBytes, instructionsBuf]);
+    const txBuffer = Buffer.concat([
+        _encodeCompactU16(1), // one signature slot
+        Buffer.alloc(64),     // empty placeholder — wallet signer fills idx 0
+        message,
+    ]);
+
+    return {
+        txBuffer,
+        sourceAta: _base58Encode(sourceAta),
+        destAta: _base58Encode(destAta),
+        instructionCount,
     };
 }
 
@@ -1466,8 +1612,10 @@ module.exports = {
     // Exposed for tests:
     USDC_MINT,
     TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
     _buildUsdcTransferTx,
+    buildClassicSplTransferTx,
     _buildV2UsdcTransferTx,
     _buildCuLimitData,
     _buildCuPriceData,
@@ -1477,8 +1625,10 @@ module.exports = {
     COMPUTE_BUDGET_PROGRAM_ID,
     MEMO_PROGRAM_ID,
     _findAssociatedTokenAddress,
+    _findAssociatedTokenAddressForProgram,
     _isOnCurve,
     _decodeSolanaPubkey,
+    _base58Encode,
     _extractPayload,
     _extractRequirementsArray,
     _classifyNetwork,
