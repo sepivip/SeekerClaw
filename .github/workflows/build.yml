@@ -70,6 +70,7 @@ jobs:
             caps-preflight \
             confirmation-policy \
             confirmation-policy-burner \
+            confirmation-buttons-guard \
             system-prompt-wallets \
             wallet-registry \
             wallet-set-caps-errors \

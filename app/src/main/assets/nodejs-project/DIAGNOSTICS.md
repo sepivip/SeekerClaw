@@ -823,6 +823,25 @@ Because the agent can't see WHY the server complained on a ≥400, the right nex
 3. Maintainer-side fix: update `catalog.json` `entries[].endpoint.cost_usdc` for the affected entry, bump `paysh-catalog/SKILL.md` version so devices re-seed.
 
 
+## When does a burner action need confirmation? (BAT-1067)
+
+The confirmation gate (`confirmation/policy.js getConfirmationPolicy`, called in `ai.js` before every tool dispatch) — NOT the agent — decides whether a fund/dangerous action prompts the user. The agent must PREVIEW the action (amount / recipient / quote) and call the tool; it must never run its own yes/no or attach its own Confirm/Cancel buttons (those don't satisfy the gate and only create a confusing double-confirm). One action = one confirmation.
+
+**The rule is keyed on the SPENT asset, not on whether it's a "conversion":**
+
+| Action | Gate outcome |
+|---|---|
+| Burner SPENDS USDC or native SOL, routes to burner, **under cap** | **Silent** (no prompt) — the cap pre-authorizes it |
+| Burner spend of USDC/SOL **over cap** | Default/auto flow falls back to the **main wallet (MWA) confirmation**. A *forced* burner (`source="burner"`, or a swap that doesn't opt into main fallback) returns `burner_cap_exceeded` instead → raise caps, lower amount, or use main. |
+| Spend any **non-USDC/SOL token** (e.g. PYUSD, BONK) — including **converting a held token back** to USDC/SOL (BAT-1057) | **Confirm** — disposing of a non-cap asset is not pre-authorized by the USDC/SOL caps |
+| **Main-routed** (MWA) action | **Confirm** (the wallet app's own approval) |
+| `wallet_set_caps`, `agent_pay` POST, android_sms/call/camera/location | **Confirm** (always) |
+| `agent_pay` GET (with max_usdc), `wallet_status` | **Silent** (read / GET-side, not cap-related) |
+
+This is intended product behavior, not a bug or a "PYUSD/Token-2022 limitation." So "buy PYUSD with USDC under cap" signs silently, but "sell that PYUSD back to USDC" asks for one confirmation — because the second spends a non-cap asset. Never promise silent held-token conversions, and never tell the user a confirmed conversion is a defect.
+
+(Root cause, for maintainers: `caps/preflight._principalForTool` returns a cap principal ONLY when the spent asset is USDC/SOL; a non-cap input → null → `routeFor` previews routing=main → policy `confirm`. Conversions are cap-exempt by construction, so "over-cap conversion" is unreachable.)
+
 ## burner policy (BAT-1013)
 
 The burner policy gate (`wallet/burner-policy.js validateBurnerTx`) runs BEFORE every `/burner/sign-transaction` and `/burner/sign-and-send` bridge call. Rejects are sorted into three classes; the agent's recovery action MUST differ per class.
