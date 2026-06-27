@@ -2302,11 +2302,29 @@ const handlers = {
                         ...(conversionTokenStandard ? { tokenStandard: conversionTokenStandard } : {}),
                     };
                 } catch (eDelta) {
-                    // Copilot PR #398 R2: a null expectedDelta is silently
-                    // skipped by dispatch.js -> BurnerSigner, which would let
-                    // the burner sign without the policy gate. Force main
-                    // routing so the user sees the MWA popup instead.
-                    log(`[Jupiter Ultra] Could not build expectedDelta — forcing main wallet routing: ${eDelta.message}`, 'WARN');
+                    // BAT-1066 (CodeRabbit #413) + BAT-1038 Amendment 1: order.transaction
+                    // was built by the order step with userPublicKey as taker. On a BURNER
+                    // route that taker IS the burner, so flipping routingHint to 'main' and
+                    // signing via MWA would hand the SAME burner-taker order to the main
+                    // wallet — the exact unsafe fallback the fee-payer guard above fails
+                    // closed on (sponsored signer-mode is unwired). Fail CLOSED on a burner
+                    // route instead of re-routing a stale burner-taker order to MWA. A real
+                    // main fallback needs a NEW order with the main wallet as taker (separate
+                    // invoke), so we don't fabricate one here.
+                    if (routingHint.routingDecision === 'burner') {
+                        log(`[Jupiter Ultra] expected_delta_unbuildable on burner route: ${eDelta.message} — failing closed (won't sign a burner-taker order via MWA)`, 'WARN');
+                        return {
+                            error: 'expected_delta_unbuildable',
+                            reason: `Couldn't build the burner's safety check for this ${inputToken.symbol}→${outputToken.symbol} swap (${eDelta.message}) — the burner won't sign an order it can't gate. Retry (Jupiter routes change), or run the swap from your main wallet.`,
+                            retryable: true,
+                        };
+                    }
+                    // Non-burner route: order.transaction was built for the main-wallet
+                    // taker, so signing via MWA with a null expectedDelta is safe (MWA is the
+                    // taker by construction; Copilot PR #398 R2: dispatch skips a null
+                    // expectedDelta). Keep the original force-main fail-safe so any non-burner
+                    // routing state still resolves to the MWA popup unchanged.
+                    log(`[Jupiter Ultra] Could not build expectedDelta (non-burner route) — proceeding via MWA: ${eDelta.message}`, 'WARN');
                     routingHint.routingDecision = 'main';
                     expectedDelta = null;
                 }

@@ -530,16 +530,38 @@ function _burnerOff() {
         assert.strictEqual(ed.burnerDebit.mint, 'native_sol');
     });
 
-    await check('BAT-1038: output mint with unrecognized owner program → forces main, burner NOT invoked', async () => {
+    await check('BAT-1066 (CodeRabbit #413): unrecognized output-mint owner on a BURNER route → fail closed (expected_delta_unbuildable); burner-taker order NOT re-routed to MWA', async () => {
         _burnerOn();
+        bridgeResponses['/burner/reserve'] = { reservationId: 'res-eunbuild' };
+        bridgeResponses['/burner/sign-transaction'] = { signedTxBase64: 'X' };
         bridgeResponses['/solana/sign-only'] = { signedTransaction: 'SIGNED-MAIN-UNKNOWN' };
-        // PYUSD's mint owner is some non-token program (e.g. System) → unknown → fail-safe to main.
+        // PYUSD's mint owner is a non-token program (System) → _mintTokenProgram THROWS →
+        // expectedDelta can't be built. The order was built with the burner as taker, so
+        // the OLD code's flip-to-main + MWA-sign reused that SAME burner-taker order on the
+        // main wallet — invalid (the BAT-1038 Amendment 1 risk class). Must fail closed
+        // BEFORE routeAndSign — no reserve, no sign, no broadcast, no unsafe main fallback.
         mockAccountInfoFn = (pk) => pk === _PYUSD_MINT ? _mintAccountInfo('11111111111111111111111111111111', 6) : _mintAccountInfo(_TKN_PROGRAM, 6);
         const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'PYUSD', amount: 0.001 });
-        if (result.error) throw new Error(`unexpected error: ${JSON.stringify(result)}`);
-        assert.strictEqual(result.wallet, 'main', 'unknown output mint program must force main (fail-safe)');
-        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must NOT sign for an unknown mint program');
-        assert.ok(bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'expected MWA fallback');
+        assert.strictEqual(result.error, 'expected_delta_unbuildable', JSON.stringify(result));
+        assert.strictEqual(result.retryable, true, JSON.stringify(result));
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/reserve'), 'no reserve when the safety check is unbuildable');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must NOT sign an ungated order');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'MWA must NOT sign the burner-taker order (no unsafe main fallback)');
+        assert.strictEqual(jupiterUltraExecuteCalls.length, 0, 'no execute/broadcast');
+    });
+
+    await check('BAT-1066: unrecognized output-mint owner on a MAIN route → proceeds via MWA (order built for main taker; expectedDelta unused on MWA path)', async () => {
+        _burnerOff();
+        bridgeResponses['/solana/sign-only'] = { signedTransaction: 'SIGNED-MAIN-UNKNOWN-MAIN' };
+        // Same unbuildable expectedDelta, but burner OFF → main route. The order was built
+        // for the main wallet as taker, so MWA signing it is valid (MWA is taker by
+        // construction); the catch nulls the unused expectedDelta and proceeds.
+        mockAccountInfoFn = (pk) => pk === _PYUSD_MINT ? _mintAccountInfo('11111111111111111111111111111111', 6) : _mintAccountInfo(_TKN_PROGRAM, 6);
+        const result = await tools.handlers.solana_swap({ inputToken: 'SOL', outputToken: 'PYUSD', amount: 0.001 });
+        if (result.error) throw new Error(`main route must proceed, got: ${JSON.stringify(result)}`);
+        assert.strictEqual(result.wallet, 'main', 'main route signs via MWA (MWA is taker by construction)');
+        assert.ok(bridgeCalls.find(c => c.endpoint === '/solana/sign-only'), 'main route signs via MWA despite unbuildable expectedDelta');
+        assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'burner must NOT sign on a main route');
     });
 
     await check('BAT-1038 Amendment 1: Ultra order fee payer != burner → fee_payer_mismatch, no reserve/sign/broadcast', async () => {
