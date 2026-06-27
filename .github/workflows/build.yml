@@ -94,6 +94,10 @@ jobs:
             spl-transfer-builder \
             ata-derivation \
             token2022-mint \
+            rich-markdown \
+            telegram-systemplain \
+            telegram-no-double-delivery \
+            telegram-rich-send \
             ci-coverage-manifest
           do
             echo "── $t ──"
