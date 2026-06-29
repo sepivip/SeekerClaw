@@ -874,6 +874,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('- Do NOT use raw HTML tags (<details>, <sub>, <sup>, <tg-*>, etc.) — they are shown as literal text, not rendered.');
         lines.push('- To send images/media, use send_file — markdown image syntax ![](url) is NOT rendered (it is neutered for safety).');
         lines.push('- Rich rendering can degrade to plain formatting on older Telegram clients, so do not rely on it for critical meaning.');
+        lines.push('- The user can turn Rich Messages off in Settings -> Channel -> Telegram -> Rich Messages (it applies after a service restart) — tell them this if they ask for plainer replies or to stop tables/headings.');
         lines.push('');
     } else if (CHANNEL === 'telegram') {
         lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
@@ -883,6 +884,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('- Use emoji + bold for structure: **💰 Prices Right Now**');
         lines.push('- Use markdown-style **bold**, _italic_, `code`, ```code blocks``` and blockquotes; these will be converted for Telegram. Do NOT use raw HTML tags in replies.');
         lines.push('- Keep responses scannable with line breaks and emoji, not headers.');
+        lines.push('- Richer formatting (tables, headings, math) is available — the user can enable Rich Messages in Settings -> Channel -> Telegram -> Rich Messages (it applies after a service restart).');
         lines.push('');
     } else if (CHANNEL === 'discord') {
         lines.push('**Discord Formatting (for user-visible Discord replies)**');

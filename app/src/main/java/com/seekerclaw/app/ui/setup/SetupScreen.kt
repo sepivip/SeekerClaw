@@ -382,6 +382,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     openaiOAuthRefresh = preservedOAuthRefresh,
                     openaiOAuthEmail = preservedOAuthEmail,
                     openaiOAuthExpiresAt = preservedOAuthExpiresAt,
+                    // BAT-1050: carry the Rich Messages toggle forward on re-run-setup;
+                    // a fresh install (existing == null) defaults ON. Never silently
+                    // flip a user's explicit OFF back on.
+                    richMessages = existing?.richMessages ?: true,
                     provider = "openai",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
@@ -402,6 +406,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     openaiOAuthRefresh = preservedOAuthRefresh,
                     openaiOAuthEmail = preservedOAuthEmail,
                     openaiOAuthExpiresAt = preservedOAuthExpiresAt,
+                    richMessages = existing?.richMessages ?: true, // BAT-1050: preserve toggle (default ON on fresh install)
                     provider = "openrouter",
                     authType = "api_key",
                     telegramBotToken = botToken.trim(),
@@ -423,6 +428,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     openaiOAuthRefresh = preservedOAuthRefresh,
                     openaiOAuthEmail = preservedOAuthEmail,
                     openaiOAuthExpiresAt = preservedOAuthExpiresAt,
+                    richMessages = existing?.richMessages ?: true, // BAT-1050: preserve toggle (default ON on fresh install)
                     provider = "claude",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),

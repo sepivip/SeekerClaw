@@ -817,7 +817,7 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = 
         return sendPlainChunks(chatId, text, replyTo, buttons);
     }
 
-    // BAT-1050 P1A: try Rich Messages first (flag-gated; OFF by default). On any
+    // BAT-1050: try Rich Messages first (flag-gated; ON by default). On any
     // non-delivery it returns { delivered:false } and we fall through to the
     // classic chunked HTML pipeline below (the rollout source of truth). A
     // possibly-delivered transport error returns { delivered:true } so we do NOT

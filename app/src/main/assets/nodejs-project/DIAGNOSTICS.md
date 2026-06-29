@@ -38,11 +38,11 @@ grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
 ```bash
 grep -i "sendRichMessage\|systemPlain\|Plain-text fallback\|transient send" node_debug.log | tail -20
 ```
-**Diagnosis:** Rich Messages (Bot API 10.1) are gated behind the default-OFF `SEEKERCLAW_RICH` env var / `config.richMessages` flag. With the flag OFF, every reply uses the classic `parse_mode:HTML` pipeline — this is normal. With it ON, a reply falls back to classic when `sendRichMessage` does not land:
+**Diagnosis:** Rich Messages (Bot API 10.1) are **default ON**, controlled by the Telegram-settings **Rich Messages** toggle (`config.richMessages`) with a `SEEKERCLAW_RICH` env-var override (precedence: toggle > env > default ON). With it OFF, every reply uses the classic `parse_mode:HTML` pipeline — this is normal. With it ON (the default), a reply falls back to classic when `sendRichMessage` does not land:
 - `sendRichMessage unsupported by this Bot API ...` — the API does not expose Rich Messages; Rich is disabled for the rest of the run and all replies use the classic pipeline. Nothing is lost.
 - `sendRichMessage failed (fallback/transient: ...) — falling back to classic HTML` — a single rich send was rejected (malformed rich markdown, 429 rate limit, or 5xx); the classic pipeline delivers it instead (not a duplicate — the rich send did not land).
 - `sendRichMessage transport error (possibly delivered; no classic fallback)` — the connection dropped after the request was sent, so the message MAY already be delivered; it is NOT resent (NO-DOUBLE-DELIVERY). If a reply seems missing, ask the user to confirm rather than blindly resending.
-**Fix:** No action for the unsupported/fallback cases — delivery still happens via the classic path. For repeated transient failures see "Telegram Rate Limited (429)" above. To turn Rich off entirely, unset `SEEKERCLAW_RICH` (or `richMessages`) and restart.
+**Fix:** No action for the unsupported/fallback cases — delivery still happens via the classic path. For repeated transient failures see "Telegram Rate Limited (429)" above. To turn Rich off entirely, switch off **Rich Messages** in Telegram settings (or set `SEEKERCLAW_RICH`/`richMessages` to `false`) and restart the service.
 
 ### System Notices Render Plain Even With Rich On (expected)
 **Symptoms:** Heartbeat alerts, "Back online", status/thinking bubbles, and auto-resume notices appear as plain text although Rich is enabled.

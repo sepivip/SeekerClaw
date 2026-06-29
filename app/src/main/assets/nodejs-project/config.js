@@ -512,14 +512,18 @@ const API_TIMEOUT_RETRIES = Math.max(0, Math.min(5, _safeInt(config.apiTimeoutRe
 const API_TIMEOUT_BACKOFF_MS = Math.max(100, _safeInt(config.apiTimeoutBackoffMs ?? process.env.API_TIMEOUT_BACKOFF_MS) ?? 500);
 const API_TIMEOUT_MAX_BACKOFF_MS = Math.max(1000, _safeInt(config.apiTimeoutMaxBackoffMs ?? process.env.API_TIMEOUT_MAX_BACKOFF_MS) ?? 5000);
 
-// BAT-1050 P1A: Telegram Rich Messages (Bot API 10.1) feature flag — DEFAULT OFF.
-// Internal owner/device-test gate using the same config-or-env idiom as
-// API_TIMEOUT_* above (config.json field wins, else env var). No Settings UI
-// yet, so SEEKERCLAW_RICH is the device-test bridge until a toggle ships.
-// When false the entire Rich send path is inert: replies take the classic
-// parse_mode:HTML -> plain pipeline, byte-for-byte unchanged.
+// BAT-1050: Telegram Rich Messages (Bot API 10.1) feature flag — DEFAULT ON.
+// Precedence (same config-or-env idiom as API_TIMEOUT_* above):
+//   config.richMessages  — the Telegram-settings toggle (ConfigManager writes it) — wins, else
+//   process.env.SEEKERCLAW_RICH  — env-var / device-test override, else
+//   true  — default ON for everyone.
+// Set the toggle (or SEEKERCLAW_RICH) to false to disable: the whole Rich send
+// path then goes inert and replies take the classic parse_mode:HTML -> plain
+// pipeline, byte-for-byte unchanged. Rich also self-disables at runtime if the
+// bot's Telegram cannot serve sendRichMessage (method-not-found -> classic), so
+// default-ON is safe even where the Bot API method is unavailable.
 const _boolFlag = (v) => v === true || v === 'true' || v === '1';
-const RICH_MESSAGES_ENABLED = _boolFlag(config.richMessages ?? process.env.SEEKERCLAW_RICH ?? false);
+const RICH_MESSAGES_ENABLED = _boolFlag(config.richMessages ?? process.env.SEEKERCLAW_RICH ?? true);
 // Bot API feature level this build targets (Rich Messages = Bot API 10.1).
 // Tracked so diagnostics / the tg-bot-api-parity check can report what we
 // build against; not a wire-protocol version (we call api.telegram.org raw).
@@ -981,7 +985,7 @@ module.exports = {
     API_TIMEOUT_BACKOFF_MS,
     API_TIMEOUT_MAX_BACKOFF_MS,
 
-    // BAT-1050 P1A: Telegram Rich Messages (Bot API 10.1) — default-OFF flag
+    // BAT-1050: Telegram Rich Messages (Bot API 10.1) — DEFAULT-ON flag (config.richMessages > SEEKERCLAW_RICH > true)
     RICH_MESSAGES_ENABLED,
     BOT_API_VERSION,
 
