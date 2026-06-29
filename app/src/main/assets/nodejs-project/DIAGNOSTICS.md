@@ -859,6 +859,12 @@ This is intended product behavior, not a bug or a "PYUSD/Token-2022 limitation."
 
 (Root cause, for maintainers: `caps/preflight._principalForTool` returns a cap principal ONLY when the spent asset is USDC/SOL; a non-cap input → null → `routeFor` previews routing=main → policy `confirm`. Conversions are cap-exempt by construction, so "over-cap conversion" is unreachable.)
 
+### Error: `confirmation_buttons_not_allowed` (BAT-1067)
+
+**Symptoms:** `telegram_send` returns `error: "confirmation_buttons_not_allowed"` with a `detail` naming the offending button.
+**Cause:** the agent tried to attach a Confirm/Approve/Cancel/Retry inline button to a **fund-moving / confirmation-gated** action (the button's callback_data or label matched a confirm-verb + a fund keyword, e.g. `confirm_swap`, `approve_send`, `retry_swap`, `cancel_order`). The deterministic guard in `tools/telegram.js` rejects it **before** sending. Inline button taps are ordinary chat messages — they can NEVER satisfy the confirmation gate (only a literal `YES`/`NO`/`/approve`/`/deny` does), so such a button would create a confusing double-confirm.
+**Fix:** do NOT add your own confirm/cancel buttons for gated actions. Preview the action (amount / recipient / quote) as plain text and call the tool — the system confirmation gate asks the user for YES when policy requires it. Buttons are for navigation / non-sensitive choices only.
+
 ## burner policy (BAT-1013)
 
 The burner policy gate (`wallet/burner-policy.js validateBurnerTx`) runs BEFORE every `/burner/sign-transaction` and `/burner/sign-and-send` bridge call. Rejects are sorted into three classes; the agent's recovery action MUST differ per class.
