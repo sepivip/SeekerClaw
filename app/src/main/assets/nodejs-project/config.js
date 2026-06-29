@@ -3,6 +3,8 @@
 
 const fs = require('fs');
 const path = require('path');
+// BAT-1071: pure, require-safe bridge-token validator (no config init).
+const { isCanonicalBridgeToken } = require('./bridge-token');
 
 // ============================================================================
 // WORKSPACE & LOG PATHS
@@ -447,15 +449,18 @@ function getSearchProvider() {
 // least matches what AndroidBridge has if it never rotated.
 //
 // Never throws. Worst case returns ''.
+//
+// BAT-1071: validate the EXACT canonical UUID shape via the pure `bridge-token`
+// module (8-4-4-4-12 hex — what SeekerClawService.kt writes). The old check
+// (`length === 36 && /^[0-9a-f-]+$/`) accepted ANY 36 hex-or-dash chars (even 36
+// dashes / misplaced dashes), so a corrupt file slipped through.
 function getBridgeToken() {
     try {
         const tokenPath = path.join(path.dirname(workDir), 'bridge_token');
         const raw = fs.readFileSync(tokenPath, 'utf8').trim();
-        // UUID v4 shape: 36 chars, hex+dash only. ServiceState.kt
-        // writes UUID.randomUUID().toString() which produces exactly
-        // this format. Reject anything else (truncated, corrupt,
-        // wrong file content) by falling through to the cold value.
-        if (raw && raw.length === 36 && /^[0-9a-f-]+$/i.test(raw)) return raw;
+        // Reject anything that isn't the real UUID shape by falling through to
+        // the cold BRIDGE_TOKEN (matches the function comment's stated intent).
+        if (isCanonicalBridgeToken(raw)) return raw;
     } catch (_) { /* fall through to cold-start fallback */ }
     return BRIDGE_TOKEN;
 }

@@ -929,10 +929,10 @@ The most common burner-policy `simulation_returned_error` after BAT-1013 ships i
 **With BAT-1024, the burner-policy reason string now decodes this case explicitly:**
 
 > SPL Token returned InsufficientFunds (code 1): Source account does not have enough tokens (or lamports for rent) to fund the transfer. — burner likely needs SOL top-up for rent (typical: ~0.01-0.02 SOL covers Order PDA + vault ATA). Suggest solana_send(source=main, to=<burner pubkey>, amount=0.02) and retry. (unitsConsumed=8421)
->   logs[-5..]:
->   Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]
->   Program log: Error: insufficient funds
->   Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1
+> logs[-5..]:
+> Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]
+> Program log: Error: insufficient funds
+> Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1
 
 **Agent recovery flow:**
 
