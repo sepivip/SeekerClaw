@@ -35,6 +35,7 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
+import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.MorphActionButton
@@ -210,6 +211,45 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                             info = SettingsHelpTexts.OWNER_ID,
                             showDivider = false,
                         )
+                    }
+
+                    // Message formatting (BAT-1050) — Rich Messages toggle, default ON.
+                    // Routed through saveField() so it triggers the same restart prompt
+                    // as a channel switch: RICH_MESSAGES_ENABLED is read once at Node
+                    // startup, so the change only applies after the service restarts.
+                    Spacer(modifier = Modifier.height(24.dp))
+                    SectionLabel("Formatting")
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    CardSurface {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text(
+                                    text = "Rich Messages",
+                                    fontFamily = RethinkSans,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = SeekerClawColors.TextPrimary,
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Headings, tables, code blocks and math. " +
+                                        "Falls back to classic formatting automatically if unsupported. " +
+                                        "Restart applies the change.",
+                                    fontFamily = RethinkSans,
+                                    fontSize = 12.sp,
+                                    color = SeekerClawColors.TextDim,
+                                )
+                            }
+                            SeekerClawSwitch(
+                                checked = config?.richMessages ?: true,
+                                onCheckedChange = { saveField("richMessages", it.toString()) },
+                            )
+                        }
                     }
 
                     // Connection test

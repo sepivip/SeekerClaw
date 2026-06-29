@@ -8,13 +8,13 @@ const {
 } = require('../config');
 
 const {
-    safePath,
+    safePath, redactSecrets,
 } = require('../security');
 
 const {
     telegram, telegramSendFile, detectTelegramFileType,
     cleanResponse, toTelegramHtml, stripMarkdown,
-    recordSentMessage,
+    recordSentMessage, classifyTelegramOutcome, richTrySend, RICH_MAX_BYTES,
 } = require('../telegram');
 
 const tools = [
@@ -50,7 +50,7 @@ const tools = [
         input_schema: {
             type: 'object',
             properties: {
-                text: { type: 'string', description: 'Message text to send (Markdown formatting supported; converted to Telegram HTML). Max 4096 characters — for long responses use the default sendMessage().' },
+                text: { type: 'string', description: 'Message text to send. Markdown formatting supported. Up to 32768 UTF-8 bytes when Rich Messages are enabled (the classic fallback handles ~4096); for long multi-message responses, reply normally instead.' },
                 buttons: {
                     type: 'array',
                     description: 'Optional inline keyboard rows for NAVIGATION / non-sensitive choices ONLY. Each button: "text" (display label), "callback_data" (value sent back when tapped, max 64 bytes), optional "style" ("destructive" red / "primary" blue). A button tap is just an ordinary chat message \u2014 it does NOT authorize anything. Do NOT use buttons to confirm/approve/cancel fund-moving or confirmation-gated actions (swaps, sends, payments, wallet/cap changes) \u2014 those have a dedicated system confirmation gate that asks for YES. Example: [[{"text": "\uD83D\uDCCA Show more", "callback_data": "show_more", "style": "primary"}, {"text": "\uD83D\uDD04 Refresh", "callback_data": "refresh"}]]',
@@ -156,7 +156,7 @@ const handlers = {
     async telegram_send(input, chatId) {
         const text = input.text;
         if (!text) return { error: 'text is required' };
-        if (text.length > 4096) return { error: 'text exceeds Telegram 4096 character limit' };
+        if (Buffer.byteLength(text, 'utf8') > RICH_MAX_BYTES) return { error: 'text exceeds the 32768-byte Rich Message limit' };
         if (!chatId) return { error: 'No active chat' };
         // #298: Heartbeat/cron use synthetic string chatIds (e.g. "__heartbeat__",
         // "cron:abc") — not valid Telegram targets. Heartbeat alerts are sent via
@@ -194,10 +194,26 @@ const handlers = {
             }
         }
         try {
-            const cleaned = cleanResponse(text);
+            // Redaction parity with sendMessage (BAT-1050): scrub leaked secrets
+            // before either the Rich or the classic send.
+            const cleaned = redactSecrets(cleanResponse(text));
             const replyMarkup = input.buttons ? { inline_keyboard: input.buttons } : undefined;
-            // Try HTML first, fall back to plain text
-            let result, htmlFailed = false;
+
+            // BAT-1050 P1A: try Rich Messages first (flag-gated; shares richTrySend
+            // with sendMessage). On non-delivery, fall through to classic HTML/plain.
+            const rich = await richTrySend(chatId, cleaned, null, input.buttons);
+            if (rich.delivered) {
+                if (rich.ret && rich.ret.messageId != null) {
+                    log(`telegram_send: sent rich message ${rich.ret.messageId}`, 'DEBUG');
+                    return { ok: true, message_id: rich.ret.messageId, chat_id: chatId };
+                }
+                return { ok: false, warning: 'Rich message sent but no message_id was returned (or the connection dropped after sending); not retried to avoid a duplicate.' };
+            }
+
+            // Try HTML first; fall back to plain ONLY on a deterministic rejection.
+            // NO-DOUBLE-DELIVERY (BAT-1050): a transport throw means the message may
+            // already be delivered — do NOT resend (that would duplicate it).
+            let result = null, outcome;
             try {
                 const payload = {
                     chat_id: chatId,
@@ -206,10 +222,20 @@ const handlers = {
                 };
                 if (replyMarkup) payload.reply_markup = replyMarkup;
                 result = await telegram('sendMessage', payload);
+                outcome = classifyTelegramOutcome(result, null);
             } catch (e) {
-                htmlFailed = true;
+                outcome = classifyTelegramOutcome(null, e);
             }
-            if (htmlFailed || !result || !result.ok) {
+            if (outcome.verdict === 'uncertain') {
+                // Connection dropped after the POST — possibly delivered. Don't resend.
+                log(`telegram_send transport error (possibly delivered; not retried): ${outcome.desc}`, 'WARN');
+                return { ok: false, warning: 'Connection dropped after sending; the message may have been delivered. Not retried to avoid a duplicate.' };
+            }
+            // telegram_send doesn't chunk, so 'too_long' (HTML expanded past 4096)
+            // also falls back to the shorter plain text — both 'fallback' and
+            // 'too_long' are deterministic rejections (not delivered), so the
+            // resend is safe. 'transient' (429/5xx) is NOT resent (avoid hammer).
+            if (outcome.verdict === 'fallback' || outcome.verdict === 'too_long') {
                 const payload = {
                     chat_id: chatId,
                     text: stripMarkdown(cleaned),

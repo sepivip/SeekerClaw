@@ -11,6 +11,7 @@ const {
     workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
+    RICH_MESSAGES_ENABLED,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
     truncateToolResult,
     localTimestamp, localDateStr, log,
@@ -865,7 +866,17 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     }
 
     // Channel formatting — headers aren't rendered in Telegram, guide the agent
-    if (CHANNEL === 'telegram') {
+    if (CHANNEL === 'telegram' && RICH_MESSAGES_ENABLED) {
+        // BAT-1050 P1A: Rich Messages ON — Telegram's server renders full Markdown.
+        lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
+        lines.push('- Rich Messages are ON: Telegram renders standard Markdown, so you MAY use ## headings, tables, task lists (- [ ] / - [x]), > blockquotes, ==marked==, ||spoiler||, math ($x^2$ and $$E=mc^2$$), and fenced code blocks WITH a language tag (```python).');
+        lines.push('- Use **bold**, _italic_, ~~strikethrough~~, `inline code`, and [links](https://example.com) — only https:// and mailto: links render; other schemes (tg://, javascript:, relative) are shown as plain text.');
+        lines.push('- Do NOT use raw HTML tags (<details>, <sub>, <sup>, <tg-*>, etc.) — they are shown as literal text, not rendered.');
+        lines.push('- To send images/media, use send_file — markdown image syntax ![](url) is NOT rendered (it is neutered for safety).');
+        lines.push('- Rich rendering can degrade to plain formatting on older Telegram clients, so do not rely on it for critical meaning.');
+        lines.push('- The user can turn Rich Messages off in Settings -> Channel -> Telegram -> Rich Messages (it applies after a service restart) — tell them this if they ask for plainer replies or to stop tables/headings.');
+        lines.push('');
+    } else if (CHANNEL === 'telegram') {
         lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
         lines.push('- In Telegram replies, do NOT use markdown headers (##, ###) — Telegram doesn\'t render them.');
         lines.push('- Headers like ## may appear in this system prompt, but must NOT be used in messages you send to users.');
@@ -873,6 +884,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('- Use emoji + bold for structure: **💰 Prices Right Now**');
         lines.push('- Use markdown-style **bold**, _italic_, `code`, ```code blocks``` and blockquotes; these will be converted for Telegram. Do NOT use raw HTML tags in replies.');
         lines.push('- Keep responses scannable with line breaks and emoji, not headers.');
+        lines.push('- Richer formatting (tables, headings, math) is available — the user can enable Rich Messages in Settings -> Channel -> Telegram -> Rich Messages (it applies after a service restart).');
         lines.push('');
     } else if (CHANNEL === 'discord') {
         lines.push('**Discord Formatting (for user-visible Discord replies)**');

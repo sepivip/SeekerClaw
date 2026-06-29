@@ -7,9 +7,10 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 
-const { BOT_TOKEN, log, workDir, getOwnerId } = require('./config');
+const { BOT_TOKEN, log, workDir, getOwnerId, RICH_MESSAGES_ENABLED } = require('./config');
 const { redactSecrets } = require('./security');
 const { httpRequest } = require('./http');
+const { sanitizeRichMarkdown } = require('./rich-markdown');
 
 // ============================================================================
 // TELEGRAM API
@@ -704,12 +705,125 @@ function chunkMarkdown(text) {
     return chunks;
 }
 
-async function sendMessage(chatId, text, replyTo = null, buttons = null) {
+// BAT-1050 P1A NO-DOUBLE-DELIVERY: classify a telegram('sendMessage') outcome to
+// decide whether a SECOND (fallback) visible send is safe. The transport layer
+// (http.js) REJECTS on socket error / timeout-after-POST (possibly delivered) and
+// RESOLVES { ok:false, ... } for any HTTP response (deterministic rejection).
+//   error (thrown)      -> 'uncertain' : possibly delivered  -> NO second send
+//   ok:true             -> 'ok'        : delivered
+//   ok:false 'too long' -> 'too_long'  : not delivered; caller may re-chunk
+//   ok:false 429 / 5xx  -> 'transient' : not delivered, but do NOT hammer a resend
+//   ok:false (other)    -> 'fallback'  : deterministic format rejection -> safe plain retry
+// Only 'fallback' (and 'too_long' for callers that don't re-chunk) permits a
+// second visible send; 'transient'/'uncertain' must NOT produce a duplicate.
+function classifyTelegramOutcome(result, error) {
+    if (error) return { verdict: 'uncertain', desc: error.message || String(error) };
+    if (result && result.ok) return { verdict: 'ok', desc: '' };
+    const desc = (result && result.description) || '';
+    const code = result && result.error_code;
+    if (desc.includes('too long')) return { verdict: 'too_long', desc };
+    // Coerce error_code (Telegram normally sends a number, but tolerate a
+    // stringified '429'/'503' so a transient is never misclassified as a
+    // deterministic 'fallback' — which would trigger a duplicate resend).
+    const numCode = Number(code);
+    if (numCode === 429 || (Number.isFinite(numCode) && numCode >= 500)) {
+        return { verdict: 'transient', desc: desc || `error_code ${code}` };
+    }
+    return { verdict: 'fallback', desc };
+}
+
+// BAT-1050 P1A: Rich Messages (Bot API 10.1) budget + method-availability cache.
+// _richMethodAvailable: null=untried, true=works, false=unsupported by this Bot
+// API (stop probing for the rest of the run so we don't add latency before every
+// message).
+const RICH_MAX_BYTES = 32768; // Rich budget (vs 4096 classic), counted in UTF-8 bytes.
+let _richMethodAvailable = null;
+
+// Try sending USER content as a Rich Message (posture A). Returns { delivered, ret? }.
+//   delivered:false -> caller falls back to the classic chunked HTML pipeline (the
+//                      rollout source of truth); not a duplicate (Rich didn't land).
+//   delivered:true  -> sent OR possibly-delivered (transport error) — caller must
+//                      NOT also send via classic (NO-DOUBLE-DELIVERY).
+async function richTrySend(chatId, text, replyTo, buttons) {
+    if (!RICH_MESSAGES_ENABLED || _richMethodAvailable === false) return { delivered: false };
+    // Over the Rich budget -> let the classic chunked path handle it.
+    if (Buffer.byteLength(text, 'utf8') > RICH_MAX_BYTES) return { delivered: false };
+
+    const payload = {
+        chat_id: chatId,
+        // Posture A: sanitize agent markdown (escape raw HTML, neuter bad-scheme
+        // links + images) before it reaches the server-side Rich parser.
+        rich_message: { markdown: sanitizeRichMarkdown(text), skip_entity_detection: true },
+    };
+    // reply_parameters (not the deprecated reply_to_message_id) for the Rich path;
+    // allow_sending_without_reply so a deleted reply target never loses the message.
+    if (replyTo != null) payload.reply_parameters = { message_id: replyTo, allow_sending_without_reply: true };
+    if (buttons) payload.reply_markup = { inline_keyboard: buttons };
+
+    let outcome, result = null;
+    try {
+        result = await telegram('sendRichMessage', payload);
+        outcome = classifyTelegramOutcome(result, null);
+    } catch (e) {
+        outcome = classifyTelegramOutcome(null, e);
+    }
+
+    if (outcome.verdict === 'ok') {
+        _richMethodAvailable = true;
+        const mid = result.result && result.result.message_id;
+        if (mid != null) {
+            recordSentMessage(chatId, mid, text);
+            return { delivered: true, ret: { messageId: mid } };
+        }
+        return { delivered: true };
+    }
+
+    if (outcome.verdict === 'uncertain') {
+        // Transport error after the POST — possibly delivered. NO-DOUBLE-DELIVERY:
+        // do NOT fall back to classic (would risk a duplicate).
+        log(`sendRichMessage transport error (possibly delivered; no classic fallback): ${outcome.desc}`, 'WARN');
+        return { delivered: true };
+    }
+
+    // Any other non-delivery (deterministic rejection, 429/5xx, unsupported method)
+    // means Rich did NOT land -> fall back to the classic pipeline (not a
+    // duplicate). If the method itself is unsupported, stop probing this run.
+    const desc = (outcome.desc || '').toLowerCase();
+    // Only disable Rich for an actual unsupported-method signal — NOT a generic
+    // "not found" (which also matches target errors like "chat not found" /
+    // "message not found", a 400 that must not kill Rich for the whole run).
+    if (desc.includes('method not found') || (result && Number(result.error_code) === 404)) {
+        _richMethodAvailable = false;
+        log('sendRichMessage unsupported by this Bot API — disabling Rich for this run; using classic pipeline', 'WARN');
+    } else {
+        log(`sendRichMessage failed (${outcome.verdict}: ${outcome.desc}) — falling back to classic HTML`, 'WARN');
+    }
+    return { delivered: false };
+}
+
+async function sendMessage(chatId, text, replyTo = null, buttons = null, opts = {}) {
     // Clean AI artifacts before sending to user
     text = cleanResponse(text);
     if (!text) return; // Nothing left after cleaning
     // Redact any leaked secrets (API keys, tokens) from outgoing messages
     text = redactSecrets(text);
+
+    // BAT-1050 P1A: systemPlain path — synthetic/system notices (heartbeat,
+    // back-online, confirmation nudges, auto-resume status) send RAW: no
+    // parse_mode, no HTML/rich transform. Keeps these messages plain so the
+    // future Rich send path and BAT-558 heartbeat behavior are unaffected.
+    // Reached via sendMessageSystem() / channel.sendMessageSystem().
+    if (opts && opts.plainOnly) {
+        return sendPlainChunks(chatId, text, replyTo, buttons);
+    }
+
+    // BAT-1050: try Rich Messages first (flag-gated; ON by default). On any
+    // non-delivery it returns { delivered:false } and we fall through to the
+    // classic chunked HTML pipeline below (the rollout source of truth). A
+    // possibly-delivered transport error returns { delivered:true } so we do NOT
+    // duplicate it on the classic path.
+    const rich = await richTrySend(chatId, text, replyTo, buttons);
+    if (rich.delivered) return rich.ret;
 
     // Telegram max message length is 4096 — use markdown-aware chunking
     const chunks = chunkMarkdown(text);
@@ -720,10 +834,10 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
         const isLastChunk = i === chunks.length - 1;
         // Only attach buttons to the last chunk (they belong at the bottom)
         const replyMarkup = (isLastChunk && buttons) ? { inline_keyboard: buttons } : undefined;
-        let sent = false;
 
         // Try with HTML first (supports native blockquotes)
         const htmlText = toTelegramHtml(chunk);
+        let outcome;
         try {
             const payload = {
                 chat_id: chatId,
@@ -733,33 +847,48 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
             };
             if (replyMarkup) payload.reply_markup = replyMarkup;
             const result = await telegram('sendMessage', payload);
-            // Check if Telegram actually accepted the message
-            if (result && result.ok) {
-                sent = true;
-                if (result.result && result.result.message_id) {
-                    lastMessageId = result.result.message_id;
-                    recordSentMessage(chatId, result.result.message_id, chunk);
-                }
-            } else if (result && !result.ok) {
-                const desc = result.description || '';
-                // HTML expansion exceeded Telegram's 4096 limit — re-chunk at half size
-                if (desc.includes('too long')) {
-                    const half = Math.floor(chunk.length / 2);
-                    const subChunks = chunkMarkdown(chunk.slice(0, half));
-                    subChunks.push(...chunkMarkdown(chunk.slice(half)));
-                    // Insert sub-chunks after current position so they get sent in order
-                    chunks.splice(i + 1, 0, ...subChunks);
-                    sent = true; // skip plain-text fallback, sub-chunks will be sent next
-                } else {
-                    log(`HTML format rejected: ${desc}`, 'WARN');
-                }
+            outcome = classifyTelegramOutcome(result, null);
+            if (outcome.verdict === 'ok' && result.result && result.result.message_id) {
+                lastMessageId = result.result.message_id;
+                recordSentMessage(chatId, result.result.message_id, chunk);
             }
         } catch (e) {
-            log(`sendMessage HTML failed: ${e.message}`, 'WARN');
+            // Transport error (timeout/socket) AFTER the POST — the message may
+            // already be delivered. NO-DOUBLE-DELIVERY: classify as 'uncertain' so
+            // we do NOT retry as plain text (that would risk a duplicate).
+            outcome = classifyTelegramOutcome(null, e);
         }
 
-        // Only retry as plain text if the HTML attempt failed
-        if (!sent) {
+        // Decide the plain-text fallback from the classified outcome. Only a
+        // deterministic HTML rejection ('fallback') is safe to re-send as plain;
+        // 'transient' (429/5xx) and 'uncertain' (transport throw) must NOT.
+        let plainFallbackEligible = false;
+        switch (outcome.verdict) {
+            case 'too_long': {
+                // HTML expansion exceeded Telegram's 4096 limit — re-chunk at half
+                // size; the sub-chunks deliver the content (no plain fallback).
+                const half = Math.floor(chunk.length / 2);
+                const subChunks = chunkMarkdown(chunk.slice(0, half));
+                subChunks.push(...chunkMarkdown(chunk.slice(half)));
+                chunks.splice(i + 1, 0, ...subChunks);
+                break;
+            }
+            case 'fallback':
+                log(`HTML format rejected: ${outcome.desc}`, 'WARN');
+                plainFallbackEligible = true;
+                break;
+            case 'transient':
+                log(`Telegram transient send failure (${outcome.desc}) — not retrying as plain (avoid duplicate/hammer)`, 'WARN');
+                break;
+            case 'uncertain':
+                log(`sendMessage HTML transport error (possibly delivered; no plain fallback): ${outcome.desc}`, 'WARN');
+                break;
+            case 'ok':
+            default:
+                break;
+        }
+
+        if (plainFallbackEligible) {
             try {
                 const payload = {
                     chat_id: chatId,
@@ -771,15 +900,55 @@ async function sendMessage(chatId, text, replyTo = null, buttons = null) {
                 if (result && result.ok && result.result && result.result.message_id) {
                     lastMessageId = result.result.message_id;
                     recordSentMessage(chatId, result.result.message_id, chunk);
+                } else if (result && !result.ok) {
+                    log(`Plain-text fallback rejected: ${result.description || 'unknown error'}`, 'WARN');
                 }
             } catch (e) {
-                log(`Failed to send message: ${e.message}`, 'ERROR');
+                // Plain fallback also hit a transport error — give up for this chunk
+                // (no further retry, to avoid an unbounded send loop / duplicate).
+                log(`Plain-text fallback transport error: ${e.message}`, 'ERROR');
             }
         }
     }
 
     // Return { messageId } of the last successfully sent chunk (channel interface contract)
     if (lastMessageId != null) return { messageId: lastMessageId };
+}
+
+// BAT-1050 P1A: raw plain-text chunked send — no parse_mode, no HTML/rich
+// transform. Single attempt per chunk (no HTML->plain ladder), so it carries no
+// double-send risk. `text` is already cleanResponse'd + redactSecrets'd by the
+// caller (sendMessage). Used for system/synthetic notices via sendMessageSystem.
+async function sendPlainChunks(chatId, text, replyTo, buttons) {
+    const chunks = chunkMarkdown(text);
+    let lastMessageId = null;
+    for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const isLastChunk = i === chunks.length - 1;
+        const replyMarkup = (isLastChunk && buttons) ? { inline_keyboard: buttons } : undefined;
+        try {
+            const payload = { chat_id: chatId, text: chunk, reply_to_message_id: replyTo };
+            if (replyMarkup) payload.reply_markup = replyMarkup;
+            const result = await telegram('sendMessage', payload);
+            if (result && result.ok && result.result && result.result.message_id) {
+                lastMessageId = result.result.message_id;
+                recordSentMessage(chatId, result.result.message_id, chunk);
+            } else if (result && !result.ok) {
+                log(`systemPlain send rejected: ${result.description || 'unknown error'}`, 'WARN');
+            }
+        } catch (e) {
+            log(`systemPlain send failed: ${e.message}`, 'WARN');
+        }
+    }
+    if (lastMessageId != null) return { messageId: lastMessageId };
+}
+
+// BAT-1050 P1A: explicit plain send for system/synthetic notices. The
+// channel-agnostic entry is channel.sendMessageSystem(); Telegram routes here
+// (raw plain via opts.plainOnly), Discord falls back to its normal send. This
+// path NEVER renders Rich.
+async function sendMessageSystem(chatId, text) {
+    return sendMessage(chatId, text, null, null, { plainOnly: true });
 }
 
 // OpenClaw parity: backoff on 401/403 to avoid hammering Telegram with invalid token
@@ -1119,6 +1288,10 @@ module.exports = {
     SENT_CACHE_TTL,
     recordSentMessage,
     sendMessage,
+    sendMessageSystem,
+    richTrySend,
+    classifyTelegramOutcome,
+    RICH_MAX_BYTES,
     sendTyping,
     deferStatus,
     deferThinkingStatus,

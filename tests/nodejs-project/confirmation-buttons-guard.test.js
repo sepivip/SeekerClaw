@@ -61,7 +61,7 @@ function setupMocks() {
     const cfgPath = require.resolve(path.join(BUNDLE, 'config.js'));
     require.cache[cfgPath] = { id: cfgPath, filename: cfgPath, loaded: true, exports: { log: () => {} } };
     const secPath = require.resolve(path.join(BUNDLE, 'security.js'));
-    require.cache[secPath] = { id: secPath, filename: secPath, loaded: true, exports: { safePath: (p) => p } };
+    require.cache[secPath] = { id: secPath, filename: secPath, loaded: true, exports: { safePath: (p) => p, redactSecrets: (s) => s } };
     const tgPath = require.resolve(path.join(BUNDLE, 'telegram.js'));
     require.cache[tgPath] = {
         id: tgPath, filename: tgPath, loaded: true,
@@ -73,6 +73,11 @@ function setupMocks() {
             toTelegramHtml: (t) => t,
             stripMarkdown: (t) => t,
             recordSentMessage: () => {},
+            // BAT-1050: telegram_send now shares richTrySend + classifyTelegramOutcome
+            // and the 32768-byte budget. Rich off here (delivered:false) -> classic path.
+            richTrySend: async () => ({ delivered: false }),
+            classifyTelegramOutcome: (result, error) => error ? { verdict: 'uncertain' } : (result && result.ok ? { verdict: 'ok' } : { verdict: 'fallback' }),
+            RICH_MAX_BYTES: 32768,
         },
     };
 }

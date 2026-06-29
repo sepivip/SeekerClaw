@@ -51,6 +51,10 @@ data class AppConfig(
     val jupiterApiKey: String = "",
     val heliusApiKey: String = "",
     val autoStartOnBoot: Boolean = true,
+    // BAT-1050: Telegram Rich Messages (Bot API 10.1). Written into config.json as
+    // `richMessages` (Node reads config.richMessages). DEFAULT true — existing users
+    // with no stored value resolve to ON without ever persisting false (upgrade-safe).
+    val richMessages: Boolean = true,
     val heartbeatIntervalMinutes: Int = 30,
     val maxStepsPerTurn: Int = 35,
     val provider: String = "claude", // "claude", "openai", or "openrouter"
@@ -213,6 +217,7 @@ object ConfigManager {
     private const val KEY_MODEL = "model"
     private const val KEY_AGENT_NAME = "agent_name"
     private const val KEY_AUTO_START = "auto_start_on_boot"
+    private const val KEY_RICH_MESSAGES = "rich_messages"
     private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
     private const val KEY_SETUP_COMPLETE = "setup_complete"
     private const val KEY_AUTH_TYPE = "auth_type"
@@ -444,6 +449,7 @@ object ConfigManager {
             .putString(KEY_AGENT_NAME, config.agentName)
             .putString(KEY_AUTH_TYPE, config.authType)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
+            .putBoolean(KEY_RICH_MESSAGES, config.richMessages)
             .putInt(KEY_HEARTBEAT_INTERVAL, config.heartbeatIntervalMinutes)
             .putInt(KEY_MAX_STEPS_PER_TURN, config.maxStepsPerTurn)
             .putBoolean(KEY_SETUP_COMPLETE, true)
@@ -1186,6 +1192,7 @@ object ConfigManager {
             jupiterApiKey = jupiterApiKey,
             heliusApiKey = heliusApiKey,
             autoStartOnBoot = p.getBoolean(KEY_AUTO_START, true),
+            richMessages = p.getBoolean(KEY_RICH_MESSAGES, true),
             heartbeatIntervalMinutes = p.getInt(KEY_HEARTBEAT_INTERVAL, 30),
             maxStepsPerTurn = p.getInt(KEY_MAX_STEPS_PER_TURN, 35),
             provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
@@ -1717,6 +1724,7 @@ object ConfigManager {
             "maxStepsPerTurn" -> config.copy(
                 maxStepsPerTurn = value.toIntOrNull()?.coerceIn(10, 100) ?: 35
             )
+            "richMessages" -> config.copy(richMessages = value.toBoolean())
             "provider" -> config.copy(provider = value)
             "openaiApiKey" -> config.copy(openaiApiKey = value)
             "openrouterApiKey" -> config.copy(openrouterApiKey = value)
@@ -1869,6 +1877,7 @@ object ConfigManager {
             put("agentName", config.agentName)
             put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
             put("maxStepsPerTurn", config.maxStepsPerTurn)
+            put("richMessages", config.richMessages)
             put("bridgeToken", bridgeToken)
             if (config.braveApiKey.isNotBlank()) put("braveApiKey", config.braveApiKey)
             put("searchProvider", config.searchProvider)
