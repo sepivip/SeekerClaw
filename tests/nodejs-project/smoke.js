@@ -110,6 +110,7 @@ const LOAD_TARGETS = [
     'confirmation/index.js',
     'tools/solana-send-guard.js',   // BAT-1037: pure native-SOL-only denomination guard (no config dep)
     'security-reject-block.js',   // BAT-1039: pure deterministic security-reject renderer (no config dep)
+    'bridge-token.js',   // BAT-1071: pure require-safe bridge-token UUID validator (no config dep)
 ];
 
 // Files skipped intentionally. Most modules depend on config.js (which

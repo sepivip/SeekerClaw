@@ -71,6 +71,7 @@ jobs:
             confirmation-policy \
             confirmation-policy-burner \
             confirmation-buttons-guard \
+            bridge-token-validation \
             system-prompt-wallets \
             wallet-registry \
             wallet-set-caps-errors \

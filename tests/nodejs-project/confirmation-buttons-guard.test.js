@@ -38,7 +38,14 @@ async function runStatic() {
     await check('drift: inline-keyboard door no longer demonstrates a ✅Confirm/❌Cancel pair', () => {
         const i = aiSrc.indexOf('Inline keyboard buttons');
         assert.ok(i !== -1, 'inline-keyboard door missing');
-        const door = aiSrc.slice(i, i + 1400);
+        // BAT-1071: bound the slice to the door's OWN lines.push(...) string
+        // (up to the next lines.push) rather than a brittle fixed char window —
+        // a magic 1400 could capture a later push's example or miss content.
+        const next = aiSrc.indexOf('lines.push(', i + 1);
+        // Fail fast if the terminator is missing — otherwise the slice would run
+        // to EOF and unrelated later content could make this drift guard flaky.
+        assert.ok(next !== -1, 'door terminator missing (no lines.push after the inline-keyboard door)');
+        const door = aiSrc.slice(i, next);
         assert.ok(!/"callback_data":\s*"(yes|no)"/i.test(door), 'door still uses a yes/no confirm example');
         assert.ok(!(/✅\s*Confirm/.test(door) && /❌\s*Cancel/.test(door)), 'door still shows a Confirm/Cancel pair example');
     });
