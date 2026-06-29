@@ -9,13 +9,15 @@
 // Exit: 0 = all pass, 1 = at least one failure.
 //
 // We can't require('config.js') directly (it reads a real config.json and
-// process.exit(1)s on load). Following the env-merge.test.js / active-model.test.js
-// convention, we (1) copy the truncation logic verbatim from the module into this
-// file as a pure function and assert its behavior, and (2) read the live source and
-// assert — with tolerant structural regexes over comment-stripped text — that the
-// module's copy hasn't drifted. The EXACT marker bytes (⚠️, em-dash, leading "\n\n")
-// are pinned as a behavioral assertion on output (an independent golden literal),
-// not as a source substring (so harmless marker reflow doesn't false-fail).
+// process.exit(1)s on load). So we extract the LIVE truncateToolResult function
+// (plus its four constants) from the config.js source and execute it in an
+// isolated `vm` sandbox. This means the behavioral assertions below run against
+// the REAL implementation — a semantic change in config.js (e.g. a different cap,
+// cutoff rule, or marker) is caught here, not silently mirrored. The function is
+// pure (only Math/String, no requires), so vm execution is safe and side-effect
+// free. If config.js refactors the function away/renames it (e.g. the eventual
+// #345 move into an agent/* module), extraction fails loudly and this test must be
+// repointed — exactly the conscious review a characterization test should force.
 //
 // This is a CHARACTERIZATION test: it documents CURRENT behavior so the eventual
 // #345 ai.js decomposition can move/refactor this code safely. It must NOT change
@@ -24,40 +26,62 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
+// Build-time constant path (not request-derived); mirrors env-merge.test.js.
 const CONFIG_JS = path.join(__dirname, '..', '..', 'app', 'src', 'main',
     'assets', 'nodejs-project', 'config.js');
 
-// --- extracted pure function (verbatim mirror of config.js) ---
-const HARD_MAX_TOOL_RESULT_CHARS = 50000;
-const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
-const MIN_KEEP_CHARS = 2000;
-const MODEL_CONTEXT_CHARS = 200000;
+const CONST_NAMES = [
+    'HARD_MAX_TOOL_RESULT_CHARS',
+    'MAX_TOOL_RESULT_CONTEXT_SHARE',
+    'MIN_KEEP_CHARS',
+    'MODEL_CONTEXT_CHARS',
+];
 
-function truncateToolResult(text) {
-    if (typeof text !== 'string') return text;
+// Extract `const NAME = …;` declarations + the truncateToolResult function body
+// from config.js source and run them in a fresh vm context, returning the LIVE
+// function. Brace-matching from `function truncateToolResult` handles the one
+// template literal in the body (`${droppedChars}` is brace-balanced).
+function loadRealTruncate(src) {
+    const constLines = CONST_NAMES.map((name) => {
+        const m = src.match(new RegExp('const\\s+' + name + '\\s*=\\s*[^;]+;'));
+        assert.ok(m, `config.js: const ${name} declaration not found`);
+        return m[0];
+    });
 
-    const maxChars = Math.min(
-        HARD_MAX_TOOL_RESULT_CHARS,
-        Math.max(MIN_KEEP_CHARS, Math.floor(MODEL_CONTEXT_CHARS * MAX_TOOL_RESULT_CONTEXT_SHARE))
-    );
+    const fnIdx = src.indexOf('function truncateToolResult');
+    assert.ok(fnIdx !== -1, 'config.js: function truncateToolResult not found');
+    let i = src.indexOf('{', fnIdx);
+    assert.ok(i !== -1, 'config.js: truncateToolResult opening brace not found');
+    let depth = 0, end = -1;
+    for (; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    assert.ok(end !== -1, 'config.js: could not brace-match truncateToolResult body');
+    const fnSrc = src.slice(fnIdx, end);
 
-    if (text.length <= maxChars) return text;
-
-    // Truncate at a line boundary
-    let cutoff = text.lastIndexOf('\n', maxChars);
-    if (cutoff < MIN_KEEP_CHARS) cutoff = maxChars;
-
-    const truncated = text.slice(0, cutoff);
-    const droppedChars = text.length - cutoff;
-    return truncated + `\n\n⚠️ [Content truncated — ${droppedChars} characters removed. Use offset/limit parameters for more.]`;
+    const snippet = constLines.join('\n') + '\n' + fnSrc +
+        '\nmodule.exports = { truncateToolResult };';
+    const sandbox = { module: { exports: {} } };
+    vm.createContext(sandbox);
+    vm.runInContext(snippet, sandbox, { filename: 'config.js#truncateToolResult' });
+    const fn = sandbox.module.exports.truncateToolResult;
+    assert.strictEqual(typeof fn, 'function', 'extracted truncateToolResult is not a function');
+    return fn;
 }
 
-// Effective cap derived from the four constants: min(50000, max(2000, floor(60000))) = 50000.
+const CONFIG_SRC = fs.readFileSync(CONFIG_JS, 'utf8');
+const truncateToolResult = loadRealTruncate(CONFIG_SRC); // the LIVE function under test
+
+// Effective cap the live function should resolve to from its constants:
+// min(50000, max(2000, floor(200000 * 0.3 = 60000))) = 50000. The behavioral
+// boundary cases below fail if config.js changes any constant such that this moves.
 const CAP = 50000;
 
-// Independent golden copy of the marker (NOT shared with the mirror above) so a
-// drift in the mirror's marker literal is caught by the behavioral assertions.
+// Independent golden copy of the marker (NOT shared with config.js) so a change to
+// the live marker text is caught by the behavioral assertions below.
 function goldenMarker(droppedChars) {
     return `\n\n⚠️ [Content truncated — ${droppedChars} characters removed. Use offset/limit parameters for more.]`;
 }
@@ -225,34 +249,15 @@ t('UTF-16: hard cut can split a surrogate pair (lone high surrogate kept)', () =
         'kept text ends with a lone high surrogate (pair was split)');
 });
 
-// (18) Source drift-guard — structural regexes over comment-stripped source.
-t('config.js truncation logic still matches the mirror (structural, comment-stripped)', () => {
-    const src = fs.readFileSync(CONFIG_JS, 'utf8');
-    const code = src
+// (18) Export guard — the vm harness runs the function body regardless of whether
+// config.js exports it, so separately confirm the live module still exports it
+// (ai.js imports `truncateToolResult` from config.js; un-exporting would break it).
+t('config.js exports truncateToolResult from module.exports', () => {
+    const code = CONFIG_SRC
         .replace(/\/\*[\s\S]*?\*\//g, '')        // block comments
         .replace(/(^|[^:])\/\/[^\n]*/g, '$1');   // line comments (avoid URLs)
-
-    assert.ok(/const\s+HARD_MAX_TOOL_RESULT_CHARS\s*=\s*50000\b/.test(code),
-        'HARD_MAX_TOOL_RESULT_CHARS = 50000 missing/changed');
-    assert.ok(/const\s+MAX_TOOL_RESULT_CONTEXT_SHARE\s*=\s*0\.3\b/.test(code),
-        'MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3 missing/changed');
-    assert.ok(/const\s+MIN_KEEP_CHARS\s*=\s*2000\b/.test(code),
-        'MIN_KEEP_CHARS = 2000 missing/changed');
-    assert.ok(/const\s+MODEL_CONTEXT_CHARS\s*=\s*200000\b/.test(code),
-        'MODEL_CONTEXT_CHARS = 200000 missing/changed');
-    assert.ok(/function\s+truncateToolResult\s*\(/.test(code),
-        'function truncateToolResult declaration missing');
     assert.ok(/module\.exports\s*=\s*\{[\s\S]*\btruncateToolResult\b/.test(code),
-        'truncateToolResult not exported from module.exports');
-    // line-boundary selection + MIN_KEEP_CHARS fallback
-    assert.ok(/lastIndexOf\s*\(\s*['"]\\n['"]\s*,/.test(code),
-        "lastIndexOf('\\n', ...) line-boundary call missing");
-    assert.ok(/cutoff\s*<\s*MIN_KEEP_CHARS/.test(code),
-        'cutoff < MIN_KEEP_CHARS fallback branch missing');
-    // tolerant marker anchors (semantic, reflow-safe) — exact bytes pinned on output above
-    assert.ok(/Content truncated/.test(code), 'marker "Content truncated" wording missing');
-    assert.ok(/characters removed/.test(code), 'marker "characters removed" wording missing');
-    assert.ok(/offset\/limit/.test(code), 'marker "offset/limit" recovery hint missing');
+        'truncateToolResult is no longer exported from config.js module.exports');
 });
 
 // --- runner ---
