@@ -237,7 +237,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "Headings, tables, code blocks and math (Bot API 10.1). " +
+                                    text = "Headings, tables, code blocks and math. " +
                                         "Falls back to classic formatting automatically if unsupported. " +
                                         "Restart applies the change.",
                                     fontFamily = RethinkSans,
