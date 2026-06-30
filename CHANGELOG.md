@@ -5,15 +5,59 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-30
+
+> **Autonomous on-chain trading + richer chat.** v2.0 let the agent's burner
+> wallet spend USDC autonomously on paid (x402) endpoints; v2.1 extends that to
+> trading — the burner can now swap tokens, convert held tokens back to USDC/SOL,
+> and place limit/recurring orders, all bounded by the same per-tx and daily caps,
+> with a single clean confirmation model. Telegram replies also gain optional rich
+> formatting. Fully backward-compatible: the burner is opt-in, so upgrading without
+> configuring one behaves exactly as in 2.0.
+
+### Added
+
+- **Autonomous burner swaps & orders** — token swaps, SOL/SPL sends, and limit /
+  recurring (DCA) orders can run from the burner under your per-tx and daily caps:
+  under cap signs silently; over cap (or with no burner) falls back to a main-wallet
+  approval. Every transaction is simulated and validated before signing.
+- **Convert held tokens back to USDC/SOL** — the burner can cash a token it holds
+  (including fee-free Token-2022 tokens like PYUSD) back to USDC or SOL on its own,
+  within caps and a 1% price-impact limit.
+- **Autonomous SPL token transfers** — send USDC, BONK, or any classic SPL token
+  from the burner, cap-routed like other actions.
+- **Telegram Rich Messages** — optional rich formatting (tables, headings, task
+  lists, math, spoilers) with automatic fallback to plain text. Toggle in
+  Settings → Channel → Telegram → Rich Messages.
+- **Better token visibility** — balances now show Token-2022 holdings alongside
+  classic SPL tokens and flag partial reads; wallet holdings report correctly.
+
 ### Fixed
 
-- **Custom model IDs no longer silently revert** (BAT-1032) — saving a custom model on Anthropic/OpenAI used to survive only on the Node side: every `loadConfig()` re-validated it against the registry allowlist and clamped prefs back to the provider default, so the model picker, AI Provider page, and Dashboard all showed the wrong model, and a service restart reverted the agent too. The config reconcile now trusts the value the Settings UI saved (overlay == prefs, provider/auth unchanged) while keeping all defensive clamps for external/corrupt values and provider/auth switches.
-- System screen no longer labels every Opus model "Opus 4.6" — the model name now resolves through the model registry.
-- Switching OpenAI auth type no longer wipes a custom model ID; only models belonging to the old auth mode's list are clamped (e.g. oauth-only `gpt-5.4-mini` on oauth→api_key).
+- **One clean confirmation for wallet actions** — removed a confusing double-prompt;
+  each action that needs approval now asks once. Spending capped assets (USDC/SOL)
+  under your caps is silent; selling or converting other tokens asks once.
+- **More reliable swaps** — burner swaps automatically re-quote and retry on
+  transient market slippage instead of failing.
+- **Token-2022 swaps** — correct account handling for swaps like USDC→PYUSD.
+- **Fewer wallet pop-ups** — the main wallet no longer re-prompts on every signature.
+- **Custom model selection sticks** — a custom model chosen in Settings no longer
+  reverts on restart; model names display correctly (no more mislabeled "Opus 4.6"),
+  and switching OpenAI auth type no longer drops a custom model.
 
 ### Changed
 
-- **Claude model lineup** (BAT-1032): added **Fable 5** (`claude-fable-5`, new top tier) and **Opus 4.8** (`claude-opus-4-8`, new Anthropic default). Opus 4.6 stays in the registry for now — review found that dropping a registry row silently disables Extended Thinking for users still on that model (the registry drives `reasoningSupport`); it can be dropped once a retired-models concept exists.
+- **Updated Claude model lineup** — added **Fable 5** (`claude-fable-5`, new top
+  tier) and **Opus 4.8** (`claude-opus-4-8`, new default). Opus 4.6 remains
+  available.
+
+### Security
+
+- **Autonomous-signing safety gate** — every burner transaction is simulated and
+  checked before signing (drainer detection, balance-change validation, per-account
+  loss limits) and fails closed if anything can't be verified.
+- **Hardened the internal Node↔Android channel** — DNS-rebind defense, strict
+  transaction parsing, and tightened auth-token validation.
 
 ## [2.0.0] - 2026-05-19
 
