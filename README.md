@@ -31,9 +31,9 @@
 
 SeekerClaw — winner of the **Solana Mobile Hackathon (April 2026)** — embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram or Discord — ask questions, control your phone, trade crypto, schedule tasks, **and now pay for paid APIs autonomously in USDC**.
 
-v2 introduces a **burner wallet + x402 payment client**: a small, app-stored wallet you import once that lets your agent transact within per-tx and daily caps you set — without leaving your main wallet exposed. The agent can call 44 catalogued paid endpoints across 10 services (market data, real estate, travel, research, captcha, SMS, more) once you opt in to a paid lookup, while your Phantom / MWA wallet remains user-controlled for swaps and transfers.
+v2 introduced a **burner wallet + x402 payment client**; **v2.1 expands it into a full autonomous trading wallet.** Import a Solana key once, set per-tx and daily caps, and your agent can trade *and* pay within those caps — **swap tokens, convert held balances (including fee-free Token-2022 like PYUSD) back to USDC/SOL, send SPL tokens, and place limit / DCA orders** — signing silently while it stays under cap and falling back to a main-wallet popup when it doesn't. It can also call 44 catalogued paid (x402) endpoints across 10 services (market data, real estate, travel, research, captcha, SMS, more) when you opt in to a paid lookup. Your Phantom / MWA wallet stays fully user-controlled.
 
-**63 built-in tools** (plus MCP remote tools), **22 bundled skills + 35+ partner skills**, two-wallet Solana, multi-provider AI (Claude + OpenAI + OpenRouter + any OpenAI-compatible gateway), extended thinking preserved across tool calls, graceful Stop — all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
+**64 built-in tools** (plus MCP remote tools), **22 bundled skills + 35+ partner skills**, two-wallet Solana with **capped autonomous trading**, multi-provider AI (Claude + OpenAI + OpenRouter + any OpenAI-compatible gateway), extended thinking preserved across tool calls, graceful Stop — all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
 
 <div align="center">
   <img src="design/screenshots/01-first-launch.png" width="130">
@@ -57,10 +57,10 @@ SeekerClaw was selected as a winner of the Solana Mobile Hackathon, recognized f
 | | Feature | What it does |
 |---|---|---|
 | :robot: | **AI Engine** | Claude, OpenAI (API key + Codex OAuth), OpenRouter, or any OpenAI-compatible gateway (Custom). Multi-turn tool use, extended thinking on supported models |
-| :credit_card: | **Autonomous Payments (x402)** | A separate, app-stored burner wallet (you import a key once) lets the agent pay for paid APIs in USDC on Solana — within per-tx and daily caps you set in Settings. Supports x402 v1 + v2 end-to-end including POST settlement (GET silent under cap, POST always confirmed). 44 catalogued endpoints across 10 services (Stablecrypto Market Data, Tripadvisor, Rentcast, Perplexity, WolframAlpha, Reducto, CrushRewards, 2Captcha, Textbelt SMS, Purch). **OPT-IN** — the catalog activates only when you explicitly ask to pay. Burner key encrypted under Android Keystore (AES-256-GCM); your main wallet stays user-controlled. |
+| :credit_card: | **Autonomous Wallet (trading + x402)** | A separate, app-stored burner wallet (you import a key once) lets the agent transact in USDC / SOL on Solana — within per-tx and daily caps you set in Settings. **Trading:** swaps, held-token conversions (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL, SPL transfers, and limit / DCA orders — signed silently under cap, main-wallet popup over cap. **Payments:** x402 v1 + v2 end-to-end including POST settlement (GET silent under cap, POST always confirmed), across 44 catalogued endpoints / 10 services (Stablecrypto Market Data, Tripadvisor, Rentcast, Perplexity, WolframAlpha, Reducto, CrushRewards, 2Captcha, Textbelt SMS, Purch). **OPT-IN** paid catalog — activates only when you explicitly ask to pay. Burner key encrypted under Android Keystore (AES-256-GCM); your main wallet stays user-controlled. |
 | :thought_balloon: | **Extended Thinking** | Toggle in Settings → AI Provider → Reasoning or via `/think` from chat. Supported models (Fable 5, Opus 4.8 / 4.7 / 4.6, Sonnet 4.6, GPT-5.5 / 5.4 / 5.3-codex, gpt-5.4-mini) think across tool calls, with reasoning preserved across `/resume` and tool-loop turns on **all four providers** (Claude, OpenAI, OpenRouter, Custom). |
-| :speech_balloon: | **Channels** | Telegram (full bot — reactions, file sharing, inline keyboards) or Discord (Gateway v10 — DMs, media, reply threading) |
-| :link: | **Solana Wallets** | **Main wallet:** swaps, limit orders, DCA, transfers via Jupiter + MWA — you sign every action. **Burner wallet:** a key you import once, used for capped autonomous USDC payments (see Autonomous Payments below). |
+| :speech_balloon: | **Channels** | Telegram (full bot — reactions, file sharing, inline keyboards, **rich messages: tables / headings / math via Bot API 10.1, with automatic plain-text fallback**) or Discord (Gateway v10 — DMs, media, reply threading) |
+| :link: | **Solana Wallets** | **Main wallet:** swaps, limit orders, DCA, transfers via Jupiter + MWA — you sign every action. **Burner wallet:** a key you import once, used for capped autonomous trading (swaps, conversions, SPL sends, limit/DCA orders) **and** x402 payments — silent under cap, main-wallet popup over cap (see Autonomous Wallet below). |
 | :iphone: | **Device Control** | Battery, GPS, camera, SMS, calls, clipboard, TTS |
 | :brain: | **Memory** | Persistent personality, daily notes, ranked keyword search, session summaries preserved across user-Stop |
 | :pause_button: | **Graceful Stop** | Tapping Stop Agent triggers a bounded flush handshake — pending session summaries and dirty SQL.js writes persist before the Node.js process exits. Last ~60s of activity survives a clean Stop. |
@@ -71,14 +71,16 @@ SeekerClaw was selected as a winner of the Solana Mobile Hackathon, recognized f
 | :bar_chart: | **Activity** | 26-week heatmap of your agent's API requests on the System screen — see when it's active, spot quiet days. Up to 13 months of daily history persisted on-device |
 | :electric_plug: | **Extensible** | 35+ partner skills + custom skills + MCP remote tools |
 
-## Autonomous Payments
+## Autonomous Wallet
 
-v2 makes SeekerClaw the first on-device agent that can actually transact on the open web. Two wallets, two roles:
+v2 made SeekerClaw the first on-device agent that can transact on the open web; **v2.1 lets it trade, too** — all within caps you control. Two wallets, two roles:
 
-- **Main wallet (you sign):** Phantom or any MWA wallet. Used for swaps, transfers, DCA, limit orders. Every action goes through a wallet popup.
-- **Burner wallet (agent signs, within caps):** A Solana Ed25519 keypair *you import once* (from Phantom, Solflare, a hardware wallet, or `solana-keygen`) — encrypted at rest under Android Keystore (AES-256-GCM). **SeekerClaw does not generate keys.** Used only for x402 micropayments to paid APIs. You set per-tx and daily caps in USDC and SOL; the agent cannot exceed them.
+- **Main wallet (you sign):** Phantom or any MWA wallet. Every action goes through a wallet popup — and any trade over your caps, or when no burner is configured, routes here.
+- **Burner wallet (agent signs, within caps):** A Solana Ed25519 keypair *you import once* (from Phantom, Solflare, a hardware wallet, or `solana-keygen`) — encrypted at rest under Android Keystore (AES-256-GCM). **SeekerClaw does not generate keys.** Used for capped autonomous **trading** — swaps, held-token conversions, SPL sends, limit/DCA orders — **and** x402 payments to paid APIs. You set per-tx and daily caps in USDC and SOL; the agent cannot exceed them.
 
-With a funded burner, the agent uses three new tools — `agent_pay`, `wallet_status`, `wallet_set_caps` — to fetch x402-protected endpoints and settle payments. GET requests under cap settle silently; POST requests always ask for confirmation. SSRF defense, DNS-rebinding protection, and an 18-error-code DIAGNOSTICS playbook are built in.
+**Capped trading is live.** `solana_swap`, `solana_send`, `solana_send_token`, `jupiter_trigger_create`, and `jupiter_dca_create` route through the burner when a trade is under your caps (signed silently) and fall back to a main-wallet popup when it's over cap or no burner is configured. Held-token conversions (e.g. PYUSD → USDC, no price oracle required, under a 1% price-impact limit) and Token-2022 balances are handled natively.
+
+For payments, the agent uses three tools — `agent_pay`, `wallet_status`, `wallet_set_caps` — to fetch x402-protected endpoints and settle. GET requests under cap settle silently; POST requests always ask for confirmation. SSRF defense, DNS-rebinding protection, and an 18-error-code DIAGNOSTICS playbook are built in.
 
 **x402 v2 is live end-to-end.** `agent_pay` completes the full 402 → build USDC transfer → settle → retrieve response loop for v2 services including Tripadvisor, CoinGecko (via Stablecrypto Market Data), and Textbelt SMS POST. No "detect/build only" caveats — POST settlement works.
 
@@ -119,7 +121,7 @@ Android App (Kotlin, Jetpack Compose)  ~27K lines, 68 files
          ├─ ai.js                    — AI provider API, system prompt, conversations, /think
          ├─ message-handler.js       — Inbound message routing, commands, auto-resume
          ├─ providers/               — Claude, OpenAI (API key + Codex OAuth), OpenRouter, Custom adapters
-         ├─ tools/                   — 63 tool handlers across 13 modules (incl. agent_pay, wallet_status, wallet_set_caps)
+         ├─ tools/                   — 64 tool handlers across 13 modules (incl. solana_send_token, agent_pay, wallet_status)
          ├─ payment/x402.js          — x402 v1 + v2 payment protocol (detect / build / settle — v2 settle is live end-to-end)
          ├─ wallet/dispatch.js       — Routes signing through burner (capped, silent) or main (popup)
          ├─ caps/preflight.js        — Per-tx and daily cap preflight checks before any tx
@@ -194,9 +196,9 @@ SeekerClaw gives an AI agent real capabilities on your phone — including walle
 
 - **AI can make mistakes.** Large language models hallucinate, misinterpret instructions, and occasionally take unintended actions. Always verify before trusting critical outputs.
 - **Prompt injection is a real risk.** Malicious content from websites, messages, or files could manipulate the agent. SeekerClaw includes defenses, but no system is bulletproof.
-- **Wallet transactions are irreversible.** Swaps, transfers, and DCA orders on Solana cannot be undone. The agent requires confirmation for financial actions — read the details before approving.
+- **Wallet transactions are irreversible.** Swaps, transfers, and DCA orders on Solana cannot be undone. Main-wallet actions and any transaction over your caps require your confirmation — read the details before approving. (Under-cap burner actions sign automatically; see below.)
 - **Start with small amounts.** Don't connect a wallet with significant funds until you're comfortable with how the agent behaves.
-- **The burner wallet pays autonomously, within caps.** v2's burner wallet — a key *you import once* — can settle x402 payments without prompting you, as long as the transaction stays under your per-tx and daily caps. Set caps you're comfortable with the agent spending, and only fund the burner with what you'd be okay losing if the agent makes a poor call. Your main wallet remains popup-protected.
+- **The burner wallet acts autonomously, within caps.** v2.1's burner wallet — a key *you import once* — can **trade (swaps, conversions, transfers, limit/DCA orders) and settle x402 payments** without prompting you, as long as each transaction stays under your per-tx and daily caps. Set caps you're comfortable with the agent spending, and only fund the burner with what you'd be okay losing if the agent makes a poor call. Your main wallet remains popup-protected.
 - **You are responsible for your agent's actions.** SeekerClaw is a tool, not financial advice. The developers are not liable for any losses.
 
 > **TL;DR:** Treat your agent like a capable but imperfect assistant. Verify important actions, secure your wallet, and don't trust it with more than you can afford to lose.
