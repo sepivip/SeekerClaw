@@ -40,7 +40,7 @@
 
 | Version | Current | Location |
 |---------|---------|----------|
-| **App** | `2.0.0` (code 20) | `app/build.gradle.kts` → `versionName` / `versionCode` |
+| **App** | `2.1.0` (code 21) | `app/build.gradle.kts` → `versionName` / `versionCode` |
 | **OpenClaw** | `2026.4.10` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
 | **Node.js** | `18 LTS` | `app/build.gradle.kts` → `NODEJS_VERSION` buildConfigField |
 

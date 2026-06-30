@@ -875,6 +875,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('- To send images/media, use send_file — markdown image syntax ![](url) is NOT rendered (it is neutered for safety).');
         lines.push('- Rich rendering can degrade to plain formatting on older Telegram clients, so do not rely on it for critical meaning.');
         lines.push('- The user can turn Rich Messages off in Settings -> Channel -> Telegram -> Rich Messages (it applies after a service restart) — tell them this if they ask for plainer replies or to stop tables/headings.');
+        lines.push('- If a reply you sent with rich formatting (tables/headings) arrived as PLAIN text, the rich send was rejected or unsupported and SeekerClaw automatically fell back to the classic formatting pipeline — the message was still delivered ONCE (no duplicate). System notices (heartbeats/status bubbles) are always plain by design, not a bug. See DIAGNOSTICS.md -> "Rich Messages Falling Back to Classic Formatting" / "System Notices Render Plain Even With Rich On" to explain it.');
         lines.push('');
     } else if (CHANNEL === 'telegram') {
         lines.push('**Telegram Formatting (for user-visible Telegram replies)**');
@@ -943,7 +944,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('## Tool Confirmation Gates');
     lines.push('Any tool whose action moves funds or is otherwise dangerous goes through a mandatory system confirmation gate — you do not decide this, the gate does (based on policy). Tools that can trigger it include (not an exhaustive list): solana_send, solana_send_token, solana_swap, jupiter_trigger_create, jupiter_dca_create, jupiter_trigger_cancel / jupiter_dca_cancel (when the order is not burner-owned), wallet_set_caps, agent_pay (POST), and android_sms / android_call / android_camera_capture / android_location.');
     lines.push('When you call one of these, the system automatically sends ITS OWN confirmation message and waits for the user\'s YES — when policy requires it. You do NOT need to (and must NOT) ask for confirmation yourself. Specifically: do NOT add your own yes/no question AND do NOT attach your own Confirm/Approve/Cancel/Retry inline buttons for these tools — your buttons do not satisfy the gate and produce a confusing double-confirm. Just preview the action (amount / recipient / quote) as text and call the tool; the gate owns confirm/cancel. One action = one confirmation.');
-    lines.push('Note: some gated tools execute SILENTLY by policy (no prompt) — e.g. a burner swap/send SPENDING USDC or SOL that is under the burner caps. That is intended (the cap pre-authorizes it). Do not add your own confirmation there either.');
+    lines.push('Note: some gated tools execute SILENTLY by policy (no prompt) — e.g. a burner swap/send SPENDING USDC or SOL that is under the burner caps. That is intended (the cap pre-authorizes it). Do not add your own confirmation there either. The full rule (keyed on the SPENT asset: USDC/SOL under cap = silent; spending a non-cap token, incl. a held-token conversion = one confirmation; over-cap / main-routed = confirm) is in DIAGNOSTICS.md -> "When does a burner action need confirmation? (BAT-1067)" — read it to explain to a user why one action was silent and another asked for YES. The same section documents the error `confirmation_buttons_not_allowed` (you attached a fund-confirm button — preview as text and let the gate ask instead).');
     lines.push('If the user replies anything other than YES (or 60s passes), the action is canceled and the tool returns an error.');
     lines.push('These tools are also rate-limited (SMS/call: 1 per 60s, Jupiter orders: 1 per 30s).');
     lines.push('');
@@ -1127,6 +1128,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('3. android_* bridge tools: check if the required permission is granted (e.g., SEND_SMS for android_sms, ACCESS_FINE_LOCATION for android_location)');
     lines.push('4. Solana tools: check if wallet is configured — read solana_wallet.json');
     lines.push('5. Jupiter tools: check if Jupiter API key is set — suggest Settings > Configuration > Jupiter API Key');
+    lines.push('6. web_search erroring WITH a provider key set: 401/403 → key invalid (re-check Settings → Search Provider); 429 → provider quota hit (retry later, try a different `provider` arg, or fall back to web_fetch); timeout/5xx → retry once then use web_fetch. (No key configured at all degrades to a structured fallback, not an error — see DIAGNOSTICS.md search section.)');
     lines.push('');
     lines.push('**If API calls keep failing:**');
     lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
