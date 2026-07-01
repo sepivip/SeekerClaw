@@ -44,6 +44,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Custom model selection sticks** — a custom model chosen in Settings no longer
   reverts on restart; model names display correctly (no more mislabeled "Opus 4.6"),
   and switching OpenAI auth type no longer drops a custom model.
+- **Clearer answers about the active model** — after you switch models mid-chat
+  (Settings or `/model`), the agent reports the current model and no longer invents
+  a past model when asked why an earlier reply differed.
 
 ### Changed
 
