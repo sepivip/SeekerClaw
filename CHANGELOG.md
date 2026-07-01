@@ -48,8 +48,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 
 - **Updated Claude model lineup** — added **Fable 5** (`claude-fable-5`, new top
-  tier) and **Opus 4.8** (`claude-opus-4-8`, new default). Opus 4.6 remains
-  available.
+  tier), **Opus 4.8** (`claude-opus-4-8`, new default), and **Sonnet 5**
+  (`claude-sonnet-5`, the speed/intelligence tier). Opus 4.6 remains available.
 
 ### Security
 
