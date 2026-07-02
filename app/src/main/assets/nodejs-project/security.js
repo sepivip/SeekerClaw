@@ -3,6 +3,7 @@
 // Depends on: config.js
 
 const path = require('path');
+const fs = require('fs');
 
 // BAT-1001 PR-B: per-call getBridgeToken (not the startup-frozen
 // BRIDGE_TOKEN constant) so log redaction tracks Kotlin-side token
@@ -137,6 +138,95 @@ function redactSecrets(msg) {
     }
     return msg;
 }
+
+// ============================================================================
+// AGENT SETTINGS MASKING (BAT-1087)
+// ============================================================================
+// agent_settings.json stores plaintext provider keys under apiKeys.* and is
+// readable by the model via the read / js_eval / shell_exec tools. We mask the
+// secret VALUES when the file's contents would reach the model, while leaving
+// structural settings (heartbeat interval, model, provider, ...) visible. This
+// is MODEL-FACING OUTPUT MASKING, not storage-at-rest protection — the file on
+// disk is unchanged and the save/write/edit flow is untouched.
+
+const _AGENT_SETTINGS_MASK = '[REDACTED]';
+
+// Whether a key name denotes a credential value (matched at any depth). Separators
+// are stripped first so api_key / apiKey / api-key all normalize identically.
+function _isCredentialKeyName(key) {
+    const k = String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
+    return /(apikey|accesskey|secretkey|clientsecret|privatekey|authtoken|token|secret|password|passphrase|credential)s?$/.test(k);
+}
+
+// A string value is secret if it sits directly under an `apiKeys` map (every stored
+// service value — incl. unknown/custom services) OR its key name is credential-like.
+function _isSecretEntry(key, value, underApiKeys) {
+    return typeof value === 'string' && (underApiKeys || _isCredentialKeyName(key));
+}
+
+// Recursively rebuild `node`, replacing secret string values with the mask.
+function _maskSettingsNode(node, underApiKeys) {
+    if (Array.isArray(node)) return node.map((v) => _maskSettingsNode(v, false));
+    if (node && typeof node === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(node)) {
+            if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+            if (_isSecretEntry(k, v, underApiKeys)) {
+                out[k] = _AGENT_SETTINGS_MASK;
+            } else if (v && typeof v === 'object') {
+                out[k] = _maskSettingsNode(v, k === 'apiKeys' && !Array.isArray(v));
+            } else {
+                out[k] = v;
+            }
+        }
+        return out;
+    }
+    return node;
+}
+
+// Mask secret values in agent_settings.json text. Returns the masked JSON string,
+// or null if the text is not a parseable JSON object — the caller MUST fail closed
+// (withhold the content) rather than emit possibly-secret raw bytes.
+function maskAgentSettings(text) {
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (_) { return null; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return JSON.stringify(_maskSettingsNode(parsed, false), null, 2);
+}
+
+// Collect every secret string value from a parsed settings object (same rule as
+// the mask). Used to register those values for global redaction so the js_eval /
+// shell_exec paths — which pass through redactSecrets, not the file mask — are
+// covered too, including values that never win the config merge.
+function _collectSettingsSecrets(node, underApiKeys, out) {
+    if (Array.isArray(node)) { for (const v of node) _collectSettingsSecrets(v, false, out); return out; }
+    if (node && typeof node === 'object') {
+        for (const [k, v] of Object.entries(node)) {
+            if (_isSecretEntry(k, v, underApiKeys)) {
+                out.push(v);
+            } else if (v && typeof v === 'object') {
+                _collectSettingsSecrets(v, k === 'apiKeys' && !Array.isArray(v), out);
+            }
+        }
+    }
+    return out;
+}
+
+// Read agent_settings.json from the workspace root, collect its secret values and
+// register them for redaction. Safe to call repeatedly (the Set dedupes). Called
+// at module load and after any write/edit to the file (tools/file.js).
+function registerAgentSettingsSecrets() {
+    try {
+        const settingsPath = path.join(workDir, 'agent_settings.json');
+        if (!fs.existsSync(settingsPath)) return;
+        const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        if (!parsed || typeof parsed !== 'object') return;
+        registerRedactedSecrets(_collectSettingsSecrets(parsed, false, []));
+    } catch (_) { /* unparseable / absent — nothing to register */ }
+}
+
+// Register at load so the very first js_eval/shell_exec read is already covered.
+registerAgentSettingsSecrets();
 
 // ============================================================================
 // PATH VALIDATION
@@ -277,6 +367,8 @@ module.exports = {
     rebuildRedactPatterns,
     registerRedactedSecret,
     registerRedactedSecrets,
+    maskAgentSettings,
+    registerAgentSettingsSecrets,
     safePath,
     INJECTION_PATTERNS,
     normalizeWhitespace,

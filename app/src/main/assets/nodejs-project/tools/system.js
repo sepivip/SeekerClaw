@@ -190,13 +190,18 @@ const handlers = {
                 shell: shellPath,
                 env: childEnv
             }, (err, stdout, stderr) => {
+                // BAT-1087: redact secrets from shell output before it reaches the
+                // model. `cat agent_settings.json` (and other allowlisted printers)
+                // would otherwise return raw provider keys; redactSecrets also masks
+                // the bridge token and any registered secret. Redact BEFORE slicing so
+                // a secret spanning the truncation boundary is still masked.
                 if (err) {
                     if (err.killed && err.signal) {
                         log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`, 'WARN');
                         resolve({
                             success: false,
                             command: cmd,
-                            stdout: (stdout || '').slice(0, 50000),
+                            stdout: redactSecrets(stdout || '').slice(0, 50000),
                             stderr: `Command timed out after ${timeout}ms`,
                             exit_code: err.code || 1
                         });
@@ -205,8 +210,8 @@ const handlers = {
                         resolve({
                             success: false,
                             command: cmd,
-                            stdout: (stdout || '').slice(0, 50000),
-                            stderr: (stderr || '').slice(0, 10000) || err.message || 'Unknown error',
+                            stdout: redactSecrets(stdout || '').slice(0, 50000),
+                            stderr: redactSecrets((stderr || '') || err.message || 'Unknown error').slice(0, 10000),
                             exit_code: err.code || 1
                         });
                     }
@@ -215,8 +220,8 @@ const handlers = {
                     resolve({
                         success: true,
                         command: cmd,
-                        stdout: (stdout || '').slice(0, 50000),
-                        stderr: (stderr || '').slice(0, 10000),
+                        stdout: redactSecrets(stdout || '').slice(0, 50000),
+                        stderr: redactSecrets(stderr || '').slice(0, 10000),
                         exit_code: 0
                     });
                 }
