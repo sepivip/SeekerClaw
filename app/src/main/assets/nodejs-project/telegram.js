@@ -11,6 +11,7 @@ const { BOT_TOKEN, log, workDir, getOwnerId, RICH_MESSAGES_ENABLED } = require('
 const { redactSecrets } = require('./security');
 const { httpRequest } = require('./http');
 const { sanitizeRichMarkdown } = require('./rich-markdown');
+const { isBlockedAddress } = require('./web'); // BAT-1088: shared SSRF host classifier
 
 // ============================================================================
 // TELEGRAM API
@@ -315,15 +316,13 @@ async function downloadFileByUrl(url, fileName, maxSize) {
         throw new Error('Unsupported URL protocol: ' + parsedUrl.protocol + ' (only https: allowed)');
     }
 
-    // SSRF guard: block private/local/reserved addresses by hostname string.
-    // Known limitation: DNS rebinding attacks are not prevented here because we check
-    // the hostname string before DNS resolution. Full protection would require async DNS
-    // lookup and IP validation, which adds latency and complexity.
-    // Accepted trade-off: Discord CDN URLs come from cdn.discordapp.com (validated by
-    // the Discord API) — this hostname check is a first-pass defense against obvious
-    // SSRF attempts (localhost, RFC1918, link-local). Prompt-injection-sourced URLs
-    // arriving through normal message flow are a lower risk given the owner-only gate.
-    if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|localhost|\[::1\]|\[fe80:)/i.test(parsedUrl.hostname)) {
+    // SSRF guard: shared canonical classifier (BAT-1088) — blocks private/loopback/
+    // link-local literals incl. IPv6 (ULA / IPv4-mapped / IPv4-compatible / zone-id),
+    // so this path can't drift from web_fetch's guard.
+    // Known limitation: DNS rebinding (a public hostname resolving to a private IP) is
+    // NOT prevented here — that needs resolve-and-pin (tracked as BAT-1093). Discord CDN
+    // URLs come from cdn.discordapp.com; the owner-only message flow keeps injection risk low.
+    if (isBlockedAddress(parsedUrl.hostname)) {
         throw new Error('Blocked: private/local address');
     }
 

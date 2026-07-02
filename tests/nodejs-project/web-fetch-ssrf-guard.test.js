@@ -37,6 +37,7 @@ let calls = 0;
 httpMod.httpRequest = async () => { calls++; return { status: 200, headers: {}, data: 'ok' }; };
 
 const { isBlockedAddress, webFetch } = require(path.join(BUNDLE, 'web.js'));
+const tg = require(path.join(BUNDLE, 'telegram.js')); // BAT-1088: shares the same SSRF guard
 
 let pass = 0, fail = 0;
 function check(name, fn) {
@@ -128,6 +129,14 @@ console.log();
         const res = await webFetch('https://example.com/');
         assert.strictEqual(calls, 1, 'public host must reach the transport');
         assert.strictEqual(res.status, 200);
+    });
+
+    // Same-class sweep: telegram.js downloadFileByUrl shares the same classifier, so it
+    // gets the same IPv6/private coverage. Drift-guard that it actually calls the guard.
+    await checkAsync('telegram downloadFileByUrl rejects private hosts via the shared guard', async () => {
+        for (const u of ['https://127.0.0.1/x', 'https://[::1]/x', 'https://[::ffff:127.0.0.1]/x', 'https://localhost./x']) {
+            await assert.rejects(() => tg.downloadFileByUrl(u, 'f', 100), /Blocked: private\/local address/, `should block ${u}`);
+        }
     });
 
     console.log();
