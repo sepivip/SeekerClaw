@@ -185,11 +185,14 @@ check('stored values >= min length (incl. merge-losers + nested) are registered 
         }
     });
 
-    await checkAsync('shell_exec still works for unrelated commands (block is narrow)', async () => {
-        const sh = await sysTool.handlers.shell_exec({ command: 'echo hello' }, 'chat');
-        // On a host without a POSIX shell the exec fails, but it must NOT be blocked
-        // by the agent_settings guard — assert we did not short-circuit with a block.
-        assert.ok(!(sh.error && /blocked/i.test(sh.error)), 'unrelated command must not be blocked');
+    await checkAsync('shell_exec block is a precise token — does not over-match neighbours', async () => {
+        // `echo hello` and a different file `agent_settings.json.bak` must NOT trip the
+        // block (a \b-based regex would falsely match the .bak). On a shell-less host the
+        // exec may fail, but it must not short-circuit with the agent_settings block.
+        for (const command of ['echo hello', 'cat agent_settings.json.bak']) {
+            const sh = await sysTool.handlers.shell_exec({ command }, 'chat');
+            assert.ok(!(sh.error && /blocked/i.test(sh.error)), `must not be blocked: ${command}`);
+        }
     });
 
     // ---------------------------------------------------------------------------

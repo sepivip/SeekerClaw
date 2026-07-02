@@ -16,9 +16,12 @@ const {
 // not return its raw bytes — redactSecrets only covers registered values (misses
 // <7-char and corrupt-file secrets). Both route the agent to the masking read tool.
 const AGENT_SETTINGS_FILE = 'agent_settings.json';
-// Word-boundary matcher for the filename, derived from the constant so shell_exec
-// and js_eval stay in lockstep if the name ever changes.
-const AGENT_SETTINGS_RX = new RegExp('\\b' + AGENT_SETTINGS_FILE.replace(/[.]/g, '\\.') + '\\b', 'i');
+// Match the filename as a WHOLE command token: optional path prefix (start / space /
+// separator) and whitespace-or-end after — so `cat agent_settings.json` and
+// `cat ./agent_settings.json` are blocked, but a different file like
+// `agent_settings.json.bak` is NOT falsely matched (a `\b` after `.json` would).
+// Derived from the constant so shell_exec and js_eval stay in lockstep if renamed.
+const AGENT_SETTINGS_RX = new RegExp('(^|[\\s/])' + AGENT_SETTINGS_FILE.replace(/[.]/g, '\\.') + '(\\s|$)', 'i');
 
 // DeerFlow P2: Tool registry for tool_search — set from tools/index.js at startup
 let _getTools = null;
