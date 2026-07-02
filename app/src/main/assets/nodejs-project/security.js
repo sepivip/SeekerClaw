@@ -165,16 +165,23 @@ function _isSecretEntry(key, value, underApiKeys) {
 }
 
 // Recursively rebuild `node`, replacing secret string values with the mask.
+// `underApiKeys` propagates to EVERY descendant of an `apiKeys` map (through both
+// objects AND arrays), so a malformed shape like apiKeys:["k"] or apiKeys:{a:["k"]}
+// can't slip a secret through unmasked.
 function _maskSettingsNode(node, underApiKeys) {
-    if (Array.isArray(node)) return node.map((v) => _maskSettingsNode(v, false));
+    // A bare string reached via an array (no key to check) is secret iff it descends
+    // from an apiKeys map. Keyed strings are handled at the object level below.
+    if (typeof node === 'string') return underApiKeys ? _AGENT_SETTINGS_MASK : node;
+    if (Array.isArray(node)) return node.map((v) => _maskSettingsNode(v, underApiKeys));
     if (node && typeof node === 'object') {
         const out = {};
         for (const [k, v] of Object.entries(node)) {
             if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-            if (_isSecretEntry(k, v, underApiKeys)) {
+            const childUnderApiKeys = underApiKeys || k === 'apiKeys';
+            if (_isSecretEntry(k, v, childUnderApiKeys)) {
                 out[k] = _AGENT_SETTINGS_MASK;
             } else if (v && typeof v === 'object') {
-                out[k] = _maskSettingsNode(v, k === 'apiKeys' && !Array.isArray(v));
+                out[k] = _maskSettingsNode(v, childUnderApiKeys);
             } else {
                 out[k] = v;
             }
@@ -199,14 +206,18 @@ function maskAgentSettings(text) {
 // shell_exec paths — which pass through redactSecrets, not the file mask — are
 // covered too, including values that never win the config merge.
 function _collectSettingsSecrets(node, underApiKeys, out) {
-    if (Array.isArray(node)) { for (const v of node) _collectSettingsSecrets(v, false, out); return out; }
+    // Mirror _maskSettingsNode exactly: propagate underApiKeys through arrays and
+    // objects so array-nested secrets under apiKeys are registered too.
+    if (typeof node === 'string') { if (underApiKeys) out.push(node); return out; }
+    if (Array.isArray(node)) { for (const v of node) _collectSettingsSecrets(v, underApiKeys, out); return out; }
     if (node && typeof node === 'object') {
         for (const [k, v] of Object.entries(node)) {
             if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-            if (_isSecretEntry(k, v, underApiKeys)) {
+            const childUnderApiKeys = underApiKeys || k === 'apiKeys';
+            if (_isSecretEntry(k, v, childUnderApiKeys)) {
                 out.push(v);
             } else if (v && typeof v === 'object') {
-                _collectSettingsSecrets(v, k === 'apiKeys' && !Array.isArray(v), out);
+                _collectSettingsSecrets(v, childUnderApiKeys, out);
             }
         }
     }

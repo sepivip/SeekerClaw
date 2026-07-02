@@ -95,6 +95,19 @@ check('masks apiKeys.* (known + unknown) and nested credential fields; keeps str
     assert.ok(!masked.includes('SECRET'), 'no raw secret value leaks');
 });
 
+check('masks secrets nested under apiKeys via arrays + deep objects (malformed shapes)', () => {
+    const sample = JSON.stringify({
+        apiKeys: { list: ['ARR_SECRET_1', 'ARR_SECRET_2'], deep: { inner: 'DEEP_APIKEYS_SECRET' } },
+        weirdArray: [{ token: 'TOKEN_IN_ARRAY_SECRET' }], // credential key inside an array
+        heartbeatIntervalMinutes: 3,
+    });
+    const masked = sec.maskAgentSettings(sample);
+    for (const s of ['ARR_SECRET_1', 'ARR_SECRET_2', 'DEEP_APIKEYS_SECRET', 'TOKEN_IN_ARRAY_SECRET']) {
+        assert.ok(!masked.includes(s), `${s} must be masked`);
+    }
+    assert.strictEqual(JSON.parse(masked).heartbeatIntervalMinutes, 3, 'structural field intact');
+});
+
 check('fails closed (null) on unparseable / non-object JSON', () => {
     assert.strictEqual(sec.maskAgentSettings('{bad json'), null, 'corrupt JSON -> null');
     assert.strictEqual(sec.maskAgentSettings('[1,2,3]'), null, 'array -> null');
