@@ -124,22 +124,31 @@ check('every stored value (incl. merge-losers + nested) is registered for redact
         assert.ok(r.content.includes('"model": "claude-opus-4-8"'), 'model still visible');
     });
 
-    // D. js_eval reading the file — redactSecrets (in the js_eval handler) masks the
-    // registered values, INCLUDING merge-losers that never enter `config`.
-    await checkAsync('js_eval reading the file: all stored values masked (incl. merge-loser)', async () => {
+    // js_eval must not read agent_settings.json raw — the guarded fs proxy blocks it,
+    // so <7-char / corrupt-file secrets that registration can't cover never leak. The
+    // read tool is the masked path. (Registration is still proven by test B as
+    // defense-in-depth for any value that surfaces elsewhere.)
+    await checkAsync('js_eval reading agent_settings.json is blocked (no raw bytes reach the model)', async () => {
         const code = "const fs=require('fs'), p=require('path'); return fs.readFileSync(p.join(process.cwd(), 'agent_settings.json'),'utf8');";
         const r = await sysTool.handlers.js_eval({ code }, 'chat');
-        assert.ok(r.success, `js_eval failed: ${r.error}`);
-        assert.ok(hasNoSentinel(r.result), 'js_eval result must not contain any raw stored value');
+        assert.ok(!r.success, 'js_eval read of agent_settings.json must be blocked');
+        assert.ok(/blocked/i.test(r.error || ''), 'error explains the block');
+        assert.ok(hasNoSentinel(JSON.stringify(r)), 'no raw stored value in result/output/error');
     });
 
-    // shell_exec must fail CLOSED on any command that references agent_settings.json
-    // (cat/head/base64/... incl. ./ paths). redactSecrets only covers registered
-    // values, so a corrupt/unparseable file — which registers nothing — could
-    // otherwise leak raw keys through a shell dump. Blocking is deterministic and
-    // needs no shell spawn (short-circuits before exec), so it runs on every host.
-    await checkAsync('shell_exec referencing agent_settings.json is blocked (fail closed)', async () => {
-        for (const command of ['cat agent_settings.json', 'head ./agent_settings.json', 'base64 agent_settings.json']) {
+    // shell_exec must fail CLOSED on any command referencing agent_settings.json,
+    // INCLUDING shell-quoting / backslash evasions that /bin/sh would normalize to the
+    // real filename. Deterministic + needs no shell spawn (short-circuits before exec).
+    await checkAsync('shell_exec referencing agent_settings.json is blocked, incl. quoted/escaped', async () => {
+        const variants = [
+            'cat agent_settings.json',
+            'head ./agent_settings.json',
+            'base64 agent_settings.json',
+            'cat agent_settings\\.json',   // backslash escape → \.
+            "cat agent_settings.jso''n",   // empty-quote split
+            'cat "agent_settings.json"',   // quoted
+        ];
+        for (const command of variants) {
             const sh = await sysTool.handlers.shell_exec({ command }, 'chat');
             assert.ok(sh.error && /blocked/i.test(sh.error), `must block: ${command}`);
             assert.strictEqual(sh.stdout, undefined, 'a blocked command returns no stdout');

@@ -11,6 +11,12 @@ const {
     redactSecrets, safePath,
 } = require('../security');
 
+// BAT-1087: agent_settings.json holds provider secrets under apiKeys.*. It is NOT in
+// SECRETS_BLOCKED (the read tool needs masked access), but shell_exec and js_eval must
+// not return its raw bytes — redactSecrets only covers registered values (misses
+// <7-char and corrupt-file secrets). Both route the agent to the masking read tool.
+const AGENT_SETTINGS_FILE = 'agent_settings.json';
+
 // DeerFlow P2: Tool registry for tool_search — set from tools/index.js at startup
 let _getTools = null;
 function _setToolRegistry(fn) { _getTools = fn; }
@@ -143,9 +149,11 @@ const handlers = {
         // BAT-1087: block shell access to agent_settings.json. redactSecrets covers
         // registered values, but a corrupt/unparseable file registers nothing, so a
         // dump command (cat/head/grep/base64/...) could still leak raw stored keys.
-        // Fail closed and route the agent to the read tool, which masks values and
-        // withholds unparseable content.
-        if (/\bagent_settings\.json\b/i.test(cmd)) {
+        // Strip shell quoting/backslash escapes before matching so evasions like
+        // `agent_settings\.json` or `agent_settings.jso''n` (which /bin/sh collapses to
+        // the real name) can't slip past; operators ($, backticks, *, ...) are already
+        // rejected above, leaving quotes and backslashes as the only evasion chars.
+        if (/\bagent_settings\.json\b/i.test(cmd.replace(/['"\\]/g, ''))) {
             return { error: 'Reading agent_settings.json via shell_exec is blocked. Use the read tool — it returns the file with secret values masked.' };
         }
 
@@ -297,6 +305,12 @@ const handlers = {
                             const basename = path.basename(resolvedPath);
                             if (SECRETS_BLOCKED.has(basename)) {
                                 throw new Error(`Access to ${basename} is blocked for security.`);
+                            }
+                            // BAT-1087: agent_settings.json isn't in SECRETS_BLOCKED (masked
+                            // read is allowed via the read tool), but js_eval must not read it
+                            // raw — that would bypass masking for <7-char / corrupt-file secrets.
+                            if (basename === AGENT_SETTINGS_FILE) {
+                                throw new Error('Access to agent_settings.json via js_eval is blocked; use the read tool (secret values are masked).');
                             }
                             return original.apply(target, args);
                         };
