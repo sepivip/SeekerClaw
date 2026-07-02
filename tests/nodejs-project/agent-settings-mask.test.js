@@ -3,13 +3,15 @@
 //
 // BAT-1087: agent_settings.json stores plaintext provider keys under apiKeys.* and
 // is readable by the model via the read / js_eval / shell_exec tools. This test
-// pins the model-facing masking:
+// pins the model-facing protection across all three surfaces:
 //   A. maskAgentSettings() masks apiKeys.* + credential-typed values at any depth,
 //      keeps structural fields, and fails closed (null) on unparseable input.
-//   B. registerAgentSettingsSecrets() registers EVERY stored value (incl. ones that
-//      lost the config merge) so redactSecrets — applied by js_eval AND shell_exec —
-//      masks them.
-//   C. the read handler returns masked content (and withholds on corrupt JSON).
+//   B. registerAgentSettingsSecrets() registers stored values (>= _MIN_SECRET_LEN)
+//      so redactSecrets scrubs them if they surface elsewhere (logs/other output) —
+//      DEFENSE-IN-DEPTH, not the primary path.
+//   C. read handler returns masked content (all lengths) and withholds on corrupt
+//      JSON; js_eval and shell_exec BLOCK the file outright (so short/corrupt-file
+//      secrets can't leak via those surfaces).
 //   D. the save/write flow still persists + syncs keys (BAT-236 unbroken).
 //
 // This is MODEL-FACING OUTPUT MASKING, not storage-at-rest protection — the file on
@@ -117,7 +119,7 @@ check('fails closed (null) on unparseable / non-object JSON', () => {
 // ---------------------------------------------------------------------------
 // B. registration + redactSecrets  (the js_eval / shell_exec coverage mechanism)
 // ---------------------------------------------------------------------------
-check('every stored value (incl. merge-losers + nested) is registered for redaction', () => {
+check('stored values >= min length (incl. merge-losers + nested) are registered for redaction', () => {
     // registerAgentSettingsSecrets() ran at security.js load against the seeded file.
     const blob = `dump: ${SENTINELS.join(' / ')}`;
     const red = sec.redactSecrets(blob);

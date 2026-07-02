@@ -16,6 +16,9 @@ const {
 // not return its raw bytes — redactSecrets only covers registered values (misses
 // <7-char and corrupt-file secrets). Both route the agent to the masking read tool.
 const AGENT_SETTINGS_FILE = 'agent_settings.json';
+// Word-boundary matcher for the filename, derived from the constant so shell_exec
+// and js_eval stay in lockstep if the name ever changes.
+const AGENT_SETTINGS_RX = new RegExp('\\b' + AGENT_SETTINGS_FILE.replace(/[.]/g, '\\.') + '\\b', 'i');
 
 // DeerFlow P2: Tool registry for tool_search — set from tools/index.js at startup
 let _getTools = null;
@@ -153,8 +156,8 @@ const handlers = {
         // `agent_settings\.json` or `agent_settings.jso''n` (which /bin/sh collapses to
         // the real name) can't slip past; operators ($, backticks, *, ...) are already
         // rejected above, leaving quotes and backslashes as the only evasion chars.
-        if (/\bagent_settings\.json\b/i.test(cmd.replace(/['"\\]/g, ''))) {
-            return { error: 'Reading agent_settings.json via shell_exec is blocked. Use the read tool — it returns the file with secret values masked.' };
+        if (AGENT_SETTINGS_RX.test(cmd.replace(/['"\\]/g, ''))) {
+            return { error: `Reading ${AGENT_SETTINGS_FILE} via shell_exec is blocked. Use the read tool — it returns the file with secret values masked.` };
         }
 
         // Resolve working directory (must be within workspace)

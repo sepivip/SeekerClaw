@@ -201,10 +201,14 @@ function maskAgentSettings(text) {
     return JSON.stringify(_maskSettingsNode(parsed, false), null, 2);
 }
 
-// Collect every secret string value from a parsed settings object (same rule as
-// the mask). Used to register those values for global redaction so the js_eval /
-// shell_exec paths — which pass through redactSecrets, not the file mask — are
-// covered too, including values that never win the config merge.
+// Collect secret string values from a parsed settings object (same rule as the
+// mask). Registering them makes redactSecrets scrub those values if they ever
+// surface OUTSIDE the file read — e.g. in a log line or another tool's output.
+// This is DEFENSE-IN-DEPTH, not the primary protection: the read tool masks the
+// file (all lengths) and js_eval/shell_exec block it outright. Note registration
+// only takes values >= _MIN_SECRET_LEN (short strings would cause false-positive
+// redaction elsewhere); short secrets are still fully covered by those mask/block
+// paths, just not by redactSecrets.
 function _collectSettingsSecrets(node, underApiKeys, out) {
     // Mirror _maskSettingsNode exactly: propagate underApiKeys through arrays and
     // objects so array-nested secrets under apiKeys are registered too.
@@ -224,9 +228,10 @@ function _collectSettingsSecrets(node, underApiKeys, out) {
     return out;
 }
 
-// Read agent_settings.json from the workspace root, collect its secret values and
-// register them for redaction. Safe to call repeatedly (the Set dedupes). Called
-// at module load and after any write/edit to the file (tools/file.js).
+// Read agent_settings.json from the workspace root and register its secret values
+// (>= _MIN_SECRET_LEN) for redaction as defense-in-depth (see _collectSettingsSecrets).
+// Safe to call repeatedly (the Set dedupes). Called at module load and after any
+// write/edit to the file (tools/file.js).
 function registerAgentSettingsSecrets() {
     try {
         const settingsPath = path.join(workDir, 'agent_settings.json');
@@ -237,7 +242,7 @@ function registerAgentSettingsSecrets() {
     } catch (_) { /* unparseable / absent — nothing to register */ }
 }
 
-// Register at load so the very first js_eval/shell_exec read is already covered.
+// Register at load so any secret that later surfaces in logs/output is scrubbed.
 registerAgentSettingsSecrets();
 
 // ============================================================================
