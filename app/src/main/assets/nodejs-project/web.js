@@ -236,6 +236,41 @@ async function searchFirecrawl(query, count = 5) {
 
 // --- Enhanced HTTP fetch with redirects + SSRF protection ---
 
+// Build the outbound headers for a single hop of a (possibly redirected) web_fetch.
+//
+// Security (BAT-1086): caller-supplied headers ride along ONLY when this hop is
+// same-origin as the ORIGINAL request. On any cross-origin hop we send just the
+// framework defaults (User-Agent, Accept), so secret auth headers — Authorization,
+// Cookie, x-api-key, a bearer token placed in a custom header, etc. — never follow
+// a redirect to a different host. Comparing against the ORIGINAL origin (not the
+// previous hop) means that once the chain leaves the trusted origin the headers
+// stay stripped, while a hop back to the original origin (A->B->A) re-attaches them.
+//
+// Content-Type is re-derived here (never carried across origins) and only when a
+// body is actually being sent. Pure and deterministic — exported for unit testing.
+function computeOutboundHeaders(customHeaders, url, originUrl, options = {}, currentBody = null) {
+    const headers = {
+        'User-Agent': USER_AGENT,
+        'Accept': (options && options.accept) || 'text/markdown, text/html;q=0.9, */*;q=0.1',
+    };
+    // Caller headers AND a body-derived Content-Type ride along ONLY on same-origin
+    // hops. A cross-origin hop gets nothing but the two framework defaults above.
+    // (webFetch also blocks cross-origin body-preserving redirects, so a body is
+    // only ever sent same-origin anyway.)
+    if (url.origin === originUrl.origin) {
+        if (customHeaders && typeof customHeaders === 'object') {
+            for (const [k, v] of Object.entries(customHeaders)) {
+                headers[k] = v;
+            }
+        }
+        const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type');
+        if (currentBody != null && typeof currentBody === 'object' && !hasContentType) {
+            headers['Content-Type'] = 'application/json';
+        }
+    }
+    return headers;
+}
+
 async function webFetch(urlString, options = {}) {
     const maxRedirects = options.maxRedirects || 5;
     const timeout = options.timeout || 30000;
@@ -262,21 +297,9 @@ async function webFetch(urlString, options = {}) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Request timeout (redirect chain)');
 
-        // Strip sensitive headers on cross-origin redirect
-        const reqHeaders = {
-            'User-Agent': USER_AGENT,
-            'Accept': options.accept || 'text/markdown, text/html;q=0.9, */*;q=0.1'
-        };
-        for (const [k, v] of Object.entries(customHeaders)) {
-            const lower = k.toLowerCase();
-            // Strip auth headers on cross-origin redirects
-            if (url.origin !== originUrl.origin && (lower === 'authorization' || lower === 'cookie')) continue;
-            reqHeaders[k] = v;
-        }
-        const hasContentType = Object.keys(reqHeaders).some(k => k.toLowerCase() === 'content-type');
-        if (currentBody && typeof currentBody === 'object' && !hasContentType) {
-            reqHeaders['Content-Type'] = 'application/json';
-        }
+        // Build outbound headers: caller headers only on same-origin hops,
+        // safe framework defaults otherwise (BAT-1086 — see computeOutboundHeaders).
+        const reqHeaders = computeOutboundHeaders(customHeaders, url, originUrl, options, currentBody);
 
         const res = await httpRequest({
             hostname: url.hostname,
@@ -289,14 +312,21 @@ async function webFetch(urlString, options = {}) {
 
         // Follow redirects
         if ([301, 302, 303, 307, 308].includes(res.status) && res.headers?.location) {
-            currentUrl = new URL(res.headers.location, currentUrl).toString();
+            const nextUrl = new URL(res.headers.location, currentUrl);
             if (res.status === 307 || res.status === 308) {
-                // Preserve method + body
+                // 307/308 preserve method + body. Block cross-origin body-preserving
+                // redirects (BAT-1086): forwarding a caller POST/PUT body to a
+                // different origin is a data-exfil path even after headers are
+                // stripped. Same-origin 307/308 keep method + body as before.
+                if (nextUrl.origin !== originUrl.origin && currentBody != null) {
+                    throw new Error('Blocked: cross-origin redirect with request body');
+                }
             } else {
                 // 301/302/303 → downgrade to GET, drop body
                 currentMethod = 'GET';
                 currentBody = null;
             }
+            currentUrl = nextUrl.toString();
             continue;
         }
 
@@ -320,4 +350,5 @@ module.exports = {
     searchTavily,
     searchFirecrawl,
     webFetch,
+    computeOutboundHeaders,
 };
