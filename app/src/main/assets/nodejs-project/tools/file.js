@@ -12,7 +12,11 @@ const channel = require('../channel');
 
 const {
     redactSecrets, rebuildRedactPatterns, safePath, detectSuspiciousPatterns,
+    maskAgentSettings, registerAgentSettingsSecrets,
 } = require('../security');
+
+// BAT-1087: filename whose contents carry provider/service secrets under apiKeys.*
+const AGENT_SETTINGS_FILE = 'agent_settings.json';
 
 // Helper to recursively list files in a directory (used by skill_read)
 function listFilesRecursive(dir, maxDepth = 3, currentDepth = 0) {
@@ -132,8 +136,9 @@ const handlers = {
             return { error: `File not found: ${input.path}` };
         }
         // Resolve symlinks and re-check basename (prevents symlink bypass)
+        let realBasename = readBasename;
         try {
-            const realBasename = path.basename(fs.realpathSync(filePath));
+            realBasename = path.basename(fs.realpathSync(filePath));
             if (SECRETS_BLOCKED.has(realBasename)) {
                 log(`[Security] BLOCKED read via symlink to sensitive file: ${realBasename}`, 'WARN');
                 return { error: `Reading ${realBasename} is blocked for security.` };
@@ -144,6 +149,22 @@ const handlers = {
             return { error: 'Path is a directory, use ls tool instead' };
         }
         const content = fs.readFileSync(filePath, 'utf8');
+        // BAT-1087: mask secret values before returning agent_settings.json to the
+        // model. Match basename OR realpath-basename so symlink aliases are covered;
+        // conservatively masking any file named agent_settings.json is acceptable.
+        if (readBasename === AGENT_SETTINGS_FILE || realBasename === AGENT_SETTINGS_FILE) {
+            const masked = maskAgentSettings(content);
+            if (masked === null) {
+                // Unparseable → fail closed: withhold rather than emit raw bytes.
+                log('[Security] agent_settings.json unparseable — withholding content from model', 'WARN');
+                return {
+                    path: input.path,
+                    size: stat.size,
+                    error: 'agent_settings.json is unparseable; contents withheld to avoid leaking secrets',
+                };
+            }
+            return { path: input.path, size: stat.size, content: masked.slice(0, 50000) };
+        }
         return {
             path: input.path,
             size: stat.size,
@@ -178,9 +199,10 @@ const handlers = {
         fs.writeFileSync(filePath, input.content, 'utf8');
 
         // BAT-236: If agent wrote to workspace root agent_settings.json, re-sync API keys
-        if (filePath === path.join(workDir, 'agent_settings.json')) {
+        if (filePath === path.join(workDir, AGENT_SETTINGS_FILE)) {
             syncAgentApiKeys();
             rebuildRedactPatterns();
+            registerAgentSettingsSecrets(); // BAT-1087: register newly-saved secrets for redaction
         }
 
         return {
@@ -231,9 +253,10 @@ const handlers = {
         fs.writeFileSync(filePath, content, 'utf8');
 
         // BAT-236: If agent edited workspace root agent_settings.json, re-sync API keys
-        if (filePath === path.join(workDir, 'agent_settings.json')) {
+        if (filePath === path.join(workDir, AGENT_SETTINGS_FILE)) {
             syncAgentApiKeys();
             rebuildRedactPatterns();
+            registerAgentSettingsSecrets(); // BAT-1087: register newly-saved secrets for redaction
         }
 
         return {

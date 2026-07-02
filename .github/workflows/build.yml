@@ -102,6 +102,7 @@ jobs:
             rich-messages-default \
             truncate-tool-result \
             web-fetch-redirect-headers \
+            agent-settings-mask \
             ci-coverage-manifest
           do
             echo "── $t ──"
