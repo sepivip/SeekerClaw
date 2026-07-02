@@ -358,7 +358,12 @@ function isBlockedAddress(hostname) {
     if (typeof hostname !== 'string') return true; // fail closed on junk
     let host = hostname.trim().toLowerCase();
     if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1); // strip IPv6 brackets
-    if (!host) return true; // empty / whitespace-only / "[]" → fail closed
+    // Strip trailing dot(s): the FQDN root form (localhost. / api.localhost.) resolves
+    // identically to the un-dotted name, so it must classify the same — otherwise it's
+    // a localhost SSRF bypass. (new URL() drops the dot on IP literals but keeps it on
+    // names.)
+    host = host.replace(/\.+$/, '');
+    if (!host) return true; // empty / whitespace-only / "[]" / "." → fail closed
     const v = net.isIP(host);
     if (v === 0) return host === 'localhost' || host.endsWith('.localhost'); // hostname, not an IP literal
     if (v === 4) return _isBlockedIPv4(host);

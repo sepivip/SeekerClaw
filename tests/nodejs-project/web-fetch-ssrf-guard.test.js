@@ -59,13 +59,14 @@ const BLOCK = [
     '[::1]', '::1', '[::]', '[::ffff:127.0.0.1]', '[::ffff:7f00:1]', '[fd00::1]', 'fd00::1', '[fe80::1]', 'fe80::1',
     // IPv4 private / loopback / link-local / this-host
     '127.0.0.1', '127.255.255.254', '10.0.0.1', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '0.0.0.0',
-    // hostnames
-    'localhost', 'api.localhost',
+    // hostnames — incl. FQDN-root trailing-dot forms (resolve like the un-dotted name)
+    'localhost', 'api.localhost', 'localhost.', 'api.localhost.', 'localhost..',
+    '127.0.0.1.', // trailing-dot IP literal (belt-and-suspenders; new URL also strips this)
 ];
 const ALLOW = [
     '8.8.8.8', '1.1.1.1', '9.9.9.9',
     '[2606:4700::1111]', '2606:4700::1111',
-    'example.com', 'api.example.com',
+    'example.com', 'api.example.com', 'example.com.', // trailing-dot public FQDN stays allowed
     // Boundaries just outside the private ranges
     '172.15.0.1', '172.32.0.1',
     // Deliberately allowed in V1 (per BAT-1088 decision)
