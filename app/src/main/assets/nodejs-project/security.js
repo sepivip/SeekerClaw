@@ -161,30 +161,24 @@ function _isCredentialKeyName(key) {
     return /(apikey|accesskey|secretkey|clientsecret|privatekey|authtoken|token|secret|password|passphrase|credential)s?$/.test(k);
 }
 
-// A string value is secret if it sits directly under an `apiKeys` map (every stored
-// service value — incl. unknown/custom services) OR its key name is credential-like.
-function _isSecretEntry(key, value, underApiKeys) {
-    return typeof value === 'string' && (underApiKeys || _isCredentialKeyName(key));
-}
-
-// Recursively rebuild `node`, replacing secret string values with the mask.
-// `underApiKeys` propagates to EVERY descendant of an `apiKeys` map (through both
-// objects AND arrays), so a malformed shape like apiKeys:["k"] or apiKeys:{a:["k"]}
-// can't slip a secret through unmasked.
-function _maskSettingsNode(node, underApiKeys) {
-    // A bare string reached via an array (no key to check) is secret iff it descends
-    // from an apiKeys map. Keyed strings are handled at the object level below.
-    if (typeof node === 'string') return underApiKeys ? _AGENT_SETTINGS_MASK : node;
-    if (Array.isArray(node)) return node.map((v) => _maskSettingsNode(v, underApiKeys));
+// A node enters a "secret context" once traversal passes through a credential-typed
+// key — apiKeys (itself credential-typed), webhookSecret, authToken, etc. Inside that
+// context EVERY string is secret (keyed, bare-in-array, or nested arbitrarily deep in
+// objects/arrays), so `{ webhookSecret: { current: "x" } }` or `apiKeys: ["k"]` can't
+// slip a value through. Outside it, a string is secret only if its OWN key is
+// credential-typed. `underSecret` carries the context down through objects AND arrays.
+function _maskSettingsNode(node, underSecret) {
+    if (typeof node === 'string') return underSecret ? _AGENT_SETTINGS_MASK : node;
+    if (Array.isArray(node)) return node.map((v) => _maskSettingsNode(v, underSecret));
     if (node && typeof node === 'object') {
         const out = {};
         for (const [k, v] of Object.entries(node)) {
             if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-            const childUnderApiKeys = underApiKeys || k === 'apiKeys';
-            if (_isSecretEntry(k, v, childUnderApiKeys)) {
-                out[k] = _AGENT_SETTINGS_MASK;
+            const childSecret = underSecret || _isCredentialKeyName(k);
+            if (typeof v === 'string') {
+                out[k] = childSecret ? _AGENT_SETTINGS_MASK : v;
             } else if (v && typeof v === 'object') {
-                out[k] = _maskSettingsNode(v, childUnderApiKeys);
+                out[k] = _maskSettingsNode(v, childSecret);
             } else {
                 out[k] = v;
             }
@@ -212,19 +206,19 @@ function maskAgentSettings(text) {
 // only takes values >= _MIN_SECRET_LEN (short strings would cause false-positive
 // redaction elsewhere); short secrets are still fully covered by those mask/block
 // paths, just not by redactSecrets.
-function _collectSettingsSecrets(node, underApiKeys, out) {
-    // Mirror _maskSettingsNode exactly: propagate underApiKeys through arrays and
-    // objects so array-nested secrets under apiKeys are registered too.
-    if (typeof node === 'string') { if (underApiKeys) out.push(node); return out; }
-    if (Array.isArray(node)) { for (const v of node) _collectSettingsSecrets(v, underApiKeys, out); return out; }
+function _collectSettingsSecrets(node, underSecret, out) {
+    // Mirror _maskSettingsNode exactly: propagate the secret context through arrays
+    // and objects so array-nested and object-nested secrets are registered too.
+    if (typeof node === 'string') { if (underSecret) out.push(node); return out; }
+    if (Array.isArray(node)) { for (const v of node) _collectSettingsSecrets(v, underSecret, out); return out; }
     if (node && typeof node === 'object') {
         for (const [k, v] of Object.entries(node)) {
             if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-            const childUnderApiKeys = underApiKeys || k === 'apiKeys';
-            if (_isSecretEntry(k, v, childUnderApiKeys)) {
-                out.push(v);
+            const childSecret = underSecret || _isCredentialKeyName(k);
+            if (typeof v === 'string') {
+                if (childSecret) out.push(v);
             } else if (v && typeof v === 'object') {
-                _collectSettingsSecrets(v, childUnderApiKeys, out);
+                _collectSettingsSecrets(v, childSecret, out);
             }
         }
     }

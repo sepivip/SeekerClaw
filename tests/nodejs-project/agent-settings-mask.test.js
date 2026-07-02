@@ -110,6 +110,21 @@ check('masks secrets nested under apiKeys via arrays + deep objects (malformed s
     assert.strictEqual(JSON.parse(masked).heartbeatIntervalMinutes, 3, 'structural field intact');
 });
 
+check('masks secrets nested under a credential-typed key (object/array value)', () => {
+    // A credential-named key whose VALUE is an object/array must mask its descendants,
+    // not just direct-string values.
+    const sample = JSON.stringify({
+        webhookSecret: { current: 'CRED_OBJ_SECRET', previous: 'CRED_OBJ_SECRET_2' },
+        authToken: ['TOKEN_ARR_SECRET'],
+        heartbeatIntervalMinutes: 4,
+    });
+    const masked = sec.maskAgentSettings(sample);
+    for (const s of ['CRED_OBJ_SECRET', 'CRED_OBJ_SECRET_2', 'TOKEN_ARR_SECRET']) {
+        assert.ok(!masked.includes(s), `${s} nested under a credential-typed key must be masked`);
+    }
+    assert.strictEqual(JSON.parse(masked).heartbeatIntervalMinutes, 4, 'structural field intact');
+});
+
 check('fails closed (null) on unparseable / non-object JSON', () => {
     assert.strictEqual(sec.maskAgentSettings('{bad json'), null, 'corrupt JSON -> null');
     assert.strictEqual(sec.maskAgentSettings('[1,2,3]'), null, 'array -> null');
