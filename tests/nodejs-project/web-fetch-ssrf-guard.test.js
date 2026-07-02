@@ -59,6 +59,8 @@ const BLOCK = [
     '[::1]', '::1', '[::]', '[::ffff:127.0.0.1]', '[::ffff:7f00:1]', '[fd00::1]', 'fd00::1', '[fe80::1]', 'fe80::1',
     // IPv6 zone identifiers (RFC 6874) — classify the address, ignore the zone
     'fe80::1%eth0', '[fe80::1%eth0]', '::1%lo0',
+    // Deprecated IPv4-compatible IPv6 (::w.x.y.z / ::7f00:1) embedding private/loopback IPv4
+    '::127.0.0.1', '::7f00:1', '[::127.0.0.1]', '::10.0.0.1', '::192.168.1.1',
     // IPv4 private / loopback / link-local / this-host
     '127.0.0.1', '127.255.255.254', '10.0.0.1', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '0.0.0.0',
     // hostnames — incl. FQDN-root trailing-dot forms (resolve like the un-dotted name)
@@ -68,6 +70,7 @@ const BLOCK = [
 const ALLOW = [
     '8.8.8.8', '1.1.1.1', '9.9.9.9',
     '[2606:4700::1111]', '2606:4700::1111',
+    '::8.8.8.8', // IPv4-compatible embedding a PUBLIC IPv4 → allowed (consistent with 8.8.8.8)
     'example.com', 'api.example.com', 'example.com.', // trailing-dot public FQDN stays allowed
     // Boundaries just outside the private ranges
     '172.15.0.1', '172.32.0.1',

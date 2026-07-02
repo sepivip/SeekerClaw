@@ -342,13 +342,15 @@ function _ipv6ToBytes(str) {
 function _isBlockedIPv6(str) {
     const b = _ipv6ToBytes(str);
     if (!b) return true; // fail closed on anything we can't classify
-    if (b.every((x) => x === 0)) return true;                              // :: unspecified
-    if (b.slice(0, 15).every((x) => x === 0) && b[15] === 1) return true;  // ::1 loopback
-    if ((b[0] & 0xfe) === 0xfc) return true;                               // fc00::/7 ULA
-    if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;              // fe80::/10 link-local
-    if (b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff) {
-        return _isBlockedIPv4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);      // ::ffff:0:0/96 IPv4-mapped
-    }
+    if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 ULA
+    if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
+    const embeddedV4 = () => _isBlockedIPv4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
+    // IPv4-mapped ::ffff:0:0/96 → classify by embedded IPv4.
+    if (b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff) return embeddedV4();
+    // First 96 bits zero covers :: (unspecified → 0.0.0.0), ::1 (loopback → 0.0.0.1),
+    // and the deprecated IPv4-compatible form ::w.x.y.z (::7f00:1 etc.) that some
+    // stacks route as IPv4 — classify by the embedded IPv4 (0/8 catches :: and ::1).
+    if (b.slice(0, 12).every((x) => x === 0)) return embeddedV4();
     return false;
 }
 
