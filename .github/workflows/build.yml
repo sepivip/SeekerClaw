@@ -103,6 +103,7 @@ jobs:
             truncate-tool-result \
             web-fetch-redirect-headers \
             agent-settings-mask \
+            web-fetch-ssrf-guard \
             ci-coverage-manifest
           do
             echo "── $t ──"
