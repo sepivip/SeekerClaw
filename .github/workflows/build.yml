@@ -101,6 +101,7 @@ jobs:
             telegram-rich-send \
             rich-messages-default \
             truncate-tool-result \
+            web-fetch-redirect-headers \
             ci-coverage-manifest
           do
             echo "── $t ──"
