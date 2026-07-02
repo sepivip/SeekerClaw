@@ -57,6 +57,8 @@ console.log();
 const BLOCK = [
     // IPv6 (the live gap): loopback, unspecified, IPv4-mapped, ULA, link-local
     '[::1]', '::1', '[::]', '[::ffff:127.0.0.1]', '[::ffff:7f00:1]', '[fd00::1]', 'fd00::1', '[fe80::1]', 'fe80::1',
+    // IPv6 zone identifiers (RFC 6874) — classify the address, ignore the zone
+    'fe80::1%eth0', '[fe80::1%eth0]', '::1%lo0',
     // IPv4 private / loopback / link-local / this-host
     '127.0.0.1', '127.255.255.254', '10.0.0.1', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '0.0.0.0',
     // hostnames — incl. FQDN-root trailing-dot forms (resolve like the un-dotted name)

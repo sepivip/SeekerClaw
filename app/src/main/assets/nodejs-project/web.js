@@ -358,6 +358,12 @@ function isBlockedAddress(hostname) {
     if (typeof hostname !== 'string') return true; // fail closed on junk
     let host = hostname.trim().toLowerCase();
     if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1); // strip IPv6 brackets
+    // Strip an IPv6 zone identifier (RFC 6874: fe80::1%eth0). Classify the address
+    // itself so a zoned link-local literal is caught as link-local, not treated as a
+    // hostname. (new URL() actually rejects zoned IPv6 URLs, so this mainly hardens
+    // direct callers of this exported helper.)
+    const pct = host.indexOf('%');
+    if (pct !== -1) host = host.slice(0, pct);
     // Strip trailing dot(s): the FQDN root form (localhost. / api.localhost.) resolves
     // identically to the un-dotted name, so it must classify the same — otherwise it's
     // a localhost SSRF bypass. (new URL() drops the dot on IP literals but keeps it on
