@@ -260,6 +260,10 @@ function computeOutboundHeaders(customHeaders, url, originUrl, options = {}, cur
     if (url.origin === originUrl.origin) {
         if (customHeaders && typeof customHeaders === 'object') {
             for (const [k, v] of Object.entries(customHeaders)) {
+                // Filter prototype-pollution keys — this helper is exported, so a
+                // direct caller could pass unsanitized headers (tools/web.js already
+                // strips these at the input boundary; mirror it here defensively).
+                if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
                 headers[k] = v;
             }
         }

@@ -26,9 +26,11 @@ const BUNDLE = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets
 // process.argv[2] and process.exit(1)s without a valid config.json. Point it at a
 // throwaway fixture workDir BEFORE any bundle require so the real modules load.
 const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bat1086-webfetch-'));
+// Fixtures use obviously-fake, non-credential-shaped placeholders (config.js only
+// requires these to be non-empty) so secret scanners don't flag the test file.
 fs.writeFileSync(path.join(workDir, 'config.json'), JSON.stringify({
-    botToken: '123456789:test-bot-token-abcdefghijklmnop',
-    anthropicApiKey: 'sk-ant-test-key-abcdefghij',
+    botToken: 'placeholder-not-a-real-bot-token',
+    anthropicApiKey: 'placeholder-not-a-real-api-key',
     ownerId: '111',
     channel: 'telegram',
 }), 'utf8');
@@ -105,6 +107,20 @@ check('same-origin caller Content-Type is preserved (not overwritten)', () => {
     const url = new URL('https://api.example.com/next');
     const h = computeOutboundHeaders({ 'Content-Type': 'text/plain' }, url, ORIGIN, {}, { a: 1 });
     assert.strictEqual(h['Content-Type'], 'text/plain');
+});
+
+check('same-origin: prototype-pollution header keys are filtered out', () => {
+    const url = new URL('https://api.example.com/next');
+    // JSON.parse (not an object literal) yields REAL own "__proto__"/"constructor"
+    // properties that Object.entries enumerates — the shape an attacker would send.
+    const malicious = JSON.parse('{"__proto__":"x","constructor":"y","prototype":"z","X-Ok":"v"}');
+    const h = computeOutboundHeaders(malicious, url, ORIGIN, {}, null);
+    const keys = headerKeys(h);
+    for (const bad of ['__proto__', 'constructor', 'prototype']) {
+        assert.ok(!keys.includes(bad), `dangerous key ${bad} must be filtered`);
+    }
+    assert.strictEqual(h['X-Ok'], 'v', 'safe caller header still passes through');
+    assert.strictEqual(({}).polluted, undefined, 'Object.prototype must be untouched');
 });
 
 check('cross-origin never derives Content-Type from a (would-be) body', () => {
