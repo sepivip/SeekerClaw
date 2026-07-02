@@ -150,6 +150,9 @@ function redactSecrets(msg) {
 // disk is unchanged and the save/write/edit flow is untouched.
 
 const _AGENT_SETTINGS_MASK = '[REDACTED]';
+// Centralized within this module so registration can't drift from the read/js_eval/
+// shell_exec paths (which keep their own AGENT_SETTINGS_FILE consts) if renamed.
+const _AGENT_SETTINGS_FILE = 'agent_settings.json';
 
 // Whether a key name denotes a credential value (matched at any depth). Separators
 // are stripped first so api_key / apiKey / api-key all normalize identically.
@@ -234,7 +237,7 @@ function _collectSettingsSecrets(node, underApiKeys, out) {
 // write/edit to the file (tools/file.js).
 function registerAgentSettingsSecrets() {
     try {
-        const settingsPath = path.join(workDir, 'agent_settings.json');
+        const settingsPath = path.join(workDir, _AGENT_SETTINGS_FILE);
         if (!fs.existsSync(settingsPath)) return;
         const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
