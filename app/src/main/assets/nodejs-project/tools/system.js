@@ -140,6 +140,15 @@ const handlers = {
             return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}, []) are not allowed in arguments. Run one simple command at a time.' };
         }
 
+        // BAT-1087: block shell access to agent_settings.json. redactSecrets covers
+        // registered values, but a corrupt/unparseable file registers nothing, so a
+        // dump command (cat/head/grep/base64/...) could still leak raw stored keys.
+        // Fail closed and route the agent to the read tool, which masks values and
+        // withholds unparseable content.
+        if (/\bagent_settings\.json\b/i.test(cmd)) {
+            return { error: 'Reading agent_settings.json via shell_exec is blocked. Use the read tool — it returns the file with secret values masked.' };
+        }
+
         // Resolve working directory (must be within workspace)
         let cwd = workDir;
         if (input.cwd) {

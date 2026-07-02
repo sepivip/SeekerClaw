@@ -202,6 +202,7 @@ function _collectSettingsSecrets(node, underApiKeys, out) {
     if (Array.isArray(node)) { for (const v of node) _collectSettingsSecrets(v, false, out); return out; }
     if (node && typeof node === 'object') {
         for (const [k, v] of Object.entries(node)) {
+            if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
             if (_isSecretEntry(k, v, underApiKeys)) {
                 out.push(v);
             } else if (v && typeof v === 'object') {
@@ -220,7 +221,7 @@ function registerAgentSettingsSecrets() {
         const settingsPath = path.join(workDir, 'agent_settings.json');
         if (!fs.existsSync(settingsPath)) return;
         const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        if (!parsed || typeof parsed !== 'object') return;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
         registerRedactedSecrets(_collectSettingsSecrets(parsed, false, []));
     } catch (_) { /* unparseable / absent — nothing to register */ }
 }

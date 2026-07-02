@@ -133,16 +133,24 @@ check('every stored value (incl. merge-losers + nested) is registered for redact
         assert.ok(hasNoSentinel(r.result), 'js_eval result must not contain any raw stored value');
     });
 
-    // shell_exec cat — same redactSecrets wrapper on stdout. Guarded: on a runner
-    // without a POSIX shell the handler fails; the redaction mechanism is already
-    // proven by test B (redactSecrets) and runs for real on the Linux CI runner.
-    await checkAsync('shell_exec cat agent_settings.json: stdout redacted (CI/POSIX)', async () => {
-        const sh = await sysTool.handlers.shell_exec({ command: 'cat agent_settings.json' }, 'chat');
-        if (sh && sh.success && sh.stdout) {
-            assert.ok(hasNoSentinel(sh.stdout), 'shell_exec cat stdout must be redacted');
-        } else {
-            console.log('    (shell unavailable on this host — asserted via redactSecrets in test B; runs on Linux CI)');
+    // shell_exec must fail CLOSED on any command that references agent_settings.json
+    // (cat/head/base64/... incl. ./ paths). redactSecrets only covers registered
+    // values, so a corrupt/unparseable file — which registers nothing — could
+    // otherwise leak raw keys through a shell dump. Blocking is deterministic and
+    // needs no shell spawn (short-circuits before exec), so it runs on every host.
+    await checkAsync('shell_exec referencing agent_settings.json is blocked (fail closed)', async () => {
+        for (const command of ['cat agent_settings.json', 'head ./agent_settings.json', 'base64 agent_settings.json']) {
+            const sh = await sysTool.handlers.shell_exec({ command }, 'chat');
+            assert.ok(sh.error && /blocked/i.test(sh.error), `must block: ${command}`);
+            assert.strictEqual(sh.stdout, undefined, 'a blocked command returns no stdout');
         }
+    });
+
+    await checkAsync('shell_exec still works for unrelated commands (block is narrow)', async () => {
+        const sh = await sysTool.handlers.shell_exec({ command: 'echo hello' }, 'chat');
+        // On a host without a POSIX shell the exec fails, but it must NOT be blocked
+        // by the agent_settings guard — assert we did not short-circuit with a block.
+        assert.ok(!(sh.error && /blocked/i.test(sh.error)), 'unrelated command must not be blocked');
     });
 
     // ---------------------------------------------------------------------------
