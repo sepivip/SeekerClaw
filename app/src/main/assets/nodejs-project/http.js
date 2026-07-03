@@ -82,6 +82,7 @@ function applyClaudeStreamEvent(state, eventType, parsed) {
             }
             break;
         case 'content_block_delta': {
+            if (typeof parsed.index !== 'number') break;
             const blk = blocks[parsed.index];
             if (!blk || !parsed.delta) break;
             if (parsed.delta.type === 'text_delta') {
@@ -100,6 +101,7 @@ function applyClaudeStreamEvent(state, eventType, parsed) {
             break;
         }
         case 'content_block_stop': {
+            if (typeof parsed.index !== 'number') break;
             const blk = blocks[parsed.index];
             if (blk?.type === 'tool_use' && blk._inputJson) {
                 try { blk.input = JSON.parse(blk._inputJson); } catch (_) { blk.input = {}; }
@@ -136,7 +138,11 @@ function finalizeClaudeStreamBlocks(blocks) {
 function assembleClaudeStreamMessage(events) {
     const state = newClaudeStreamState();
     let stopped = false;
-    for (const ev of events) { if (applyClaudeStreamEvent(state, ev.eventType, ev.data)) stopped = true; }
+    for (const ev of events) {
+        // Stop at the first message_stop, matching the live socket path (which
+        // settles and breaks) — trailing events must not mutate a finalized message.
+        if (applyClaudeStreamEvent(state, ev.eventType, ev.data)) { stopped = true; break; }
+    }
     if (!stopped) state.message.content = finalizeClaudeStreamBlocks(state.blocks);
     return state.message;
 }
