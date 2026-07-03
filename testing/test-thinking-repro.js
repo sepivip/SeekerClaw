@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// test-thinking-repro.js — LIVE recreation of the BAT-1033 / v2.1.1 bug.
+// test-thinking-repro.js — LIVE recreation of the BAT-1033 bug (shipped in
+// v2.1.0, fixed in v2.1.1).
 //
 // Replicates SeekerClaw's production request (setup_token + interleaved-thinking
 // beta + a tool) across 3 thinking configs per model, then a REPLAY round to

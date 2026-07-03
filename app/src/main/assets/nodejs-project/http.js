@@ -244,6 +244,11 @@ function httpStreamingRequest(options, body = null) {
                     if (applyClaudeStreamEvent(state, eventType, parsed)) {
                         clearTimeout(hardTimer);
                         settle(resolve, { status: 200, data: message, headers: res.headers });
+                        // Stop the stream so any trailing bytes can't re-enter the
+                        // reducer and mutate the already-resolved message by
+                        // reference (mirrors the SSE-error path). settled=true
+                        // also no-ops the res.on('end') partial-flush below.
+                        res.destroy();
                         break;
                     }
                 }

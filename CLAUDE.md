@@ -904,7 +904,7 @@ if (bootstrap) { runRitual(/* resume: !!identity */); }
 
 **When assembling a streamed API response, handle every `*_delta` type the wire can send — a dropped delta silently corrupts the block.** The Claude SSE reducer in `http.js` (`applyClaudeStreamEvent`) accumulates `text_delta`, `input_json_delta`, `thinking_delta`, and `signature_delta`. Anthropic streams a thinking block as an empty shell followed by deltas:
 
-```
+```text
 content_block_start  { type:'thinking', thinking:'', signature:'' }
 content_block_delta  { thinking_delta:  <reasoning text> }
 content_block_delta  { signature_delta: <the signature> }   ← easy to forget
@@ -912,7 +912,7 @@ content_block_delta  { signature_delta: <the signature> }   ← easy to forget
 
 **The v2.1.0 bug (BAT-1033):** the reducer handled only `text_delta` + `input_json_delta`, so it dropped `signature_delta`. The assembled thinking block kept the empty signature from `content_block_start`. On the next tool-loop round the block was echoed back (Anthropic requires thinking blocks to be replayed **unchanged** on tool-use turns) and the API rejected the whole request:
 
-```
+```text
 API error (400): messages.N.content.0.thinking: each thinking block must contain thinking
 ```
 
