@@ -5,32 +5,29 @@
 const { log } = require('../config');
 const { logSuppression, SUPPRESSION_REASONS } = require('../reasoning-gating');
 
-// BAT-558 R1 — Claude extended-thinking clamp constants.
+// BAT-1033 — Claude adaptive thinking.
 //
-// Anthropic Messages API requires `thinking.budget_tokens < max_tokens`,
-// AND the thinking budget itself has a 1024-token floor. A naive
-// `min(DEFAULT, max_tokens - 1)` formula satisfies the validator but
-// can leave only single-digit tokens for the actual response on small
-// turns — useless. The `* 0.5` rule below splits the budget so every
-// emitted thinking turn has at least `ANTHROPIC_MIN_BUDGET` tokens for
-// thinking AND at least `MIN_THINKING_TURN - ANTHROPIC_MIN_BUDGET`
-// tokens left over for the final answer.
+// Anthropic REMOVED extended thinking (`thinking.type:'enabled'` +
+// `budget_tokens`) from the current models. fable-5, opus-4-8, opus-4-7,
+// and sonnet-5 reject it with HTTP 400 ("thinking.type.enabled is not
+// supported for this model. Use thinking.type.adaptive"); only the older
+// opus-4-6 / sonnet-4-6 still accept it. `thinking.type:'adaptive'` (the
+// model auto-sizes its own budget — no `budget_tokens`) is accepted by
+// EVERY reasoning model, so we send it uniformly.
 //
-// The `MIN_THINKING_TURN < 2048 → omit thinking` short-circuit is the
-// load-bearing piece. Without it, a `max_tokens=1100` turn would emit
-// `budget_tokens=1024` and have 76 tokens for the answer — technically
-// valid Anthropic API, useless to the user. Skipping thinking entirely
-// for these small turns is the contract Codex signed off on (v3
-// amendment 1, ratified into v4).
+// This also retires the BAT-558 budget clamp: with no `budget_tokens`
+// there is no `budget_tokens < max_tokens` constraint to satisfy, which
+// removes that entire 400 class (the reason BAT-558 existed).
 //
-// Practical sizing examples (max_tokens × 0.5, clamped to [1024, 16000]):
-//   1024 → omit (below MIN_THINKING_TURN floor)
-//   1536 → omit (below MIN_THINKING_TURN floor; v3 gap-case)
-//   2048 → 1024 budget, 1024 answer room
-//   4096 → 2048 budget, 2048 answer room (the heartbeat case)
-//   32000 → 16000 budget (DEFAULT_THINKING_BUDGET cap kicks in)
-const ANTHROPIC_MIN_BUDGET = 1024;
-const DEFAULT_THINKING_BUDGET = 16000;
+// Verified live on the RAW api-key path (testing/test-thinking-matrix.js):
+//   extended → fable-5/opus-4-8/opus-4-7/sonnet-5: 400 removed; opus-4-6/sonnet-4-6: 200
+//   adaptive → all six: 200
+// The 400 only surfaced for users on their own API key — setup_token's
+// `cc_version` billing lane still tolerated the deprecated extended shape.
+//
+// MIN_THINKING_TURN is retained purely as a UX guard: on a sub-2048
+// max_tokens turn, reasoning would eat most of the answer budget, so we
+// skip it. It is no longer an API constraint (adaptive has no budget floor).
 const MIN_THINKING_TURN = 2048;
 
 // ── Neutral ↔ Claude message translation ────────────────────────────────────
@@ -66,9 +63,21 @@ function _collectClaudeWireBlocks(msg) {
         const t = blk.wire.type;
         if (t !== 'thinking' && t !== 'redacted_thinking') continue;
         // Verify the shape minimally so a corrupted checkpoint can't
-        // submit nonsense: thinking needs string `thinking` + signature;
-        // redacted_thinking needs string `data`.
-        if (t === 'thinking' && (typeof blk.wire.thinking !== 'string' || typeof blk.wire.signature !== 'string')) continue;
+        // submit nonsense: thinking needs string `thinking` + a NON-EMPTY
+        // signature; redacted_thinking needs string `data`.
+        //
+        // BAT-1033: the signature — not the thinking text — is what Anthropic
+        // validates. A thinking block with an empty/whitespace signature is
+        // rejected with 400 "each thinking block must contain thinking" (the
+        // message is misleading); an empty-TEXT block WITH a valid signature is
+        // accepted. Pre-fix builds streamed thinking blocks with an empty
+        // signature (http.js dropped signature_delta), so guard on the signature
+        // being present. This also recovers already-poisoned v2.1.0 checkpoints
+        // after upgrade — skip the bad block rather than 400 the whole request.
+        // Do NOT reject on empty thinking text: a signed empty-text block is
+        // valid and must still be echoed back unchanged.
+        if (t === 'thinking' && (typeof blk.wire.thinking !== 'string'
+            || typeof blk.wire.signature !== 'string' || blk.wire.signature.trim() === '')) continue;
         if (t === 'redacted_thinking' && typeof blk.wire.data !== 'string') continue;
         out.push(blk.wire);
     }
@@ -186,6 +195,18 @@ function fromApiResponse(raw) {
     const sourceModel = (raw && typeof raw.model === 'string') ? raw.model : null;
     for (const c of content) {
         if (!c || (c.type !== 'thinking' && c.type !== 'redacted_thinking')) continue;
+        // BAT-1033: reject malformed blocks at the CAPTURE boundary too, not
+        // just on replay, so a poisoned block never enters a checkpoint in the
+        // first place. Mirror _collectClaudeWireBlocks exactly: a `thinking`
+        // block needs a string `thinking` + a NON-EMPTY string `signature`
+        // (empty TEXT is valid — an empty-signature block is the poison);
+        // `redacted_thinking` needs a string `data`. With the http.js delta
+        // fix the normal streamed path won't produce these, but a malformed
+        // block from any other source (older build, non-streaming edge) is
+        // dropped here instead of persisted.
+        if (c.type === 'thinking' && (typeof c.thinking !== 'string'
+            || typeof c.signature !== 'string' || c.signature.trim() === '')) continue;
+        if (c.type === 'redacted_thinking' && typeof c.data !== 'string') continue;
         reasoningBlocks.push({
             schemaVersion: 1,
             provider: 'anthropic',
@@ -252,31 +273,22 @@ function formatTools(tools) {
  *
  * BAT-549 Commit 3c gated `body.thinking` emission on the user toggle
  * (`reasoningEnabled === true`) AND registry confirmation
- * (`reasoningSupport === "yes"`). BAT-558 v4 R1 layered a request-level
- * BUDGET CLAMP on top of that: the budget must be `< max_tokens` per
- * Anthropic, and `>= 1024` per Anthropic's thinking-budget floor — so
- * the budget is sized as `floor(maxTokens * 0.5)` clamped to
- * `[ANTHROPIC_MIN_BUDGET, DEFAULT_THINKING_BUDGET]`, and turns with
- * `maxTokens < MIN_THINKING_TURN` (2048) skip thinking entirely so the
- * answer always has at least `ANTHROPIC_MIN_BUDGET` tokens of room.
+ * (`reasoningSupport === "yes"`). BAT-558 v4 R3 added the
+ * `reasoningMode: 'off'` short-circuit so heartbeats / synthetic turns
+ * opt out even when the user toggle is on.
  *
- * Pre-clamp, this code emitted `budget_tokens=16000` regardless of
- * `max_tokens`. ai.js calls `formatRequest(..., 4096, ...)` for normal
- * chat, which Anthropic rejects with HTTP 400 ("max_tokens must be
- * greater than thinking.budget_tokens"). The heartbeat path hit it
- * first because the watchdog made the 400s visible; real user chats
- * with Extended thinking on were silently failing too.
+ * BAT-1033 replaced the extended-thinking budget clamp with
+ * `thinking: { type: 'adaptive' }`. Anthropic removed extended thinking
+ * (`type:'enabled'` + `budget_tokens`) from the current models — they 400
+ * — while adaptive (model auto-sizes its own budget) is accepted by every
+ * reasoning model. Adaptive carries no `budget_tokens`, so the old
+ * `budget_tokens < max_tokens` clamp is gone; see the module header for
+ * the per-model matrix and the live-probe evidence.
  *
- * BAT-558 v4 R3 also adds `reasoningMode: 'off'` short-circuit — when
- * the caller (heartbeat / future synthetic turns) marks the request
- * as opted out of app-controlled reasoning, skip thinking even when
- * the user toggle is on. R2 documents this contract at the chat()
- * boundary; ai.js threads it through `requestOptions` per BAT-549's
- * existing pattern.
- *
- * Existing call sites (vision/summary) that pass small `maxTokens`
- * (256, 500) or no `requestOptions` continue to emit no `thinking` —
- * additive change.
+ * The `maxTokens < MIN_THINKING_TURN` (2048) skip is retained as a UX
+ * guard so a tiny answer budget isn't consumed by reasoning. Existing
+ * call sites (vision/summary) that pass small `maxTokens` (256, 500) or
+ * no `requestOptions` continue to emit no `thinking` — additive change.
  */
 function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestOptions) {
     const body = {
@@ -301,10 +313,10 @@ function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestO
         return JSON.stringify(body);
     }
 
-    // BAT-558 v4 R1 — small-turn skip. `max_tokens < 2048` doesn't have
-    // headroom for both the 1024-floor budget AND a usable answer, so
-    // thinking is skipped (rate-limited INFO log so the suppression is
-    // discoverable in field reports without flooding the Logs screen).
+    // Small-turn skip (retained from BAT-558 as a UX guard): a sub-2048
+    // max_tokens turn has no headroom for useful reasoning AND a usable
+    // answer, so thinking is skipped (rate-limited INFO log so the
+    // suppression is discoverable in field reports without flooding Logs).
     if (maxTokens < MIN_THINKING_TURN) {
         logSuppression(
             SUPPRESSION_REASONS.MAX_TOKENS_BELOW_FLOOR,
@@ -313,13 +325,10 @@ function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestO
         return JSON.stringify(body);
     }
 
-    // BAT-558 v4 R1 — clamp budget to [ANTHROPIC_MIN_BUDGET,
-    // DEFAULT_THINKING_BUDGET], scaled at half of `maxTokens` so the
-    // final answer always has the other half. See module-level constant
-    // block for the worked-examples table.
-    const cap = Math.min(DEFAULT_THINKING_BUDGET, Math.floor(maxTokens * 0.5));
-    const budget = Math.max(ANTHROPIC_MIN_BUDGET, cap);
-    body.thinking = { type: 'enabled', budget_tokens: budget };
+    // BAT-1033 — adaptive thinking: the model auto-sizes its own budget.
+    // No `budget_tokens` (extended thinking was removed from the current
+    // models; adaptive is accepted by all). See module header for the matrix.
+    body.thinking = { type: 'adaptive' };
     return JSON.stringify(body);
 }
 
