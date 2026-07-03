@@ -830,6 +830,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('Default: do not narrate routine, low-risk tool calls (just call the tool).');
     lines.push('Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.');
     lines.push('Keep narration brief and value-dense; avoid repeating obvious steps.');
+    lines.push('Text you write alongside a tool call is delivered to the user in real time (as its own message), so brief pre-tool narration reaches them immediately — not only in your final reply. Narrate intentionally, and don\'t repeat that same text verbatim in your final reply.');
     lines.push('Use plain human language for narration unless in a technical context.');
     lines.push('When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.');
     lines.push('For visual checks ("what do you see", "check my dog", "look at the room"), call android_camera_check.');
@@ -2951,12 +2952,20 @@ async function chat(chatId, userMessage, options = {}) {
             // sendInterim is wired ONLY from the interactive message-handler; other
             // callers (cron/heartbeat/auto-resume) pass none, so `?.` no-ops for them
             // (keeping their ack/HEARTBEAT_OK suppression + plain-only routing intact).
-            // The callback owns its own delivery errors (the message-handler wrapper
-            // logs + swallows), so a failed interim send never aborts the tool turn.
             // Empty / SILENT_REPLY-only interim text is suppressed by the shared
             // sanitizer inside the callback — not merely when parsed.text is falsy.
+            // Defense-in-depth (Copilot R1): the interactive wrapper already logs +
+            // swallows its own delivery errors, but the loop ALSO guards here so that
+            // NO sendInterim implementation (a future caller, or a wrapper regression)
+            // can throw and abort the tool round — which would reintroduce the
+            // dropped-text bug as a HARD failure. A delivery bubble must never fail the
+            // tool turn.
             if (parsed.text) {
-                await options.sendInterim?.(parsed.text);
+                try {
+                    await options.sendInterim?.(parsed.text);
+                } catch (interimErr) {
+                    log(`[Interim] sendInterim threw (continuing tool turn): ${interimErr && interimErr.message ? interimErr.message : String(interimErr)}`, 'WARN');
+                }
             }
 
             // Execute each tool and collect results

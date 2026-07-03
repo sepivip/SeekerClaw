@@ -50,6 +50,7 @@ function assertInit() {
 //                     reasoning-content-400 recovery replay (chat() re-emits the same
 //                     pre-tool text after quarantine + retry). The final send passes none.
 async function deliverAgentText(chatId, rawText, messageId, replyToDefault, dedupSet = null) {
+    assertInit();
     if (typeof rawText !== 'string') return false;
     if (containsSilentReply(rawText)) deps.log('[Audit] Agent sent SILENT_REPLY', 'DEBUG');
     let text = stripSilentReply(
@@ -68,15 +69,19 @@ async function deliverAgentText(chatId, rawText, messageId, replyToDefault, dedu
     // Dedup AFTER sanitizing so an exact-duplicate delivered string (the recovery
     // replay) is suppressed regardless of protocol-token noise. Exact-match only —
     // near-identical re-emits are rare and low-harm (BAT-1109 contract decision).
-    if (dedupSet) {
-        if (dedupSet.has(text)) {
-            deps.log('[Interim] Duplicate interim text suppressed (recovery replay)', 'DEBUG');
-            return false;
-        }
-        dedupSet.add(text);
+    // Record the text as delivered ONLY AFTER a successful send (not before): a
+    // FAILED send must leave the text un-recorded so a later retry — e.g. the
+    // reasoning-content-400 recovery replay this guard exists for — can still
+    // deliver it, instead of being silently suppressed as a phantom "duplicate"
+    // (CodeRabbit R1: dedup state must reflect a confirmed outcome, not an
+    // optimistic pre-send mark).
+    if (dedupSet && dedupSet.has(text)) {
+        deps.log('[Interim] Duplicate interim text suppressed (recovery replay)', 'DEBUG');
+        return false;
     }
 
     await deps.sendMessage(chatId, text, replyTo);
+    if (dedupSet) dedupSet.add(text);
     return true;
 }
 

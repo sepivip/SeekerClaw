@@ -206,6 +206,19 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 2. Re-run with more targeted parameters (e.g., `grep` instead of `cat`, smaller page ranges)
 **Fix:** Use more targeted queries. For large files, use `head`/`tail`/`grep` instead of reading the whole file. For web content, extract specific sections.
 
+### Interim / Pre-Tool Narration Not Delivered (BAT-1109)
+**Symptoms:** The agent's brief narration written alongside a tool call (e.g. "Let me check…") didn't arrive as a message, but the final reply did.
+**How it works:** Text emitted in the same model turn as a `tool_use` block is delivered live — before the tool runs — as its own message (BAT-1109). Each such interim send is independent of tool execution and of the final reply.
+**Check:**
+```
+grep "\[Interim\]" node_debug.log | tail -5
+```
+**Diagnosis:**
+- `[Interim] send failed` / `[Interim] sendInterim threw` (WARN): a transient channel error (e.g. Telegram 429 / network) on the interim bubble only. The tool turn and the final reply are unaffected, and the text is still in conversation history, so the agent's transcript stays consistent.
+- `[Interim] Duplicate interim text suppressed` (DEBUG): the exact same narration was emitted twice in one turn (e.g. a reasoning-content-400 recovery replay) and the duplicate bubble was intentionally suppressed — not an error.
+- No `[Interim]` lines but narration still missing: the model didn't emit any text alongside the tool call (nothing to deliver), or the text was a protocol token (`[[SILENT_REPLY]]` / `HEARTBEAT_OK`) and was intentionally suppressed.
+**Fix:** Interim-send failures are transient and self-recovering — the final reply still arrives. If they recur, check the Telegram/Discord channel sections (rate limits or token issues). Only the interactive channel receives interim narration; cron/heartbeat turns deliver a single message by design.
+
 ---
 
 ## Web Search

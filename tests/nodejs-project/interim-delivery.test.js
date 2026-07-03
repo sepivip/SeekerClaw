@@ -262,6 +262,22 @@ async function turn(text, chat) {
     await turn('silent final', async () => '[[SILENT_REPLY]]');
     ok('B6 SILENT_REPLY-only final delivers nothing', sent.length === 0);
 
+    // B7: a FAILED interim send is NOT recorded in the dedup Set (CodeRabbit R1) — a
+    // later retry of the SAME text still delivers instead of being suppressed as a
+    // phantom duplicate. Without the after-send record fix, the first (failed) send
+    // would mark 'RETRY' seen and the retry would be dropped — permanently losing it
+    // in exactly the reasoning-400-recovery case the dedup guard exists for.
+    await turn('failed-then-retry', async (chatId, content, opts) => {
+        throwOnText = 'RETRY';
+        await opts.sendInterim('RETRY');   // fails → must NOT be marked delivered
+        throwOnText = null;
+        await opts.sendInterim('RETRY');   // retry → must deliver (not suppressed)
+        return 'final';
+    });
+    ok('B7 failed interim not marked seen; retry delivers',
+        sent.filter(s => s.text === 'RETRY').length === 1 && sent.some(s => s.text === 'final'),
+        JSON.stringify(sent));
+
     // Cleanup
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
 
