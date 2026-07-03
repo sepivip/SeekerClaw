@@ -2936,6 +2936,29 @@ async function chat(chatId, userMessage, options = {}) {
                 break; // Model didn't listen — force exit with text response
             }
 
+            // BAT-1109: deliver interim/pre-tool assistant text — the text the model
+            // emits in the SAME message as a tool_use — to the interactive channel in
+            // real time. Without this, only the final text-only response is ever sent,
+            // and any text the agent "says" alongside a tool call is silently dropped
+            // (the trust-damaging "it insists it said X" bug). Delivery-only: this text
+            // is already in `messages` (pushed just above) and replayed to the model on
+            // the next turn, so conversation history is unchanged. Placement is
+            // deliberate:
+            //   - AFTER the _loopFinalIteration guard, so the forced-final text (which
+            //     is RETURNED as the final answer) is never ALSO interim-sent;
+            //   - only reached for rounds whose tools actually execute — a text-only
+            //     response already broke out at the top of the loop (toolCalls === 0).
+            // sendInterim is wired ONLY from the interactive message-handler; other
+            // callers (cron/heartbeat/auto-resume) pass none, so `?.` no-ops for them
+            // (keeping their ack/HEARTBEAT_OK suppression + plain-only routing intact).
+            // The callback owns its own delivery errors (the message-handler wrapper
+            // logs + swallows), so a failed interim send never aborts the tool turn.
+            // Empty / SILENT_REPLY-only interim text is suppressed by the shared
+            // sanitizer inside the callback — not merely when parsed.text is falsy.
+            if (parsed.text) {
+                await options.sendInterim?.(parsed.text);
+            }
+
             // Execute each tool and collect results
             // BAT-246: Each tool execution is individually guarded — if one tool throws,
             // the others still run and ALL tool calls get matching tool result entries.
