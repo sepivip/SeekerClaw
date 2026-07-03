@@ -830,6 +830,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('Default: do not narrate routine, low-risk tool calls (just call the tool).');
     lines.push('Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.');
     lines.push('Keep narration brief and value-dense; avoid repeating obvious steps.');
+    lines.push('Text you write alongside a tool call is delivered to the user in real time (as its own message), so brief pre-tool narration reaches them immediately — not only in your final reply. Narrate intentionally, and don\'t repeat that same text verbatim in your final reply.');
     lines.push('Use plain human language for narration unless in a technical context.');
     lines.push('When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.');
     lines.push('For visual checks ("what do you see", "check my dog", "look at the room"), call android_camera_check.');
@@ -2934,6 +2935,37 @@ async function chat(chatId, userMessage, options = {}) {
                 parsed.toolCalls = [];
                 _loopFinalIteration = false;
                 break; // Model didn't listen — force exit with text response
+            }
+
+            // BAT-1109: deliver interim/pre-tool assistant text — the text the model
+            // emits in the SAME message as a tool_use — to the interactive channel in
+            // real time. Without this, only the final text-only response is ever sent,
+            // and any text the agent "says" alongside a tool call is silently dropped
+            // (the trust-damaging "it insists it said X" bug). Delivery-only: this text
+            // is already in `messages` (pushed just above) and replayed to the model on
+            // the next turn, so conversation history is unchanged. Placement is
+            // deliberate:
+            //   - AFTER the _loopFinalIteration guard, so the forced-final text (which
+            //     is RETURNED as the final answer) is never ALSO interim-sent;
+            //   - only reached for rounds whose tools actually execute — a text-only
+            //     response already broke out at the top of the loop (toolCalls === 0).
+            // sendInterim is wired ONLY from the interactive message-handler; other
+            // callers (cron/heartbeat/auto-resume) pass none, so `?.` no-ops for them
+            // (keeping their ack/HEARTBEAT_OK suppression + plain-only routing intact).
+            // Empty / SILENT_REPLY-only interim text is suppressed by the shared
+            // sanitizer inside the callback — not merely when parsed.text is falsy.
+            // Defense-in-depth (Copilot R1): the interactive wrapper already logs +
+            // swallows its own delivery errors, but the loop ALSO guards here so that
+            // NO sendInterim implementation (a future caller, or a wrapper regression)
+            // can throw and abort the tool round — which would reintroduce the
+            // dropped-text bug as a HARD failure. A delivery bubble must never fail the
+            // tool turn.
+            if (parsed.text) {
+                try {
+                    await options.sendInterim?.(parsed.text);
+                } catch (interimErr) {
+                    log(`[Interim] sendInterim threw (continuing tool turn): ${interimErr && interimErr.message ? interimErr.message : String(interimErr)}`, 'WARN');
+                }
             }
 
             // Execute each tool and collect results

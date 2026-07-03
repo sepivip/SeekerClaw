@@ -73,6 +73,7 @@ const SKIP_REASONS = {
     'env-list.test.js': 'fixture-only — needs env scaffold',
     'env-merge.test.js': 'fixture-only — needs env scaffold',
     'idle-summary-timers.test.js': 'fixture-only — timer-based, flaky in CI',
+    'interim-delivery.test.js': 'fixture-only — message-handler.js depends on main.js globals + config require-cache stubs (run via node locally / pre-push)',
     'jupiter-trigger-v2.test.js': 'fixture-only — live Jupiter Trigger V2 API roundtrip',
     'main-wallet-balance.test.js': 'fixture-only — live MWA + RPC roundtrip',
     'mcp-servers.test.js': 'fixture-only — needs workDir scaffold',
