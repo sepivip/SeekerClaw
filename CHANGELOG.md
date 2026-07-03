@@ -5,6 +5,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-07-03
+
+> **Reasoning reliability hotfix for the latest Claude models.** Fixes two
+> failures that could surface with Claude Sonnet 5, Opus 4.8, and other current
+> models — one during tool use, one when Extended Thinking is turned on with a
+> personal Anthropic API key. Fully backward-compatible; no configuration or
+> data changes.
+
+### Fixed
+
+- Resolved an API error that could interrupt a Claude reply during tool use or
+  multi-step responses on the latest models (including Sonnet 5 and Opus 4.8):
+  a reasoning step from one turn could be rejected on the next. Reasoning is now
+  carried across turns intact.
+- Fixed Extended Thinking failing to start on current Claude models when
+  connected with a personal Anthropic API key. Reasoning now uses Anthropic's
+  adaptive thinking mode, which the newest models require.
+
 ## [2.1.0] - 2026-06-30
 
 > **Autonomous on-chain trading + richer chat.** v2.0 let the agent's burner
