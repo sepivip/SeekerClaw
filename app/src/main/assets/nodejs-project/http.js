@@ -39,10 +39,13 @@ function httpRequest(options, body = null) {
 //
 // The v2.1.0 bug lived here: the content_block_delta arm handled only
 // text_delta + input_json_delta and silently dropped `thinking_delta` and
-// `signature_delta`. Anthropic streams a `thinking` block as
+// `signature_delta`. Anthropic streams a `thinking` block as an empty shell
+// then interleaved deltas — typically the reasoning text first and the
+// signature last, but the order can vary. The reducer accumulates each delta
+// independently, so it does NOT depend on ordering (don't "fix" it to assume one):
 //   content_block_start {type:'thinking', thinking:'', signature:''}
-//   content_block_delta {signature_delta: <the real signature>}
 //   content_block_delta {thinking_delta:  <the reasoning text>}
+//   content_block_delta {signature_delta: <the signature, typically last>}
 // so dropping those two deltas left the block with the EMPTY signature from
 // content_block_start. Echoing that block back on the next tool-loop round →
 // API 400 "each thinking block must contain thinking" (the message is
@@ -248,7 +251,10 @@ function httpStreamingRequest(options, body = null) {
                     const err = new Error('Stream ended before message_stop');
                     err.timeoutSource = 'transport';
                     if (blocks.length > 0) {
-                        message.content = blocks.filter(Boolean);
+                        // BAT-1033: normalize via the shared finalizer so the
+                        // diagnostic partial message matches the real message
+                        // shape and doesn't leak internal fields (e.g. _inputJson).
+                        message.content = finalizeClaudeStreamBlocks(blocks);
                         err.partialMessage = message;
                     }
                     settle(reject, err);
