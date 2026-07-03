@@ -1290,6 +1290,16 @@ async function handleMessage(normalized) {
 
         let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction, resumedFromTaskId, sendInterim });
 
+        // chat() is contracted to return a STRING (assistant text, a budget/fallback
+        // string, or the SILENT_REPLY sentinel). A non-string here is a programming
+        // error / adapter regression — surface it LOUDLY via the catch → error-reply
+        // path (as the pre-BAT-1109 `response.trim()` did) rather than letting
+        // deliverAgentText's non-string guard treat it as a protocol-token-only reply
+        // and silently drop the final response (Copilot R2).
+        if (typeof response !== 'string') {
+            throw new Error(`chat() returned a non-string response (${typeof response})`);
+        }
+
         // Final reply — routed through the SAME shared sanitizer/sender as interim text
         // (BAT-1109). replyToDefault = messageId preserves the prior behavior of always
         // quote-replying the triggering message; no dedup on the final send. A false

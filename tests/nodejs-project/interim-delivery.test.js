@@ -278,6 +278,14 @@ async function turn(text, chat) {
         sent.filter(s => s.text === 'RETRY').length === 1 && sent.some(s => s.text === 'final'),
         JSON.stringify(sent));
 
+    // B8: a non-string chat() return is surfaced LOUDLY as an error reply, NOT silently
+    // dropped as a phantom "protocol-token-only" response (Copilot R2). Guards against an
+    // adapter regression turning a dropped final reply into a silent no-op.
+    await turn('nonstring-return', async () => undefined);
+    ok('B8 non-string chat() return surfaces an error (not a silent drop)',
+        sent.length === 1 && /^Error:/.test(sent[0].text),
+        JSON.stringify(sent));
+
     // Cleanup
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
 
