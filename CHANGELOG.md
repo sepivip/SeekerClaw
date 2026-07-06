@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security
+
+- Hardened `web_fetch` against credential exfiltration on cross-origin redirects: caller-supplied headers (API keys, bearer tokens) are now dropped when a request redirects to a different origin, and a cross-origin `307`/`308` can no longer forward the request body to the new host. Same-origin flows are unchanged. (BAT-1086)
+- API-key values stored in `agent_settings.json` are now masked before they reach the AI model. The agent can still read its settings and save keys, but raw key values are never exposed to the model or the chat — the read tool returns them masked, and the `js_eval`/`shell_exec` paths are blocked for that file. Protects provider billing keys even against prompt injection. This is model-facing output masking; the file on disk and the save flow are unchanged. (BAT-1087)
+- Strengthened `web_fetch`'s SSRF guard to block private/loopback/link-local addresses across all IPv4 and IPv6 encodings — including IPv6 loopback, IPv4-mapped, ULA, link-local, zone-identifier, and decimal/hex/octal literal forms — and applied the same guard to the file-download path. Only requests to internal addresses are affected. (BAT-1088)
+
 ## [2.1.1] - 2026-07-03
 
 > **Reasoning & message-delivery reliability hotfix for the latest Claude
