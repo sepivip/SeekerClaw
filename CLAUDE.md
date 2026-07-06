@@ -572,8 +572,8 @@ git tag v1.x.x && git push origin v1.x.x
 > **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `docs/internal/OPENCLAW_TRACKING.md` for full details.
 
 ### Current Versions
-- **OpenClaw Reference:** 2026.4.10
-- **Last Sync Review:** 2026-04-11
+- **OpenClaw Reference:** 2026.4.10 (parity baseline; upstream has since diverged ~34K commits — now a loose reference)
+- **Last Sync Review:** 2026-07-06 (reviewed HEAD 538d4eeb77; nothing portable — see `docs/internal/OPENCLAW_TRACKING.md`)
 
 ### Quick Update Check
 ```bash

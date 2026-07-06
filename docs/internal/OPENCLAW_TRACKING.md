@@ -1,9 +1,23 @@
 # OpenClaw Version Tracking
 
 > **Purpose:** Track OpenClaw releases and identify changes to port to SeekerClaw.
-> **Current OpenClaw Version:** 2026.4.10 (main 08ba5a72f7, 2026-04-11)
-> **Last Sync Review:** 2026-04-11 (PR #322 / BAT-488)
+> **Current OpenClaw Version:** 2026.4.10 (main 08ba5a72f7, 2026-04-11) — SeekerClaw's parity baseline
+> **Last Sync Review:** 2026-07-06 (reviewed upstream HEAD 538d4eeb77; **nothing ported** — see note below)
 > **Parity Plan:** See `PARITY_PLAN.md`
+
+> **2026-07-06 review — codebases have fundamentally diverged.** Upstream is
+> **34,310 commits** ahead of our baseline (08ba5a72f7), ~163K insertions in the
+> parity include-list alone. The skills subsystem was re-architected into
+> session/plugin/sandbox modules SeekerClaw doesn't ship; system-prompt gained
+> Sub-Agent/Control-UI/Self-Update/`/approve` sections (all N/A to a single-user
+> mobile port); cron gained multi-session watchdog/isolation machinery. **No
+> portable changes found.** The one candidate — `src/auto-reply/tokens.ts`
+> silent-reply hardening — was verified **already covered** by our
+> `silent-reply.js` (bold-wrapped `**[[SILENT_REPLY]]**` + JSON-envelope are
+> explicit variants; the upstream "reasoning-prefixed" case doesn't apply because
+> we separate thinking into `reasoningBlocks` before the silent check). Kept
+> `OPENCLAW_VERSION` at 2026.4.10 (a review is not a port); OpenClaw parity is now
+> a **loose reference** — SeekerClaw is its own line (mobile / Node 18 / Solana).
 
 ---
 
