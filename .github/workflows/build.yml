@@ -101,6 +101,9 @@ jobs:
             telegram-rich-send \
             rich-messages-default \
             truncate-tool-result \
+            web-fetch-redirect-headers \
+            agent-settings-mask \
+            web-fetch-ssrf-guard \
             claude-thinking-signature \
             claude-adaptive-thinking \
             ci-coverage-manifest

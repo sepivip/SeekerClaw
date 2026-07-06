@@ -2,6 +2,7 @@
 // Web cache, HTML-to-markdown, search providers, web fetch.
 // Depends on: config.js, http.js
 
+const net = require('net');
 const { config, log, USER_AGENT } = require('./config');
 const { httpRequest } = require('./http');
 
@@ -236,6 +237,147 @@ async function searchFirecrawl(query, count = 5) {
 
 // --- Enhanced HTTP fetch with redirects + SSRF protection ---
 
+// Build the outbound headers for a single hop of a (possibly redirected) web_fetch.
+//
+// Security (BAT-1086): caller-supplied headers ride along ONLY when this hop is
+// same-origin as the ORIGINAL request. On any cross-origin hop we send just the
+// framework defaults (User-Agent, Accept), so secret auth headers — Authorization,
+// Cookie, x-api-key, a bearer token placed in a custom header, etc. — never follow
+// a redirect to a different host. Comparing against the ORIGINAL origin (not the
+// previous hop) means that once the chain leaves the trusted origin the headers
+// stay stripped, while a hop back to the original origin (A->B->A) re-attaches them.
+//
+// Content-Type is re-derived here (never carried across origins) and only when a
+// body is actually being sent. Pure and deterministic — exported for unit testing.
+function computeOutboundHeaders(customHeaders, url, originUrl, options = {}, currentBody = null) {
+    const headers = {
+        'User-Agent': USER_AGENT,
+        'Accept': (options && options.accept) || 'text/markdown, text/html;q=0.9, */*;q=0.1',
+    };
+    // Caller headers AND a body-derived Content-Type ride along ONLY on same-origin
+    // hops. A cross-origin hop gets nothing but the two framework defaults above.
+    // (webFetch also blocks cross-origin body-preserving redirects, so a body is
+    // only ever sent same-origin anyway.)
+    if (url.origin === originUrl.origin) {
+        if (customHeaders && typeof customHeaders === 'object') {
+            for (const [k, v] of Object.entries(customHeaders)) {
+                // Filter prototype-pollution keys — this helper is exported, so a
+                // direct caller could pass unsanitized headers (tools/web.js already
+                // strips these at the input boundary; mirror it here defensively).
+                if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+                headers[k] = v;
+            }
+        }
+        const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type');
+        if (currentBody != null && typeof currentBody === 'object' && !hasContentType) {
+            headers['Content-Type'] = 'application/json';
+        }
+    }
+    return headers;
+}
+
+// --- SSRF guard: block private / loopback / link-local literals (BAT-1088) ---
+//
+// LITERAL / canonical-host screening only — NOT DNS-rebind protection. `new URL()`
+// already canonicalizes IPv4 decimal/octal/hex forms to dotted-quad before we see
+// url.hostname, so the live gap this closes over the old prefix regex is IPv6
+// (loopback/mapped/ULA/link-local). A public hostname that RESOLVES to a private IP
+// is out of scope (needs resolve-and-pin — tracked separately as BAT-1093).
+//
+// V1 blocks: IPv4 loopback 127/8, private 10/8 + 172.16/12 + 192.168/16, link-local
+// 169.254/16, unspecified 0/8; IPv6 :: , ::1, ULA fc00::/7, link-local fe80::/10,
+// IPv4-mapped ::ffff:0:0/96 (classified by embedded IPv4); localhost / *.localhost.
+// Deliberately NOT blocked (per BAT-1088 decision): CGNAT 100.64/10, benchmark
+// 198.18/15, multicast, reserved-future — asserted allowed in tests.
+
+function _isBlockedIPv4(ip) {
+    const p = ip.split('.');
+    if (p.length !== 4) return true; // net.isIPv4 validated the shape; be safe
+    const a = Number(p[0]), b = Number(p[1]);
+    if (a === 127) return true;                       // loopback 127/8
+    if (a === 10) return true;                        // private 10/8
+    if (a === 0) return true;                         // "this host" 0/8
+    if (a === 169 && b === 254) return true;          // link-local 169.254/16
+    if (a === 192 && b === 168) return true;          // private 192.168/16
+    if (a === 172 && b >= 16 && b <= 31) return true; // private 172.16/12
+    return false;
+}
+
+// Parse a (net.isIPv6-validated) IPv6 string into 16 bytes, or null if unparseable.
+function _ipv6ToBytes(str) {
+    const halves = str.split('::');
+    if (halves.length > 2) return null;
+    const parseGroups = (part) => {
+        if (part === '') return [];
+        const out = [];
+        for (const t of part.split(':')) {
+            if (t.includes('.')) { // embedded IPv4 tail → two 16-bit groups
+                const q = t.split('.').map(Number);
+                if (q.length !== 4 || q.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+                out.push(((q[0] << 8) | q[1]) & 0xffff, ((q[2] << 8) | q[3]) & 0xffff);
+            } else {
+                if (!/^[0-9a-f]{1,4}$/i.test(t)) return null;
+                out.push(parseInt(t, 16));
+            }
+        }
+        return out;
+    };
+    const head = parseGroups(halves[0]);
+    const tail = halves.length === 2 ? parseGroups(halves[1]) : [];
+    if (head === null || tail === null) return null;
+    let g;
+    if (halves.length === 2) {
+        const missing = 8 - head.length - tail.length;
+        if (missing < 0) return null;
+        g = [...head, ...Array(missing).fill(0), ...tail];
+    } else {
+        g = head;
+    }
+    if (g.length !== 8) return null;
+    const bytes = new Uint8Array(16);
+    for (let i = 0; i < 8; i++) { bytes[2 * i] = (g[i] >> 8) & 0xff; bytes[2 * i + 1] = g[i] & 0xff; }
+    return bytes;
+}
+
+function _isBlockedIPv6(str) {
+    const b = _ipv6ToBytes(str);
+    if (!b) return true; // fail closed on anything we can't classify
+    if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 ULA
+    if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
+    const embeddedV4 = () => _isBlockedIPv4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
+    // IPv4-mapped ::ffff:0:0/96 → classify by embedded IPv4.
+    if (b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff) return embeddedV4();
+    // First 96 bits zero covers :: (unspecified → 0.0.0.0), ::1 (loopback → 0.0.0.1),
+    // and the deprecated IPv4-compatible form ::w.x.y.z (::7f00:1 etc.) that some
+    // stacks route as IPv4 — classify by the embedded IPv4 (0/8 catches :: and ::1).
+    if (b.slice(0, 12).every((x) => x === 0)) return embeddedV4();
+    return false;
+}
+
+// Is this host a private/loopback/link-local literal that web_fetch must not reach?
+// Pure + exported for unit testing. Called per redirect hop before any socket opens.
+function isBlockedAddress(hostname) {
+    if (typeof hostname !== 'string') return true; // fail closed on junk
+    let host = hostname.trim().toLowerCase();
+    if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1); // strip IPv6 brackets
+    // Strip an IPv6 zone identifier (RFC 6874: fe80::1%eth0). Classify the address
+    // itself so a zoned link-local literal is caught as link-local, not treated as a
+    // hostname. (new URL() actually rejects zoned IPv6 URLs, so this mainly hardens
+    // direct callers of this exported helper.)
+    const pct = host.indexOf('%');
+    if (pct !== -1) host = host.slice(0, pct);
+    // Strip trailing dot(s): the FQDN root form (localhost. / api.localhost.) resolves
+    // identically to the un-dotted name, so it must classify the same — otherwise it's
+    // a localhost SSRF bypass. (new URL() drops the dot on IP literals but keeps it on
+    // names.)
+    host = host.replace(/\.+$/, '');
+    if (!host) return true; // empty / whitespace-only / "[]" / "." → fail closed
+    const v = net.isIP(host);
+    if (v === 0) return host === 'localhost' || host.endsWith('.localhost'); // hostname, not an IP literal
+    if (v === 4) return _isBlockedIPv4(host);
+    return _isBlockedIPv6(host);
+}
+
 async function webFetch(urlString, options = {}) {
     const maxRedirects = options.maxRedirects || 5;
     const timeout = options.timeout || 30000;
@@ -254,29 +396,18 @@ async function webFetch(urlString, options = {}) {
             throw new Error('Unsupported URL protocol: ' + url.protocol);
         }
 
-        // SSRF guard: block private/local/reserved addresses
-        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|localhost)/i.test(url.hostname)) {
+        // SSRF guard: block private/local/link-local literals (BAT-1088).
+        // Per-hop + before any socket, so redirect targets are covered too.
+        if (isBlockedAddress(url.hostname)) {
             throw new Error('Blocked: private/local address');
         }
 
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Request timeout (redirect chain)');
 
-        // Strip sensitive headers on cross-origin redirect
-        const reqHeaders = {
-            'User-Agent': USER_AGENT,
-            'Accept': options.accept || 'text/markdown, text/html;q=0.9, */*;q=0.1'
-        };
-        for (const [k, v] of Object.entries(customHeaders)) {
-            const lower = k.toLowerCase();
-            // Strip auth headers on cross-origin redirects
-            if (url.origin !== originUrl.origin && (lower === 'authorization' || lower === 'cookie')) continue;
-            reqHeaders[k] = v;
-        }
-        const hasContentType = Object.keys(reqHeaders).some(k => k.toLowerCase() === 'content-type');
-        if (currentBody && typeof currentBody === 'object' && !hasContentType) {
-            reqHeaders['Content-Type'] = 'application/json';
-        }
+        // Build outbound headers: caller headers only on same-origin hops,
+        // safe framework defaults otherwise (BAT-1086 — see computeOutboundHeaders).
+        const reqHeaders = computeOutboundHeaders(customHeaders, url, originUrl, options, currentBody);
 
         const res = await httpRequest({
             hostname: url.hostname,
@@ -289,14 +420,21 @@ async function webFetch(urlString, options = {}) {
 
         // Follow redirects
         if ([301, 302, 303, 307, 308].includes(res.status) && res.headers?.location) {
-            currentUrl = new URL(res.headers.location, currentUrl).toString();
+            const nextUrl = new URL(res.headers.location, currentUrl);
             if (res.status === 307 || res.status === 308) {
-                // Preserve method + body
+                // 307/308 preserve method + body. Block cross-origin body-preserving
+                // redirects (BAT-1086): forwarding a caller POST/PUT body to a
+                // different origin is a data-exfil path even after headers are
+                // stripped. Same-origin 307/308 keep method + body as before.
+                if (nextUrl.origin !== originUrl.origin && currentBody != null) {
+                    throw new Error('Blocked: cross-origin redirect with request body');
+                }
             } else {
                 // 301/302/303 → downgrade to GET, drop body
                 currentMethod = 'GET';
                 currentBody = null;
             }
+            currentUrl = nextUrl.toString();
             continue;
         }
 
@@ -320,4 +458,6 @@ module.exports = {
     searchTavily,
     searchFirecrawl,
     webFetch,
+    computeOutboundHeaders,
+    isBlockedAddress,
 };

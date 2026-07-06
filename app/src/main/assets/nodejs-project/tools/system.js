@@ -11,6 +11,18 @@ const {
     redactSecrets, safePath,
 } = require('../security');
 
+// BAT-1087: agent_settings.json holds provider secrets under apiKeys.*. It is NOT in
+// SECRETS_BLOCKED (the read tool needs masked access), but shell_exec and js_eval must
+// not return its raw bytes — redactSecrets only covers registered values (misses
+// <7-char and corrupt-file secrets). Both route the agent to the masking read tool.
+const AGENT_SETTINGS_FILE = 'agent_settings.json';
+// Match the filename as a WHOLE command token: optional path prefix (start / space /
+// separator) and whitespace-or-end after — so `cat agent_settings.json` and
+// `cat ./agent_settings.json` are blocked, but a different file like
+// `agent_settings.json.bak` is NOT falsely matched (a `\b` after `.json` would).
+// Derived from the constant so shell_exec and js_eval stay in lockstep if renamed.
+const AGENT_SETTINGS_RX = new RegExp('(^|[\\s/])' + AGENT_SETTINGS_FILE.replace(/[.]/g, '\\.') + '(\\s|$)', 'i');
+
 // DeerFlow P2: Tool registry for tool_search — set from tools/index.js at startup
 let _getTools = null;
 function _setToolRegistry(fn) { _getTools = fn; }
@@ -140,6 +152,17 @@ const handlers = {
             return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}, []) are not allowed in arguments. Run one simple command at a time.' };
         }
 
+        // BAT-1087: block shell access to agent_settings.json. redactSecrets covers
+        // registered values, but a corrupt/unparseable file registers nothing, so a
+        // dump command (cat/head/grep/base64/...) could still leak raw stored keys.
+        // Strip shell quoting/backslash escapes before matching so evasions like
+        // `agent_settings\.json` or `agent_settings.jso''n` (which /bin/sh collapses to
+        // the real name) can't slip past; operators ($, backticks, *, ...) are already
+        // rejected above, leaving quotes and backslashes as the only evasion chars.
+        if (AGENT_SETTINGS_RX.test(cmd.replace(/['"\\]/g, ''))) {
+            return { error: `Reading ${AGENT_SETTINGS_FILE} via shell_exec is blocked. Use the read tool — it returns the file with secret values masked.` };
+        }
+
         // Resolve working directory (must be within workspace)
         let cwd = workDir;
         if (input.cwd) {
@@ -190,13 +213,18 @@ const handlers = {
                 shell: shellPath,
                 env: childEnv
             }, (err, stdout, stderr) => {
+                // BAT-1087: redact secrets from shell output before it reaches the
+                // model. `cat agent_settings.json` (and other allowlisted printers)
+                // would otherwise return raw provider keys; redactSecrets also masks
+                // the bridge token and any registered secret. Redact BEFORE slicing so
+                // a secret spanning the truncation boundary is still masked.
                 if (err) {
                     if (err.killed && err.signal) {
                         log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`, 'WARN');
                         resolve({
                             success: false,
                             command: cmd,
-                            stdout: (stdout || '').slice(0, 50000),
+                            stdout: redactSecrets(stdout || '').slice(0, 50000),
                             stderr: `Command timed out after ${timeout}ms`,
                             exit_code: err.code || 1
                         });
@@ -205,8 +233,8 @@ const handlers = {
                         resolve({
                             success: false,
                             command: cmd,
-                            stdout: (stdout || '').slice(0, 50000),
-                            stderr: (stderr || '').slice(0, 10000) || err.message || 'Unknown error',
+                            stdout: redactSecrets(stdout || '').slice(0, 50000),
+                            stderr: redactSecrets((stderr || '') || err.message || 'Unknown error').slice(0, 10000),
                             exit_code: err.code || 1
                         });
                     }
@@ -215,8 +243,8 @@ const handlers = {
                     resolve({
                         success: true,
                         command: cmd,
-                        stdout: (stdout || '').slice(0, 50000),
-                        stderr: (stderr || '').slice(0, 10000),
+                        stdout: redactSecrets(stdout || '').slice(0, 50000),
+                        stderr: redactSecrets(stderr || '').slice(0, 10000),
                         exit_code: 0
                     });
                 }
@@ -283,6 +311,12 @@ const handlers = {
                             const basename = path.basename(resolvedPath);
                             if (SECRETS_BLOCKED.has(basename)) {
                                 throw new Error(`Access to ${basename} is blocked for security.`);
+                            }
+                            // BAT-1087: agent_settings.json isn't in SECRETS_BLOCKED (masked
+                            // read is allowed via the read tool), but js_eval must not read it
+                            // raw — that would bypass masking for <7-char / corrupt-file secrets.
+                            if (basename === AGENT_SETTINGS_FILE) {
+                                throw new Error('Access to agent_settings.json via js_eval is blocked; use the read tool (secret values are masked).');
                             }
                             return original.apply(target, args);
                         };
