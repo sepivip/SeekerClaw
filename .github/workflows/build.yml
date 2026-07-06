@@ -104,6 +104,8 @@ jobs:
             web-fetch-redirect-headers \
             agent-settings-mask \
             web-fetch-ssrf-guard \
+            claude-thinking-signature \
+            claude-adaptive-thinking \
             ci-coverage-manifest
           do
             echo "── $t ──"

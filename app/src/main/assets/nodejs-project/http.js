@@ -33,6 +33,120 @@ function httpRequest(options, body = null) {
     });
 }
 
+// ── Claude SSE stream assembly (BAT-1033) ────────────────────────────────────
+// Pure reducer for Anthropic streaming events, extracted so the live socket
+// path AND offline regression tests run the EXACT same assembly logic.
+//
+// The v2.1.0 bug lived here: the content_block_delta arm handled only
+// text_delta + input_json_delta and silently dropped `thinking_delta` and
+// `signature_delta`. Anthropic streams a `thinking` block as an empty shell
+// then interleaved deltas — typically the reasoning text first and the
+// signature last, but the order can vary. The reducer accumulates each delta
+// independently, so it does NOT depend on ordering (don't "fix" it to assume one):
+//   content_block_start {type:'thinking', thinking:'', signature:''}
+//   content_block_delta {thinking_delta:  <the reasoning text>}
+//   content_block_delta {signature_delta: <the signature, typically last>}
+// so dropping those two deltas left the block with the EMPTY signature from
+// content_block_start. Echoing that block back on the next tool-loop round →
+// API 400 "each thinking block must contain thinking" (the message is
+// misleading — the trigger is the empty *signature*, not empty text; a signed
+// empty-text block is accepted). Handling both delta types makes the assembled
+// block byte-complete so it replays cleanly.
+
+function newClaudeStreamState() {
+    return {
+        message: { id: null, type: 'message', role: 'assistant', content: [], model: null, stop_reason: null, usage: {} },
+        blocks: [], // indexed by content_block index
+    };
+}
+
+// Apply one parsed Anthropic SSE event to the accumulator. Content assembly
+// only — transport concerns (error events, settle, timers) stay in the caller.
+// Returns true when the event is `message_stop` (stream complete).
+function applyClaudeStreamEvent(state, eventType, parsed) {
+    const { message, blocks } = state;
+    switch (eventType) {
+        case 'message_start':
+            if (parsed.message) {
+                message.id = parsed.message.id;
+                message.model = parsed.message.model;
+                Object.assign(message.usage, parsed.message.usage || {});
+            }
+            break;
+        case 'content_block_start':
+            if (typeof parsed.index === 'number' && parsed.content_block) {
+                blocks[parsed.index] = parsed.content_block;
+                if (blocks[parsed.index].type === 'tool_use') {
+                    blocks[parsed.index]._inputJson = '';
+                }
+            }
+            break;
+        case 'content_block_delta': {
+            if (typeof parsed.index !== 'number') break;
+            const blk = blocks[parsed.index];
+            if (!blk || !parsed.delta) break;
+            if (parsed.delta.type === 'text_delta') {
+                blk.text = (blk.text || '') + parsed.delta.text;
+            } else if (parsed.delta.type === 'input_json_delta') {
+                if (typeof blk._inputJson !== 'string') blk._inputJson = '';
+                blk._inputJson += parsed.delta.partial_json;
+            } else if (parsed.delta.type === 'thinking_delta') {
+                // BAT-1033: accumulate reasoning text (was silently dropped).
+                blk.thinking = (blk.thinking || '') + (parsed.delta.thinking || '');
+            } else if (parsed.delta.type === 'signature_delta') {
+                // BAT-1033: accumulate the thinking signature. Without this the
+                // block keeps content_block_start's empty signature → replay 400.
+                blk.signature = (blk.signature || '') + (parsed.delta.signature || '');
+            }
+            break;
+        }
+        case 'content_block_stop': {
+            if (typeof parsed.index !== 'number') break;
+            const blk = blocks[parsed.index];
+            if (blk?.type === 'tool_use' && blk._inputJson) {
+                try { blk.input = JSON.parse(blk._inputJson); } catch (_) { blk.input = {}; }
+                delete blk._inputJson;
+            }
+            break;
+        }
+        case 'message_delta':
+            if (parsed.delta) {
+                message.stop_reason = parsed.delta.stop_reason ?? message.stop_reason;
+            }
+            Object.assign(message.usage, parsed.usage || {});
+            break;
+        case 'message_stop':
+            message.content = finalizeClaudeStreamBlocks(blocks);
+            return true;
+    }
+    return false;
+}
+
+// Map accumulated blocks to the non-streaming content[] shape. text/tool_use
+// are normalized; thinking/redacted_thinking pass through verbatim — now WITH
+// their assembled signature + text.
+function finalizeClaudeStreamBlocks(blocks) {
+    return blocks.filter(Boolean).map(b => {
+        if (b.type === 'text') return { type: 'text', text: b.text || '' };
+        if (b.type === 'tool_use') return { type: 'tool_use', id: b.id, name: b.name, input: b.input || {} };
+        return b;
+    });
+}
+
+// Assemble a full message from an ordered list of {eventType, data} events.
+// Test-only convenience; the live path drives applyClaudeStreamEvent directly.
+function assembleClaudeStreamMessage(events) {
+    const state = newClaudeStreamState();
+    let stopped = false;
+    for (const ev of events) {
+        // Stop at the first message_stop, matching the live socket path (which
+        // settles and breaks) — trailing events must not mutate a finalized message.
+        if (applyClaudeStreamEvent(state, ev.eventType, ev.data)) { stopped = true; break; }
+    }
+    if (!stopped) state.message.content = finalizeClaudeStreamBlocks(state.blocks);
+    return state.message;
+}
+
 // BAT-259: Streaming HTTP request for Claude API — SSE parsing, same return shape as httpRequest.
 // Eliminates transport timeouts: SSE events reset the socket idle timer every few seconds,
 // so even 120s responses never trigger the 60s timeout.
@@ -78,8 +192,12 @@ function httpStreamingRequest(options, body = null) {
 
             // SSE streaming — accumulate content blocks into a non-streaming response shape
             res.setEncoding('utf8');
-            const message = { id: null, type: 'message', role: 'assistant', content: [], model: null, stop_reason: null, usage: {} };
-            const blocks = []; // indexed by content_block index
+            // BAT-1033: assembly runs through the shared pure reducer so the live
+            // socket path and offline regression tests stay in lockstep. message
+            // and blocks alias the state so the res.on('end') partial-flush below
+            // keeps working unchanged.
+            const state = newClaudeStreamState();
+            const { message, blocks } = state;
             let sseBuffer = '';
 
             res.on('data', chunk => {
@@ -120,56 +238,18 @@ function httpStreamingRequest(options, body = null) {
                     let parsed;
                     try { parsed = JSON.parse(eventData); } catch (_) { continue; }
 
-                    switch (eventType) {
-                        case 'message_start':
-                            if (parsed.message) {
-                                message.id = parsed.message.id;
-                                message.model = parsed.message.model;
-                                Object.assign(message.usage, parsed.message.usage || {});
-                            }
-                            break;
-                        case 'content_block_start':
-                            if (typeof parsed.index === 'number' && parsed.content_block) {
-                                blocks[parsed.index] = parsed.content_block;
-                                if (blocks[parsed.index].type === 'tool_use') {
-                                    blocks[parsed.index]._inputJson = '';
-                                }
-                            }
-                            break;
-                        case 'content_block_delta': {
-                            const blk = blocks[parsed.index];
-                            if (!blk || !parsed.delta) break;
-                            if (parsed.delta.type === 'text_delta') {
-                                blk.text = (blk.text || '') + parsed.delta.text;
-                            } else if (parsed.delta.type === 'input_json_delta') {
-                                if (typeof blk._inputJson !== 'string') blk._inputJson = '';
-                                blk._inputJson += parsed.delta.partial_json;
-                            }
-                            break;
-                        }
-                        case 'content_block_stop': {
-                            const blk = blocks[parsed.index];
-                            if (blk?.type === 'tool_use' && blk._inputJson) {
-                                try { blk.input = JSON.parse(blk._inputJson); } catch (_) { blk.input = {}; }
-                                delete blk._inputJson;
-                            }
-                            break;
-                        }
-                        case 'message_delta':
-                            if (parsed.delta) {
-                                message.stop_reason = parsed.delta.stop_reason ?? message.stop_reason;
-                            }
-                            Object.assign(message.usage, parsed.usage || {});
-                            break;
-                        case 'message_stop':
-                            clearTimeout(hardTimer);
-                            message.content = blocks.filter(Boolean).map(b => {
-                                if (b.type === 'text') return { type: 'text', text: b.text || '' };
-                                if (b.type === 'tool_use') return { type: 'tool_use', id: b.id, name: b.name, input: b.input || {} };
-                                return b;
-                            });
-                            settle(resolve, { status: 200, data: message, headers: res.headers });
-                            break;
+                    // Assemble via the shared pure reducer (BAT-1033). Returns
+                    // true on message_stop, at which point message.content is
+                    // finalized and we settle.
+                    if (applyClaudeStreamEvent(state, eventType, parsed)) {
+                        clearTimeout(hardTimer);
+                        settle(resolve, { status: 200, data: message, headers: res.headers });
+                        // Stop the stream so any trailing bytes can't re-enter the
+                        // reducer and mutate the already-resolved message by
+                        // reference (mirrors the SSE-error path). settled=true
+                        // also no-ops the res.on('end') partial-flush below.
+                        res.destroy();
+                        break;
                     }
                 }
             });
@@ -182,7 +262,10 @@ function httpStreamingRequest(options, body = null) {
                     const err = new Error('Stream ended before message_stop');
                     err.timeoutSource = 'transport';
                     if (blocks.length > 0) {
-                        message.content = blocks.filter(Boolean);
+                        // BAT-1033: normalize via the shared finalizer so the
+                        // diagnostic partial message matches the real message
+                        // shape and doesn't leak internal fields (e.g. _inputJson).
+                        message.content = finalizeClaudeStreamBlocks(blocks);
                         err.partialMessage = message;
                     }
                     settle(reject, err);
@@ -677,4 +760,9 @@ module.exports = {
     httpStreamingRequest,
     httpOpenAIStreamingRequest,
     httpChatCompletionsStreamingRequest,
+    // BAT-1033: exported for offline regression tests (Claude SSE assembly).
+    newClaudeStreamState,
+    applyClaudeStreamEvent,
+    finalizeClaudeStreamBlocks,
+    assembleClaudeStreamMessage,
 };

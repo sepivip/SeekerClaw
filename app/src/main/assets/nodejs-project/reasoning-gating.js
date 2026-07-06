@@ -165,8 +165,9 @@ function stripReasoningForCustomGating(messages, behavior) {
  * process, so adding a noisy reason will be visible in production logs.
  */
 const SUPPRESSION_REASONS = Object.freeze({
-    // R1 clamp — Claude turn's maxTokens leaves no headroom for both
-    // a thinking budget AND a final answer (< MIN_THINKING_TURN = 2048).
+    // Claude small-turn skip — maxTokens leaves no headroom for useful
+    // reasoning AND a final answer (< MIN_THINKING_TURN = 2048). Retained
+    // from BAT-558 as a UX guard after the BAT-1033 adaptive migration.
     MAX_TOKENS_BELOW_FLOOR: 'maxTokens-below-floor',
     // R2/R3 — heartbeat AI turn carries reasoningMode='off'; no app-
     // controlled optional reasoning emitted (heartbeats are liveness

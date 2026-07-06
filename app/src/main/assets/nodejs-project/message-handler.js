@@ -33,6 +33,58 @@ function assertInit() {
     if (!initialized) throw new Error('message-handler.js: init() must be called before use');
 }
 
+// BAT-1109: Shared delivery for agent text — used for BOTH the final reply and
+// interim/pre-tool text (the text the model emits alongside a tool_use). Applies the
+// SAME protocol-token handling as the final reply always has (SILENT_REPLY audit +
+// strip, HEARTBEAT_OK strip), the SAME [[reply_to_current]] handling, and the SAME
+// rich / HTML / plain-fallback + long-message split (all inside deps.sendMessage).
+// Returns true if a message was actually sent, false if suppressed (empty after
+// sanitizing) — the caller owns statusReaction / stats side-effects.
+//
+//   messageId       — the triggering user message (target for [[reply_to_current]]).
+//   replyToDefault  — reply target when NO [[reply_to_current]] tag is present:
+//                       final   → messageId (preserves the prior always-quote-reply)
+//                       interim → null      (interim bubbles don't quote by default)
+//   dedupSet        — optional per-turn Set; when provided, an identical SANITIZED
+//                     string already delivered this turn is suppressed. Guards the
+//                     reasoning-content-400 recovery replay (chat() re-emits the same
+//                     pre-tool text after quarantine + retry). The final send passes none.
+async function deliverAgentText(chatId, rawText, messageId, replyToDefault, dedupSet = null) {
+    assertInit();
+    if (typeof rawText !== 'string') return false;
+    if (containsSilentReply(rawText)) deps.log('[Audit] Agent sent SILENT_REPLY', 'DEBUG');
+    let text = stripSilentReply(
+        rawText.trim()
+            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+    );
+    if (!text) return false;
+
+    let replyTo = replyToDefault;
+    if (text.startsWith('[[reply_to_current]]')) {
+        text = text.replace('[[reply_to_current]]', '').trim();
+        replyTo = messageId;
+        if (!text) return false; // tag-only content after strip → nothing to send
+    }
+
+    // Dedup AFTER sanitizing so an exact-duplicate delivered string (the recovery
+    // replay) is suppressed regardless of protocol-token noise. Exact-match only —
+    // near-identical re-emits are rare and low-harm (BAT-1109 contract decision).
+    // Record the text as delivered ONLY AFTER a successful send (not before): a
+    // FAILED send must leave the text un-recorded so a later retry — e.g. the
+    // reasoning-content-400 recovery replay this guard exists for — can still
+    // deliver it, instead of being silently suppressed as a phantom "duplicate"
+    // (CodeRabbit R1: dedup state must reflect a confirmed outcome, not an
+    // optimistic pre-send mark).
+    if (dedupSet && dedupSet.has(text)) {
+        deps.log('[Interim] Duplicate interim text suppressed (recovery replay)', 'DEBUG');
+        return false;
+    }
+
+    await deps.sendMessage(chatId, text, replyTo);
+    if (dedupSet) dedupSet.add(text);
+    return true;
+}
+
 // ============================================================================
 // COMMAND HANDLERS
 // ============================================================================
@@ -1216,30 +1268,49 @@ async function handleMessage(normalized) {
             }
         }
 
-        let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction, resumedFromTaskId });
+        // BAT-1109: interim/pre-tool text delivery. sendInterim routes text the model
+        // emits alongside a tool_use through the SAME sanitize + rich-send path as the
+        // final reply (deliverAgentText), so it is no longer silently dropped. Wired
+        // ONLY here (the interactive path); cron/heartbeat/auto-resume callers of chat()
+        // pass no sendInterim, so their ack/HEARTBEAT_OK suppression + plain-only
+        // routing are never bypassed. The dedup Set is per-turn (this closure): it
+        // survives chat()'s internal reasoning-content-400 recovery `continue` — which
+        // re-emits the same pre-tool text after quarantine — but resets on the next user
+        // turn (a fresh Set per handleMessage call). Interim send failures are logged and
+        // swallowed here so a delivery error never aborts the tool turn or the final
+        // reply. Interim sends don't quote-reply (replyToDefault = null).
+        const seenInterim = new Set();
+        const sendInterim = async (rawText) => {
+            try {
+                await deliverAgentText(chatId, rawText, messageId, null, seenInterim);
+            } catch (e) {
+                deps.log(`[Interim] send failed (continuing): ${e && e.message ? e.message : String(e)}`, 'WARN');
+            }
+        };
 
-        // Strip protocol tokens the agent may have mixed into content (BAT-279)
-        // Uses centralized silent-reply.js helper (BAT-488) that also handles
-        // leading-attached cases like "SILENT_REPLYhello" + JSON envelope form.
-        if (containsSilentReply(response)) deps.log('[Audit] Agent sent SILENT_REPLY', 'DEBUG');
-        response = stripSilentReply(
-            response.trim()
-                .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
-        );
-        if (!response) {
+        let response = await deps.chat(chatId, userContent, { isResume, originalGoal: resumeGoal, statusReaction, resumedFromTaskId, sendInterim });
+
+        // chat() is contracted to return a STRING (assistant text, a budget/fallback
+        // string, or the SILENT_REPLY sentinel). A non-string here is a programming
+        // error / adapter regression — surface it LOUDLY via the catch → error-reply
+        // path (as the pre-BAT-1109 `response.trim()` did) rather than letting
+        // deliverAgentText's non-string guard treat it as a protocol-token-only reply
+        // and silently drop the final response (Copilot R2).
+        if (typeof response !== 'string') {
+            throw new Error(`chat() returned a non-string response (${typeof response})`);
+        }
+
+        // Final reply — routed through the SAME shared sanitizer/sender as interim text
+        // (BAT-1109). replyToDefault = messageId preserves the prior behavior of always
+        // quote-replying the triggering message; no dedup on the final send. A false
+        // return means the response was only protocol tokens (SILENT_REPLY / HEARTBEAT_OK
+        // / empty / a bare [[reply_to_current]]) → nothing to deliver.
+        const finalSent = await deliverAgentText(chatId, response, messageId, messageId);
+        if (!finalSent) {
             deps.log('Agent returned protocol-token-only response, discarding', 'DEBUG');
             await statusReaction.clear();
             return;
         }
-
-        // [[reply_to_current]] - quote reply to the current message
-        let replyToId = null;
-        if (response.startsWith('[[reply_to_current]]')) {
-            response = response.replace('[[reply_to_current]]', '').trim();
-            replyToId = messageId;
-        }
-
-        await deps.sendMessage(chatId, response, replyToId || messageId);
         await statusReaction.setDone();
 
         // Report message to Android for stats tracking
@@ -1440,4 +1511,4 @@ async function handleThinkCommand(chatId, args) {
     return `✓ ${action} Takes effect on your next message.`;
 }
 
-module.exports = { init, handleCommand, handleMessage, handleReactionUpdate };
+module.exports = { init, handleCommand, handleMessage, handleReactionUpdate, deliverAgentText };
