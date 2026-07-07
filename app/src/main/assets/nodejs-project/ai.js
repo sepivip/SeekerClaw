@@ -1159,7 +1159,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('');
     lines.push('**If API calls keep failing:**');
     lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
-    lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
+    lines.push('2. Auth error (401/403): credentials were rejected — tell the user to re-check the API key OR re-pair the Pro/Max sign-in in Settings (setup_token users have no API key).');
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
     lines.push('4. Model not found (404): the configured model ID is wrong — likely a custom model ID typo. /model <valid-id> or Settings > AI Provider fixes it (slash commands work even when AI turns fail).');
     const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com'
@@ -1171,6 +1171,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         : PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().hostname || 'custom endpoint')
         : 'api.anthropic.com';
     lines.push(`5. Billing error (402): tell user to check their billing at ${billingUrl}`);
+    lines.push('5b. "Out of extra usage" 400 on a Pro/Max sign-in: usually a content-filter false-positive, NOT real usage exhaustion — SeekerClaw auto-retries once without recent-activity memory (`[SelfHeal]` in logs). If it persists, see DIAGNOSTICS.md → "out of extra usage".');
     const apiScheme = PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().protocol === 'http:' ? 'http' : 'https') : 'https';
     lines.push(`6. Network error: check connectivity with js_eval using require("${apiScheme}").get("${apiScheme}://${apiHost}") or shell_exec "curl -s ${apiScheme}://${apiHost}"`);
     lines.push('');

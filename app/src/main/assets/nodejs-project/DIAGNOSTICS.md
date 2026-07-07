@@ -143,6 +143,18 @@ grep -i "400\|context.*length\|too many tokens" node_debug.log | tail -5
 2. If a specific tool result was too large, note that tool results are auto-truncated at ~50K characters (HARD_MAX_TOOL_RESULT_CHARS) but the conversation can still accumulate
 3. MAX_HISTORY (35 messages) should prevent this in normal use — if it happens, it's likely a single very large message or tool result
 
+### Pro/Max Sign-in: "You're out of extra usage" (400, often misleading)
+**Symptoms:** On a Pro/Max sign-in (setup_token), API calls return `400` with "You're out of extra usage. Add more at claude.ai/settings/usage" — sometimes on every turn, even when the subscription still has usage left.
+**Check:**
+```
+grep -iE "out of extra usage|SelfHeal|invalid_request_error" node_debug.log | tail -10
+```
+**Diagnosis:** Anthropic's setup_token path can MISLABEL a content-filter rejection as this billing message. A specific phrase inside the request (historically an auto-generated session summary) trips a filter, and the rejection is dressed up as "out of extra usage" — the account is often NOT actually out of usage (a tiny request on the same sign-in still succeeds).
+**What the system does automatically:** On this 400, SeekerClaw retries the turn ONCE with volatile memory dropped (Recent Sessions + today's daily memory + MEMORY.md), logged as `[SelfHeal]`. If the lean retry succeeds, it was a content false-positive and the turn completes normally.
+**Fix (only if it persists after the auto-retry):**
+1. Content vs usage: if a short message succeeds but longer turns keep failing, it's content — trim any unusual phrase from recent memory files, or use `/new` to reset the conversation.
+2. If even a short message fails with this message, the subscription's Claude-Code usage really is exhausted → add usage at claude.ai/settings/usage, wait for the reset window, or switch to a direct Anthropic API key in Settings.
+
 ### Custom Provider — Connection or Format Errors
 **Symptoms:** All API calls fail immediately. Logs show connection refused, SSL errors, or unexpected response format (e.g., "Unexpected token" JSON parse errors).
 **Check:**
