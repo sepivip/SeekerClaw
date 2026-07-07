@@ -78,6 +78,23 @@ function check(label, fn) {
         assert.strictEqual(three.length, 3, 'limit honored after filtering');
         assert.ok(three.every(s => !/HEARTBEAT_OK/i.test(String(s.summaryText || ''))), 'still no heartbeat rows');
     });
+    check('does NOT false-empty when the newest 20+ rows are all heartbeat (Copilot R5)', () => {
+        // A real conversation, then 25 NEWER heartbeat-ack rows (> the old over-fetch of 20).
+        // The old JS-post-filter would have fetched 20 all-heartbeat rows → returned [].
+        // SQL filtering applies the LIMIT AFTER filtering, so the real session survives.
+        db.saveSession({ ...base, startedAt: '2026-07-09T00:00:00Z', endedAt: '2026-07-09T00:05:00Z',
+            summaryExcerpt: 'A real conversation buried under many heartbeats' });
+        for (let i = 0; i < 25; i++) {
+            const hh = String(i).padStart(2, '0');
+            db.saveSession({ ...base, durationMin: 1, messageCount: 1,
+                startedAt: `2026-07-10T${hh}:00:00Z`, endedAt: `2026-07-10T${hh}:05:00Z`,
+                summaryExcerpt: `Responded with heartbeat acknowledgment (HEARTBEAT_OK) #${i}` });
+        }
+        const recent = db.getRecentSessions(5);
+        assert.ok(recent.length > 0, 'must NOT return empty when real sessions exist behind 25 heartbeat rows');
+        assert.ok(recent.every(s => !/HEARTBEAT_OK/i.test(String(s.summaryText || ''))), 'no heartbeat rows survive');
+        assert.ok(recent.some(s => /buried under many heartbeats/.test(String(s.summaryText || ''))), 'the buried real session surfaces');
+    });
 
     try { fs.unlinkSync(TMP_DB); } catch (_) {}
 
