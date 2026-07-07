@@ -1603,15 +1603,18 @@ function classifyApiError(status, data) {
 // BAT-1130: Anthropic's setup_token (Claude Code OAuth) path mislabels some
 // content-filter rejections as a billing "You're out of extra usage" 400 — even
 // when the account has usage left (proven: a tiny request on the same token
-// succeeds; see testing/FINDINGS.md). Detect that specific shape so the tool
-// loop can self-heal by retrying without volatile agent-authored memory. Matches
-// on the message text (provider-agnostic; no other provider emits this string).
+// succeeds; see testing/FINDINGS.md). Detect that EXACT mislabelled message so
+// the tool loop can self-heal by retrying without volatile agent-authored
+// memory. Matches the specific phrase (not just "extra usage") to avoid firing
+// on unrelated 400s; the call site additionally gates on the setup_token flow.
+// Handles object/string/Buffer bodies like the other error paths.
 function _isUsageFilter400(status, data) {
     if (status !== 400) return false;
-    const msg = (data && data.error && typeof data.error.message === 'string' && data.error.message)
-        || (typeof data === 'string' ? data : '')
-        || '';
-    return /extra usage/i.test(msg);
+    let msg = '';
+    if (data && data.error && typeof data.error.message === 'string') msg = data.error.message;
+    else if (typeof data === 'string') msg = data;
+    else if (Buffer.isBuffer(data)) msg = data.toString('utf8');
+    return /out of extra usage/i.test(msg);
 }
 
 function classifyNetworkError(err) {
@@ -2924,7 +2927,10 @@ async function chat(chatId, userMessage, options = {}) {
                 // also fails, fall through and surface the real error. F1/F2
                 // fix the known heartbeat trigger; this is the general backstop
                 // so no future poison can permanently deadlock. See testing/FINDINGS.md.
-                if (!_contentFilterSelfHealed && _isUsageFilter400(res.status, res.data)) {
+                // Gated to the setup_token flow — that's the only path Anthropic
+                // mislabels this way; a raw-API-key 400 with this text would be a
+                // genuine error, not a content-filter false-positive.
+                if (!_contentFilterSelfHealed && AUTH_TYPE === 'setup_token' && _isUsageFilter400(res.status, res.data)) {
                     _contentFilterSelfHealed = true;
                     const lean = buildSystemBlocks(matchedSkills, chatId, activeModel, { leanMemory: true });
                     systemBlocks = adapter.formatSystemPrompt(lean.stable, lean.dynamic + resumeBlock, AUTH_TYPE);

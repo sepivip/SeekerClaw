@@ -144,15 +144,17 @@ check('F3: default (non-lean) keeps the volatile memory', () => {
 });
 
 // ── F3: _isUsageFilter400 detector ───────────────────────────────────────────
-check('_isUsageFilter400: matches the 400 "out of extra usage" shape', () => {
+check('_isUsageFilter400: matches the exact 400 "out of extra usage" shape (object/string/Buffer)', () => {
     assert.strictEqual(_isUsageFilter400(400, { error: { message: "You're out of extra usage. Add more at claude.ai/settings/usage and keep going." } }), true);
     assert.strictEqual(_isUsageFilter400(400, 'You are out of extra usage'), true, 'raw-string bodies also match');
+    assert.strictEqual(_isUsageFilter400(400, Buffer.from("You're out of extra usage")), true, 'Buffer bodies also match');
 });
-check('_isUsageFilter400: does NOT match unrelated 400s or other statuses', () => {
-    assert.strictEqual(_isUsageFilter400(400, { error: { message: 'messages.0.content: invalid' } }), false, 'other 400 must not match');
-    assert.strictEqual(_isUsageFilter400(429, { error: { message: 'extra usage' } }), false, 'only status 400 qualifies');
+check('_isUsageFilter400: requires the exact phrase — not just "extra usage" — and status 400', () => {
+    assert.strictEqual(_isUsageFilter400(400, { error: { message: 'Your extra usage balance is low' } }), false, '"extra usage" without "out of" must NOT match (tightened)');
+    assert.strictEqual(_isUsageFilter400(400, { error: { message: 'messages.0.content: invalid' } }), false, 'unrelated 400 must not match');
+    assert.strictEqual(_isUsageFilter400(429, { error: { message: 'out of extra usage' } }), false, 'only status 400 qualifies');
     assert.strictEqual(_isUsageFilter400(400, null), false, 'null body is safe');
-    assert.strictEqual(_isUsageFilter400(200, { error: { message: 'extra usage' } }), false, '200 never qualifies');
+    assert.strictEqual(_isUsageFilter400(200, { error: { message: 'out of extra usage' } }), false, '200 never qualifies');
 });
 
 if (failures > 0) { console.error(`\n${failures} failure(s).`); process.exit(1); }
