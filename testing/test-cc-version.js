@@ -16,7 +16,8 @@ const { loadEnv, CC_BILLING_HEADER } = require('./lib');
 loadEnv();
 
 const BETA = 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14';
-// Current shipped value — parsed from CC_BILLING_HEADER so there's ONE source of truth.
+// Current shipped value — read from the testing helper's CC_BILLING_HEADER (testing/lib.js,
+// a mirror of providers/claude.js kept in sync) so this probe list has one place to update.
 const SHIPPED_CC = (CC_BILLING_HEADER.match(/cc_version=([^;]+)/) || [])[1] || '2.1.195';
 // Parse the override, dropping blanks (a trailing/double comma must not send cc_version=).
 const parsedCC = (process.env.CC_VERSIONS || '').split(',').map((s) => s.trim()).filter(Boolean);

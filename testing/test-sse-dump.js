@@ -24,6 +24,7 @@ const req = https.request({
     hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'anthropic-beta': BETA, 'Authorization': `Bearer ${TOKEN}` },
 }, (res) => {
+    res.setEncoding('utf8'); // decode UTF-8 across chunk boundaries so a split multibyte char can't corrupt JSON
     if (res.statusCode !== 200) { let e = ''; res.on('data', (c) => e += c); res.on('end', () => console.error(`❌ HTTP ${res.statusCode}: ${e.slice(0, 300)}`)); return; }
     let buf = ''; // hold partial lines across chunks → truly incremental parse
     res.on('data', (chunk) => {

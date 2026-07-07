@@ -77,7 +77,11 @@ async function send(label, token, seed) {
     const payloadSize = JSON.stringify(body).length;
     const r = await post(token, body);
     const u = r.data?.usage || {};
-    if (r.data?.error) { console.log(`${label}  payload=${payloadSize}B → ${r.status} ❌ ${r.data.error.type}: ${(r.data.error.message || '').slice(0, 80)}`); return r.status; }
+    if (r.data?.error || r.status !== 200) {
+        const detail = r.data?.error ? `${r.data.error.type}: ${(r.data.error.message || '').slice(0, 80)}`
+            : (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)).slice(0, 120); // non-JSON/HTML error body
+        console.log(`${label}  payload=${payloadSize}B → ${r.status} ❌ ${detail}`); return r.status;
+    }
     console.log(`${label}  payload=${payloadSize}B → ${r.status} | input(non-cached)=${u.input_tokens} cache_write=${u.cache_creation_input_tokens} cache_read=${u.cache_read_input_tokens} out=${u.output_tokens}`);
     return r.status;
 }

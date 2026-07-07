@@ -45,7 +45,8 @@ async function run(label, token, { tools, maxTokens, sysPad }) {
     if (tools) body.tools = makeTools(tools);
     const payloadSize = JSON.stringify(body).length;
     const r = await post(token, body);
-    const errMsg = r.data?.error ? `${r.data.error.type}: ${r.data.error.message}` : '';
+    const errMsg = r.data?.error ? `${r.data.error.type}: ${r.data.error.message}`
+        : (r.status !== 200 ? `HTTP ${r.status}: ${(typeof r.data === 'string' ? r.data : JSON.stringify(r.data)).slice(0, 90)}` : '');
     const text = !r.data?.error && Array.isArray(r.data?.content) ? r.data.content.filter((b) => b.type === 'text').map((b) => b.text).join(' ') : '';
     console.log(`${label.padEnd(28)} payload=${String(payloadSize).padStart(7)}B tools=${tools || 0}  → ${r.status} ${errMsg ? '❌ ' + errMsg.slice(0, 90) : '✅ "' + text.slice(0, 40) + '"'}`);
     return r.status;
