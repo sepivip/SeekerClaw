@@ -18,9 +18,9 @@ loadEnv();
 const BETA = 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14';
 // Current shipped value — parsed from CC_BILLING_HEADER so there's ONE source of truth.
 const SHIPPED_CC = (CC_BILLING_HEADER.match(/cc_version=([^;]+)/) || [])[1] || '2.1.195';
-const CC_VERSIONS = (process.env.CC_VERSIONS && process.env.CC_VERSIONS.trim())
-    ? process.env.CC_VERSIONS.split(',').map((s) => s.trim())
-    : ['2.1.116', SHIPPED_CC]; // legacy control + current shipped (from CC_BILLING_HEADER)
+// Parse the override, dropping blanks (a trailing/double comma must not send cc_version=).
+const parsedCC = (process.env.CC_VERSIONS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const CC_VERSIONS = parsedCC.length ? parsedCC : ['2.1.116', SHIPPED_CC]; // else: legacy control + current shipped (from CC_BILLING_HEADER)
 const MODELS = ['claude-sonnet-5', 'claude-opus-4-8'];
 
 const billingHeader = (ver) => `x-anthropic-billing-header: cc_version=${ver}; cc_entrypoint=cli; cch=00000;`;
