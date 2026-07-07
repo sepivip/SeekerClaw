@@ -106,3 +106,7 @@ tests/jupiter-ultra/fixtures/v2-flow-*.json
 tests/jupiter-ultra/node_modules/
 tests/jupiter-ultra/package-lock.json.local-backup
 tests/jupiter-ultra/package.json.local-backup
+
+# JVM crash dumps (from local Gradle/Android Studio builds)
+hs_err_pid*.log
+replay_pid*.log
