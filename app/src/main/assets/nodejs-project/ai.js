@@ -515,6 +515,22 @@ async function generateSessionSummary(chatId) {
 }
 
 async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = false } = {}) {
+    // BAT-1130: never summarize heartbeat sessions. They are automated liveness
+    // polls with no conversational continuity — summarizing them only adds noise
+    // to the Recent Sessions block, and the "HEARTBEAT_OK" ack text a summary
+    // produces is what tripped Anthropic's setup_token content filter (mislabeled
+    // as a "You're out of extra usage" 400), deadlocking every turn. The heartbeat
+    // mechanism itself (poll → HEARTBEAT_OK reply) is untouched. See testing/FINDINGS.md.
+    // Still perform the cheap housekeeping the full path used to do (reset the
+    // session track, drop any pending idle-summary timer) so the heartbeat track
+    // can't grow unbounded across polls now that it's never summarized.
+    if (chatId === '__heartbeat__') {
+        cancelIdleSummary(chatId);
+        const hbTrack = sessionTracking.get(chatId);
+        if (hbTrack) { hbTrack.messageCount = 0; hbTrack.firstMessageTime = 0; hbTrack.lastSummaryTime = Date.now(); }
+        return;
+    }
+
     const track = getSessionTrack(chatId);
 
     // Per-chatId debounce: at least 1 min between summaries (skipped for manual/shutdown)
@@ -592,10 +608,19 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
 // SYSTEM PROMPT
 // ============================================================================
 
-function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODEL) {
+// BAT-1130: `leanMemory` (used by the tool-loop self-heal) omits the volatile,
+// agent-authored memory sections (MEMORY.md, today's daily memory, Recent
+// Sessions) so a request that Anthropic rejected because of a poisoned memory
+// phrase can be retried without it. All other sections (identity, tooling,
+// safety, wallets, runtime, heartbeats, ...) are unchanged.
+function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODEL, { leanMemory = false } = {}) {
     const soul = loadSoul();
-    const memory = loadMemory();
-    const dailyMemory = loadDailyMemory();
+    // BAT-1130: skip the MEMORY.md / daily-memory disk reads entirely on the lean
+    // self-heal retry — they're omitted from the prompt anyway, so the recovery
+    // path avoids unnecessary I/O (and any read error) when it's trying to get a
+    // rejected request through.
+    const memory = leanMemory ? '' : loadMemory();
+    const dailyMemory = leanMemory ? '' : loadDailyMemory();
     const allSkills = loadSkills();
     const bootstrap = loadBootstrap();
     const identity = loadIdentity();
@@ -1139,7 +1164,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('');
     lines.push('**If API calls keep failing:**');
     lines.push('1. Read agent_health_state — check consecutiveFailures and lastError');
-    lines.push('2. Auth error (401/403): API key may be invalid — tell user to check Settings');
+    lines.push('2. Auth error (401/403): credentials were rejected — tell the user to re-check the API key OR re-pair the Pro/Max sign-in in Settings (setup_token users have no API key).');
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
     lines.push('4. Model not found (404): the configured model ID is wrong — likely a custom model ID typo. /model <valid-id> or Settings > AI Provider fixes it (slash commands work even when AI turns fail).');
     const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com'
@@ -1153,6 +1178,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         : PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().hostname || 'custom endpoint')
         : 'api.anthropic.com';
     lines.push(`5. Billing error (402): tell user to check their billing at ${billingUrl}`);
+    lines.push('5b. "Out of extra usage" 400 on a Pro/Max sign-in: usually a content-filter false-positive, NOT real usage exhaustion — SeekerClaw auto-retries once without recent-activity memory (`[SelfHeal]` in logs). If it persists, see DIAGNOSTICS.md → "out of extra usage".');
     const apiScheme = PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().protocol === 'http:' ? 'http' : 'https') : 'https';
     lines.push(`6. Network error: check connectivity with js_eval using require("${apiScheme}").get("${apiScheme}://${apiHost}") or shell_exec "curl -s ${apiScheme}://${apiHost}"`);
     lines.push('');
@@ -1209,16 +1235,16 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('');
     }
 
-    // MEMORY.md
-    if (memory) {
+    // MEMORY.md — omitted on the lean self-heal retry (BAT-1130)
+    if (!leanMemory && memory) {
         lines.push('## MEMORY.md');
         lines.push('');
         lines.push(memory.length > 3000 ? memory.slice(0, 3000) + '\n...(truncated)' : memory);
         lines.push('');
     }
 
-    // Today's daily memory
-    if (dailyMemory) {
+    // Today's daily memory — omitted on the lean self-heal retry (BAT-1130)
+    if (!leanMemory && dailyMemory) {
         const date = localDateStr();
         lines.push(`## memory/${date}.md`);
         lines.push('');
@@ -1226,25 +1252,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('');
     }
 
-    // Recent Sessions — temporal context awareness (BAT-322)
-    // Gives the agent awareness of when past conversations happened
-    const recentSessions = getRecentSessions(5);
-    if (recentSessions.length > 0) {
-        lines.push('## Recent Sessions');
-        lines.push('Your recent conversation sessions (use this to maintain continuity):');
-        lines.push('');
-        for (const s of recentSessions) {
-            const dur = s.durationMin < 60
-                ? `${s.durationMin}min`
-                : `${Math.floor(s.durationMin / 60)}h${s.durationMin % 60 ? ` ${s.durationMin % 60}m` : ''}`;
-            let line = `- **${s.relativeTime}** (${dur}, ${s.messageCount} msgs)`;
-            if (s.summaryText) line += `: ${s.summaryText}`;
-            lines.push(line);
-        }
-        lines.push('');
-        lines.push('Use this to: pick up where you left off, follow up on mentioned plans, notice time gaps, and maintain conversational continuity. Be natural — don\'t mechanically list previous sessions unless asked.');
-        lines.push('');
-    }
+    // Recent Sessions (BAT-322) is emitted in the DYNAMIC block below, not here
+    // (BAT-1130): it rotates every session, so keeping it in the cached stable
+    // prefix busted the ~60 KB prompt cache on every rotation. See the dynamic
+    // section further down.
 
     // Heartbeat section
     lines.push('## Heartbeats');
@@ -1506,6 +1517,30 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     dynamicLines.push(`Current time: ${weekday} ${localTimestamp(now)} (${now.toLocaleString()})`);
     const uptimeSec = Math.floor((Date.now() - sessionStartedAt) / 1000);
     dynamicLines.push(`Session uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s (conversation context is ephemeral — cleared on each restart)`);
+
+    // Recent Sessions — temporal context awareness (BAT-322). Lives in the
+    // DYNAMIC block (BAT-1130) so session rotation no longer busts the cached
+    // stable prefix. Heartbeat-ack summaries are dropped at the DB layer
+    // (getRecentSessions). Omitted entirely on the lean self-heal retry.
+    if (!leanMemory) {
+        const recentSessions = getRecentSessions(5);
+        if (recentSessions.length > 0) {
+            dynamicLines.push('');
+            dynamicLines.push('## Recent Sessions');
+            dynamicLines.push('Your recent conversation sessions (use this to maintain continuity):');
+            dynamicLines.push('');
+            for (const s of recentSessions) {
+                const dur = s.durationMin < 60
+                    ? `${s.durationMin}min`
+                    : `${Math.floor(s.durationMin / 60)}h${s.durationMin % 60 ? ` ${s.durationMin % 60}m` : ''}`;
+                let line = `- **${s.relativeTime}** (${dur}, ${s.messageCount} msgs)`;
+                if (s.summaryText) line += `: ${s.summaryText}`;
+                dynamicLines.push(line);
+            }
+            dynamicLines.push('');
+            dynamicLines.push('Use this to: pick up where you left off, follow up on mentioned plans, notice time gaps, and maintain conversational continuity. Be natural — don\'t mechanically list previous sessions unless asked.');
+        }
+    }
     const lastMsg = chatId && _deps.lastIncomingMessages ? _deps.lastIncomingMessages.get(String(chatId)) : null;
     if (lastMsg && REACTION_GUIDANCE !== 'off') {
         const toolHint = CHANNEL === 'telegram' ? ' (use with telegram_react or telegram_send_file)' : '';
@@ -1591,6 +1626,23 @@ const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
 // BAT-315: Error classification delegated to provider adapter
 function classifyApiError(status, data) {
     return getAdapter(PROVIDER).classifyError(status, data);
+}
+
+// BAT-1130: Anthropic's setup_token (Claude Code OAuth) path mislabels some
+// content-filter rejections as a billing "You're out of extra usage" 400 — even
+// when the account has usage left (proven: a tiny request on the same token
+// succeeds; see testing/FINDINGS.md). Detect that EXACT mislabelled message so
+// the tool loop can self-heal by retrying without volatile agent-authored
+// memory. Matches the specific phrase (not just "extra usage") to avoid firing
+// on unrelated 400s; the call site additionally gates on the setup_token flow.
+// Handles object/string/Buffer bodies like the other error paths.
+function _isUsageFilter400(status, data) {
+    if (status !== 400) return false;
+    let msg = '';
+    if (data && data.error && typeof data.error.message === 'string') msg = data.error.message;
+    else if (typeof data === 'string') msg = data;
+    else if (Buffer.isBuffer(data)) msg = data.toString('utf8');
+    return /out of extra usage/i.test(msg);
 }
 
 function classifyNetworkError(err) {
@@ -2457,7 +2509,9 @@ async function chat(chatId, userMessage, options = {}) {
 
     // BAT-315: Provider-agnostic system prompt formatting
     const adapter = getAdapter(PROVIDER);
-    const systemBlocks = adapter.formatSystemPrompt(stablePrompt, dynamicPrompt + resumeBlock, AUTH_TYPE);
+    // BAT-1130: `let` (not `const`) so the content-filter self-heal can rebuild
+    // it lean (without volatile memory) and retry the same turn.
+    let systemBlocks = adapter.formatSystemPrompt(stablePrompt, dynamicPrompt + resumeBlock, AUTH_TYPE);
 
     // Add user message to history (neutral format)
     addToConversation(chatId, 'user', userMessage);
@@ -2478,6 +2532,9 @@ async function chat(chatId, userMessage, options = {}) {
     // (Copilot R1 thread 1, BAT-549 PR #354).
     const messages = getConversation(chatId);
     let _reasoningRecoveryStep = 0;
+    // BAT-1130: at most one lean self-heal retry per turn (guards against a
+    // genuine usage-exhaustion 400 looping forever).
+    let _contentFilterSelfHealed = false;
 
     // P2.4b: Extract original goal from conversation for checkpoint persistence.
     // On resume, this lets the agent know exactly what it was trying to accomplish.
@@ -2886,6 +2943,28 @@ async function chat(chatId, userMessage, options = {}) {
                     }
                     if (recovered) continue;
                     log(`[ReasoningRecovery] All 3 recovery steps returned ok=false — bubbling error to user`, 'ERROR');
+                }
+
+                // BAT-1130: self-heal the "out of extra usage" content-filter
+                // false-positive. Anthropic's setup_token path can mislabel a
+                // content rejection (e.g. a poisoned memory phrase) as this
+                // billing 400 even when the account has usage left. Retry the
+                // turn ONCE with the volatile agent-authored memory dropped
+                // (Recent Sessions / daily memory / MEMORY.md via leanMemory) —
+                // if that succeeds it was content, not usage. If the lean retry
+                // also fails, fall through and surface the real error. F1/F2
+                // fix the known heartbeat trigger; this is the general backstop
+                // so no future poison can permanently deadlock. See testing/FINDINGS.md.
+                // Gated to the setup_token flow — that's the only path Anthropic
+                // mislabels this way; a raw-API-key 400 with this text would be a
+                // genuine error, not a content-filter false-positive.
+                if (!_contentFilterSelfHealed && AUTH_TYPE === 'setup_token' && _isUsageFilter400(res.status, res.data)) {
+                    _contentFilterSelfHealed = true;
+                    const lean = buildSystemBlocks(matchedSkills, chatId, activeModel, { leanMemory: true });
+                    systemBlocks = adapter.formatSystemPrompt(lean.stable, lean.dynamic + resumeBlock, AUTH_TYPE);
+                    _ctxCache = null; // systemBlocks shrank — force context re-measure next iteration
+                    log(`[SelfHeal] status=${res.status} usage-filter false-positive — retrying turn without volatile memory (Recent Sessions / daily / MEMORY.md)`, 'WARN');
+                    continue;
                 }
 
                 const errClass = classifyApiError(res.status, res.data);
@@ -3537,4 +3616,6 @@ module.exports = {
     // reads cached burner state). Production code never calls these.
     buildSystemBlocks,
     _setWalletPromptSnapshotForTests,
+    // BAT-1130: exposed for the content-filter self-heal regression test.
+    _isUsageFilter400,
 };

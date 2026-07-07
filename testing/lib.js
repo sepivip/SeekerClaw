@@ -12,7 +12,8 @@ const ALL_MODELS = [
     'claude-haiku-4-5',
 ];
 
-const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.116; cc_entrypoint=cli; cch=00000;';
+// BAT-1123: mirror of providers/claude.js CC_BILLING_HEADER (cc_version 2.1.195).
+const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.195; cc_entrypoint=cli; cch=00000;';
 
 function loadEnv() {
     const envPath = path.join(__dirname, '.env');
