@@ -1,6 +1,6 @@
 # BAT-1124 — xAI Grok "Sign in with Grok" OAuth — Integration Contract
 
-> **Status:** DRAFT for Codex sign-off (revised after adversarial 3-lens validation). **No implementation until signed off.**
+> **Status:** Conditional sign-off received (Codex/PM, 2026-07-07) — two required amendments applied (both-flavors device test + GATE-0 OAuth proof spike). Implementation unblocked in the staged order in §9; **step 1 = live OAuth proof spike** before any broad integration.
 > **Analog:** mirrors the existing OpenAI "Sign in with ChatGPT" OAuth (`OpenAIOAuthActivity.kt` / `providers/openai.js`) — **but three "mirror OpenAI" premises in the first draft were false and are corrected below** (redaction, endpoint-pinning, and fire-and-forget refresh persistence).
 
 ---
@@ -145,17 +145,27 @@ Loopback: redirect mismatch / port-in-use → surface, retry. Device-code (if ch
 - **MUST verify:** the appended registry entry decodes without `MissingFieldException` (include `keyHint`/`consoleUrl`/`keysUrl`) — otherwise **every** user crashes at launch (§5.6). Add a `ModelRegistryTest` that decodes the shipped registry and asserts `providerById("unknown").id=="openai"` still holds.
 - No migration, no memory/workspace impact. Device-check: an existing pre-upgrade config still starts on its old provider.
 
-## 9. Test plan
-1. **Security review (adversarial + CodeRabbit/Copilot) BEFORE writing tests** (security-critical policy).
-2. **Node smoke** (`node tests/nodejs-project/smoke.js`) — mandatory.
-3. **Node unit** — `providers/xai.js`: header build (api_key vs oauth), refresh (rotation persist + **await** + **single-flight**), 401→refresh, **403→terminal**, full classifyError matrix; `config.js`/`model-catalog.js` xai matrix + default-model; client_id Kotlin↔Node equality assertion.
-4. **Update existing tests** (they break otherwise): `model-catalog.test.js:136,142` (length 4→5) and `ModelRegistryTest.kt:268-274` (append preserves `[0]==openai`).
-5. **Kotlin compile** + targeted units (`ConfigManager` persist/clear/writeConfigJson downgrade; `RuntimeStateStore.isValidPair` xai; registry-decode).
-6. **`scripts/pre-push-check.sh`** green.
-7. **SAB audit** (`/sab-audit`) BEFORE merge — target 100%, cite the SAB version in the PR (mandatory: new provider + `buildSystemBlocks()` change).
-8. **Device test on Seeker** (real SuperGrok / X Premium+): loopback sign-in end-to-end (one-tap), Grok message via Telegram, token refresh after expiry, sign-out, API-key fallback, 403 path if a low-tier account is available, and (per D5) confirm OAuth tab hidden on a `googlePlay` build. Verify System-screen SHA first.
+## 9. Implementation staging + test plan
+
+**Staging order (Codex-mandated 2026-07-07) — implementation is unblocked ONLY in this order:**
+1. **OAuth proof spike — GATE 0, before any broad Kotlin/Node/UI work.** A tiny live proof of the loopback flow against the real xAI public client, proving: the exact authorize URL (`client_id`, `scope`, PKCE `S256`, `redirect_uri=http://127.0.0.1:56121/callback`) opens a real xAI login/consent screen; the callback reaches the local `127.0.0.1:56121` server; code exchange returns **both** access + refresh tokens; a `refresh_token` grant returns **rotated** credentials; and the failure mode is documented if port `56121` is fixed and unavailable. **If the spike fails, pivot to the device-code fallback (D1) BEFORE touching the rest of the app.** (An earlier unauthenticated authorize probe returned 403 — not definitive, but enough to keep this a hard proof gate.)
+2. **Security review** of the proven auth shape (adversarial + CodeRabbit/Copilot) — BEFORE writing tests (security-critical policy).
+3. **Core provider/config/runtime plumbing + Node tests.**
+4. **Kotlin UI / storage / bridge.**
+5. **Full pre-push + SAB + Seeker device test before merge.**
+
+**Concrete tests (executed within the stages above):**
+- **Node smoke** (`node tests/nodejs-project/smoke.js`) — mandatory for any `nodejs-project/**` change.
+- **Node unit** — `providers/xai.js`: header build (api_key vs oauth), refresh (rotation persist + **await** + **single-flight**), 401→refresh, **403→terminal**, full classifyError matrix; `config.js`/`model-catalog.js` xai matrix + default-model; client_id Kotlin↔Node equality assertion.
+- **Update existing tests** (they break otherwise): `model-catalog.test.js:136,142` (length 4→5) and `ModelRegistryTest.kt:268-274` (append preserves `[0]==openai`).
+- **Kotlin compile** + targeted units (`ConfigManager` persist/clear/writeConfigJson downgrade; `RuntimeStateStore.isValidPair` xai; registry-decode).
+- **`scripts/pre-push-check.sh`** green.
+- **SAB audit** (`/sab-audit`) BEFORE merge — target 100%, cite the SAB version in the PR (mandatory: new provider + `buildSystemBlocks()` change).
+- **Device test on Seeker** (real SuperGrok / X Premium+): loopback sign-in end-to-end (one-tap), Grok message via Telegram, token refresh after expiry, sign-out, API-key fallback, 403 path if a low-tier account is available, and (per D5) confirm the **OAuth tab is visible and works on both `dappStore` and `googlePlay` builds** (device end-to-end on Seeker via the `dappStore` build if that is the only hardware path). Verify System-screen SHA first.
 
 ## 10. Change-point checklist (~22, up from 15)
+> **Do NOT start any change below until GATE 0 (the OAuth proof spike, §9) passes.** If the spike forces the device-code fallback, revisit D1/§5.1 first.
+
 **Node:** (1) `model-registry.json` [append + required fields] (2) `providers/xai.js` NEW (3) `providers/index.js` register (4) `config.js` [providers, keys, default model, generic AUTH_TYPE] (5) `model-catalog.js` `hasCredentialsFor` (6) `runtime-state.js` (7) **`ai.js`** [getProviderApiKey+import, billing/apiHost, `## Provider` block, playbook, `/provider` help] (8) **`security.js`/`main.js`** [redaction] (9) **`DIAGNOSTICS.md`** [xai OAuth + 403 tier-gate].
 **Kotlin:** (10) `oauth/XaiOAuthActivity.kt` NEW (11) `AndroidManifest.xml` (12) `config/ConfigManager.kt` (13) `state/RuntimeStateStore.kt` (14) `bridge/AndroidBridge.kt` [save-tokens + **handleConfigCredentials**] (15) `ui/components/XaiOAuth.kt` NEW (16) `ui/settings/ProviderConfigScreen.kt` (17) `ui/setup/SetupScreen.kt` (18) `ui/dashboard/DashboardScreen.kt` (19) `config/ConfigClaimImporter.kt` + SetupScreen QR handler [api-key] (20) `config/Providers.kt` [only if oauth-specific models].
 **Tests/docs:** (21) update `model-catalog.test.js` + `ModelRegistryTest.kt`; add `providers/xai.test.js`. (22) `RuntimeState.kt` KDoc matrix.
