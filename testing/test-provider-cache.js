@@ -190,6 +190,11 @@ function readUsage(data) {
             if (sys[dynIdx]?.cache_control && dynIdx !== stableIdx) { verdict = 'FAIL'; notes.push('dynamic (last) block IS cached → per-turn change invalidates the cache every turn'); }
             const toolsMarked = (body1.tools || []).some(t => t.cache_control);
             if ((body1.tools || []).length && !toolsMarked) { verdict = 'FAIL'; notes.push('no tool carries cache_control → tool block never caches'); }
+        } else if (PROVIDER === 'openrouter') {
+            // OpenRouter caches via a top-level cache_control injected by formatRequest
+            // (no per-block markers to inspect), so validate at least one marker exists —
+            // otherwise nothing caches and a blind PASS would be misleading.
+            if (cc.length === 0) { verdict = 'FAIL'; notes.push('no cache_control marker present → nothing will cache'); }
         }
         console.log(`\nStructural verdict: ${verdict === 'PASS' ? '✅ PASS' : '❌ FAIL'}${notes.length ? ' — ' + notes.join('; ') : ' (stable cached, dynamic uncached, tools cached)'}`);
     } else {
