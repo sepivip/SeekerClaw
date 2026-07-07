@@ -1,0 +1,443 @@
+#!/usr/bin/env node
+/*
+ * xAI (Grok) OAuth 2.0 Loopback + PKCE proof-spike  --  BAT-1124
+ *
+ * Proves the FULL authorization-code + PKCE flow against xAI's real OIDC
+ * endpoints using the PUBLIC Grok-CLI client (no client secret), so a human
+ * with a SuperGrok / X Premium+ account can confirm end-to-end that:
+ *   1. the authorize URL is accepted (login + consent screen renders)
+ *   2. the code exchanges for an access_token + refresh_token + expires_in
+ *   3. the refresh_token grant works AND whether the refresh token ROTATES
+ *   4. the access_token actually authenticates inference (GET /v1/models)
+ *
+ * SECURITY: nothing secret is hardcoded. Tokens are NEVER printed raw --
+ * only length + short prefix + a boolean "present" flag are logged.
+ *
+ * Runtime: Node 18+ (uses global fetch / crypto.webcrypto). Node builtins
+ * only -- no npm install.
+ *
+ * Run:   node loopback-spike.js
+ */
+
+'use strict';
+
+const http = require('node:http');
+const crypto = require('node:crypto');
+const { URL, URLSearchParams } = require('node:url');
+const { spawn } = require('node:child_process');
+
+// ---------------------------------------------------------------------------
+// Config -- captured from xAI live OIDC discovery (public, non-secret)
+// ---------------------------------------------------------------------------
+const CFG = {
+  clientId: 'b1a00492-073a-47ea-816f-4c329264a828', // PUBLIC Grok-CLI client, no secret
+  scope: 'openid profile email offline_access grok-cli:access api:access',
+  authorize: 'https://auth.x.ai/oauth2/authorize',
+  token: 'https://auth.x.ai/oauth2/token',
+  models: 'https://api.x.ai/v1/models',
+  redirectHost: '127.0.0.1',
+  redirectPort: 56121,
+  callbackPath: '/callback',
+};
+CFG.redirectUri = `http://${CFG.redirectHost}:${CFG.redirectPort}${CFG.callbackPath}`;
+
+// Timeouts (ms)
+const AUTH_WAIT_MS = 5 * 60 * 1000; // how long we wait for the user to finish login
+const HTTP_TIMEOUT_MS = 30 * 1000;  // per network request to xAI
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+function b64url(buf) {
+  return Buffer.from(buf).toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function randB64url(bytes) {
+  return b64url(crypto.randomBytes(bytes));
+}
+
+function sha256(str) {
+  return crypto.createHash('sha256').update(str).digest();
+}
+
+// Redact a token: never print it raw. Show only whether it exists, its
+// length, and a tiny non-sensitive prefix so two tokens can be compared.
+function redact(token) {
+  if (!token || typeof token !== 'string') return { present: false, length: 0, prefix: '(none)' };
+  return {
+    present: true,
+    length: token.length,
+    prefix: token.slice(0, 6) + '...', // 6 chars is not enough to reconstruct anything useful
+  };
+}
+
+function describeToken(label, token) {
+  const r = redact(token);
+  console.log(`      ${label}: present=${r.present} length=${r.length} prefix=${r.prefix}`);
+}
+
+// fetch with a hard timeout via AbortController
+async function fetchWithTimeout(url, opts = {}) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function tryOpenBrowser(url) {
+  const platform = process.platform;
+  try {
+    let cmd, args;
+    if (platform === 'win32') {
+      // `start` is a cmd builtin; empty title arg avoids quoting issues
+      cmd = 'cmd'; args = ['/c', 'start', '', url];
+    } else if (platform === 'darwin') {
+      cmd = 'open'; args = [url];
+    } else {
+      cmd = 'xdg-open'; args = [url];
+    }
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+    child.on('error', () => { /* ignore -- user can paste manually */ });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 1 -- PKCE
+// ---------------------------------------------------------------------------
+function makePkce() {
+  const verifier = randB64url(32);          // 43-char high-entropy verifier
+  const challenge = b64url(sha256(verifier)); // S256 challenge
+  return { verifier, challenge, method: 'S256' };
+}
+
+// ---------------------------------------------------------------------------
+// Step 2 -- loopback server (fails clearly if the port is taken)
+// ---------------------------------------------------------------------------
+function startCallbackServer(expectedState) {
+  // Returns { server, waitForCode() } once the socket is bound.
+  // Rejects the outer promise (before binding) on EADDRINUSE so the caller
+  // can print a clear "port in use" message and exit.
+  return new Promise((resolveBind, rejectBind) => {
+    let resolveCode, rejectCode;
+    const codePromise = new Promise((res, rej) => { resolveCode = res; rejectCode = rej; });
+
+    const server = http.createServer((req, res) => {
+      const reqUrl = new URL(req.url, `http://${CFG.redirectHost}:${CFG.redirectPort}`);
+      if (reqUrl.pathname !== CFG.callbackPath) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found');
+        return;
+      }
+      const params = reqUrl.searchParams;
+      const err = params.get('error');
+      const code = params.get('code');
+      const state = params.get('state');
+
+      // Always answer the browser so the human sees a friendly page.
+      const finish = (ok, msg) => {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+          <h2>${ok ? 'xAI OAuth spike: callback received' : 'xAI OAuth spike: error'}</h2>
+          <p>${msg}</p><p>You can close this tab and return to the terminal.</p>
+          </body></html>`);
+      };
+
+      if (err) {
+        finish(false, `Authorization server returned error: ${err} - ${params.get('error_description') || ''}`);
+        rejectCode(new Error(`Authorization error: ${err} ${params.get('error_description') || ''}`));
+        return;
+      }
+      // Validate state to defend against CSRF
+      if (!state || state !== expectedState) {
+        finish(false, 'State mismatch -- possible CSRF. Aborting.');
+        rejectCode(new Error(`State mismatch: expected ${expectedState}, got ${state}`));
+        return;
+      }
+      if (!code) {
+        finish(false, 'No authorization code present in callback.');
+        rejectCode(new Error('No authorization code in callback'));
+        return;
+      }
+      finish(true, 'Authorization code captured. Exchanging it now...');
+      resolveCode(code);
+    });
+
+    server.on('error', (e) => {
+      if (e && e.code === 'EADDRINUSE') {
+        rejectBind(new Error(
+          `Port ${CFG.redirectPort} on ${CFG.redirectHost} is already in use. ` +
+          `The xAI OAuth client only accepts redirect_uri ${CFG.redirectUri}, so this exact ` +
+          `port is required. Close whatever is using it (or a stale run of this spike) and retry.`));
+      } else {
+        rejectBind(e);
+      }
+    });
+
+    // waitForCode resolves with the code, or rejects on error/timeout.
+    function waitForCode() {
+      let timer;
+      const timeout = new Promise((_, rej) => {
+        timer = setTimeout(() => {
+          rej(new Error(`Timed out after ${Math.round(AUTH_WAIT_MS / 1000)}s waiting for the login callback.`));
+        }, AUTH_WAIT_MS);
+      });
+      return Promise.race([codePromise, timeout]).finally(() => clearTimeout(timer));
+    }
+
+    server.listen(CFG.redirectPort, CFG.redirectHost, () => {
+      resolveBind({ server, waitForCode });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Step 3 -- build authorize URL (NO openai-only params)
+// ---------------------------------------------------------------------------
+function buildAuthorizeUrl({ challenge, state, nonce }) {
+  const p = new URLSearchParams({
+    response_type: 'code',
+    client_id: CFG.clientId,
+    redirect_uri: CFG.redirectUri,
+    scope: CFG.scope,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
+    nonce,
+  });
+  return `${CFG.authorize}?${p.toString()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Step 4 -- exchange authorization code for tokens
+// ---------------------------------------------------------------------------
+async function exchangeCode(code, verifier) {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: CFG.redirectUri,
+    client_id: CFG.clientId,       // public client -> client_id in body, no secret
+    code_verifier: verifier,
+  });
+  const res = await fetchWithTimeout(CFG.token, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+    },
+    body: body.toString(),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* leave null */ }
+  if (!res.ok) {
+    throw new Error(`Token exchange failed: HTTP ${res.status} ${res.statusText} -- ${text.slice(0, 500)}`);
+  }
+  return json || {};
+}
+
+// ---------------------------------------------------------------------------
+// Step 6 -- refresh grant; report whether the refresh_token ROTATED
+// ---------------------------------------------------------------------------
+async function refreshGrant(refreshToken) {
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: CFG.clientId,
+    scope: CFG.scope,
+  });
+  const res = await fetchWithTimeout(CFG.token, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+    },
+    body: body.toString(),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* leave null */ }
+  if (!res.ok) {
+    throw new Error(`Refresh grant failed: HTTP ${res.status} ${res.statusText} -- ${text.slice(0, 500)}`);
+  }
+  return json || {};
+}
+
+// ---------------------------------------------------------------------------
+// Step 7 -- prove inference auth via GET /v1/models
+// ---------------------------------------------------------------------------
+async function listModels(accessToken) {
+  const res = await fetchWithTimeout(CFG.models, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json',
+    },
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* leave null */ }
+  let count = null;
+  if (json) {
+    if (Array.isArray(json.data)) count = json.data.length;
+    else if (Array.isArray(json.models)) count = json.models.length;
+    else if (Array.isArray(json)) count = json.length;
+  }
+  return { status: res.status, ok: res.ok, count, snippet: text.slice(0, 300) };
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------
+async function main() {
+  console.log('==========================================================');
+  console.log(' xAI (Grok) OAuth Loopback + PKCE proof-spike  [BAT-1124]');
+  console.log('==========================================================');
+  console.log(`  Client ID (public):  ${CFG.clientId}`);
+  console.log(`  Redirect URI:        ${CFG.redirectUri}`);
+  console.log(`  Scope:               ${CFG.scope}`);
+  console.log('----------------------------------------------------------\n');
+
+  // Step 1 -- PKCE
+  const pkce = makePkce();
+  console.log('[1/7] Generated PKCE verifier + S256 challenge.');
+  console.log(`      verifier length=${pkce.verifier.length}, challenge length=${pkce.challenge.length}, method=${pkce.method}\n`);
+
+  const state = randB64url(16);
+  const nonce = randB64url(16);
+
+  // Step 2 -- start loopback server (this may reject with EADDRINUSE)
+  let server, waitForCode;
+  try {
+    const started = await startCallbackServer(state);
+    server = started.server;
+    waitForCode = started.waitForCode;
+  } catch (e) {
+    console.error(`[2/7] FAILED to start loopback server.\n      ${e.message}`);
+    process.exit(2);
+  }
+  console.log(`[2/7] Loopback server listening on ${CFG.redirectUri}\n`);
+
+  // Step 3 -- authorize URL
+  const authUrl = buildAuthorizeUrl({ challenge: pkce.challenge, state, nonce });
+  console.log('[3/7] Open this URL in a browser signed into your SuperGrok / X Premium+ account:');
+  console.log('\n' + authUrl + '\n');
+  const opened = tryOpenBrowser(authUrl);
+  console.log(opened
+    ? '      (Attempted to open it in your default browser automatically.)\n'
+    : '      (Could not auto-open a browser -- copy/paste the URL above.)\n');
+  console.log(`      Waiting up to ${Math.round(AUTH_WAIT_MS / 1000)}s for you to log in and approve...\n`);
+
+  // wait for callback
+  let code;
+  try {
+    code = await waitForCode();
+  } catch (e) {
+    console.error(`[4/7] FAILED during authorization: ${e.message}`);
+    try { server.close(); } catch { /* noop */ }
+    process.exit(3);
+  } finally {
+    try { server.close(); } catch { /* noop */ }
+  }
+  console.log('[4/7] Callback received. State validated OK. Authorization code captured (redacted).');
+  describeToken('auth_code', code);
+  console.log('');
+
+  // Step 4 -- exchange
+  let tokens;
+  try {
+    tokens = await exchangeCode(code, pkce.verifier);
+  } catch (e) {
+    console.error(`[5/7] FAILED token exchange: ${e.message}`);
+    process.exit(4);
+  }
+  console.log('[5/7] Token exchange succeeded. Tokens (redacted):');
+  describeToken('access_token', tokens.access_token);
+  describeToken('refresh_token', tokens.refresh_token);
+  describeToken('id_token', tokens.id_token);
+  console.log(`      expires_in present=${tokens.expires_in != null} value=${tokens.expires_in ?? '(none)'}`);
+  console.log(`      token_type=${tokens.token_type ?? '(none)'} scope=${tokens.scope ?? '(none)'}`);
+  const gotAccess = !!tokens.access_token;
+  const gotRefresh = !!tokens.refresh_token;
+  const gotExpiry = tokens.expires_in != null;
+  console.log(`      >> access_token present: ${gotAccess}`);
+  console.log(`      >> refresh_token present: ${gotRefresh}`);
+  console.log(`      >> expires_in present: ${gotExpiry}\n`);
+
+  // Step 6 -- refresh grant + rotation check
+  let refreshed = null;
+  let rotated = null;
+  if (gotRefresh) {
+    try {
+      refreshed = await refreshGrant(tokens.refresh_token);
+      const newRefresh = refreshed.refresh_token;
+      console.log('[6/7] Refresh grant succeeded. New tokens (redacted):');
+      describeToken('new_access_token', refreshed.access_token);
+      describeToken('new_refresh_token', newRefresh);
+      console.log(`      new expires_in present=${refreshed.expires_in != null} value=${refreshed.expires_in ?? '(none)'}`);
+      if (newRefresh) {
+        rotated = newRefresh !== tokens.refresh_token;
+        console.log(`      >> refresh_token ROTATED: ${rotated} ` +
+          `(old prefix ${redact(tokens.refresh_token).prefix} vs new prefix ${redact(newRefresh).prefix})`);
+      } else {
+        console.log('      >> No refresh_token returned on refresh (cannot determine rotation).');
+      }
+      console.log('');
+    } catch (e) {
+      console.error(`[6/7] FAILED refresh grant: ${e.message}\n`);
+    }
+  } else {
+    console.log('[6/7] SKIPPED refresh grant -- no refresh_token was returned (check offline_access scope).\n');
+  }
+
+  // Step 7 -- inference auth via /v1/models
+  // Prefer the freshest access token we hold.
+  const accessForModels = (refreshed && refreshed.access_token) || tokens.access_token;
+  let modelsResult = null;
+  if (accessForModels) {
+    try {
+      modelsResult = await listModels(accessForModels);
+      console.log(`[7/7] GET ${CFG.models} -> HTTP ${modelsResult.status}`);
+      console.log(`      model count: ${modelsResult.count == null ? '(could not parse)' : modelsResult.count}`);
+      if (modelsResult.count == null) {
+        console.log(`      body snippet: ${modelsResult.snippet}`);
+      }
+      console.log(`      >> inference auth OK: ${modelsResult.ok && modelsResult.count != null && modelsResult.count > 0}\n`);
+    } catch (e) {
+      console.error(`[7/7] FAILED GET /v1/models: ${e.message}\n`);
+    }
+  } else {
+    console.log('[7/7] SKIPPED /v1/models -- no access_token available.\n');
+  }
+
+  // ---- Verdict ----
+  const pass =
+    gotAccess && gotRefresh && gotExpiry &&
+    modelsResult && modelsResult.ok && modelsResult.count != null && modelsResult.count > 0;
+
+  console.log('==========================================================');
+  console.log(` RESULT: ${pass ? 'PASS' : 'INCOMPLETE / FAIL'}`);
+  console.log('----------------------------------------------------------');
+  console.log(`  access_token returned .......... ${gotAccess}`);
+  console.log(`  refresh_token returned ......... ${gotRefresh}`);
+  console.log(`  expires_in returned ............ ${gotExpiry}`);
+  console.log(`  refresh grant succeeded ........ ${refreshed ? true : false}`);
+  console.log(`  refresh_token rotated .......... ${rotated == null ? '(unknown)' : rotated}`);
+  console.log(`  /v1/models auth OK ............. ${modelsResult ? (modelsResult.ok && modelsResult.count > 0) : false}`);
+  console.log(`  /v1/models count ............... ${modelsResult ? modelsResult.count : '(n/a)'}`);
+  console.log('==========================================================');
+
+  process.exit(pass ? 0 : 5);
+}
+
+main().catch((e) => {
+  console.error('\nUNEXPECTED ERROR:', e && e.stack ? e.stack : e);
+  process.exit(1);
+});

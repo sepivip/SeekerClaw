@@ -58,6 +58,14 @@ Ship the `oauth` path on **both flavors** (`dappStore` + `googlePlay`), exactly 
 | Refresh | `POST token endpoint` `grant_type=refresh_token`+`client_id`+`refresh_token`. **Refresh token is single-use / rotates — the new one MUST be persisted or the account is locked out (§5.4).** `invalid_grant` on refresh → re-login required. |
 | Access-token TTL | ~6h; refresh proactively ~1h early and/or on 401 |
 
+**GATE-0 live-endpoint evidence (2026-07-07 — headless probes, PASS; live-login proof still pending):**
+- **All headlessly-provable elements CONFIRMED, zero refutations** (OIDC discovery, device-code POST, authorize-loopback GET, token error-shape, inference reachability), each adversarially re-verified. Client `b1a00492-…` is live (public, discovery advertises `token_endpoint_auth_methods … "none"`); our **exact 6-scope string is accepted**; the **loopback `127.0.0.1:56121` redirect is registered** (authorize → 302 to `accounts.x.ai/sign-in` → `/oauth2/consent`, carrying our `redirect_uri`+PKCE, **no** `invalid_client`/redirect-mismatch); token body shapes accepted (both grants → `400 invalid_grant`); `api.x.ai/v1/{models,chat/completions}` live + Bearer-gated (`401 unauthenticated:no-credentials`).
+- **Codex's earlier 403 is resolved:** it was a **Cloudflare bot-block on a bare/curl User-Agent** (generic "you have been blocked", no OAuth error param), NOT a client/redirect rejection — a normal browser UA gets a clean 302. Implication: the on-device Chrome Custom Tab is fine; only non-browser probes of `/oauth2/authorize` need a browser-like UA.
+- **Verification hosts:** device-code approval at `https://accounts.x.ai/oauth2/device`; authorize sign-in/consent at `accounts.x.ai/sign-in` → `/oauth2/consent`.
+- **Port `56121` is a hard runtime dependency** of the loopback flow (redirect must match exactly) → device-code is the fallback where the port is unavailable.
+- `api.x.ai` emits **no `WWW-Authenticate`** header — send `Authorization: Bearer` proactively (already our design); CORS `*`; `id_token` **ES256**, `jwks_uri=https://auth.x.ai/.well-known/jwks.json`.
+- **D1 = GO loopback+PKCE** (device-code proven as fallback). **Still pending live login (Beka's SuperGrok / X Premium+ account):** actual token issuance, refresh-token rotation, `/v1/models` 200 — via `testing/xai-oauth-spike/loopback-spike.js`.
+
 ---
 
 ## 4. Architecture (mirror of OpenAI OAuth; note the two cross-process files)
