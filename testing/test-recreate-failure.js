@@ -70,9 +70,11 @@ function post(token, body) {
     console.log(`token …${token.slice(-6)}  model=${MODEL}  payload=${JSON.stringify(sample).length}B (device failing turn=${TARGET_BYTES}B)  tools=64\n`);
     for (const [label, seed] of [['SEND 1 (cold)', 7001], ['SEND 2 (same bytes)', 7001]]) {
         const r = await post(token, build(seed));
-        if (r.data?.error) {
-            console.log(`${label} → ${r.status} ❌ ${r.data.error.type}: "${r.data.error.message}"`);
-            if (/extra usage|usage/i.test(r.data.error.message || '')) console.log('   ✅ RECREATED — identical to the device error.');
+        if (r.data?.error || r.status !== 200) {
+            const msg = r.data?.error ? `${r.data.error.type}: "${r.data.error.message}"`
+                : (typeof r.data === 'string' ? r.data : JSON.stringify(r.data)).slice(0, 120); // non-JSON/HTML error body
+            console.log(`${label} → ${r.status} ❌ ${msg}`);
+            if (/extra usage|usage/i.test(r.data?.error?.message || '')) console.log('   ✅ RECREATED — identical to the device error.');
         } else {
             const u = r.data.usage || {};
             console.log(`${label} → ${r.status} ✅ input=${u.input_tokens} cache_write=${u.cache_creation_input_tokens} cache_read=${u.cache_read_input_tokens} out=${u.output_tokens}`);
