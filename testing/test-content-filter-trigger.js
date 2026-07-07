@@ -21,11 +21,12 @@ const configPath = path.resolve(__dirname, '../app/src/main/assets/nodejs-projec
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true,
     exports: { log: () => {}, CHANNEL: 'telegram', config: {}, API_TIMEOUT_MS: 60000 } };
 const claude = require('../app/src/main/assets/nodejs-project/providers/claude');
-const { loadEnv } = require('./lib');
+const { loadEnv, CC_BILLING_HEADER } = require('./lib');
 loadEnv();
 
 const MODEL = process.env.TEST_MODEL || 'claude-opus-4-8';
-const BILL = 'x-anthropic-billing-header: cc_version=2.1.195; cc_entrypoint=cli; cch=00000;';
+const BILL = CC_BILLING_HEADER; // shared with providers/claude.js — no drift on cc_version bumps
+const TOKEN = process.env.SETUP_TOKEN || process.env.ANTHROPIC_SETUP_TOKEN;
 
 // [phrase, expected] — the minimal trigger + the safe variants (drop any one word).
 const CASES = [
@@ -41,7 +42,7 @@ function probe(text) {
     const body = JSON.stringify({ model: MODEL, max_tokens: 16, stream: false,
         system: [{ type: 'text', text: BILL }, { type: 'text', text }],
         messages: [{ role: 'user', content: 'Hey' }] });
-    const headers = claude.buildHeaders(process.env.SETUP_TOKEN, 'setup_token');
+    const headers = claude.buildHeaders(TOKEN, 'setup_token');
     return new Promise((res) => {
         const r = https.request({ hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST', headers },
             (rp) => { rp.on('data', () => {}); rp.on('end', () => res(rp.statusCode)); });
@@ -51,7 +52,7 @@ function probe(text) {
 }
 
 (async () => {
-    if (!process.env.SETUP_TOKEN) { console.error('❌ SETUP_TOKEN required in testing/.env'); process.exit(1); }
+    if (!TOKEN) { console.error('❌ SETUP_TOKEN (or ANTHROPIC_SETUP_TOKEN) required in testing/.env'); process.exit(1); }
     console.log(`🧪 content-filter regression probe (setup_token, ${MODEL})\n`);
     let fails = 0;
     for (const [text, expect] of CASES) {

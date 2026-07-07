@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // test-recreate-failure.js — recreate the DEVICE's FAILING turn, not a success.
 // The device's 400 "out of extra usage" turns had payloadSize≈116014 bytes,
-// 64 tools, model sonnet-4-6, ~26K UNCACHED tokens billed. My earlier
+// 64 tools, model claude-opus-4-8, ~26K UNCACHED tokens billed. My earlier
 // recreations passed because they were cheap (cached/tiny). This one matches
 // the device's WEIGHT: ~26K fresh tokens on the same setup_token, so it hits
 // the shared usage meter as hard as the device does. If the account is at its
@@ -18,7 +18,7 @@ const claude = require('../app/src/main/assets/nodejs-project/providers/claude')
 const { loadEnv } = require('./lib');
 loadEnv();
 
-const MODEL = process.env.TEST_MODEL || 'claude-sonnet-4-6'; // device's real model = claude-opus-4-8
+const MODEL = process.env.TEST_MODEL || 'claude-opus-4-8'; // the device's real failing model
 const TARGET_BYTES = 116014;                  // device's exact failing payloadSize
 
 // Build system (~26K tokens) + 64 tools, tuned to hit the device's payload size.

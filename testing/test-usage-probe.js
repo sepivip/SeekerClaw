@@ -14,11 +14,11 @@ const configPath = path.resolve(__dirname, '../app/src/main/assets/nodejs-projec
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true,
     exports: { log: () => {}, CHANNEL: 'telegram', config: {}, API_TIMEOUT_MS: 60000 } };
 const claude = require('../app/src/main/assets/nodejs-project/providers/claude');
-const { loadEnv } = require('./lib');
+const { loadEnv, CC_BILLING_HEADER } = require('./lib');
 loadEnv();
 
 const MODEL = 'claude-sonnet-4-6'; // the agent's exact model
-const BILL = 'x-anthropic-billing-header: cc_version=2.1.195; cc_entrypoint=cli; cch=00000;';
+const BILL = CC_BILLING_HEADER; // shared with providers/claude.js — no drift on cc_version bumps
 
 function post(token, body) {
     const headers = claude.buildHeaders(token, 'setup_token');
