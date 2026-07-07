@@ -286,13 +286,15 @@ async function listModels(accessToken) {
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* leave null */ }
-  let count = null;
+  let count = null, ids = [];
   if (json) {
-    if (Array.isArray(json.data)) count = json.data.length;
-    else if (Array.isArray(json.models)) count = json.models.length;
-    else if (Array.isArray(json)) count = json.length;
+    const arr = Array.isArray(json.data) ? json.data
+      : Array.isArray(json.models) ? json.models
+      : Array.isArray(json) ? json : [];
+    ids = arr.map((m) => (m && (m.id || m.name)) || m).filter((x) => typeof x === 'string');
+    count = arr.length;
   }
-  return { status: res.status, ok: res.ok, count, snippet: text.slice(0, 300) };
+  return { status: res.status, ok: res.ok, count, ids, snippet: text.slice(0, 300) };
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +454,7 @@ async function main() {
     try {
       modelsResult = await listModels(accessForTest);
       console.log(`      GET /v1/models -> HTTP ${modelsResult.status} (count ${modelsResult.count == null ? 'n/a' : modelsResult.count})`);
+      if (modelsResult.ok && modelsResult.ids && modelsResult.ids.length) console.log(`      MODEL IDs: ${modelsResult.ids.join(', ')}`);
       if (!modelsResult.ok) console.log(`      models body: ${modelsResult.snippet}`);
     } catch (e) { console.error(`      /v1/models error: ${e.message}`); }
     console.log('');
