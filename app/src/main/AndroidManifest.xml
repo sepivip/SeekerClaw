@@ -77,6 +77,12 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:exported="false" />
 
+        <!-- BAT-1124: xAI Grok "Sign in with Grok" OAuth (loopback + PKCE). -->
+        <activity
+            android:name=".oauth.XaiOAuthActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false" />
+
         <activity
             android:name=".camera.CameraCaptureActivity"
             android:theme="@style/Theme.SeekerClaw"

@@ -128,8 +128,10 @@ import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.PrimaryButton
 import com.seekerclaw.app.ui.components.SecondaryButton
 import com.seekerclaw.app.ui.components.OpenAIOAuthSection
+import com.seekerclaw.app.ui.components.XaiOAuthSection
 import com.seekerclaw.app.ui.components.ProviderPicker
 import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
+import com.seekerclaw.app.ui.components.rememberXaiOAuthController
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.components.SetupStepIndicator
 import com.seekerclaw.app.ui.components.dotMatrix
@@ -183,6 +185,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             existingConfig?.let { cfg ->
                 when (cfg.provider) {
                     "openai" -> cfg.openaiApiKey
+                    "xai" -> cfg.xaiApiKey
                     "openrouter" -> cfg.openrouterApiKey
                     else -> cfg.activeCredential
                 }
@@ -265,6 +268,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     authType = cfg.authType
                     apiKey = when (cfg.provider) {
                         "openai" -> cfg.openaiApiKey
+                        "xai" -> cfg.xaiApiKey
                         "openrouter" -> cfg.openrouterApiKey
                         else -> if (cfg.authType == "setup_token") cfg.setupToken else cfg.anthropicApiKey
                     }
@@ -315,29 +319,32 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
     fun saveAndStart() {
         if (isStarting) return
-        // OpenAI supports oauth; everything else (non-Claude) is api_key only.
+        // OpenAI + xAI support oauth; everything else (non-Claude) is api_key only.
         val effectiveAuthType = when {
             scannedProvider == "claude" -> authType
             scannedProvider == "openai" && authType == "oauth" -> "oauth"
+            scannedProvider == "xai" && authType == "oauth" -> "oauth"
             else -> "api_key"
         }
         val isOpenAIOAuth = scannedProvider == "openai" && effectiveAuthType == "oauth"
+        val isXaiOAuth = scannedProvider == "xai" && effectiveAuthType == "oauth"
+        // For OAuth providers the credential lives in the OAuth token (set by the OAuth
+        // activity), not apiKey — skip the apiKey checks entirely.
+        val isOAuth = isOpenAIOAuth || isXaiOAuth
 
-        // For OpenAI OAuth, the credential lives in openaiOAuthToken (set by the OAuth
-        // activity), not apiKey — skip the apiKey blank check entirely.
-        if (!isOpenAIOAuth && apiKey.isBlank()) {
+        if (!isOAuth && apiKey.isBlank()) {
             apiKeyError = "Required"
             errorMessage = "AI credential is required"
             currentStep = SetupSteps.PROVIDER
             return
         }
-        if (scannedProvider != "claude" && !isOpenAIOAuth && apiKey.trim().startsWith("sk-ant-oat")) {
+        if (scannedProvider != "claude" && !isOAuth && apiKey.trim().startsWith("sk-ant-oat")) {
             apiKeyError = "Setup tokens are only valid for Anthropic"
             errorMessage = apiKeyError
             currentStep = SetupSteps.PROVIDER
             return
         }
-        val credentialError = if (isOpenAIOAuth) null
+        val credentialError = if (isOAuth) null
             else ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType)
         if (credentialError != null) {
             apiKeyError = credentialError
@@ -368,6 +375,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
             val preservedOAuthRefresh = existing?.openaiOAuthRefresh ?: bootstrap?.openaiOAuthRefresh ?: ""
             val preservedOAuthEmail = existing?.openaiOAuthEmail ?: bootstrap?.openaiOAuthEmail ?: ""
             val preservedOAuthExpiresAt = existing?.openaiOAuthExpiresAt ?: bootstrap?.openaiOAuthExpiresAt ?: ""
+            // BAT-1124: same preserve-through-first-save logic for xAI OAuth tokens.
+            val preservedXaiToken = existing?.xaiOAuthToken ?: bootstrap?.xaiOAuthToken ?: ""
+            val preservedXaiRefresh = existing?.xaiOAuthRefresh ?: bootstrap?.xaiOAuthRefresh ?: ""
+            val preservedXaiEmail = existing?.xaiOAuthEmail ?: bootstrap?.xaiOAuthEmail ?: ""
+            val preservedXaiExpiresAt = existing?.xaiOAuthExpiresAt ?: bootstrap?.xaiOAuthExpiresAt ?: ""
             val config = when (scannedProvider) {
                 "openai" -> AppConfig(
                     anthropicApiKey = existing?.anthropicApiKey ?: "",
@@ -382,11 +394,45 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     openaiOAuthRefresh = preservedOAuthRefresh,
                     openaiOAuthEmail = preservedOAuthEmail,
                     openaiOAuthExpiresAt = preservedOAuthExpiresAt,
+                    // BAT-1124: preserve xAI creds — saveConfig writes all fields, so an empty
+                    // default here would wipe a key/tokens the user set under xAI.
+                    xaiApiKey = existing?.xaiApiKey ?: "",
+                    xaiOAuthToken = preservedXaiToken,
+                    xaiOAuthRefresh = preservedXaiRefresh,
+                    xaiOAuthEmail = preservedXaiEmail,
+                    xaiOAuthExpiresAt = preservedXaiExpiresAt,
                     // BAT-1050: carry the Rich Messages toggle forward on re-run-setup;
                     // a fresh install (existing == null) defaults ON. Never silently
                     // flip a user's explicit OFF back on.
                     richMessages = existing?.richMessages ?: true,
                     provider = "openai",
+                    authType = effectiveAuthType,
+                    telegramBotToken = botToken.trim(),
+                    telegramOwnerId = ownerId.trim(),
+                    model = selectedModel,
+                    agentName = agentName.trim().ifBlank { "SeekerClaw" },
+                )
+                "xai" -> AppConfig(
+                    anthropicApiKey = existing?.anthropicApiKey ?: "",
+                    setupToken = existing?.setupToken ?: "",
+                    openaiApiKey = existing?.openaiApiKey ?: "",
+                    openrouterApiKey = existing?.openrouterApiKey ?: "",
+                    // Preserve OpenAI OAuth tokens even when saving as xAI (same rationale
+                    // as the OpenAI branch preserving the other providers' creds).
+                    openaiOAuthToken = preservedOAuthToken,
+                    openaiOAuthRefresh = preservedOAuthRefresh,
+                    openaiOAuthEmail = preservedOAuthEmail,
+                    openaiOAuthExpiresAt = preservedOAuthExpiresAt,
+                    // Don't wipe an existing xaiApiKey when the user picked OAuth.
+                    xaiApiKey = if (isXaiOAuth) (existing?.xaiApiKey ?: "") else trimmedKey,
+                    // Preserve xAI OAuth tokens written by XaiOAuthActivity — on a fresh
+                    // install these come from the bootstrap config, not the (null) loadConfig.
+                    xaiOAuthToken = preservedXaiToken,
+                    xaiOAuthRefresh = preservedXaiRefresh,
+                    xaiOAuthEmail = preservedXaiEmail,
+                    xaiOAuthExpiresAt = preservedXaiExpiresAt,
+                    richMessages = existing?.richMessages ?: true, // BAT-1050
+                    provider = "xai",
                     authType = effectiveAuthType,
                     telegramBotToken = botToken.trim(),
                     telegramOwnerId = ownerId.trim(),
@@ -406,6 +452,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     openaiOAuthRefresh = preservedOAuthRefresh,
                     openaiOAuthEmail = preservedOAuthEmail,
                     openaiOAuthExpiresAt = preservedOAuthExpiresAt,
+                    xaiApiKey = existing?.xaiApiKey ?: "", // BAT-1124: preserve xAI creds across provider save
+                    xaiOAuthToken = preservedXaiToken,
+                    xaiOAuthRefresh = preservedXaiRefresh,
+                    xaiOAuthEmail = preservedXaiEmail,
+                    xaiOAuthExpiresAt = preservedXaiExpiresAt,
                     richMessages = existing?.richMessages ?: true, // BAT-1050: preserve toggle (default ON on fresh install)
                     provider = "openrouter",
                     authType = "api_key",
@@ -428,6 +479,11 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     openaiOAuthRefresh = preservedOAuthRefresh,
                     openaiOAuthEmail = preservedOAuthEmail,
                     openaiOAuthExpiresAt = preservedOAuthExpiresAt,
+                    xaiApiKey = existing?.xaiApiKey ?: "", // BAT-1124: preserve xAI creds across provider save
+                    xaiOAuthToken = preservedXaiToken,
+                    xaiOAuthRefresh = preservedXaiRefresh,
+                    xaiOAuthEmail = preservedXaiEmail,
+                    xaiOAuthExpiresAt = preservedXaiExpiresAt,
                     richMessages = existing?.richMessages ?: true, // BAT-1050: preserve toggle (default ON on fresh install)
                     provider = "claude",
                     authType = effectiveAuthType,
@@ -594,6 +650,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     // Load existing key for new provider (preserves credentials on switch)
                     apiKey = when (newProvider) {
                         "openai" -> existingConfig?.openaiApiKey ?: ""
+                        "xai" -> existingConfig?.xaiApiKey ?: ""
                         "openrouter" -> existingConfig?.openrouterApiKey ?: ""
                         else -> existingConfig?.activeCredential ?: ""
                     }
@@ -628,6 +685,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                             val previouslySelectedOAuth =
                                 existingConfig?.authType == "oauth" || current.authType == "oauth"
                             if (existingConfig == null || hasStoredOAuthToken || previouslySelectedOAuth) "oauth"
+                            else "api_key"
+                        }
+                        "xai" -> {
+                            // BAT-1124: mirror OpenAI — default to OAuth (Sign in with Grok) on
+                            // fresh install, if a xAI OAuth token is already stored, or if oauth
+                            // was previously selected. Otherwise api_key.
+                            val current = ConfigManager.loadConfigOrBootstrap(context)
+                            val hasStoredXaiOAuthToken = current.xaiOAuthToken.isNotBlank()
+                            val previouslySelectedOAuth =
+                                existingConfig?.authType == "oauth" || current.authType == "oauth"
+                            if (existingConfig == null || hasStoredXaiOAuthToken || previouslySelectedOAuth) "oauth"
                             else "api_key"
                         }
                         else -> "api_key"
@@ -699,6 +767,17 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         // entry so a cross-auth stale model never gets persisted by
                         // saveAndStart. Shared models are left alone.
                         val validModels = modelsForProvider("openai", newAuthType)
+                        if (validModels.isNotEmpty() && validModels.none { it.id == selectedModel }) {
+                            selectedModel = validModels[0].id
+                        }
+                    } else if (scannedProvider == "xai") {
+                        // OAuth tab doesn't use the apiKey field. Switching to API Key restores
+                        // the saved xAI key only if one exists; otherwise keep the in-flight draft.
+                        if (newAuthType == "api_key") {
+                            val saved = existingConfig?.xaiApiKey
+                            if (!saved.isNullOrBlank()) apiKey = saved
+                        }
+                        val validModels = modelsForProvider("xai", newAuthType)
                         if (validModels.isNotEmpty() && validModels.none { it.id == selectedModel }) {
                             selectedModel = validModels[0].id
                         }
@@ -1080,14 +1159,17 @@ private fun ProviderSetupStep(
     val providerInfo = providerById(provider)
     val isToken = authType == "setup_token"
     val isOpenAIOAuth = provider == "openai" && authType == "oauth"
+    val isXaiOAuth = provider == "xai" && authType == "oauth" // BAT-1124
+    val isOAuth = isOpenAIOAuth || isXaiOAuth
     val uriHandler = LocalUriHandler.current
     val effectiveAuthType = when {
         provider == "claude" -> authType
-        isOpenAIOAuth -> "oauth"
+        isOAuth -> "oauth"
         else -> "api_key"
     }
-    // Shared OAuth controller — same flow as Settings, syncs via configVersion.
+    // Shared OAuth controllers — same flow as Settings, syncs via configVersion.
     val oauthController = rememberOpenAIOAuthController(context)
+    val xaiOAuthController = rememberXaiOAuthController(context)
     val isValid = apiKey.trim().isNotBlank() &&
         ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType) == null &&
         apiKeyError == null
@@ -1112,6 +1194,9 @@ private fun ProviderSetupStep(
             keyTestState = try {
                 val (host, path, headers) = when (provider) {
                     "openai" -> Triple("api.openai.com", "/v1/models", mapOf("Authorization" to "Bearer $key"))
+                    // BAT-1124: this key-test only runs on the API-KEY path (the OAuth path hides
+                    // the key field), so GET /v1/models is fine — a console.x.ai key has models access.
+                    "xai" -> Triple("api.x.ai", "/v1/models", mapOf("Authorization" to "Bearer $key"))
                     "openrouter" -> Triple("openrouter.ai", "/api/v1/models", mapOf("Authorization" to "Bearer $key"))
                     else -> Triple(
                         "api.anthropic.com",
@@ -1174,6 +1259,7 @@ private fun ProviderSetupStep(
             val authTabs = when (provider) {
                 "claude" -> listOf("api_key" to "API Key", "setup_token" to "Pro/Max Token")
                 "openai" -> listOf("oauth" to "OAuth", "api_key" to "API Key")
+                "xai" -> listOf("oauth" to "OAuth", "api_key" to "API Key") // BAT-1124
                 else -> emptyList()
             }
             if (authTabs.isNotEmpty()) {
@@ -1222,6 +1308,14 @@ private fun ProviderSetupStep(
                     onSignIn = oauthController.signIn,
                     onSignOut = oauthController.signOut,
                     onCancel = oauthController.cancel,
+                )
+            } else if (isXaiOAuth) {
+                // BAT-1124: Sign in with Grok — same controller pattern as OpenAI.
+                XaiOAuthSection(
+                    state = xaiOAuthController.state,
+                    onSignIn = xaiOAuthController.signIn,
+                    onSignOut = xaiOAuthController.signOut,
+                    onCancel = xaiOAuthController.cancel,
                 )
             } else {
             // Instructions — provider-specific
@@ -1299,8 +1393,11 @@ private fun ProviderSetupStep(
         NavButtons(
             onBack = onBack,
             onNext = onNext,
-            nextEnabled = if (isOpenAIOAuth) oauthController.state.isConnected
-                else apiKey.isNotBlank(),
+            nextEnabled = when {
+                isOpenAIOAuth -> oauthController.state.isConnected
+                isXaiOAuth -> xaiOAuthController.state.isConnected
+                else -> apiKey.isNotBlank()
+            },
             nextLabel = "Create Agent",
             animatedDotPosition = animatedDotPosition,
             isLoading = isStarting,

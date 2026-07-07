@@ -295,6 +295,12 @@ object RuntimeStateStore {
     internal fun isValidPair(provider: String, authType: String): Boolean = when (provider) {
         "claude" -> authType == "api_key" || authType == "setup_token"
         "openai" -> authType == "api_key" || authType == "oauth"
+        // BAT-1124: xai mirrors openai's api_key|oauth pair. NOTE the H5 boot-loop guard
+        // lives at the WRITE site (ConfigManager.runtimeAuthTypeFor) — (xai, oauth) with a
+        // blank token is downgraded to api_key BEFORE it reaches this validator, so
+        // runtime_state.json never advertises an unstartable oauth pair. This function only
+        // answers "is the (provider, authType) combination legal per Node's matrix?".
+        "xai" -> authType == "api_key" || authType == "oauth"
         "openrouter" -> authType == "api_key"
         "custom" -> authType == "api_key"
         else -> false

@@ -57,6 +57,14 @@ class RuntimeStateStoreTest {
     }
 
     @Test
+    fun `xai accepts api_key and oauth, rejects setup_token (BAT-1124)`() {
+        assertTrue(RuntimeStateStore.isValidPair("xai", "api_key"))
+        assertTrue(RuntimeStateStore.isValidPair("xai", "oauth"))
+        assertFalse(RuntimeStateStore.isValidPair("xai", "setup_token"))
+        assertFalse(RuntimeStateStore.isValidPair("xai", ""))
+    }
+
+    @Test
     fun `openrouter and custom only accept api_key`() {
         assertTrue(RuntimeStateStore.isValidPair("openrouter", "api_key"))
         assertFalse(RuntimeStateStore.isValidPair("openrouter", "oauth"))

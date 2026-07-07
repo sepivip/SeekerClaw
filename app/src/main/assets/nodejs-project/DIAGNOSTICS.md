@@ -194,6 +194,35 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 3. For persistent failures: check Logcat (`adb logcat | grep OpenAIOAuth`) for the exact error code. State mismatches and double-submission errors are usually benign.
 4. As a last resort, the user can sign out (clears tokens, keeps OAuth as the chosen auth type) and sign back in.
 
+### xAI Grok OAuth — Sign-In Flow (BAT-1124)
+**Symptoms:** User taps "Sign in with Grok", browser opens auth.x.ai, but sign-in never completes. UI shows "Sign-in canceled", "Port 56121 is in use", or hangs.
+**Check:** `adb logcat | grep XaiOAuth` (this is Logcat, not node_debug.log — the sign-in flow is Kotlin-side).
+**Diagnosis / flow:** loopback + PKCE S256, mirror of the OpenAI flow. Chrome Custom Tab → user signs in on `auth.x.ai` → 302 to the FIXED redirect `http://127.0.0.1:56121/callback` → the on-device server captures the code → token exchange at `auth.x.ai/oauth2/token`. Failure modes:
+- **Port 56121 in use:** the redirect port is FIXED (xAI registered exactly `127.0.0.1:56121` — there is no random-port fallback). If another app holds it, sign-in fails loud with "Port 56121 is in use". Close the offending app and retry; an app restart usually frees it.
+- **State mismatch:** a stray request hit the callback with the wrong `state` (CSRF defense) — the legitimate redirect still works, tell the user to retry.
+- **Browser closed / 10-min timeout:** Custom Tab dismissed before consent, or the user took too long. Retry from Settings > AI Provider > xAI > Sign in with Grok.
+- **Cloudflare block during token exchange:** auth.x.ai is Cloudflare-gated and blocks empty/default User-Agents. The app sends `User-Agent: SeekerClaw/<version>` on the token POST, so this should not occur; if it does (`node_debug.log` / Logcat shows a Cloudflare "you have been blocked" HTML page), it is transient — retry.
+**Fix:** The OAuth section stays visible after a failed sign-in — the user just taps "Sign in with Grok" again (no need to re-pick the auth type). Sign-out (clears tokens, keeps OAuth selected) then sign back in is the last resort.
+
+### xAI Grok — 403 "API access" / Tier-Gate (add API key, do NOT re-login)
+**Symptoms:** Grok messages fail with a 403 / "update permissions at console.x.ai" / "permission-denied". The user is signed in via OAuth.
+**Check:** `grep -i "xai\|grok" node_debug.log | tail -20` — look for `403`, `permission-denied`, or the terminal message "Your Grok subscription tier doesn't include API access".
+**Diagnosis:** xAI enforces API entitlement server-side.
+- On the **first** login, `/v1/models` can 403 because API access provisions *lazily on first touch* — the provider retries once after a short delay, so a single transient 403 is expected and self-heals.
+- A **persistent** 403 means the account's Grok tier does not include `api.x.ai` access. This is NOT an auth failure — do NOT trigger a token refresh or ask the user to re-login (that would burn xAI's single-use refresh-token rotation for nothing).
+**Fix:** Tell the user to add an **xAI API key** instead: Settings > AI Provider > xAI > Auth Type → API Key, and paste a key from `console.x.ai`. The api_key path is always selectable even while OAuth is the chosen auth type.
+
+### xAI Grok OAuth — Token Refresh / Persist Failure
+**Symptoms:** Agent stops responding on xAI OAuth after ~6h. Log shows `[xAI] OAuth refresh failed` or `[xAI] OAuth token rotated but could NOT be persisted`.
+**Check:** `grep -i "xai.*oauth\|invalid_grant\|persist" node_debug.log | tail -20`
+**Diagnosis:** xAI refresh tokens are **single-use and rotate** — each refresh returns a NEW refresh token that MUST be persisted (via the bridge `POST /xai/oauth/save-tokens`) or the account is locked out on the next restart. Causes:
+- **`invalid_grant` on refresh** — the refresh token is dead (revoked, or a prior rotation wasn't persisted). Re-login required.
+- **Bridge persist failed** — the rotated token couldn't be written to Keystore (`XAI_OAUTH_SAVE_FAILED`). The in-memory token keeps THIS session working, but a re-login may be needed after a restart.
+**Fix:**
+1. Check the exact error: `grep "xAI.*refresh\|persist" node_debug.log | tail -5`.
+2. Tell the user to re-sign-in: Settings > AI Provider > xAI > Sign in with Grok (overwrites the stored tokens; sign-out first is not required).
+3. If re-login isn't possible, switch Auth Type to "API Key" and provide a `console.x.ai` key.
+
 ---
 
 ## Tools
