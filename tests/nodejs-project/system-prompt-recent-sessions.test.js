@@ -65,9 +65,12 @@ _stub(path.join(BUNDLE, 'bridge.js'), {
 _stub(path.join(BUNDLE, 'silent-reply.js'), { stripSilentReply: (s) => s, TOKEN: '__SILENT_REPLY__' });
 // Memory markers — MEMORY.md + today's daily memory must land in stable normally,
 // and must vanish under leanMemory.
+// Call counters pin BAT-1130's read-skip: leanMemory must not even READ memory from disk.
+let _memReads = 0, _dailyReads = 0;
 _stub(path.join(BUNDLE, 'memory.js'), {
     loadSoul: () => '', loadBootstrap: () => '', loadIdentity: () => '', loadUser: () => '',
-    loadMemory: () => 'MEMORY_MARKER_XYZ', loadDailyMemory: () => 'DAILY_MARKER_XYZ',
+    loadMemory: () => { _memReads++; return 'MEMORY_MARKER_XYZ'; },
+    loadDailyMemory: () => { _dailyReads++; return 'DAILY_MARKER_XYZ'; },
 });
 _stub(path.join(BUNDLE, 'skills.js'), { findMatchingSkills: () => [], loadSkills: () => [] });
 // Fixture recent session — its marker text is what we assert on for placement.
@@ -118,6 +121,19 @@ check('F3: leanMemory omits Recent Sessions + MEMORY.md + daily memory', () => {
     // Core prompt still intact (self-heal must keep a usable agent).
     assert.ok(stable.includes('## Wallets'), 'lean: core sections (Wallets) still present');
     assert.ok(stable.includes('## Wallet Key Policy'), 'lean: security policy still present');
+});
+
+check('F3: leanMemory does NOT read MEMORY.md / daily memory from disk', () => {
+    _memReads = 0; _dailyReads = 0;
+    buildSystemBlocks([], 'chat-lean-io', 'claude-opus-4-8', { leanMemory: true });
+    assert.strictEqual(_memReads, 0, 'loadMemory must not be called on the lean retry');
+    assert.strictEqual(_dailyReads, 0, 'loadDailyMemory must not be called on the lean retry');
+});
+
+check('F3: default (non-lean) build DOES read memory from disk', () => {
+    _memReads = 0; _dailyReads = 0;
+    buildSystemBlocks([], 'chat-nonlean-io', 'claude-opus-4-8');
+    assert.ok(_memReads >= 1 && _dailyReads >= 1, 'non-lean build must read memory + daily memory');
 });
 
 check('F3: default (non-lean) keeps the volatile memory', () => {

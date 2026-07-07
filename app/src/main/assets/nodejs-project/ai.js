@@ -516,7 +516,15 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
     // produces is what tripped Anthropic's setup_token content filter (mislabeled
     // as a "You're out of extra usage" 400), deadlocking every turn. The heartbeat
     // mechanism itself (poll → HEARTBEAT_OK reply) is untouched. See testing/FINDINGS.md.
-    if (chatId === '__heartbeat__') return;
+    // Still perform the cheap housekeeping the full path used to do (reset the
+    // session track, drop any pending idle-summary timer) so the heartbeat track
+    // can't grow unbounded across polls now that it's never summarized.
+    if (chatId === '__heartbeat__') {
+        cancelIdleSummary(chatId);
+        const hbTrack = sessionTracking.get(chatId);
+        if (hbTrack) { hbTrack.messageCount = 0; hbTrack.firstMessageTime = 0; hbTrack.lastSummaryTime = Date.now(); }
+        return;
+    }
 
     const track = getSessionTrack(chatId);
 
@@ -602,8 +610,12 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
 // safety, wallets, runtime, heartbeats, ...) are unchanged.
 function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODEL, { leanMemory = false } = {}) {
     const soul = loadSoul();
-    const memory = loadMemory();
-    const dailyMemory = loadDailyMemory();
+    // BAT-1130: skip the MEMORY.md / daily-memory disk reads entirely on the lean
+    // self-heal retry — they're omitted from the prompt anyway, so the recovery
+    // path avoids unnecessary I/O (and any read error) when it's trying to get a
+    // rejected request through.
+    const memory = leanMemory ? '' : loadMemory();
+    const dailyMemory = leanMemory ? '' : loadDailyMemory();
     const allSkills = loadSkills();
     const bootstrap = loadBootstrap();
     const identity = loadIdentity();
