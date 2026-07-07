@@ -535,14 +535,24 @@ function relativeTimeLabel(isoTimestamp) {
 function getRecentSessions(limit = 5) {
     if (!db) return [];
     try {
+        // BAT-1130: over-fetch, then drop legacy heartbeat-ack summaries. New
+        // builds no longer summarize heartbeat sessions (see ai.js
+        // saveSessionSummary), but rows written by older builds persist — their
+        // "...HEARTBEAT_OK..." text is both noise AND trips Anthropic's
+        // setup_token content filter (mislabeled "out of extra usage" — see
+        // testing/FINDINGS.md). Filtering at read fixes existing installs on
+        // upgrade with no schema change and no DB surgery.
         const rows = db.exec(
             `SELECT started_at, ended_at, duration_min, message_count, summary_file, summary_excerpt, trigger, model
              FROM sessions ORDER BY ended_at DESC LIMIT ?`,
-            [limit]
+            [Math.max(limit * 4, 20)]
         );
         if (!rows.length || !rows[0].values.length) return [];
 
-        return rows[0].values.map(([startedAt, endedAt, durationMin, messageCount, summaryFile, summaryExcerpt, trigger, model]) => ({
+        return rows[0].values
+            .filter(row => !/HEARTBEAT_OK/i.test(String(row[5] || ''))) // row[5] = summary_excerpt
+            .slice(0, limit)
+            .map(([startedAt, endedAt, durationMin, messageCount, summaryFile, summaryExcerpt, trigger, model]) => ({
             startedAt,
             endedAt,
             durationMin: durationMin ?? 0,

@@ -228,7 +228,10 @@ function fromApiResponse(raw) {
 
 // ── Billing attribution (required for OAuth/setup-token access to non-Haiku models) ─
 
-const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.116; cc_entrypoint=cli; cch=00000;';
+// BAT-1123: cc_version tracks the Claude Code CLI version we identify as on the
+// setup_token billing path. Bumped 2.1.116 → 2.1.195 (verified HTTP 200 on our
+// models via testing/test-cc-version.js). Keep in sync with testing/lib.js.
+const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.195; cc_entrypoint=cli; cch=00000;';
 
 // ── System prompt ───────────────────────────────────────────────────────────
 
@@ -371,9 +374,11 @@ const streamProtocol = 'claude';
 
 function classifyError(status, data) {
     if (status === 401 || status === 403) {
+        // BAT-1130: auth-agnostic copy — setup_token users have no "API key", so
+        // "API key might be wrong" was misleading. Covers both auth modes.
         return {
             type: 'auth', retryable: false,
-            userMessage: '🔑 Can\'t reach the AI — API key might be wrong. Check Settings?'
+            userMessage: '🔑 The AI rejected the credentials. If you use an API key, re-check it in Settings; if you signed in with a Pro/Max token, re-pair in Settings.'
         };
     }
     if (status === 402) {
