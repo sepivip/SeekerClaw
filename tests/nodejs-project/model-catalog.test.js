@@ -133,13 +133,30 @@ check('rejection reason is a non-empty string', typeof mc.hasCredentialsFor({}, 
 
 console.log();
 console.log('── KNOWN_PROVIDERS ──────────────────────────────');
-check('KNOWN_PROVIDERS has 4 entries', mc.KNOWN_PROVIDERS.length, 4);
+// BAT-1124: xai appended → 5 providers.
+check('KNOWN_PROVIDERS has 5 entries', mc.KNOWN_PROVIDERS.length, 5);
 check('includes claude', mc.KNOWN_PROVIDERS.includes('claude'), true);
 check('includes openai', mc.KNOWN_PROVIDERS.includes('openai'), true);
 check('includes openrouter', mc.KNOWN_PROVIDERS.includes('openrouter'), true);
 check('includes custom', mc.KNOWN_PROVIDERS.includes('custom'), true);
+check('includes xai (BAT-1124)', mc.KNOWN_PROVIDERS.includes('xai'), true);
 // Provider order pin (BAT-517 Codex finding 1): preserve fallback target.
+// BAT-1124 appends xai, so providers[0]==openai still holds (append, not prepend).
 check('KNOWN_PROVIDERS[0] is openai (preserves pre-BAT-517 unknown-id fallback)', mc.KNOWN_PROVIDERS[0], 'openai');
+
+console.log();
+console.log('── xai (BAT-1124) ───────────────────────────────');
+check('xai → xAI display name', mc.displayNameForProvider('xai'), 'xAI');
+check('xai has api_key + oauth', mc.authTypesForProvider('xai'), ['api_key', 'oauth']);
+check('xai default is grok-4.3', mc.defaultModelForProvider('xai', 'oauth'), 'grok-4.3');
+check('xai model list includes grok-4.3', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.3'), true);
+check('xai is NOT freeform — rejects unknown model', mc.validateModelForProvider('xai', 'api_key', 'grok-nope').ok, false);
+check('xai accepts grok-4.3', mc.validateModelForProvider('xai', 'api_key', 'grok-4.3').ok, true);
+check('xai does NOT ship image/video models', mc.modelsForProvider('xai', 'api_key').some((m) => /imagine/.test(m.id)), false);
+check('xai oauth creds present', mc.hasCredentialsFor({ xaiOAuthToken: 'eyJabc' }, 'xai', 'oauth').ok, true);
+check('xai oauth creds missing → rejected', mc.hasCredentialsFor({}, 'xai', 'oauth').ok, false);
+check('xai api_key creds present', mc.hasCredentialsFor({ xaiApiKey: 'xai-abc' }, 'xai', 'api_key').ok, true);
+check('xai api_key creds missing → rejected', mc.hasCredentialsFor({}, 'xai', 'api_key').ok, false);
 
 console.log();
 console.log('── BAT-517 schema invariants (model-registry.json contract) ──');
@@ -157,7 +174,8 @@ const REGISTRY = JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
 
 check('registry version is 1', REGISTRY.version, 1);
 check('registry has providers array', Array.isArray(REGISTRY.providers), true);
-check('registry has 4 providers', REGISTRY.providers.length, 4);
+// BAT-1124: xai appended → 5 providers.
+check('registry has 5 providers', REGISTRY.providers.length, 5);
 
 // Per-auth default-model invariant (Codex v2 Fix 4): for every
 // non-freeform provider AND every authType in `authTypes`,

@@ -148,6 +148,7 @@ const SKIP_REASONS = {
     'providers/openai.js': 'requires config.js',
     'providers/openrouter.js': 'requires config.js',
     'providers/custom.js': 'requires config.js',
+    'providers/xai.js': 'requires config.js (BAT-1124 xAI Grok adapter)',
     'tools/index.js': 'requires main.js + handlers',
     'tools/android.js': 'requires bridge.js',
     'tools/cron.js': 'requires cron.js',

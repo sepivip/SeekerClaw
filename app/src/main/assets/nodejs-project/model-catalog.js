@@ -254,6 +254,18 @@ function hasCredentialsFor(config, providerId, authType) {
             return nonBlank(config.openaiApiKey)
                 ? { ok: true }
                 : { ok: false, reason: 'No OpenAI API key. Add one in Settings → Provider → OpenAI.' };
+        case 'xai':
+            // BAT-1124: oauth reads xaiOAuthToken ("Sign in with Grok"),
+            // api_key reads xaiApiKey (console.x.ai). Field names mirror
+            // Kotlin's config.json writer + handleConfigCredentials.
+            if (authType === 'oauth') {
+                return nonBlank(config.xaiOAuthToken)
+                    ? { ok: true }
+                    : { ok: false, reason: 'Not signed in to xAI. Sign in via Settings → Provider → xAI → Sign in with Grok.' };
+            }
+            return nonBlank(config.xaiApiKey)
+                ? { ok: true }
+                : { ok: false, reason: 'No xAI API key. Add one in Settings → Provider → xAI.' };
         case 'openrouter':
             return nonBlank(config.openrouterApiKey)
                 ? { ok: true }

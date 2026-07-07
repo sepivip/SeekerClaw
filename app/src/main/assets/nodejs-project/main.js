@@ -10,6 +10,10 @@ const fs = require('fs');
 const {
     ANTHROPIC_KEY, AUTH_TYPE, MODEL, getAgentName, PROVIDER, CHANNEL,
     MCP_SERVERS, REACTION_NOTIFICATIONS,
+    // BAT-1124 H1: xAI OAuth tokens are auth.x.ai JWTs — they match no
+    // *ApiKey field name and no existing prefix pattern, so they must be
+    // registered explicitly or they leak into node_debug.log.
+    XAI_OAUTH_TOKEN, XAI_OAUTH_REFRESH,
     MEMORY_DIR,
     localTimestamp, log, setRedactFn,
     getOwnerId, setOwnerId,
@@ -50,6 +54,15 @@ setRedactFn(redactSecrets);
 registerRedactedSecrets(
     USER_ENV_KEYS.map((k) => process.env[k]).filter((v) => typeof v === 'string')
 );
+
+// BAT-1124 H1: register the xAI OAuth access + refresh tokens for redaction.
+// (openai.js relies on its `sk-`/JWT never appearing raw; xAI's tokens are
+// auth.x.ai JWTs with no matching prefix pattern and no *ApiKey field name,
+// so without this they would surface unredacted. refreshOAuthToken re-registers
+// the ROTATED pair before it logs anything, so a mid-session rotation stays
+// covered too.)
+registerRedactedSecret(XAI_OAUTH_TOKEN);
+registerRedactedSecret(XAI_OAUTH_REFRESH);
 
 // ============================================================================
 // BRIDGE (extracted to bridge.js — BAT-195)

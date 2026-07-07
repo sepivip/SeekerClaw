@@ -106,6 +106,7 @@ jobs:
             web-fetch-ssrf-guard \
             claude-thinking-signature \
             claude-adaptive-thinking \
+            xai \
             ci-coverage-manifest
           do
             echo "── $t ──"

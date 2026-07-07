@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
+    workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, XAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     RICH_MESSAGES_ENABLED,
@@ -150,6 +150,11 @@ function _setWalletPromptSnapshotForTests(snapshot) {
 
 function getProviderApiKey() {
     return PROVIDER === 'openai' ? OPENAI_KEY
+        // BAT-1124 H3: xai MUST resolve to XAI_KEY, never fall through to
+        // ANTHROPIC_KEY — otherwise xai+api_key would Bearer the Anthropic key
+        // to api.x.ai (auth fail + secret exfiltration). In oauth mode XAI_KEY
+        // is blank and xai.buildHeaders uses the OAuth token instead.
+        : PROVIDER === 'xai' ? XAI_KEY
         : PROVIDER === 'openrouter' ? OPENROUTER_KEY
         : PROVIDER === 'custom' ? CUSTOM_KEY
         : ANTHROPIC_KEY;
@@ -1033,7 +1038,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('');
     lines.push('Note: Keys in agent_settings.json persist across restarts. After saving a key, built-in tools (web_search, Jupiter, etc.) pick it up immediately — no restart needed.');
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
-    lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
+    lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom|xai>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
     lines.push('**Your model can change mid-conversation (BAT-1083):** The active model is re-resolved every turn, so a switch in Settings or via `/model` takes effect on your very next reply — your "Model:" line above always reflects the CURRENT model. You cannot see your own PAST model values across a conversation. If a user asks why an earlier reply named a different model, say it was most likely switched between turns — do NOT guess or claim you "misread" it.');
     lines.push('**Custom model IDs (BAT-1032):** The Settings model picker has a "Custom model" entry — users can type ANY model ID for Anthropic/OpenAI; it persists across restarts and is NOT clamped to the known list. `/model` only accepts registry-listed IDs by design — for an off-list ID, point users to Settings > AI Provider > Model > Custom model. See DIAGNOSTICS.md "/model Rejects a Model ID That Settings Accepted".');
     lines.push('');
@@ -1138,10 +1143,12 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
     lines.push('4. Model not found (404): the configured model ID is wrong — likely a custom model ID typo. /model <valid-id> or Settings > AI Provider fixes it (slash commands work even when AI turns fail).');
     const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com'
+        : PROVIDER === 'xai' ? 'console.x.ai'
         : PROVIDER === 'openrouter' ? 'openrouter.ai/credits'
         : PROVIDER === 'custom' ? (CUSTOM_BASE_URL || 'your custom endpoint')
         : 'console.anthropic.com';
     const apiHost = PROVIDER === 'openai' ? 'api.openai.com'
+        : PROVIDER === 'xai' ? 'api.x.ai'
         : PROVIDER === 'openrouter' ? 'openrouter.ai'
         : PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().hostname || 'custom endpoint')
         : 'api.anthropic.com';
@@ -1157,6 +1164,17 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('2. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider. The OAuth section stays visible after a failed sign-in — they can tap "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.');
         lines.push('3. If OAuth refresh persistently fails: suggest the user sign out (clears OAuth tokens but keeps OAuth as the chosen auth type) and sign back in. As a fallback, they can switch to API Key in the auth picker if they have a platform key.');
         lines.push('4. Check `grep -i "oauth\\|codex" node_debug.log | tail -20` for OAuth-specific errors.');
+        lines.push('');
+    }
+
+    // xAI Grok OAuth-specific playbook (only injected when running on OAuth)
+    if (PROVIDER === 'xai' && AUTH_TYPE === 'oauth') {
+        lines.push('**If xAI (Grok) OAuth fails:**');
+        lines.push('1. 403 tier-gate: a persistent 403 means your Grok subscription tier does NOT include API access on api.x.ai. The system retries a 403 ONCE (access can provision lazily on first touch), then stops. If it keeps failing, the fix is to add an xAI API key in Settings > AI Provider > xAI — do NOT keep retrying, and this is NOT a sign-in expiry.');
+        lines.push('2. Token expired (401): the system auto-refreshes via the refresh token. If you see "OAuth refresh failed" in node_debug.log, the refresh token is invalid (revoked, or already rotated) — the user must re-sign-in via Settings > AI Provider > xAI > Sign in with Grok.');
+        lines.push('3. "token persist failed" in node_debug.log: the rotated token could not be saved. The current session keeps working, but a re-login may be needed after the next restart — tell the user to sign in again if Grok stops responding after a restart.');
+        lines.push('4. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider > xAI. They can also switch to API Key in the auth picker if they have a console.x.ai key.');
+        lines.push('5. Check `grep -i "xai\\|grok" node_debug.log | tail -20` for xAI-specific errors.');
         lines.push('');
     }
 
@@ -1394,6 +1412,15 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
         } else {
             lines.push('Auth mode: **API Key** — the user configured an OpenAI platform API key. Requests route through api.openai.com. To switch to ChatGPT OAuth (free with a Plus/Pro subscription), the user can change auth type in Settings > AI Provider > OpenAI.');
+        }
+        lines.push('');
+    } else if (PROVIDER === 'xai') {
+        lines.push('## Provider');
+        lines.push(`You are running on xAI Grok (model: ${activeModel}, auth: ${AUTH_TYPE}).`);
+        if (AUTH_TYPE === 'oauth') {
+            lines.push('Auth mode: **Sign in with Grok (OAuth)** — the user signed in with their SuperGrok / X Premium+ subscription instead of using an API key. Requests route through api.x.ai/v1/chat/completions with the subscription\'s OAuth token (auto-refreshed on expiry). If the tier does not include API access you will get a 403 tier-gate — the fix is to add an xAI API key, NOT to re-sign-in. If refresh fails, the user must re-sign-in via Settings > AI Provider > xAI > Sign in with Grok.');
+        } else {
+            lines.push('Auth mode: **API Key** — the user configured an xAI API key from console.x.ai. Requests route through api.x.ai/v1/chat/completions. To use a Grok subscription instead (SuperGrok / X Premium+), the user can switch to "Sign in with Grok" in Settings > AI Provider > xAI.');
         }
         lines.push('');
     }
