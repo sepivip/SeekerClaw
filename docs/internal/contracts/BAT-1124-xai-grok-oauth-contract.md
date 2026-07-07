@@ -28,15 +28,16 @@ xAI's public client supports both. **Recommendation: loopback + PKCE**, cloning 
 ### D2 — Inference transport: **`/v1/chat/completions` (recommended)** vs `/v1/responses`
 Both accept the OAuth bearer. Use **chat/completions** — same host+endpoint for api_key and oauth, reuses `providers/openrouter.js`/`custom.js` request shaping. Do **NOT** copy `openai.js`'s Codex-only shaping (`store:false`, forced `reasoning`, `include:['reasoning.encrypted_content']`). Responses-API/prompt-caching deferred.
 
-### D3 — `client_id` reuse / ToS — **explicit GO/NO-GO for Codex + PM (blocker)**  *(elevated from draft)*
-Reusing the Grok-CLI public client_id `b1a00492-073a-47ea-816f-4c329264a828` is the only path (no self-serve registration; public client). **Correct the framing:** xAI blessed device-code **for the Nous/Hermes integration (their own registered client)** — that is **not** xAI sanctioning *arbitrary third parties reusing Grok-CLI's client_id*. xAI enforces server-side (the 403 tier-gate proves per-request entitlement checks), so they can revoke a misused client/UA and break the feature for all users at once. SeekerClaw ships signed builds to two stores to real users — higher exposure than the CLIs (LiteLLM/opencode/Hermes) that do this.
-- **Decision required:** (a) proceed on OpenClaw reuse basis for v1 with API-key fallback, **and/or** (b) gate OAuth to `dappStore`-only (D5) until xAI sanctions it, **and/or** (c) make a sanctioning question to xAI dev-support blocking. **Recommendation: (a)+(b) for v1; (c) in parallel, non-blocking.** PM/Codex to accept the risk explicitly — this is not a checkbox.
+### D3 — `client_id` reuse / ToS — **same accepted posture as our shipped OpenAI OAuth**  *(corrected)*
+Reusing the Grok-CLI public client_id `b1a00492-073a-47ea-816f-4c329264a828` is **the same pattern SeekerClaw already ships for OpenAI**: `OpenAIOAuthActivity.kt:57` uses OpenAI's **Codex CLI public client_id** `app_EMoamEEZ73f0CkXaXp7hrann` (authorize URL carries `codex_cli_simplified_flow=true`) to ride the ChatGPT subscription — on **both** flavors, ungated, today. xAI is materially identical (public client, no self-serve registration, consumer-subscription OAuth). We therefore accept it on the **same basis** already accepted for OpenAI — this is not a new or elevated risk, and not a blocker.
+- **Mitigation (keep it clean):** send SeekerClaw's **own `User-Agent`** (e.g. `SeekerClaw/<ver>`), NOT Grok-CLI's — zero impersonation (matches how upstream OpenClaw sends `openclaw/<ver>`). Verify our UA is accepted by `api.x.ai/v1` during device test (no evidence xAI requires the Grok-CLI UA on `/v1`).
+- xAI enforces entitlement server-side (the 403 tier-gate), so a subscription lacking API access fails gracefully to the API-key path — same fallback story as any provider. Optional/non-blocking: ask xAI dev-support for explicit third-party sanction.
 
 ### D4 — Model list — **concrete IDs are a pre-device-test gate (blocker), registry stays static**
 The registry is **static JSON bundled in the APK** (no runtime `/v1/models` discovery). With `freeform:false`, `models:[]` is **not shippable** (unlike `openrouter`, which is `freeform:true`). At impl time, enumerate `GET https://api.x.ai/v1/models` with a live token, seed `model-registry.json`, and set a valid `defaultModel` **in the model list**. Also add the `xai` branch to the hardcoded `config.js:320-323` default-model chain — its `else` returns `claude-opus-4-8`, which `api.x.ai` would **404**. Confirm whether oauth vs api_key expose different model sets → add `modelsByAuth` if so. Provisional IDs only: `grok-4.3`, `grok-code-fast-1`, `grok-build-0.1`.
 
-### D5 — Per-flavor gating (recommended)  *(new)*
-Default the **`oauth`** authType to **`dappStore`-only** via `BuildConfig.DISTRIBUTION`; keep **`api_key` on both** flavors. Google Play's impersonation/other-app-credential and third-party-ToS policies make reused-client OAuth riskier on `googlePlay`; precedent for per-flavor stripping exists (CLAUDE.md "Product Flavors"). Enabling OAuth on `googlePlay` requires separate explicit sign-off. (Payments policy is *not* implicated — we ride an externally-purchased subscription, same shape as the shipped ChatGPT OAuth.)
+### D5 — Flavor parity with OpenAI OAuth (both flavors)
+Ship the `oauth` path on **both flavors** (`dappStore` + `googlePlay`), exactly as the OpenAI OAuth ships today (no `BuildConfig.DISTRIBUTION` gate) — for consistency with our existing treatment. Payments policy isn't implicated (externally-purchased subscription, same shape as the shipped ChatGPT OAuth). If xAI ever objects, we can flavor-gate later; no gating for v1.
 
 ---
 
@@ -96,7 +97,7 @@ Kotlin performs initial sign-in + owns secret storage; **Node performs refresh-o
 
 ### 5.4 Node — `providers/xai.js` (new; openrouter/custom request shaping + openai-style OAuth mgmt)
 - `id:'xai'`, `authTypes:['api_key','oauth']`; `endpoint={hostname:'api.x.ai', path:'/v1/chat/completions'}` for both auth types (`XAI_BASE_URL` override).
-- `buildHeaders`: `Authorization: Bearer ${isOAuth ? _currentOAuthToken : apiKey}`; stable `User-Agent`; optional `x-grok-conv-id`. Standard Chat Completions `formatRequest`.
+- `buildHeaders`: `Authorization: Bearer ${isOAuth ? _currentOAuthToken : apiKey}`; **SeekerClaw's own `User-Agent`** (e.g. `SeekerClaw/<ver>` — not Grok-CLI's; D3); optional `x-grok-conv-id`. Standard Chat Completions `formatRequest`.
 - **`refreshOAuthToken()` — corrected vs OpenAI's latent bug:**
   - Single-flight guard: memoize the in-flight refresh (`_refreshInFlight ??= doRefresh().finally(...)`) so concurrent 401s don't consume the single-use token twice.
   - **`await` the `/xai/oauth/save-tokens` persist and treat persist-failure as a hard error** (surface / retry) — do NOT `resolve(true)` before the rotated token is persisted. (openai.js:612-627 fires-and-forgets; benign for OpenAI, **account-locking for xAI's single-use rotation**.)
@@ -113,7 +114,7 @@ Kotlin performs initial sign-in + owns secret storage; **Node performs refresh-o
 - `config.js`: add `xai` to `_SUPPORTED_PROVIDERS` (L246); read+export `XAI_KEY`/`XAI_OAUTH_TOKEN`/`XAI_OAUTH_REFRESH`; **reuse the generic `AUTH_TYPE`** (like claude/openrouter/custom — do **not** add a separate `XAI_AUTH_TYPE`; only `openai` needs its own, `ai.js:1411`); extend startup `_activeKey`/`keyName` validation (L598-618); add `xai` default model (L320-323 — else→`claude-opus-4-8` 404s).
 - `model-catalog.js`: add `xai` to `hasCredentialsFor` (L236-272; oauth reads `config.xaiOAuthToken`, api_key reads `config.xaiApiKey`). Leave `REQUIRED_PROVIDER_IDS` unchanged.
 - `runtime-state.js`: `_VALID_AUTH_TYPES.xai = new Set(['api_key','oauth'])` (L84-88).
-- **`security.js` (NEW change point):** redaction does **not** cover OAuth tokens today. In `main.js` (alongside L50-52) `registerRedactedSecret(XAI_OAUTH_TOKEN)` + `registerRedactedSecret(XAI_OAUTH_REFRESH)`; and register rotated tokens inside `xai.js.refreshOAuthToken`. (auth.x.ai JWTs match no existing prefix pattern and the field names don't end in `ApiKey`, so without this they leak into `node_debug.log`, which is `cat`-readable via `shell_exec`.)
+- **`security.js` (NEW change point):** redaction does **not** cover OAuth tokens today. In `main.js` (alongside L50-52) `registerRedactedSecret(XAI_OAUTH_TOKEN)` + `registerRedactedSecret(XAI_OAUTH_REFRESH)`; and register rotated tokens inside `xai.js.refreshOAuthToken`. (auth.x.ai JWTs match no existing prefix pattern and the field names don't end in `ApiKey`, so without this they leak into `node_debug.log`, which is readable via the shell/read tools.)
 
 ### 5.6 Kotlin — model registry + UI
 - **`model-registry.json`: APPEND (not prepend) the `xai` entry** and include the **required** fields `keyHint`, `consoleUrl` (`https://console.x.ai`), `keysUrl` — `ProviderInfo` has no defaults for these, so omitting them throws `MissingFieldException` in `ModelRegistry.init()` and **crashes the app at launch for every user** (`Providers.kt:33-35,300`). Appending preserves the `providers[0]==openai` unknown-id fallback invariant.
@@ -121,7 +122,7 @@ Kotlin performs initial sign-in + owns secret storage; **Node performs refresh-o
 - `state/RuntimeStateStore.kt` (L295-301): add `"xai" -> authType in ("api_key","oauth")`.
 - `ui/components/XaiOAuth.kt` (new; clone `OpenAIOAuth.kt`): controller + `XaiOAuthSection` ("Sign in with Grok", "Uses your Grok subscription.").
 - `ui/settings/ProviderConfigScreen.kt`: `"xai"` branch (L367-549) incl. OAuth section; auth-picker option (L927); `switchProvider` default (L263-273); connection-test case + `testXaiOAuthConnection` (~L1186) = authorized `GET /v1/models`.
-- `ui/setup/SetupScreen.kt`: mirror Settings (L319-395 auth/config build, L1174-1178 tabs, L1218-1225 OAuth render, L1113-1124 key-test host). **Gate OAuth tab by `BuildConfig.DISTRIBUTION=="dappStore"` per D5.**
+- `ui/setup/SetupScreen.kt`: mirror Settings (L319-395 auth/config build, L1174-1178 tabs, L1218-1225 OAuth render, L1113-1124 key-test host). OAuth ships on both flavors (parity with OpenAI; no flavor gate — D5).
 - `ui/dashboard/DashboardScreen.kt` (L137-147): add `"xai" -> xaiOAuthToken/xaiApiKey non-blank` (else-branch uses Anthropic `activeCredential` → misreports configured xai user as unconfigured).
 - `config/ConfigClaimImporter.kt` (L171-261) + `SetupScreen` QR handler (L264-286, 320-340): add `xai` **api-key** routing (else→claude downgrade today). OAuth-via-QR is out of scope (OpenAI OAuth isn't in QR either).
 - **No change:** `ProviderPicker.kt`, `ui/settings/ProviderComponents.kt`.
@@ -136,7 +137,7 @@ Loopback: redirect mismatch / port-in-use → surface, retry. Device-code (if ch
 - Loopback: PKCE S256; on-device callback server rejects non-loopback (keep guard); no client secret.
 - `id_token` email is unverified — display only.
 - Rotated refresh token persisted synchronously (§5.4) — no lockout window.
-- ToS caveat (D3) + per-flavor gate (D5); API-key fallback always available.
+- ToS: same accepted posture as the shipped OpenAI OAuth (D3); SeekerClaw-own User-Agent (no impersonation); both flavors (D5); API-key fallback always available.
 
 ## 8. Upgrade safety (existing users)
 - New `xai*`/`xaiApiKey` fields default `""`; `writeConfigJson` writes only when non-blank → old configs untouched.
@@ -156,14 +157,14 @@ Loopback: redirect mismatch / port-in-use → surface, retry. Device-code (if ch
 
 ## 10. Change-point checklist (~22, up from 15)
 **Node:** (1) `model-registry.json` [append + required fields] (2) `providers/xai.js` NEW (3) `providers/index.js` register (4) `config.js` [providers, keys, default model, generic AUTH_TYPE] (5) `model-catalog.js` `hasCredentialsFor` (6) `runtime-state.js` (7) **`ai.js`** [getProviderApiKey+import, billing/apiHost, `## Provider` block, playbook, `/provider` help] (8) **`security.js`/`main.js`** [redaction] (9) **`DIAGNOSTICS.md`** [xai OAuth + 403 tier-gate].
-**Kotlin:** (10) `oauth/XaiOAuthActivity.kt` NEW (11) `AndroidManifest.xml` (12) `config/ConfigManager.kt` (13) `state/RuntimeStateStore.kt` (14) `bridge/AndroidBridge.kt` [save-tokens + **handleConfigCredentials**] (15) `ui/components/XaiOAuth.kt` NEW (16) `ui/settings/ProviderConfigScreen.kt` (17) `ui/setup/SetupScreen.kt` [+ D5 flavor gate] (18) `ui/dashboard/DashboardScreen.kt` (19) `config/ConfigClaimImporter.kt` + SetupScreen QR handler [api-key] (20) `config/Providers.kt` [only if oauth-specific models].
+**Kotlin:** (10) `oauth/XaiOAuthActivity.kt` NEW (11) `AndroidManifest.xml` (12) `config/ConfigManager.kt` (13) `state/RuntimeStateStore.kt` (14) `bridge/AndroidBridge.kt` [save-tokens + **handleConfigCredentials**] (15) `ui/components/XaiOAuth.kt` NEW (16) `ui/settings/ProviderConfigScreen.kt` (17) `ui/setup/SetupScreen.kt` (18) `ui/dashboard/DashboardScreen.kt` (19) `config/ConfigClaimImporter.kt` + SetupScreen QR handler [api-key] (20) `config/Providers.kt` [only if oauth-specific models].
 **Tests/docs:** (21) update `model-catalog.test.js` + `ModelRegistryTest.kt`; add `providers/xai.test.js`. (22) `RuntimeState.kt` KDoc matrix.
 
 ## 11. Open questions for Codex
 - D1 (loopback+PKCE vs device-code) — confirm loopback.
 - D2 (chat/completions) — confirm.
-- **D3 (client_id reuse ToS) — explicit GO/NO-GO + risk acceptance.**
-- D5 (OAuth `dappStore`-only for v1) — confirm.
+- D3 (client_id reuse ToS) — confirm same accepted posture as our OpenAI OAuth (both flavors, own UA).
+- D5 — OAuth on both flavors (parity with OpenAI).
 - Duplicate `OpenAIOAuth*` for xai now vs generalize a shared OAuth base (recommend duplicate-then-refactor to limit blast radius on a proven flow).
 
 ## 12. Sources
