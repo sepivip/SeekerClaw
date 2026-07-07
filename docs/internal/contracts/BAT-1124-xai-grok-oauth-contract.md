@@ -58,13 +58,14 @@ Ship the `oauth` path on **both flavors** (`dappStore` + `googlePlay`), exactly 
 | Refresh | `POST token endpoint` `grant_type=refresh_token`+`client_id`+`refresh_token`. **Refresh token is single-use / rotates — the new one MUST be persisted or the account is locked out (§5.4).** `invalid_grant` on refresh → re-login required. |
 | Access-token TTL | ~6h; refresh proactively ~1h early and/or on 401 |
 
-**GATE-0 live-endpoint evidence (2026-07-07 — headless probes, PASS; live-login proof still pending):**
+**GATE-0 evidence (2026-07-07 — headless probes PASS + live-login on a real SuperGrok account PASS):**
 - **All headlessly-provable elements CONFIRMED, zero refutations** (OIDC discovery, device-code POST, authorize-loopback GET, token error-shape, inference reachability), each adversarially re-verified. Client `b1a00492-…` is live (public, discovery advertises `token_endpoint_auth_methods … "none"`); our **exact 6-scope string is accepted**; the **loopback `127.0.0.1:56121` redirect is registered** (authorize → 302 to `accounts.x.ai/sign-in` → `/oauth2/consent`, carrying our `redirect_uri`+PKCE, **no** `invalid_client`/redirect-mismatch); token body shapes accepted (both grants → `400 invalid_grant`); `api.x.ai/v1/{models,chat/completions}` live + Bearer-gated (`401 unauthenticated:no-credentials`).
 - **Codex's earlier 403 is resolved:** it was a **Cloudflare bot-block on a bare/curl User-Agent** (generic "you have been blocked", no OAuth error param), NOT a client/redirect rejection — a normal browser UA gets a clean 302. Implication: the on-device Chrome Custom Tab is fine; only non-browser probes of `/oauth2/authorize` need a browser-like UA.
 - **Verification hosts:** device-code approval at `https://accounts.x.ai/oauth2/device`; authorize sign-in/consent at `accounts.x.ai/sign-in` → `/oauth2/consent`.
 - **Port `56121` is a hard runtime dependency** of the loopback flow (redirect must match exactly) → device-code is the fallback where the port is unavailable.
 - `api.x.ai` emits **no `WWW-Authenticate`** header — send `Authorization: Bearer` proactively (already our design); CORS `*`; `id_token` **ES256**, `jwks_uri=https://auth.x.ai/.well-known/jwks.json`.
-- **D1 = GO loopback+PKCE** (device-code proven as fallback). **Still pending live login (Beka's SuperGrok / X Premium+ account):** actual token issuance, refresh-token rotation, `/v1/models` 200 — via `testing/xai-oauth-spike/loopback-spike.js`.
+- **D1 = GO loopback+PKCE** (device-code proven as fallback). **Live-login PASS on a real SuperGrok account:** full authorization_code+PKCE round-trip → tokens issued (`access_token` JWT, `expires_in=21600`=6h, all 6 scopes granted); **refresh grant ROTATED the refresh_token** (confirmed on two runs — validates the single-flight + await-persist requirement in §5.4); **both `/v1/chat/completions` and `/v1/responses` returned 200** with `grok-4.3` (chat replied "pong 👋"); `/v1/models` → 200 with **9 models**. So SuperGrok-via-OAuth grants real Grok inference on `api.x.ai/v1`.
+- **Transient-403 finding (important for §5.4/§6):** on the *first* login the initial `/v1/models` call returned `403 permission-denied` ("update permissions at console.x.ai"), then `200` on the next login/run — **API access provisions lazily on first touch**. So a 403 must get **one retry after a short delay** before being treated as a permanent tier-gate + API-key fallback; do NOT lock the user out on a single 403.
 
 ---
 
@@ -110,7 +111,7 @@ Kotlin performs initial sign-in + owns secret storage; **Node performs refresh-o
   - Single-flight guard: memoize the in-flight refresh (`_refreshInFlight ??= doRefresh().finally(...)`) so concurrent 401s don't consume the single-use token twice.
   - **`await` the `/xai/oauth/save-tokens` persist and treat persist-failure as a hard error** (surface / retry) — do NOT `resolve(true)` before the rotated token is persisted. (openai.js:612-627 fires-and-forgets; benign for OpenAI, **account-locking for xAI's single-use rotation**.)
   - Register the newly rotated access+refresh tokens with the redactor **before** any `log()` (§7).
-- **`classifyError` — full matrix (not just 401/403):** `401` → retryable only when `isOAuth && _currentRefreshToken` (→ refresh); `403` (incl. `xai_oauth_tier_denied`) → **terminal, non-retryable**, user message "Your Grok subscription tier doesn't include API access — add an xAI API key instead" (verified safe: `ai.js:1736` gates refresh on `retryable`, so 403 won't loop); `429` → retryable/backoff; `5xx` → retryable; `402`/quota → surfaced; refresh `400 invalid_grant` → re-login (non-retryable).
+- **`classifyError` — full matrix (not just 401/403):** `401` → retryable only when `isOAuth && _currentRefreshToken` (→ refresh); `403` (incl. `xai_oauth_tier_denied`/`permission-denied`) → **retry once after a short delay** (GATE-0 observed a first-touch provisioning 403 flip to 200 on the next call), then if still 403 treat as **terminal tier-gate** + user message "Your Grok subscription tier doesn't include API access — add an xAI API key instead" (never refresh on 403; `ai.js:1736` gates refresh on `retryable`, so no loop); `429` → retryable/backoff; `5xx` → retryable; `402`/quota → surfaced; refresh `400 invalid_grant` → re-login (non-retryable).
 - client_id duplicated Kotlin↔Node — **add a smoke-test asserting the two literals are byte-equal** (drift silently breaks refresh).
 
 ### 5.5 Node — `ai.js` / `config.js` / `model-catalog.js` / `runtime-state.js`
@@ -136,7 +137,7 @@ Kotlin performs initial sign-in + owns secret storage; **Node performs refresh-o
 - **No change:** `ProviderPicker.kt`, `ui/settings/ProviderComponents.kt`.
 
 ## 6. Failure behavior
-Loopback: redirect mismatch / port-in-use → surface, retry. Device-code (if chosen): pending/slow_down/expired/denied per §D1. Inference: 401→single-flight refresh→retry; refresh `invalid_grant`→re-login; **403→terminal tier-gate + API-key fallback (no loop)**; 429/5xx→backoff. Sign-out clears all four fields + bumps configVersion. Network loss → bounded poll deadline, no crash.
+Loopback: redirect mismatch / port-in-use → surface, retry. Device-code (if chosen): pending/slow_down/expired/denied per §D1. Inference: 401→single-flight refresh→retry; refresh `invalid_grant`→re-login; **403→retry-once (access can provision lazily on first touch), then terminal tier-gate + API-key fallback (no loop)**; 429/5xx→backoff. Sign-out clears all four fields + bumps configVersion. Network loss → bounded poll deadline, no crash.
 
 ## 7. Security posture
 - Tokens Keystore-encrypted at rest; `expiresAt` plaintext; email encrypted (PII).

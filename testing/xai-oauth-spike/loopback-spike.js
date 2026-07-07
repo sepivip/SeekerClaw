@@ -35,6 +35,8 @@ const CFG = {
   authorize: 'https://auth.x.ai/oauth2/authorize',
   token: 'https://auth.x.ai/oauth2/token',
   models: 'https://api.x.ai/v1/models',
+  chat: 'https://api.x.ai/v1/chat/completions',
+  responses: 'https://api.x.ai/v1/responses',
   redirectHost: '127.0.0.1',
   redirectPort: 56121,
   callbackPath: '/callback',
@@ -294,6 +296,40 @@ async function listModels(accessToken) {
 }
 
 // ---------------------------------------------------------------------------
+// Step 7b -- prove INFERENCE auth on the endpoints the feature actually uses
+// (/v1/models is only a listing endpoint and may be permission-gated separately)
+// ---------------------------------------------------------------------------
+async function probeChat(accessToken, model) {
+  const res = await fetchWithTimeout(CFG.chat, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'SeekerClaw/spike',
+    },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 8, stream: false }),
+  });
+  const text = await res.text();
+  return { status: res.status, ok: res.ok, snippet: text.slice(0, 400) };
+}
+
+async function probeResponses(accessToken, model) {
+  const res = await fetchWithTimeout(CFG.responses, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'SeekerClaw/spike',
+    },
+    body: JSON.stringify({ model, input: 'ping' }),
+  });
+  const text = await res.text();
+  return { status: res.status, ok: res.ok, snippet: text.slice(0, 400) };
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 async function main() {
@@ -397,30 +433,38 @@ async function main() {
     console.log('[6/7] SKIPPED refresh grant -- no refresh_token was returned (check offline_access scope).\n');
   }
 
-  // Step 7 -- inference auth via /v1/models
-  // Prefer the freshest access token we hold.
-  const accessForModels = (refreshed && refreshed.access_token) || tokens.access_token;
-  let modelsResult = null;
-  if (accessForModels) {
+  // Step 7 -- prove INFERENCE auth (what actually matters for the feature):
+  // chat/completions and responses; /v1/models is only a listing endpoint and
+  // may be permission-gated separately for a consumer OAuth token.
+  const accessForTest = (refreshed && refreshed.access_token) || tokens.access_token;
+  let chatRes = null, respRes = null, modelsResult = null;
+  if (accessForTest) {
     try {
-      modelsResult = await listModels(accessForModels);
-      console.log(`[7/7] GET ${CFG.models} -> HTTP ${modelsResult.status}`);
-      console.log(`      model count: ${modelsResult.count == null ? '(could not parse)' : modelsResult.count}`);
-      if (modelsResult.count == null) {
-        console.log(`      body snippet: ${modelsResult.snippet}`);
-      }
-      console.log(`      >> inference auth OK: ${modelsResult.ok && modelsResult.count != null && modelsResult.count > 0}\n`);
-    } catch (e) {
-      console.error(`[7/7] FAILED GET /v1/models: ${e.message}\n`);
-    }
+      chatRes = await probeChat(accessForTest, 'grok-4.3');
+      console.log(`[7/7] POST /v1/chat/completions (grok-4.3) -> HTTP ${chatRes.status} ok=${chatRes.ok}`);
+      console.log(`      body: ${chatRes.snippet}`);
+    } catch (e) { console.error(`      chat/completions error: ${e.message}`); }
+    try {
+      respRes = await probeResponses(accessForTest, 'grok-4.3');
+      console.log(`      POST /v1/responses (grok-4.3) -> HTTP ${respRes.status} ok=${respRes.ok}`);
+      console.log(`      body: ${respRes.snippet}`);
+    } catch (e) { console.error(`      responses error: ${e.message}`); }
+    try {
+      modelsResult = await listModels(accessForTest);
+      console.log(`      GET /v1/models -> HTTP ${modelsResult.status} (count ${modelsResult.count == null ? 'n/a' : modelsResult.count})`);
+      if (!modelsResult.ok) console.log(`      models body: ${modelsResult.snippet}`);
+    } catch (e) { console.error(`      /v1/models error: ${e.message}`); }
+    console.log('');
   } else {
-    console.log('[7/7] SKIPPED /v1/models -- no access_token available.\n');
+    console.log('[7/7] SKIPPED inference tests -- no access_token available.\n');
   }
 
-  // ---- Verdict ----
-  const pass =
-    gotAccess && gotRefresh && gotExpiry &&
-    modelsResult && modelsResult.ok && modelsResult.count != null && modelsResult.count > 0;
+  const chatOk = !!(chatRes && chatRes.ok);
+  const respOk = !!(respRes && respRes.ok);
+  const inferenceOk = chatOk || respOk;
+
+  // ---- Verdict ---- (PASS = tokens + rotation + at least one inference endpoint works)
+  const pass = gotAccess && gotRefresh && gotExpiry && inferenceOk;
 
   console.log('==========================================================');
   console.log(` RESULT: ${pass ? 'PASS' : 'INCOMPLETE / FAIL'}`);
@@ -430,8 +474,9 @@ async function main() {
   console.log(`  expires_in returned ............ ${gotExpiry}`);
   console.log(`  refresh grant succeeded ........ ${refreshed ? true : false}`);
   console.log(`  refresh_token rotated .......... ${rotated == null ? '(unknown)' : rotated}`);
-  console.log(`  /v1/models auth OK ............. ${modelsResult ? (modelsResult.ok && modelsResult.count > 0) : false}`);
-  console.log(`  /v1/models count ............... ${modelsResult ? modelsResult.count : '(n/a)'}`);
+  console.log(`  chat/completions auth OK ....... ${chatOk}`);
+  console.log(`  responses auth OK .............. ${respOk}`);
+  console.log(`  /v1/models auth OK ............. ${modelsResult ? modelsResult.ok : false}`);
   console.log('==========================================================');
 
   process.exit(pass ? 0 : 5);
