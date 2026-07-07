@@ -5,6 +5,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a condition where the agent could stop responding — showing a misleading "out of extra usage" error — on a Pro/Max sign-in even with usage remaining. An automatically-generated internal note summarizing routine background check-ins could contain a phrase the AI service rejected; because that note was included in every request, it blocked all replies until it aged out. These trivial check-in notes are no longer generated, any left over from a previous version are filtered out, and the agent now automatically retries once without recent-activity context if a request is unexpectedly rejected — so a single bad note can no longer stall it. The background check-in (heartbeat) mechanism itself is unchanged.
+- Clearer authentication-error message: it no longer suggests "API key might be wrong" for Pro/Max sign-in users, who have no API key.
+
+### Changed
+
+- The agent's system prompt now caches more effectively across background check-ins by keeping frequently-changing recent-activity context out of the cached section, lowering token usage per turn.
+- Refreshed the Claude Code client version reported on Pro/Max sign-in requests to the current stable, keeping the integration up to date.
+
 ### Security
 
 - Hardened `web_fetch` against credential exfiltration on cross-origin redirects: caller-supplied headers (API keys, bearer tokens) are now dropped when a request redirects to a different origin, and a cross-origin `307`/`308` can no longer forward the request body to the new host. Same-origin flows are unchanged. (BAT-1086)

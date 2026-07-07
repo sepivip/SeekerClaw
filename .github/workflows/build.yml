@@ -73,6 +73,8 @@ jobs:
             confirmation-buttons-guard \
             bridge-token-validation \
             system-prompt-wallets \
+            system-prompt-recent-sessions \
+            recent-sessions-heartbeat-filter \
             wallet-registry \
             wallet-set-caps-errors \
             x402 \
