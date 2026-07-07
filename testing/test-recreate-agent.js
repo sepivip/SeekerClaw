@@ -25,7 +25,9 @@ const MODEL = process.env.TEST_MODEL || 'claude-sonnet-4-6'; // the agent's actu
 const THINK = process.env.THINK === 'on';
 
 // ---- build an agent-sized payload -------------------------------------------
-// Stable system (~8K tokens ⇒ the cached prefix). Realistic prose, ~4 chars/token.
+// Stable system (~21K tokens; realistic prose, ~4 chars/token) ⇒ becomes the cached
+// prefix. Larger than the device's ~8K cached prefix, but size isn't the point here —
+// the diagnostic is whether cache_read tracks stable-only vs stable+tools (see below).
 const STABLE = ('You are a capable on-device personal AI agent running inside a mobile app. '
     + 'You have tools for messaging, memory, files, skills, cron, wallet and web access. '
     + 'Follow the safety, confirmation-gate, and reply-formatting rules precisely. ').repeat(360);
@@ -88,6 +90,6 @@ async function send(label, token, seed) {
     await send('REQ 1 (dyn=A, cold)  ', token, 1001);
     await new Promise((r) => setTimeout(r, 1500));
     await send('REQ 2 (dyn=B, changed)', token, 2002);
-    console.log('\nIf REQ 2 cache_read ≈ stable only (~8K) while input ≈ tools (~18-26K):');
+    console.log('\nIf REQ 2 cache_read ≈ stable only (~21K) while input ≈ tools (~18K):');
     console.log('→ the dynamic block between stable-cache and tools INVALIDATES the tool cache — exactly the agent pattern.');
 })();

@@ -7,12 +7,12 @@
 // Run: node testing/test-cc-bigrequest.js
 'use strict';
 const https = require('https');
-const { loadEnv } = require('./lib');
+const { loadEnv, CC_BILLING_HEADER } = require('./lib');
 loadEnv();
 
 const BETA = 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14';
-const CC = process.env.CC_VER || '2.1.116';
-const billing = `x-anthropic-billing-header: cc_version=${CC}; cc_entrypoint=cli; cch=00000;`;
+const CC = process.env.CC_VER; // override only; default = the shipped CC_BILLING_HEADER
+const billing = CC ? `x-anthropic-billing-header: cc_version=${CC}; cc_entrypoint=cli; cch=00000;` : CC_BILLING_HEADER;
 const MODEL = process.env.TEST_MODEL || 'claude-sonnet-4-6'; // the agent's actual model
 
 function post(token, body) {

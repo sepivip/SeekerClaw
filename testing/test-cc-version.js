@@ -5,7 +5,8 @@
 // `x-anthropic-billing-header` cc_version as a SYSTEM BLOCK), and checks that
 // the target cc_version is accepted (HTTP 200) on our non-Haiku models.
 //
-// Current shipped: cc_version=2.1.116. Candidate: 2.1.195 (Claude Code stable).
+// Legacy control: cc_version=2.1.116. Current shipped: 2.1.195 (BAT-1123 — see
+// providers/claude.js CC_BILLING_HEADER). Override the pair via CC_VERSIONS.
 //
 // Setup: SETUP_TOKEN=sk-ant-oat01-… in testing/.env   Run: node testing/test-cc-version.js
 'use strict';
@@ -17,7 +18,7 @@ loadEnv();
 const BETA = 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14';
 const CC_VERSIONS = (process.env.CC_VERSIONS && process.env.CC_VERSIONS.trim())
     ? process.env.CC_VERSIONS.split(',').map((s) => s.trim())
-    : ['2.1.116', '2.1.195']; // control (shipped) + candidate (stable)
+    : ['2.1.116', '2.1.195']; // legacy control + current shipped (keep 2nd in sync with CC_BILLING_HEADER)
 const MODELS = ['claude-sonnet-5', 'claude-opus-4-8'];
 
 const billingHeader = (ver) => `x-anthropic-billing-header: cc_version=${ver}; cc_entrypoint=cli; cch=00000;`;
@@ -55,5 +56,5 @@ async function probe(model, token, ccVersion) {
         for (const model of MODELS) { cells.push(await probe(model, token, ver)); await new Promise((r) => setTimeout(r, 900)); }
         console.log(ver.padEnd(12) + cells.map((c) => c.padEnd(22)).join(''));
     }
-    console.log('\n→ candidate 2.1.195 must be 200 on both models to be safe to ship.');
+    console.log('\n→ each cc_version must be 200 on both models; 2.1.195 is the current shipped value.');
 })();
