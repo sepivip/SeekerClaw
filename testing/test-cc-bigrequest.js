@@ -13,6 +13,7 @@ loadEnv();
 const BETA = 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14';
 const CC = process.env.CC_VER; // override only; default = the shipped CC_BILLING_HEADER
 const billing = CC ? `x-anthropic-billing-header: cc_version=${CC}; cc_entrypoint=cli; cch=00000;` : CC_BILLING_HEADER;
+const EFFECTIVE_CC = (billing.match(/cc_version=([^;]+)/) || [])[1] || '(unknown)'; // what actually goes on the wire
 const MODEL = process.env.TEST_MODEL || 'claude-sonnet-4-6'; // the agent's actual model
 
 function post(token, body) {
@@ -53,7 +54,7 @@ async function run(label, token, { tools, maxTokens, sysPad }) {
 (async () => {
     const token = process.env.SETUP_TOKEN || process.env.ANTHROPIC_SETUP_TOKEN;
     if (!token) { console.error('❌ no SETUP_TOKEN'); process.exit(1); }
-    console.log(`🧪 Recreate agent usage condition — model=${MODEL}, cc_version=${CC}\n`);
+    console.log(`🧪 Recreate agent usage condition — model=${MODEL}, cc_version=${EFFECTIVE_CC}\n`);
     await run('SMALL (control)', token, { tools: 0, maxTokens: 128, sysPad: 1 });
     await new Promise((r) => setTimeout(r, 1200));
     await run('BIG (agent-sized, 64 tools)', token, { tools: 64, maxTokens: 4096, sysPad: 400 });

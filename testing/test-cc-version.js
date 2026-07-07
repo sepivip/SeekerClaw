@@ -12,13 +12,15 @@
 'use strict';
 
 const https = require('https');
-const { loadEnv } = require('./lib');
+const { loadEnv, CC_BILLING_HEADER } = require('./lib');
 loadEnv();
 
 const BETA = 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14';
+// Current shipped value — parsed from CC_BILLING_HEADER so there's ONE source of truth.
+const SHIPPED_CC = (CC_BILLING_HEADER.match(/cc_version=([^;]+)/) || [])[1] || '2.1.195';
 const CC_VERSIONS = (process.env.CC_VERSIONS && process.env.CC_VERSIONS.trim())
     ? process.env.CC_VERSIONS.split(',').map((s) => s.trim())
-    : ['2.1.116', '2.1.195']; // legacy control + current shipped (keep 2nd in sync with CC_BILLING_HEADER)
+    : ['2.1.116', SHIPPED_CC]; // legacy control + current shipped (from CC_BILLING_HEADER)
 const MODELS = ['claude-sonnet-5', 'claude-opus-4-8'];
 
 const billingHeader = (ver) => `x-anthropic-billing-header: cc_version=${ver}; cc_entrypoint=cli; cch=00000;`;
@@ -56,5 +58,5 @@ async function probe(model, token, ccVersion) {
         for (const model of MODELS) { cells.push(await probe(model, token, ver)); await new Promise((r) => setTimeout(r, 900)); }
         console.log(ver.padEnd(12) + cells.map((c) => c.padEnd(22)).join(''));
     }
-    console.log('\n→ each cc_version must be 200 on both models; 2.1.195 is the current shipped value.');
+    console.log(`\n→ each cc_version must be 200 on both models; ${SHIPPED_CC} is the current shipped value.`);
 })();

@@ -12,6 +12,7 @@ loadEnv();
 const BETA = 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14';
 const CC = process.env.CC_VER; // override only; default = the shipped CC_BILLING_HEADER
 const billing = CC ? `x-anthropic-billing-header: cc_version=${CC}; cc_entrypoint=cli; cch=00000;` : CC_BILLING_HEADER;
+const EFFECTIVE_CC = (billing.match(/cc_version=([^;]+)/) || [])[1] || '(unknown)'; // what actually goes on the wire
 const MODELS = ['claude-sonnet-5', 'claude-opus-4-8'];
 
 function post(token, body) {
@@ -27,7 +28,7 @@ function post(token, body) {
 (async () => {
     const token = process.env.SETUP_TOKEN || process.env.ANTHROPIC_SETUP_TOKEN;
     if (!token) { console.error('❌ no SETUP_TOKEN'); process.exit(1); }
-    console.log(`🧪 Full-response check — setup_token, cc_version=${CC}\n`);
+    console.log(`🧪 Full-response check — setup_token, cc_version=${EFFECTIVE_CC}\n`);
     for (const model of MODELS) {
         const r = await post(token, {
             model, max_tokens: 256, stream: false,
