@@ -182,6 +182,29 @@ function restoreHttps() { https.request = _origHttpsRequest; }
     }
 })();
 
+// ── formatRequest: reasoning_effort bounding (BAT-1124 grok-4.5 fix) ──────────
+// THE bug this pins: xAI honors the OpenAI-style `reasoning_effort` STRING, NOT
+// OpenRouter's `reasoning:{effort}` object. Sending neither leaves grok-4.5's
+// reasoning UNBOUNDED → >60s silent reasoning on big agent requests → the app's
+// socket-idle timeout fires (grok-4.3 tolerates it, grok-4.5 doesn't). Proven
+// live in tests/xai-models `--diagnose`. This pins the request shape so a
+// refactor can't silently drop the param and reintroduce the hang.
+(function testFormatRequestReasoning() {
+    console.log('\n── formatRequest: reasoning_effort bounding (grok-4.5 fix) ──');
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+    const parse = (opts) => JSON.parse(xai.formatRequest('grok-4.5', 4096, 'sys', [{ role: 'user', content: 'hi' }], [], opts));
+
+    const def = parse({});
+    ok('formatRequest sends reasoning_effort as a STRING (the param xAI honors)', typeof def.reasoning_effort === 'string', JSON.stringify(def.reasoning_effort));
+    ok('does NOT send the ignored OpenRouter reasoning:{effort} object', def.reasoning === undefined);
+    ok('default (no toggle) → reasoning_effort:"low" (responsive; bounds grok-4.5)', def.reasoning_effort === 'low', def.reasoning_effort);
+    ok('still streams (stream:true)', def.stream === true);
+
+    ok('heartbeat/synthetic (reasoningMode:"off") → "minimal"', parse({ reasoningMode: 'off' }).reasoning_effort === 'minimal');
+    ok('user reasoning on a reasoning model (enabled+support:yes) → "high"', parse({ reasoningEnabled: true, reasoningSupport: 'yes' }).reasoning_effort === 'high');
+    ok('reasoning toggle on but model support:no → stays bounded "low"', parse({ reasoningEnabled: true, reasoningSupport: 'no' }).reasoning_effort === 'low');
+})();
+
 // ── classifyError matrix (C1 is the star) ────────────────────────────────────
 
 (function testClassifyError() {

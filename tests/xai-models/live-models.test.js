@@ -198,6 +198,87 @@ function chatStream(token, model, { maxTokens = 64, prompt = 'ping', extra = {} 
   });
 }
 
+// ── grok-4.5 reasoning/timeout DIAGNOSIS (reproduces the device: tools + stream) ─
+// The device sends the full agent request (~64 tools + system prompt), which makes
+// grok-4.5 reason silently >60s → the app's 60s socket-idle timeout fires. This
+// probe reproduces that with tools + a system prompt, across reasoning-param
+// variants, measuring time-to-first-BYTE (does it stream anything during reasoning?)
+// vs time-to-first-CONTENT vs total — the levers for the app-side fix.
+function fakeTools(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    type: 'function',
+    function: {
+      name: `tool_${i}_operation`,
+      description: `Performs operation ${i}. Consider carefully whether this tool applies to the user's request before invoking it; weigh it against the other available tools.`,
+      parameters: { type: 'object', properties: { arg: { type: 'string', description: 'the argument for the operation' } }, required: ['arg'] },
+    },
+  }));
+}
+const SYS_PROMPT = ('You are SeekerClaw, an autonomous agent running on a Solana Seeker phone. '
+  + 'You have many tools. Think carefully about which tool (if any) applies before acting. Be concise. ').repeat(18);
+
+function chatStreamTimed(token, model, { variant = {}, tools = 0, timeoutMs = 200000, prompt = 'Hey' } = {}) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let firstByte = 0, firstContent = 0, chunks = 0, reasoningSeen = false, status = 0, text = '', errBody = '';
+    const payload = {
+      model, stream: true, max_tokens: 512,
+      messages: [{ role: 'system', content: SYS_PROMPT }, { role: 'user', content: prompt }],
+      ...(tools ? { tools: fakeTools(tools) } : {}),
+      ...variant,
+    };
+    const body = JSON.stringify(payload);
+    const req = https.request({
+      hostname: BASE.hostname, port: BASE.port, path: '/v1/chat/completions', method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': UA, 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Content-Length': Buffer.byteLength(body) },
+    }, (res) => {
+      status = res.statusCode;
+      res.on('data', (c) => {
+        if (!firstByte) firstByte = Date.now() - t0;
+        const s = c.toString();
+        if (status !== 200) { errBody += s; return; }
+        for (const line of s.split('\n')) {
+          const l = line.trim(); if (!l.startsWith('data:')) continue;
+          const p = l.slice(5).trim(); if (!p || p === '[DONE]') continue;
+          try {
+            const d = JSON.parse(p).choices?.[0]?.delta;
+            if (d && (d.reasoning_content || d.reasoning)) reasoningSeen = true;
+            if (d && d.content) { if (!firstContent) firstContent = Date.now() - t0; chunks++; text += d.content; }
+          } catch (_) {}
+        }
+      });
+      res.on('end', () => resolve({ status, firstByteMs: firstByte, firstContentMs: firstContent, totalMs: Date.now() - t0, chunks, reasoningSeen, text: text.slice(0, 50), errBody: errBody.slice(0, 160) }));
+    });
+    req.on('error', (e) => resolve({ status: -1, firstByteMs: firstByte, totalMs: Date.now() - t0, chunks, reasoningSeen, errBody: e.message }));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve({ status: -2, firstByteMs: firstByte, firstContentMs: firstContent, totalMs: Date.now() - t0, chunks, reasoningSeen, errBody: `client-timeout ${timeoutMs}ms` }); });
+    req.write(body); req.end();
+  });
+}
+
+async function diagnose45(token) {
+  console.log(`\n${'═'.repeat(78)}`);
+  console.log('grok-4.5 REASONING/TIMEOUT DIAGNOSIS  (agent-like: system prompt + tools + stream, 200s cap)');
+  console.log('The app times out at 60s of socket IDLE. firstByte>60000ms ⇒ silent reasoning kills it.');
+  console.log('═'.repeat(78));
+  const variants = [
+    ['default + 24 tools           [device repro]', { tools: 24, variant: {} }],
+    ['reasoning:{effort:none}+24t  [OR heartbeat shape]', { tools: 24, variant: { reasoning: { effort: 'none' } } }],
+    ['reasoning:{effort:low} + 24t [OR low]', { tools: 24, variant: { reasoning: { effort: 'low' } } }],
+    ['reasoning_effort:low + 24t   [o-series str]', { tools: 24, variant: { reasoning_effort: 'low' } }],
+    ['reasoning_effort:minimal+24t [o-series min]', { tools: 24, variant: { reasoning_effort: 'minimal' } }],
+    ['no tools, no reasoning       [control]', { tools: 0, variant: {} }],
+  ];
+  for (const model of ['grok-4.5', 'grok-4.3']) {
+    console.log(`\n── ${model} ──`);
+    for (const [label, opts] of variants) {
+      const r = await chatStreamTimed(token, model, { ...opts, timeoutMs: 150000 });
+      const v = r.status === 200 ? (r.chunks > 0 ? 'OK' : 'EMPTY-200') : (r.status === -2 ? 'CLIENT-TIMEOUT' : verdict(r.status));
+      console.log(`  ${label.padEnd(46)} status=${String(r.status).padStart(4)} firstByte=${String(r.firstByteMs || 0).padStart(6)}ms firstContent=${String(r.firstContentMs || 0).padStart(6)}ms total=${String(r.totalMs).padStart(6)}ms chunks=${String(r.chunks || 0).padStart(3)} reasoningStreamed=${r.reasoningSeen ? 'Y' : 'n'}  ${v} ${r.errBody || ('"' + (r.text || '') + '"')}`);
+    }
+  }
+  console.log('\n── FIX LEVER: a variant whose grok-4.5 firstByte<60000ms (streams early) OR total<~55s is the app-side fix (send that param / consume the early stream). If none, grok-4.5 needs a model-aware idle timeout > its total.');
+}
+
 // ── the sweep ────────────────────────────────────────────────────────────────
 async function runSweep(label, token) {
   console.log(`\n${'═'.repeat(78)}`);
@@ -342,8 +423,17 @@ async function loginForToken() {
 (async function main() {
   loadEnvTest();
   const useLogin = process.argv.includes('--login');
+  const useDiagnose = process.argv.includes('--diagnose'); // grok-4.5 reasoning/timeout probe (implies a login)
   const apiKey = (process.env.XAI_API_KEY || '').trim();
   const oauthTok = (process.env.XAI_OAUTH_TOKEN || '').trim();
+
+  if (useDiagnose) {
+    try {
+      const t = oauthTok || (await loginForToken());
+      await diagnose45(t);
+    } catch (e) { console.error('\n[FATAL] ' + (e && e.stack || e)); process.exit(1); }
+    process.exit(0);
+  }
 
   if (!useLogin && !apiKey && !oauthTok) {
     console.error('No credential found. Put ONE of these in tests/xai-models/.env.test:');

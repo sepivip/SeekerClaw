@@ -177,7 +177,7 @@ object ConfigClaimImporter {
             "openai" -> "gpt-5.4"
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
-            "xai" -> "grok-4.5" // BAT-1124
+            "xai" -> "grok-4.3" // BAT-1124
             else -> "claude-opus-4-8"
         }
         // Trim like botToken/ownerId above: reconcile's equality gate

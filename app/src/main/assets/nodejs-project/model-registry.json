@@ -73,14 +73,10 @@
       "consoleUrl": "https://console.x.ai",
       "keysUrl": "https://console.x.ai/api-keys",
       "freeform": false,
-      "defaultModel": "grok-4.5",
+      "defaultModel": "grok-4.3",
       "models": [
         { "id": "grok-4.5",                     "displayName": "Grok 4.5",               "reasoningSupport": "yes" },
-        { "id": "grok-4.3",                     "displayName": "Grok 4.3",               "reasoningSupport": "yes" },
-        { "id": "grok-4.20-0309-reasoning",     "displayName": "Grok 4.20 Reasoning",     "reasoningSupport": "yes" },
-        { "id": "grok-4.20-0309-non-reasoning", "displayName": "Grok 4.20 Non-Reasoning", "reasoningSupport": "no"  },
-        { "id": "grok-4.20-multi-agent-0309",   "displayName": "Grok 4.20 Multi-Agent",   "reasoningSupport": "yes" },
-        { "id": "grok-build-0.1",               "displayName": "Grok Build 0.1",          "reasoningSupport": "no"  }
+        { "id": "grok-4.3",                     "displayName": "Grok 4.3",               "reasoningSupport": "yes" }
       ]
     }
   ]

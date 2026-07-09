@@ -327,7 +327,7 @@ const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 1
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
-    : PROVIDER === 'xai' ? 'grok-4.5'
+    : PROVIDER === 'xai' ? 'grok-4.3'
     : 'claude-opus-4-8';
 // BAT-513: model resolves from runtime_state.json first, then
 // config.json, then the per-provider safe default. The agent_settings.json

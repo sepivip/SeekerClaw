@@ -223,7 +223,7 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 - On the **first** login, `/v1/models` can 403 because API access provisions *lazily on first touch* — the provider retries once after a short delay, so a single transient 403 is expected and self-heals.
 - A **persistent** 403 means the account's Grok tier does not include `api.x.ai` access. This is NOT an auth failure — do NOT trigger a token refresh or ask the user to re-login (that would burn xAI's single-use refresh-token rotation for nothing).
 **Fix:** Tell the user to add an **xAI API key** instead: Settings > AI Provider > xAI > Auth Type → API Key, and paste a key from `console.x.ai`. The api_key path is always selectable even while OAuth is the chosen auth type.
-- **api_key mode 403 (BAT-1124):** an api_key 403 is a real credit/tier gate — **terminal on the FIRST hit** (the retry-once grace is OAuth-first-touch only, never api_key). Message: "Your xAI API key doesn't have access to this model or endpoint. Check your plan at `console.x.ai`." Fix: the key lacks access to that model/endpoint — check the plan, or pick a broadly-available model (`grok-4.3`). Note `grok-4.5` is the default but can be tier-gated on some accounts.
+- **api_key mode 403 (BAT-1124):** an api_key 403 is a real credit/tier gate — **terminal on the FIRST hit** (the retry-once grace is OAuth-first-touch only, never api_key). Message: "Your xAI API key doesn't have access to this model or endpoint. Check your plan at `console.x.ai`." Fix: the key lacks access to that model/endpoint — check the plan, or pick a broadly-available model (`grok-4.3`, the default).
 - **Billing / quota (402, or 429 with a quota/credit message):** mode-aware — an **OAuth** user sees "check your SuperGrok / X Premium+ subscription" (their billing lives on their X subscription, NOT `console.x.ai`); an **api_key** user sees "check billing at `console.x.ai`". A plain 429 (no quota text) is transient rate-limiting and self-heals with backoff.
 
 ### xAI Grok OAuth — Token Refresh / Persist Failure
@@ -236,6 +236,13 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 1. Check the exact error: `grep "xAI.*refresh\|persist" node_debug.log | tail -5`.
 2. Tell the user to re-sign-in: Settings > AI Provider > xAI > Sign in with Grok (overwrites the stored tokens; sign-out first is not required).
 3. If re-login isn't possible, switch Auth Type to "API Key" and provide a `console.x.ai` key.
+
+### xAI Grok — grok-4.5 slow / "not responding" (reasoning bound + first-touch provisioning)
+**Symptoms:** grok-4.5 hangs then fails while grok-4.3 replies fine. `node_debug.log` shows `[Trace] … timeoutSource:"transport" status:-1 error:"Timeout"` (~60s per attempt) on a grok-4.5 turn; OR a brand-new model 403s on the first message then works minutes later.
+**Diagnosis — two distinct, known causes:**
+- **Unbounded reasoning (fixed BAT-1124):** xAI honors the OpenAI-style `reasoning_effort` **string**, NOT OpenRouter's `reasoning:{effort}` **object**. With neither, grok-4.5 reasons UNBOUNDED — on a big agent request (many tools + system prompt) that is >60s of *silent* reasoning, tripping the 60s socket-idle timeout; grok-4.3 (lighter) answers in ~3s. `providers/xai.js formatRequest` now always sends `reasoning_effort` (`minimal` for heartbeats, `high` when the user enables reasoning, else `low`). Reproduce/verify with `node tests/xai-models/live-models.test.js --diagnose`.
+- **First-touch provisioning:** a brand-new xAI model 403s on its very FIRST request (API access provisions lazily), then works a few minutes later — the same 403→200 pattern a fresh account shows on grok-4.3. The 403 retry-once grace can be too short for this; if a 403 persists on a model you know exists, wait ~1 min and retry before assuming a permanent tier-gate.
+**Fix/check:** confirm `formatRequest` emits `reasoning_effort`; for a first-touch 403 on a known-good model, retry after a minute.
 
 ---
 

@@ -118,10 +118,21 @@ function buildHeaders(apiKey) {
 
 // ── Request building ────────────────────────────────────────────────────────
 // Clean Chat Completions body — copied from custom.js's chat_completions
-// branch. Deliberately NO cache_control / models-fallback (openrouter.js)
-// and NO store:false / reasoning shaping (openai.js Codex). xAI ignores
-// unknown fields, but we keep the body minimal to avoid surprise 400s.
-function formatRequest(model, maxTokens, systemPrompt, messages, tools) {
+// branch. Deliberately NO cache_control / models-fallback (openrouter.js) and
+// NO store:false (openai.js Codex).
+//
+// BAT-1124 reasoning fix (proven live in tests/xai-models `--diagnose`): xAI
+// HONORS the OpenAI-style `reasoning_effort` STRING; it does NOT honor
+// OpenRouter's `reasoning:{effort}` object. With NO effort bound, a reasoning
+// model (grok-4.5) reasons UNBOUNDED — on a large agent request (64 tools + big
+// system prompt) that is >60s of SILENT reasoning with no streamed tokens,
+// tripping the app's 60s socket-idle timeout; grok-4.3 (lighter) still answers
+// in ~3s. Diagnosis: `reasoning_effort:low|minimal` → fast + content; the object
+// shape / no field → empty content or timeout. So bound EVERY xAI request:
+//   heartbeat/synthetic (reasoningMode==='off')            → 'minimal'
+//   user-enabled reasoning on a reasoning-capable model    → 'high'
+//   otherwise (responsive interactive default)             → 'low'
+function formatRequest(model, maxTokens, systemPrompt, messages, tools, requestOptions) {
     const body = {
         model,
         stream: true,
@@ -129,6 +140,10 @@ function formatRequest(model, maxTokens, systemPrompt, messages, tools) {
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
     };
     if (tools && tools.length > 0) body.tools = tools;
+    const ro = requestOptions || {};
+    body.reasoning_effort = ro.reasoningMode === 'off'
+        ? 'minimal'
+        : (ro.reasoningEnabled === true && ro.reasoningSupport === 'yes' ? 'high' : 'low');
     return JSON.stringify(body);
 }
 
@@ -417,9 +432,10 @@ module.exports = {
     streamProtocol,
 
     // Message translation — delegated to the openrouter Chat Completions
-    // shaping (identical to how custom.js reuses it). Reasoning round-trip is
-    // inert for Grok (captured but not echoed — Grok isn't a DeepSeek-gated
-    // model), so no reasoning fields reach api.x.ai.
+    // shaping (identical to how custom.js reuses it). Reasoning ECHO (the
+    // reasoning_content round-trip) is inert for Grok, but reasoning CONTROL is
+    // NOT: formatRequest() sends `reasoning_effort` (see there) — required to
+    // bound grok-4.5's otherwise-unbounded reasoning (BAT-1124).
     toApiMessages: openrouter.toApiMessages,
     fromApiResponse: openrouter.fromApiResponse,
     formatSystemPrompt: openrouter.formatSystemPrompt,
