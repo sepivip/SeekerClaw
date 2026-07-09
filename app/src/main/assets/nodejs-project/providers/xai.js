@@ -69,20 +69,30 @@ const isOAuth = AUTH_TYPE === 'oauth';
 
 // ── Connection details ──────────────────────────────────────────────────────
 
-// Same host + endpoint for api_key AND oauth. XAI_BASE_URL overrides the host
-// for device tests / self-hosted gateways; the path stays chat/completions.
-function _resolveXaiHost() {
+// Same base for api_key AND oauth. XAI_BASE_URL overrides the inference base
+// (protocol + host + port) for device tests / self-hosted gateways; the path
+// stays chat/completions. Returns all three pieces ai.js/http.js plumb through
+// so a gateway on http:// or a non-443 port actually works — parsing only the
+// hostname (as this used to) silently dropped protocol/port. Malformed / unset
+// → the canonical api.x.ai over https:443.
+function _resolveXaiBase() {
     const raw = (typeof process.env.XAI_BASE_URL === 'string' ? process.env.XAI_BASE_URL : '').trim();
-    if (!raw) return 'api.x.ai';
+    const DEFAULT = { protocol: 'https:', hostname: 'api.x.ai', port: undefined };
+    if (!raw) return DEFAULT;
     try {
         const u = new URL(raw.includes('://') ? raw : `https://${raw}`);
-        return u.hostname || 'api.x.ai';
+        return {
+            protocol: u.protocol || 'https:',
+            hostname: u.hostname || 'api.x.ai',
+            // Explicit port only; undefined lets http.js use the protocol default (443/80).
+            port: u.port ? parseInt(u.port, 10) : undefined,
+        };
     } catch (_) {
-        return 'api.x.ai';
+        return DEFAULT;
     }
 }
 
-const endpoint = { hostname: _resolveXaiHost(), path: '/v1/chat/completions' };
+const endpoint = { ..._resolveXaiBase(), path: '/v1/chat/completions' };
 
 // Live in-memory token pair. Seeded from config; rotated by refreshOAuthToken.
 let _currentOAuthToken = XAI_OAUTH_TOKEN;
@@ -392,7 +402,7 @@ async function handleUnauthorized() {
 // (lazy provisioning) and would falsely report a signed-in user as "not
 // connected". This structural export exists for adapter parity; the Node
 // path does not invoke it.
-const testEndpoint = { hostname: endpoint.hostname, path: '/v1/chat/completions', method: 'POST' };
+const testEndpoint = { protocol: endpoint.protocol, hostname: endpoint.hostname, port: endpoint.port, path: '/v1/chat/completions', method: 'POST' };
 
 // ── Export adapter ──────────────────────────────────────────────────────────
 

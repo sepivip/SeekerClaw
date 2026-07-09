@@ -144,6 +144,44 @@ function restoreHttps() { https.request = _origHttpsRequest; }
         xai.OAUTH_CLIENT_ID === 'b1a00492-073a-47ea-816f-4c329264a828', xai.OAUTH_CLIENT_ID);
 })();
 
+// ── XAI_BASE_URL: protocol + host + port override (self-hosted gateway) ──────
+
+(function testBaseUrlOverride() {
+    console.log('\n── XAI_BASE_URL: protocol + host + port override ──');
+    // The endpoint is resolved at module load from process.env.XAI_BASE_URL, so
+    // set it BEFORE loadXai() re-requires the module. Copilot (PR #434): parsing
+    // only the hostname silently dropped protocol/port, breaking the "self-hosted
+    // gateway" use case the code comment claims to support — ai.js/http.js plumb
+    // all three (http.js picks http vs https from endpoint.protocol).
+    const prev = process.env.XAI_BASE_URL;
+    try {
+        delete process.env.XAI_BASE_URL;
+        const def = loadXai({ authType: 'api_key', apiKey: 'xai-k' });
+        ok('default endpoint hostname → api.x.ai', def.endpoint.hostname === 'api.x.ai', def.endpoint.hostname);
+        ok('default endpoint protocol → https:', def.endpoint.protocol === 'https:', def.endpoint.protocol);
+        ok('default endpoint port → undefined (http.js uses 443)', def.endpoint.port === undefined, String(def.endpoint.port));
+
+        process.env.XAI_BASE_URL = 'http://192.168.1.5:8080';
+        const gw = loadXai({ authType: 'api_key', apiKey: 'xai-k' });
+        ok('override protocol → http: (so http.js uses http, not https)', gw.endpoint.protocol === 'http:', gw.endpoint.protocol);
+        ok('override hostname → 192.168.1.5', gw.endpoint.hostname === '192.168.1.5', gw.endpoint.hostname);
+        ok('override port → 8080 (number, not dropped)', gw.endpoint.port === 8080, String(gw.endpoint.port));
+
+        process.env.XAI_BASE_URL = 'gateway.internal'; // bare host, no scheme
+        const bare = loadXai({ authType: 'api_key', apiKey: 'xai-k' });
+        ok('bare host defaults protocol → https:', bare.endpoint.protocol === 'https:', bare.endpoint.protocol);
+        ok('bare host parsed → gateway.internal', bare.endpoint.hostname === 'gateway.internal', bare.endpoint.hostname);
+        ok('bare host port → undefined (→443)', bare.endpoint.port === undefined, String(bare.endpoint.port));
+
+        process.env.XAI_BASE_URL = 'not a url ::::';
+        const bad = loadXai({ authType: 'api_key', apiKey: 'xai-k' });
+        ok('malformed override falls back to api.x.ai https (never throws at load)',
+            bad.endpoint.hostname === 'api.x.ai' && bad.endpoint.protocol === 'https:', `${bad.endpoint.protocol}//${bad.endpoint.hostname}`);
+    } finally {
+        if (prev === undefined) delete process.env.XAI_BASE_URL; else process.env.XAI_BASE_URL = prev;
+    }
+})();
+
 // ── classifyError matrix (C1 is the star) ────────────────────────────────────
 
 (function testClassifyError() {

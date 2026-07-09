@@ -1170,10 +1170,6 @@ private fun ProviderSetupStep(
     // Shared OAuth controllers — same flow as Settings, syncs via configVersion.
     val oauthController = rememberOpenAIOAuthController(context)
     val xaiOAuthController = rememberXaiOAuthController(context)
-    val isValid = apiKey.trim().isNotBlank() &&
-        ConfigManager.validateCredential(apiKey.trim(), effectiveAuthType) == null &&
-        apiKeyError == null
-
     // Inline test state for the API key field
     val scope = rememberCoroutineScope()
     var keyTestState by remember { mutableStateOf<ActionResult>(ActionResult.Idle) }
