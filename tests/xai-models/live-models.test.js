@@ -228,8 +228,9 @@ function chatStreamTimed(token, model, { variant = {}, tools = 0, timeoutMs = 20
       ...variant,
     };
     const body = JSON.stringify(payload);
-    const req = https.request({
-      hostname: BASE.hostname, port: BASE.port, path: '/v1/chat/completions', method: 'POST',
+    const mod = BASE.protocol === 'http:' ? http : https; // honor an http:// XAI_BASE_URL gateway
+    const req = mod.request({
+      protocol: BASE.protocol, hostname: BASE.hostname, port: BASE.port, path: '/v1/chat/completions', method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': UA, 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Content-Length': Buffer.byteLength(body) },
     }, (res) => {
       status = res.statusCode;

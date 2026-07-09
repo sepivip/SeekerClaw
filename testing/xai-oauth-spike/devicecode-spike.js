@@ -79,7 +79,10 @@ function request(urlStr, { method = 'GET', headers = {}, body = null } = {}) {
       hostname: u.hostname,
       port: u.port || 443,
       path: u.pathname + u.search,
-      headers: { Accept: 'application/json', ...headers },
+      // auth.x.ai is Cloudflare UA-gated — send a non-empty SeekerClaw UA
+      // (matches loopback-spike + the app) so token polling/refresh isn't
+      // false-failed on a bot-block. Caller-supplied headers can override.
+      headers: { Accept: 'application/json', 'User-Agent': 'SeekerClaw/spike', ...headers },
     };
     const req = https.request(opts, (res) => {
       let data = '';
