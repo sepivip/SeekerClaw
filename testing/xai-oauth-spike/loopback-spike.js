@@ -232,6 +232,10 @@ async function exchangeCode(code, verifier) {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
+      // auth.x.ai is Cloudflare UA-gated — a non-empty SeekerClaw UA keeps the
+      // token-exchange / refresh-rotation grants from being bot-blocked (matches
+      // the app + devicecode-spike). Not a secret.
+      'User-Agent': 'SeekerClaw/spike',
     },
     body: body.toString(),
   });
@@ -259,6 +263,10 @@ async function refreshGrant(refreshToken) {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
+      // auth.x.ai is Cloudflare UA-gated — a non-empty SeekerClaw UA keeps the
+      // token-exchange / refresh-rotation grants from being bot-blocked (matches
+      // the app + devicecode-spike). Not a secret.
+      'User-Agent': 'SeekerClaw/spike',
     },
     body: body.toString(),
   });

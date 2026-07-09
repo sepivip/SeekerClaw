@@ -247,6 +247,13 @@ async function listModels(accessToken) {
     method: 'GET',
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+  if (res.status === 403) {
+    // /v1/models 403s during first-touch provisioning even when chat inference
+    // already works (see contract §3 / README) — informational, NOT fatal, so
+    // the spike still proceeds to the refresh/rotation steps with a valid token.
+    log(`Models 403 (first-touch provisioning; chat inference may still work) — ${res.body}`);
+    return [];
+  }
   if (res.status !== 200) {
     throw new Error(`Models request failed: HTTP ${res.status} — ${res.body}`);
   }

@@ -38,7 +38,11 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 // ── app-parity constants — MUST match providers/xai.js + XaiOAuthActivity.kt ──
-const UA = 'SeekerClaw/2.1.1'; // == BuildConfig.VERSION_NAME; api.x.ai sees this exact UA on-device
+// A SeekerClaw-style UA (api.x.ai + the CF-gated auth.x.ai see this). Defaults to
+// a current app version but is OVERRIDABLE via XAI_UA for exact device parity —
+// the app's real UA is `SeekerClaw/<BuildConfig.VERSION_NAME>`, which bumps each
+// release, so don't treat this constant as a hard "must match".
+const UA = process.env.XAI_UA || 'SeekerClaw/2.1.1';
 const OAUTH_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
 const AUTH_ORIGIN = 'https://auth.x.ai';
 const AUTHORIZE_URL = `${AUTH_ORIGIN}/oauth2/authorize`;
