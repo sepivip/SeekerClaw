@@ -55,7 +55,8 @@ function log(...a) {
 }
 function redact(token) {
   if (!token || typeof token !== 'string') return '(absent)';
-  return `PRESENT [REDACTED] (len=${token.length}, head=${token.slice(0, 4)}…)`;
+  // Never print any token material — not even a prefix (partial tokens still leak).
+  return `PRESENT [REDACTED] (len=${token.length})`;
 }
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));

@@ -47,7 +47,7 @@ human with a **SuperGrok / X Premium+** account can confirm.
    status + model count.
 
 Tokens, the auth code, and the id_token are **never printed raw** — only
-`present` / length / 6-char prefix.
+`present` / length (no token material is logged, not even a prefix).
 
 ### Requirements
 

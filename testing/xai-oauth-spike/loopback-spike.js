@@ -12,7 +12,8 @@
  *      /v1/responses; GET /v1/models is reported but not required for PASS)
  *
  * SECURITY: nothing secret is hardcoded. Tokens are NEVER printed raw --
- * only length + short prefix + a boolean "present" flag are logged.
+ * only length + a boolean "present" flag are logged (no token material, not
+ * even a prefix).
  *
  * Runtime: Node 18+ (uses global fetch / crypto.webcrypto). Node builtins
  * only -- no npm install.
@@ -64,20 +65,17 @@ function sha256(str) {
   return crypto.createHash('sha256').update(str).digest();
 }
 
-// Redact a token: never print it raw. Show only whether it exists, its
-// length, and a tiny non-sensitive prefix so two tokens can be compared.
+// Redact a token: never print it raw or any slice of it. Show only whether it
+// exists and its length — no token material, not even a prefix. Rotation is
+// detected by comparing the full tokens in-memory (see below), not by prefix.
 function redact(token) {
-  if (!token || typeof token !== 'string') return { present: false, length: 0, prefix: '(none)' };
-  return {
-    present: true,
-    length: token.length,
-    prefix: token.slice(0, 6) + '...', // 6 chars is not enough to reconstruct anything useful
-  };
+  if (!token || typeof token !== 'string') return { present: false, length: 0 };
+  return { present: true, length: token.length };
 }
 
 function describeToken(label, token) {
   const r = redact(token);
-  console.log(`      ${label}: present=${r.present} length=${r.length} prefix=${r.prefix}`);
+  console.log(`      ${label}: present=${r.present} length=${r.length}`);
 }
 
 // fetch with a hard timeout via AbortController
@@ -424,7 +422,7 @@ async function main() {
       if (newRefresh) {
         rotated = newRefresh !== tokens.refresh_token;
         console.log(`      >> refresh_token ROTATED: ${rotated} ` +
-          `(old prefix ${redact(tokens.refresh_token).prefix} vs new prefix ${redact(newRefresh).prefix})`);
+          `(compared full tokens in-memory; neither printed)`);
       } else {
         console.log('      >> No refresh_token returned on refresh (cannot determine rotation).');
       }
