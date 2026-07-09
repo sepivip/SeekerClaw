@@ -173,11 +173,14 @@ function chatStream(token, model, { maxTokens = 64, prompt = 'ping', extra = {} 
       },
     }, (res) => {
       status = res.statusCode;
+      let sseBuf = ''; // preserve a partial data: line across TCP chunk boundaries
       res.on('data', (c) => {
         const s = c.toString();
         if (status !== 200) { errBody += s; return; }
-        for (const line of s.split('\n')) {
-          const l = line.trim();
+        sseBuf += s;
+        let nl;
+        while ((nl = sseBuf.indexOf('\n')) >= 0) {
+          const l = sseBuf.slice(0, nl).trim(); sseBuf = sseBuf.slice(nl + 1);
           if (!l.startsWith('data:')) continue;
           const payload = l.slice(5).trim();
           if (!payload || payload === '[DONE]') continue;
@@ -234,12 +237,16 @@ function chatStreamTimed(token, model, { variant = {}, tools = 0, timeoutMs = 20
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': UA, 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Content-Length': Buffer.byteLength(body) },
     }, (res) => {
       status = res.statusCode;
+      let sseBuf = ''; // preserve a partial data: line across TCP chunk boundaries
       res.on('data', (c) => {
         if (!firstByte) firstByte = Date.now() - t0;
         const s = c.toString();
         if (status !== 200) { errBody += s; return; }
-        for (const line of s.split('\n')) {
-          const l = line.trim(); if (!l.startsWith('data:')) continue;
+        sseBuf += s;
+        let nl;
+        while ((nl = sseBuf.indexOf('\n')) >= 0) {
+          const l = sseBuf.slice(0, nl).trim(); sseBuf = sseBuf.slice(nl + 1);
+          if (!l.startsWith('data:')) continue;
           const p = l.slice(5).trim(); if (!p || p === '[DONE]') continue;
           try {
             const d = JSON.parse(p).choices?.[0]?.delta;
