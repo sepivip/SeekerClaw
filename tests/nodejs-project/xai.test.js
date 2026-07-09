@@ -339,9 +339,16 @@ async function testHandleUnauthorized() {
     ok('ai.js declares `let headers` (reassignable for the rebuild)', /\blet headers\b/.test(aiSrc));
     const authIdx = aiSrc.indexOf('handleUnauthorized()');
     ok('ai.js still calls handleUnauthorized() in the retry loop', authIdx !== -1);
-    const afterCall = authIdx !== -1 ? aiSrc.slice(authIdx, authIdx + 1200) : '';
-    ok('ai.js rebuilds headers via buildHeaders AFTER the OAuth refresh',
-        /headers\s*=\s*adapter\.buildHeaders\(/.test(afterCall));
+    // handleUnauthorized SIGNALS a successful refresh by THROWING {retryable:true}
+    // (not by returning), so the header rebuild must live AFTER the try/catch —
+    // reachable when the throw is caught-and-not-broken. A rebuild INSIDE the try
+    // (before the throw) is dead code on the success path (Copilot PR #434 caught
+    // exactly this). Pin the structural ordering: the rebuild must come AFTER the
+    // `catch`, not between `handleUnauthorized()` and `catch`.
+    const catchIdx = authIdx !== -1 ? aiSrc.indexOf('catch', authIdx) : -1;
+    const rebuildIdx = authIdx !== -1 ? aiSrc.indexOf('headers = adapter.buildHeaders(', authIdx) : -1;
+    ok('ai.js rebuilds headers AFTER the handleUnauthorized try/catch (reachable on the retryable-throw success path)',
+        catchIdx !== -1 && rebuildIdx !== -1 && rebuildIdx > catchIdx, `catchIdx=${catchIdx} rebuildIdx=${rebuildIdx}`);
 })();
 
 // ── Runner ───────────────────────────────────────────────────────────────────

@@ -1819,18 +1819,20 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     if (errClass.type === 'auth' && typeof adapter.handleUnauthorized === 'function') {
                         try {
                             await adapter.handleUnauthorized();
-                            // Rebuild headers so the retry carries the freshly-rotated bearer.
-                            // buildHeaders re-reads the adapter's current OAuth token (which
-                            // handleUnauthorized just updated); the pre-loop `headers` still
-                            // holds the EXPIRED token. Without this, the retry re-sends the
-                            // stale bearer → another 401 → and for xAI (whose only refresh
-                            // path is this loop) every attempt burns another single-use
-                            // refresh rotation — the H2 lockout risk this feature guards
-                            // against. No-op in api_key mode (buildHeaders returns the same key).
-                            headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
                         } catch (e) {
                             if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
                         }
+                        // IMPORTANT: handleUnauthorized signals a SUCCESSFUL refresh by
+                        // THROWING { retryable:true } (see xai.js/openai.js docstrings), and a
+                        // no-op (api_key mode) by returning normally — both mean "refreshed,
+                        // retry now". A non-retryable throw already `break`ed out above. So the
+                        // header rebuild MUST live HERE, after the try/catch: rebuilding inside
+                        // the try (before the throw) is unreachable on the success path. This
+                        // makes the retry carry the freshly-rotated bearer instead of the
+                        // pre-loop EXPIRED token — critical because this loop is xAI's ONLY
+                        // refresh path, so re-sending the stale bearer 401s again and burns a
+                        // single-use refresh rotation on every attempt. No-op for api_key/claude.
+                        headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
                     }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
                     const retryAfterMs = Math.min(retryAfterRaw * 1000, 30000);
