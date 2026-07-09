@@ -79,7 +79,7 @@
         { "id": "grok-4.20-0309-reasoning",     "displayName": "Grok 4.20 Reasoning",     "reasoningSupport": "yes" },
         { "id": "grok-4.20-0309-non-reasoning", "displayName": "Grok 4.20 Non-Reasoning", "reasoningSupport": "no"  },
         { "id": "grok-4.20-multi-agent-0309",   "displayName": "Grok 4.20 Multi-Agent",   "reasoningSupport": "yes" },
-        { "id": "grok-build-0.1",               "displayName": "Grok Build 0.1" }
+        { "id": "grok-build-0.1",               "displayName": "Grok Build 0.1",          "reasoningSupport": "no"  }
       ]
     }
   ]

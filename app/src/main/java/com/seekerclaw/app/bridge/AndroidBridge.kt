@@ -976,7 +976,7 @@ class AndroidBridge(
         return try {
             val config = ConfigManager.loadConfig(context)
                 ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
-            ConfigManager.persistXaiOAuthTokens(
+            val persisted = ConfigManager.persistXaiOAuthTokens(
                 context = context,
                 accessToken = accessToken,
                 // keep-old-if-blank: a refresh response can omit a new refresh_token.
@@ -984,7 +984,18 @@ class AndroidBridge(
                 email = config.xaiOAuthEmail, // preserve — Node never sends email
                 expiresAt = if (expiresAt.isNotBlank()) expiresAt else config.xaiOAuthExpiresAt,
             )
-            jsonResponse(200, mapOf("success" to true))
+            if (persisted) {
+                jsonResponse(200, mapOf("success" to true))
+            } else {
+                // commit=false → the rotated token did NOT hit disk. Tell Node so its
+                // single-flight refresh fails loud (H2) rather than assuming success and
+                // losing the single-use rotated refresh token on the next restart.
+                Log.w(TAG, "xAI OAuth token persist failed (commit=false)")
+                jsonResponse(500, mapOf(
+                    "error" to "Failed to persist xAI OAuth tokens",
+                    "code" to "XAI_OAUTH_SAVE_FAILED",
+                ))
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to save xAI OAuth tokens", e)
             jsonResponse(500, mapOf(

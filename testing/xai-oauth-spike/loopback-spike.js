@@ -8,7 +8,8 @@
  *   1. the authorize URL is accepted (login + consent screen renders)
  *   2. the code exchanges for an access_token + refresh_token + expires_in
  *   3. the refresh_token grant works AND whether the refresh token ROTATES
- *   4. the access_token actually authenticates inference (GET /v1/models)
+ *   4. the access_token authenticates inference (POST /v1/chat/completions +
+ *      /v1/responses; GET /v1/models is reported but not required for PASS)
  *
  * SECURITY: nothing secret is hardcoded. Tokens are NEVER printed raw --
  * only length + short prefix + a boolean "present" flag are logged.

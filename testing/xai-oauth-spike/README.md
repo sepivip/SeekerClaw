@@ -81,7 +81,7 @@ Exits `0` and prints `RESULT: PASS` only when **all** hold:
 - `access_token` returned by the code exchange,
 - `refresh_token` returned (requires `offline_access` scope),
 - `expires_in` returned,
-- `GET /v1/models` returns HTTP `200` with a model count `> 0`.
+- `POST /v1/chat/completions` **or** `/v1/responses` (model `grok-4.3`) returns HTTP `200` — real inference works. (`GET /v1/models` is reported for info but 403s on first-touch provisioning, so it does **not** gate PASS.)
 
 The refresh-rotation line is **informational** (reports `true`/`false` so we
 know how the app must persist refresh tokens); it does not by itself fail the run.

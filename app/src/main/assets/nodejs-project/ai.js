@@ -2108,6 +2108,14 @@ const MODEL_CONTEXT_LIMITS = {
     'gpt-5.4-mini':        200000,
     'gpt-5.2':             200000, // kept for existing users with 5.2 still selected (removed from UI dropdown)
     'gpt-5.3-codex':       200000,
+    // BAT-1124: xAI Grok context windows. grok-4.x is ~256k actual → 200000 mobile cap
+    // (consistent with the claude/gpt caps above); grok-build-0.1 kept at the conservative
+    // 128000 default (its window is unconfirmed). Raise if xAI publishes exact per-model sizes.
+    'grok-4.3':                     200000,
+    'grok-4.20-0309-reasoning':     200000,
+    'grok-4.20-0309-non-reasoning': 200000,
+    'grok-4.20-multi-agent-0309':   200000,
+    'grok-build-0.1':               128000,
 };
 const DEFAULT_CONTEXT_LIMIT = 128000; // conservative fallback for unknown models
 let _unknownModelWarned = false; // throttle: only warn once per process about unknown model

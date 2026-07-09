@@ -168,6 +168,9 @@ fun rememberXaiOAuthController(
             onSignedOut()
         },
         cancel = {
+            // BAT-1124 (CodeRabbit): stop the ACTIVE flow (loopback server + keep-alive service),
+            // not just local polling state, so a cancel doesn't leave the server bound to :56121.
+            XaiOAuthActivity.cancelActiveFlow(context)
             isPolling = false
             requestId = null
             error = null

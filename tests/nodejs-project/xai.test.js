@@ -296,7 +296,11 @@ async function testHandleUnauthorized() {
     // Anthropic key would be Bearer'd to api.x.ai. buildHeaders(api_key) above
     // covers the downstream Bearer==XAI_KEY behavior.
     const aiSrc = fs.readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
-    const importRegion = aiSrc.slice(0, aiSrc.indexOf('function getProviderApiKey'));
+    const fnIdx = aiSrc.indexOf('function getProviderApiKey');
+    // Guard indexOf === -1 (Copilot): a renamed function must FAIL the anchor assertion,
+    // not silently slice(0,-1) the whole file and pass a stale check.
+    ok('ai.js still declares getProviderApiKey (H3 anchor present)', fnIdx !== -1);
+    const importRegion = fnIdx !== -1 ? aiSrc.slice(0, fnIdx) : '';
     ok('ai.js imports XAI_KEY from config (H3)', /\bXAI_KEY\b/.test(importRegion));
     ok("ai.js getProviderApiKey has the `PROVIDER === 'xai' ? XAI_KEY` branch (H3)",
         /PROVIDER === 'xai'\s*\?\s*XAI_KEY/.test(aiSrc));

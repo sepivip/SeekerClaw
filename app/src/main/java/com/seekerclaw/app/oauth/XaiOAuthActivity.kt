@@ -119,6 +119,17 @@ class XaiOAuthActivity : ComponentActivity() {
             activeWriteState = WriteState.IDLE
         }
 
+        /**
+         * BAT-1124 (CodeRabbit): cancel an in-flight OAuth flow from OUTSIDE the Activity
+         * (the Settings "Cancel" button only sees the controller). Tears down the loopback
+         * server AND stops the keep-alive foreground service, so a cancel doesn't leave the
+         * server bound to 127.0.0.1:56121 or the keep-alive service running.
+         */
+        fun cancelActiveFlow(context: Context) {
+            resetActiveFlow()
+            OAuthKeepAliveService.stop(context.applicationContext)
+        }
+
         // ── Static token exchange ───────────────────────────────────────
 
         suspend fun exchangeCodeForTokensStatic(
@@ -176,6 +187,25 @@ class XaiOAuthActivity : ComponentActivity() {
                     })
                 }
                 Log.i(TAG, "Browser flow completed successfully")
+                // BAT-1124 (device-test UX): xAI completes the loopback exchange in the
+                // BACKGROUND and leaves the browser on its own "copy code into Grok Build"
+                // page — unlike OpenAI, whose redirect lands the user on our "Signed In" page.
+                // So the user would be stranded on a confusing browser tab with no "connected"
+                // signal. Pull SeekerClaw back to the foreground so they land on the Settings
+                // screen, which shows "Connected as <email>" from the result-file poller.
+                try {
+                    appCtx.startActivity(
+                        Intent(appCtx, com.seekerclaw.app.MainActivity::class.java).apply {
+                            addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            )
+                        }
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not bring app to foreground after xAI sign-in", e)
+                }
             } catch (e: Exception) {
                 // Log.w survives R8; the message deliberately omits tokens + PKCE verifier.
                 Log.w(TAG, "Exchange error: ${e.javaClass.simpleName}: ${e.message}")
@@ -706,8 +736,33 @@ class XaiOAuthActivity : ComponentActivity() {
             customTabsIntent.launchUrl(this, Uri.parse(authorizeUrl))
         } catch (e: Exception) {
             Log.w(TAG, "Custom Tabs unavailable, falling back to ACTION_VIEW", e)
-            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(authorizeUrl))
-            startActivity(browserIntent)
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authorizeUrl)))
+            } catch (e2: Exception) {
+                // BAT-1124 (CodeRabbit): no browser at all is TERMINAL — write an error result,
+                // tear down the server + keep-alive, and finish, so the UI poller doesn't hang to
+                // its 10-minute timeout waiting for a callback that can never arrive.
+                Log.e(TAG, "No browser available to open the authorize URL", e2)
+                synchronized(FLOW_LOCK) {
+                    activeServer?.stop(); activeServer = null
+                    activeFlowId = null
+                }
+                if (claimWrite()) {
+                    EXCHANGE_SCOPE.launch {
+                        try {
+                            writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                                put("status", "error")
+                                put("message", "No browser available to complete sign-in.")
+                            })
+                        } catch (writeErr: Exception) {
+                            Log.w(TAG, "Failed to write no-browser result", writeErr)
+                        } finally { markWriteCompleted() }
+                    }
+                }
+                OAuthKeepAliveService.stop(appCtx)
+                finish()
+                return
+            }
         }
 
         synchronized(FLOW_LOCK) {
@@ -734,7 +789,11 @@ class XaiOAuthActivity : ComponentActivity() {
                         activeServer = null
                         activeTimeoutJob = null
                         activeWriteState = WriteState.COMPLETED
+                        // BAT-1124 (CodeRabbit): fully reset flow state on timeout.
+                        activeFlowId = null
+                        activeCallbackReceived = false
                     }
+                    OAuthKeepAliveService.stop(appCtx) // BAT-1124 (CodeRabbit): stop keep-alive on timeout
                     activityRef.get()?.finishOnMain()
                 }
             }

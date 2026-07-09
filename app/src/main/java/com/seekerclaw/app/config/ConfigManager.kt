@@ -1792,7 +1792,7 @@ object ConfigManager {
         refreshToken: String,
         email: String,
         expiresAt: String,
-    ) {
+    ): Boolean {
         val editor = prefs(context).edit()
 
         if (accessToken.isNotBlank()) {
@@ -1848,6 +1848,11 @@ object ConfigManager {
         } else {
             LogCollector.append("[Config] Failed to persist xAI OAuth tokens (commit=false)", LogLevel.ERROR)
         }
+        // BAT-1124 (CodeRabbit): return the commit result so the bridge can PROPAGATE a
+        // persist failure to Node — H2 relies on the bridge returning {error} (not success)
+        // on an unpersisted rotation, so the turn fails loud instead of silently losing the
+        // rotated single-use refresh token (which would lock the account out on restart).
+        return persisted
     }
 
     /**
@@ -2189,9 +2194,15 @@ object ConfigManager {
                 // valid credentials.
                 config.openaiOAuthToken.isNotBlank() || config.openaiApiKey.isNotBlank()
             }
-            // BAT-1124: startable on EITHER credential (writeConfigJson downgrades
-            // oauth+blank → api_key), same as OpenAI above.
-            "xai" -> config.xaiOAuthToken.isNotBlank() || config.xaiApiKey.isNotBlank()
+            // BAT-1124 (CodeRabbit): validate the credential for the EFFECTIVE auth mode
+            // (matching writeConfigJson's oauth+blank→api_key downgrade), not "either".
+            // Otherwise api_key mode with a blank key but a STALE xaiOAuthToken would report
+            // "startable" while Node, on api_key, finds a blank key → process.exit(1).
+            "xai" -> if (config.authType == "oauth" && config.xaiOAuthToken.isNotBlank()) {
+                true // oauth mode with a live token
+            } else {
+                config.xaiApiKey.isNotBlank() // api_key mode, or oauth downgraded to api_key
+            }
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
             else -> config.activeCredential.isNotBlank()
