@@ -107,7 +107,7 @@ class XaiProviderContractTest {
         assertTrue("xai.keyHint must be present", xai.keyHint.isNotBlank())
         assertTrue("xai.consoleUrl must be present", xai.consoleUrl.isNotBlank())
         assertTrue("xai.keysUrl must be present", xai.keysUrl.isNotBlank())
-        assertEquals("grok-4.3", xai.defaultModel)
+        assertEquals("grok-4.5", xai.defaultModel)
         assertEquals(listOf("api_key", "oauth"), xai.authTypes)
         // defaultModel must be present in the model list (freeform:false, models:[] is unshippable).
         assertTrue(

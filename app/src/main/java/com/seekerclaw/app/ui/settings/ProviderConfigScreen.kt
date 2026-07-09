@@ -1349,6 +1349,10 @@ private suspend fun testXaiConnection(apiKey: String): Result<Unit> = withContex
  * (model `grok-4.3`), NOT `GET /v1/models`. On the FIRST OAuth login `/v1/models` returns
  * 403 (API access provisions lazily on first touch), which would falsely report a
  * freshly-signed-in user as "not connected". A minimal chat completion returns 200 instead.
+ *
+ * The ping model is deliberately `grok-4.3` (the stable always-available survivor — xAI's
+ * May-2026 retirements redirect TO it), NOT the registry default `grok-4.5`: a newer default
+ * can be tier-gated on some accounts and would make a working sign-in fail the connection test.
  */
 private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
     val url = URL("https://api.x.ai/v1/chat/completions")
@@ -1363,7 +1367,7 @@ private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
     conn.connectTimeout = 15000
     conn.readTimeout = 15000
     val payload = JSONObject().apply {
-        put("model", "grok-4.3")
+        put("model", "grok-4.3") // stable ping target, NOT the default grok-4.5 (see kdoc)
         put("max_tokens", 1)
         put(
             "messages",

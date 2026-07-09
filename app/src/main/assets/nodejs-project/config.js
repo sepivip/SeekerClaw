@@ -327,7 +327,7 @@ const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 1
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
-    : PROVIDER === 'xai' ? 'grok-4.3'
+    : PROVIDER === 'xai' ? 'grok-4.5'
     : 'claude-opus-4-8';
 // BAT-513: model resolves from runtime_state.json first, then
 // config.json, then the per-provider safe default. The agent_settings.json
@@ -643,7 +643,12 @@ if (!OWNER_ID) {
     log('WARNING: Owner ID not set — first inbound message will claim ownership. ' +
         'This is expected on first run; use the Android setup flow to set or reset the owner.', 'WARN');
 } else {
-    const authLabel = PROVIDER === 'claude' ? (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key') : 'api-key';
+    // Non-claude providers use the generic AUTH_TYPE — reflect oauth vs api-key
+    // accurately (an xAI/OpenAI OAuth session was previously mislabelled 'api-key'
+    // in node_debug.log, which misleads device-test log triage).
+    const authLabel = PROVIDER === 'claude'
+        ? (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key')
+        : (AUTH_TYPE === 'oauth' ? 'oauth' : 'api-key');
     log(`Agent: ${getAgentName()} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
 }
 

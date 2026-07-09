@@ -184,6 +184,17 @@ function restoreHttps() { https.request = _origHttpsRequest; }
     const xaiApi = loadXai({ authType: 'api_key', apiKey: 'xai-k' });
     const e401ak = xaiApi.classifyError(401, {});
     ok('401 (api_key): NOT auth + not retryable', e401ak.type !== 'auth' && e401ak.retryable === false);
+
+    // 403 in api_key mode is a REAL tier/credit gate — terminal on the FIRST hit.
+    // The provisioning retry-once grace is OAuth-only (Copilot review, PR #434); an
+    // api_key user must not get a wasted retry or a misleading "provisioning" message.
+    const eak403 = xaiApi.classifyError(403, {});
+    ok('403 (api_key, 1st): NOT retryable — terminal immediately (no OAuth grace)', eak403.retryable === false, `retryable=${eak403.retryable}`);
+    ok('403 (api_key, 1st): still NOT "auth" (C1 holds in api_key mode too)', eak403.type !== 'auth', eak403.type);
+    ok('403 (api_key, 1st): api_key tier-gate copy, NOT "provisioning — retrying"',
+        /API key doesn't have access to this model or endpoint/.test(eak403.userMessage)
+        && !/provisioning — retrying/.test(eak403.userMessage), eak403.userMessage);
+    ok('403 (api_key, 2nd): stays terminal', xaiApi.classifyError(403, {}).retryable === false);
 })();
 
 // ── refreshOAuthToken: single-flight + await-persist + H1 registration ───────
@@ -282,6 +293,14 @@ async function testHandleUnauthorized() {
         retrySignalled = e.retryable === true;
     }
     ok('oauth 401: handleUnauthorized throws { retryable:true } after refresh', retrySignalled === true);
+
+    // Stale-bearer fix (ai.js): after the refresh, buildHeaders() must reflect the
+    // ROTATED access token — this is exactly what ai.js re-reads to rebuild request
+    // headers before the retry. If buildHeaders still returned the old token, the
+    // retry would re-send the expired bearer and burn another single-use rotation.
+    const hdrAfter = xai.buildHeaders('unused-in-oauth-mode');
+    ok('post-refresh buildHeaders carries the ROTATED bearer (enables ai.js header rebuild)',
+        hdrAfter.Authorization === 'Bearer eyJr.o.t', hdrAfter.Authorization);
     restoreHttps();
 }
 
@@ -304,6 +323,25 @@ async function testHandleUnauthorized() {
     ok('ai.js imports XAI_KEY from config (H3)', /\bXAI_KEY\b/.test(importRegion));
     ok("ai.js getProviderApiKey has the `PROVIDER === 'xai' ? XAI_KEY` branch (H3)",
         /PROVIDER === 'xai'\s*\?\s*XAI_KEY/.test(aiSrc));
+})();
+
+// ── ai.js rebuilds request headers after an OAuth 401 refresh (stale-bearer) ──
+
+(function testHeaderRebuildAfterRefresh() {
+    console.log('\n── ai.js: retry rebuilds headers after handleUnauthorized ──');
+    // ai.js can't be require()d in isolation, so pin the fix at the source level.
+    // The 'auth' retry branch MUST rebuild `headers` (via buildHeaders) AFTER
+    // awaiting handleUnauthorized — otherwise the retry re-sends the expired bearer
+    // and, for xAI (whose only refresh path is this loop), burns a single-use
+    // refresh rotation on every attempt. buildHeaders-after-refresh above proves
+    // the adapter side; this proves ai.js actually re-reads it.
+    const aiSrc = fs.readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
+    ok('ai.js declares `let headers` (reassignable for the rebuild)', /\blet headers\b/.test(aiSrc));
+    const authIdx = aiSrc.indexOf('handleUnauthorized()');
+    ok('ai.js still calls handleUnauthorized() in the retry loop', authIdx !== -1);
+    const afterCall = authIdx !== -1 ? aiSrc.slice(authIdx, authIdx + 1200) : '';
+    ok('ai.js rebuilds headers via buildHeaders AFTER the OAuth refresh',
+        /headers\s*=\s*adapter\.buildHeaders\(/.test(afterCall));
 })();
 
 // ── Runner ───────────────────────────────────────────────────────────────────

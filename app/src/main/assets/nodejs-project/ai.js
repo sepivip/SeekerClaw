@@ -1715,7 +1715,9 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         const adapter = getAdapter(PROVIDER);
         const endpoint = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
         const apiKey = getProviderApiKey();
-        const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+        // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
+        // retry carries the freshly-rotated bearer, not the expired one.
+        let headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -1814,8 +1816,19 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                 const errClass = classifyApiError(res.status, res.data);
                 if (errClass.retryable && retries < MAX_RETRIES) {
                     // OAuth 401: refresh token before retry so the next attempt uses new credentials
-                    if (errClass.type === 'auth' && typeof getAdapter(PROVIDER).handleUnauthorized === 'function') {
-                        try { await getAdapter(PROVIDER).handleUnauthorized(); } catch (e) {
+                    if (errClass.type === 'auth' && typeof adapter.handleUnauthorized === 'function') {
+                        try {
+                            await adapter.handleUnauthorized();
+                            // Rebuild headers so the retry carries the freshly-rotated bearer.
+                            // buildHeaders re-reads the adapter's current OAuth token (which
+                            // handleUnauthorized just updated); the pre-loop `headers` still
+                            // holds the EXPIRED token. Without this, the retry re-sends the
+                            // stale bearer → another 401 → and for xAI (whose only refresh
+                            // path is this loop) every attempt burns another single-use
+                            // refresh rotation — the H2 lockout risk this feature guards
+                            // against. No-op in api_key mode (buildHeaders returns the same key).
+                            headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+                        } catch (e) {
                             if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
                         }
                     }
@@ -2108,9 +2121,10 @@ const MODEL_CONTEXT_LIMITS = {
     'gpt-5.4-mini':        200000,
     'gpt-5.2':             200000, // kept for existing users with 5.2 still selected (removed from UI dropdown)
     'gpt-5.3-codex':       200000,
-    // BAT-1124: xAI Grok context windows. grok-4.x is ~256k actual → 200000 mobile cap
-    // (consistent with the claude/gpt caps above); grok-build-0.1 kept at the conservative
+    // BAT-1124: xAI Grok context windows. grok-4.x is ~256k+ actual (grok-4.5 ~500k) →
+    // 200000 mobile cap (consistent with the claude/gpt caps above); grok-build-0.1 kept at the conservative
     // 128000 default (its window is unconfirmed). Raise if xAI publishes exact per-model sizes.
+    'grok-4.5':                     200000,
     'grok-4.3':                     200000,
     'grok-4.20-0309-reasoning':     200000,
     'grok-4.20-0309-non-reasoning': 200000,

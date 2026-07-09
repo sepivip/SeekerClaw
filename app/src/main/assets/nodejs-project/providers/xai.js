@@ -17,8 +17,8 @@
 //  - C1: a 403 is NEVER type:'auth' — ai.js gates handleUnauthorized() on
 //        type==='auth', and firing a refresh on a 403 would burn xAI's
 //        SINGLE-USE refresh-token rotation. 403 = lazy-provisioning /
-//        tier-gate; retry ONCE (module one-shot flag, not MAX_RETRIES)
-//        then terminal.
+//        tier-gate; OAuth first-touch retries ONCE (module one-shot flag,
+//        not MAX_RETRIES) then terminal — api_key 403s are terminal at once.
 //  - H1: rotated access+refresh tokens are registered with the redactor
 //        BEFORE any log() so they never leak into node_debug.log.
 //  - H2: refreshOAuthToken is single-flight (concurrent 401s share one
@@ -127,11 +127,13 @@ const streamProtocol = 'chat-completions';
 
 // ── Error classification ────────────────────────────────────────────────────
 
-// C1: module one-shot flag bounding 403 retries to exactly ONE across the
-// process. xAI provisions API access LAZILY on first touch (contract §3), so
-// the first 403 gets a single grace retry; a second 403 is a real tier-gate.
-// This is NOT MAX_RETRIES (which would allow 3 retries and — if 403 were ever
-// mis-typed as 'auth' — burn 3 single-use refresh rotations).
+// C1: module one-shot flag bounding the OAuth 403 grace-retry to exactly ONE
+// across the process. xAI provisions API access LAZILY on the first OAuth touch
+// (contract §3), so a signed-in user's first 403 gets a single grace retry; a
+// second 403 is a real tier-gate. api_key mode never engages this flag — an
+// api_key 403 is terminal on the first hit (a real credit/tier gate, not
+// provisioning). This is NOT MAX_RETRIES (which would allow 3 retries and — if
+// 403 were ever mis-typed as 'auth' — burn 3 single-use refresh rotations).
 let _oauth403RetriedOnce = false;
 
 // Test seam — lets the unit test exercise the first-403 (retry) and
@@ -158,8 +160,14 @@ function classifyError(status, data) {
     if (status === 403) {
         // ⚠️ C1: NEVER type:'auth'. A 403 is provisioning/tier-gate, not an
         // expired token — firing a refresh here would consume xAI's single-use
-        // refresh rotation. Retry ONCE (lazy provisioning), then terminal.
-        if (!_oauth403RetriedOnce) {
+        // refresh rotation.
+        //
+        // The retry-once grace is OAuth-ONLY: xAI provisions API access lazily
+        // on the first OAuth touch, so a freshly-signed-in user's first 403 is
+        // likely still-provisioning and earns ONE grace retry. An api_key 403 is
+        // a real tier/credit gate — terminal on the first hit, with no retry and
+        // no misleading "provisioning" copy.
+        if (isOAuth && !_oauth403RetriedOnce) {
             _oauth403RetriedOnce = true;
             return {
                 type: 'provisioning', retryable: true,
@@ -174,17 +182,25 @@ function classifyError(status, data) {
         };
     }
     if (status === 402) {
+        // Mode-aware billing surface: an OAuth (Sign in with Grok) user manages
+        // billing via their SuperGrok / X Premium+ subscription, NOT console.x.ai
+        // (the api-key developer console — they may not even have an account there).
         return {
             type: 'billing', retryable: false,
-            userMessage: 'Your xAI account needs attention — check billing at console.x.ai'
+            userMessage: isOAuth
+                ? 'Your Grok access needs attention — check your SuperGrok / X Premium+ subscription'
+                : 'Your xAI account needs attention — check billing at console.x.ai'
         };
     }
     if (status === 429) {
         const msg = data?.error?.message || '';
         if (/quota|insufficient|credit/i.test(msg)) {
+            // Same mode-aware surface as 402 (console.x.ai is api-key-only).
             return {
                 type: 'quota', retryable: false,
-                userMessage: 'xAI quota exceeded. Check your usage/billing at console.x.ai'
+                userMessage: isOAuth
+                    ? 'Grok usage limit reached — check your SuperGrok / X Premium+ subscription'
+                    : 'xAI quota exceeded. Check your usage/billing at console.x.ai'
             };
         }
         return {
