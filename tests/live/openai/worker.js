@@ -213,8 +213,19 @@ function selfCheck() {
         A('endpoint === api.openai.com/v1/responses', ep.hostname === 'api.openai.com' && ep.path === '/v1/responses', `${ep.hostname}${ep.path}`);
         A('has max_output_tokens (=== 4096)', b.max_output_tokens === 4096, `max_output_tokens=${b.max_output_tokens}`);
         A('NO store', !('store' in b), `present=${'store' in b}`);
-        // api_key + non-codex + reasoningEnabled:false → agent sends NO reasoning block.
-        A('NO reasoning (api_key non-codex default)', !('reasoning' in b), `present=${'reasoning' in b}`);
+        // Reasoning on the api_key transport is model-dependent (Copilot): a `*-codex`
+        // model is transport-required to send `reasoning` even on api.openai.com, while
+        // a non-codex model with reasoningEnabled:false sends none. Mirror the real
+        // adapter's `wantReasoning = isOAuth || model.includes('codex') || userToggle`.
+        const isCodex = String(cfg.MODEL || '').includes('codex');
+        if (isCodex) {
+            A('reasoning present (api_key + codex → transport-required)',
+                b.reasoning && b.reasoning.effort === 'medium' && b.reasoning.summary === 'auto', JSON.stringify(b.reasoning));
+            A("include === ['reasoning.encrypted_content'] (codex)",
+                Array.isArray(b.include) && b.include[0] === 'reasoning.encrypted_content', JSON.stringify(b.include));
+        } else {
+            A('NO reasoning (api_key non-codex, reasoning toggle off)', !('reasoning' in b), `present=${'reasoning' in b}`);
+        }
     }
 
     const pass = asserts.every((a) => a.ok);
