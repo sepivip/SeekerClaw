@@ -508,6 +508,96 @@ async function testD9DeadToken() {
     restoreHttps();
 }
 
+// ── BAT-1143 review fixes (Copilot + CodeRabbit + in-house adversarial) ──────
+
+// 429-transient persist + durable convergence that clears pending (Copilot #1,
+// CodeRabbit S2).
+async function testPersistConvergenceEdges() {
+    console.log('\n── review: 429-transient persist + durable convergence unblocks refresh ──');
+    // (1) A bridge RATE-LIMIT must NOT count toward the durable-error budget.
+    _bridgeResult = { error: 'Rate limit exceeded for /xai/oauth/save-tokens' };
+    installHttpsMock({ statusCode: 200, body: { access_token: 'a.b.c', refresh_token: 'r', expires_in: 21600 } });
+    let xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    await xai.refreshOAuthToken(); // rotates; persist gets a 429
+    ok('429: persist stays pending, NOT durable', xai.isPersistPending() === true && xai.hasPersistDurableError() === false);
+    for (let i = 0; i < 8; i++) await xai.ensureFreshToken(); // hammer the throttle
+    ok('429: repeated throttles never latch the durable error (not counted)', xai.hasPersistDurableError() === false && xai.isPersistPending() === true);
+    _bridgeResult = { success: true }; // throttle clears
+    await xai.ensureFreshToken();
+    ok('429: converges once the throttle clears', xai.isPersistPending() === false);
+    restoreHttps();
+
+    // (2) A DURABLE (non-429) failure exhausts the budget → surfaces the durable error,
+    // CLEARS pending (unblocks proactive refresh), no infinite bridge hammering.
+    _bridgeResult = { error: 'keystore write failed' };
+    installHttpsMock({ statusCode: 200, body: { access_token: 'a2.b.c', refresh_token: 'r2', expires_in: 21600 } });
+    xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    await xai.refreshOAuthToken(); // persist attempt 1 fails
+    for (let i = 0; i < 8; i++) await xai.ensureFreshToken(); // drive to MAX
+    ok('durable: convergence exhausted latches hasPersistDurableError()', xai.hasPersistDurableError() === true);
+    ok('durable: _persistPending CLEARED so proactive refresh is unblocked (no forever-block)', xai.isPersistPending() === false);
+    restoreHttps();
+}
+
+// B1: reactive handleUnauthorized latches _refreshDead on invalid_grant (Copilot #4 +
+// adversarial B1 — the dead-token-hammering fix).
+async function testHandleUnauthorizedDeadToken() {
+    console.log('\n── B1: reactive handleUnauthorized latches _refreshDead on invalid_grant ──');
+    _bridgeResult = { success: true };
+    installHttpsMock({ statusCode: 400, body: { error: 'invalid_grant', error_description: 'revoked' } });
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'dead' });
+    xai._resetErrorStateForTests();
+    ok('pre: not dead', xai.isRefreshDead() === false);
+    let fatal = false;
+    try { await xai.handleUnauthorized(); } catch (e) { fatal = (e.retryable === false); }
+    ok('B1: handleUnauthorized throws fatal (non-retryable) on invalid_grant', fatal === true);
+    ok('B1: reactive path latched _refreshDead (dead token no longer re-POSTed)', xai.isRefreshDead() === true);
+    ok('B1: subsequent 401 is NOT auth (dead — classifyError suppresses refresh)', xai.classifyError(401, {}).type !== 'auth');
+    restoreHttps();
+}
+
+// S1: handleUnauthorized must not rotate AGAIN while a prior rotation is unpersisted
+// (adversarial S1 — same-turn double-rotation / orphaned pending pair).
+async function testHandleUnauthorizedPersistPending() {
+    console.log('\n── S1: handleUnauthorized does not rotate again while persist pending ──');
+    _bridgeResult = { error: 'disk full' };
+    installHttpsMock({ statusCode: 200, body: { access_token: 't2.a.b', refresh_token: 'r2', expires_in: 21600 } });
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    await xai.refreshOAuthToken(); // rotate; persist fails → pending
+    ok('setup: persist pending after a failed persist', xai.isPersistPending() === true);
+    const httpsBefore = _httpsCallCount;
+    _bridgeResult = { success: true }; // re-persist will succeed
+    let retry = false;
+    try { await xai.handleUnauthorized(); } catch (e) { retry = (e.retryable === true); }
+    ok('S1: handleUnauthorized re-persists + signals retry on the current token', retry === true);
+    ok('S1: NO second refresh POST (never rotated again while pending)', _httpsCallCount === httpsBefore, `https=${_httpsCallCount}`);
+    ok('S1: the pending persist converged', xai.isPersistPending() === false);
+    restoreHttps();
+}
+
+// D9/Q4: a transport-failure cooldown blocks a same-turn re-POST (CodeRabbit #6 —
+// lost-refresh-response protection).
+async function testTransportCooldown() {
+    console.log('\n── D9/Q4: transport-failure cooldown blocks a same-turn re-POST ──');
+    installHttpsMock({ statusCode: 500, body: {} }); // transport/server error (NOT invalid_grant)
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ expiresAtMs: Date.now() - 1000 }); // expired → will try to refresh
+    _httpsCallCount = 0;
+    await xai.ensureFreshToken(); // 1 POST → transport fail → cooldown armed
+    ok('first ensureFreshToken POSTed once (then failed)', _httpsCallCount === 1, `https=${_httpsCallCount}`);
+    ok('cooldown did NOT latch _refreshDead (transport error, not invalid_grant)', xai.isRefreshDead() === false);
+    await xai.ensureFreshToken(); // must be blocked by the cooldown
+    ok('D9/Q4: second ensureFreshToken does NOT re-POST (cooldown active)', _httpsCallCount === 1, `https=${_httpsCallCount}`);
+    let fatal = false;
+    try { await xai.handleUnauthorized(); } catch (e) { fatal = (e.retryable === false); }
+    ok('D9/Q4: handleUnauthorized is fatal + does NOT re-POST during cooldown', fatal === true && _httpsCallCount === 1, `https=${_httpsCallCount}`);
+    restoreHttps();
+}
+
 // ── BAT-1143 stage 3/4: ai.js wiring (source-level guards, like H3 above) ─────
 // ai.js can't be require()d in isolation (it boots the whole engine), so pin the
 // D6/D8/D9/D10 wiring at the source level — the adapter-side behaviour is covered
@@ -651,6 +741,10 @@ async function testHandleUnauthorized() {
         testClassifyError403BackstopD7();
         testD8BreakerHooks();
         await testD9DeadToken();
+        await testPersistConvergenceEdges();
+        await testHandleUnauthorizedDeadToken();
+        await testHandleUnauthorizedPersistPending();
+        await testTransportCooldown();
         await testHandleUnauthorized();
     } catch (e) {
         console.log('FAIL: unexpected exception in async tests — ' + (e && e.stack || e));

@@ -66,6 +66,11 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 // hammering the bridge and surface a durable error (re-pair may be needed after a
 // restart). The valid in-memory token keeps THIS session working throughout.
 const MAX_PERSIST_CONVERGENCE_ATTEMPTS = 5;
+// BAT-1143 D9/Q4: after a refresh TRANSPORT failure (not invalid_grant), suppress a
+// second refresh POST for this long — long enough to outlast the reactive retry loop
+// (a few seconds of backoff) so we never consume a SECOND single-use rotation in the
+// same turn, short enough that the next real turn/heartbeat can retry.
+const REFRESH_FAIL_COOLDOWN_MS = 60 * 1000;
 
 // H4: SeekerClaw's OWN User-Agent (never Grok-CLI's). Version from the
 // AGENT_VERSION env var Kotlin injects (message-handler.js reads the same),
@@ -134,11 +139,21 @@ let _persistAttempts = 0;
 let _persistDurableError = false; // convergence exhausted → surface re-pair (D9 step 4)
 // D5: one opportunistic refresh when expiry is unknown, at most once.
 let _opportunisticRefreshDone = false;
+// D9/Q4: monotonic timestamp of the last refresh TRANSPORT failure — gates a
+// same-turn re-POST (0n = no active cooldown).
+let _lastRefreshFailMono = 0n;
 
 // D3a: ms elapsed since the last IN-PROCESS mint, from the monotonic clock.
 // Only meaningful when _mintedMonoValid — callers must gate on that.
 function _elapsedMonoMs() {
     return Number(process.hrtime.bigint() - _currentMintedAtMono) / 1e6;
+}
+
+// D9/Q4: true while inside the post-transport-failure cooldown — blocks a second
+// refresh POST in the same turn (monotonic, immune to wall-clock jumps).
+function _refreshCoolingDown() {
+    if (_lastRefreshFailMono === 0n) return false;
+    return (Number(process.hrtime.bigint() - _lastRefreshFailMono) / 1e6) < REFRESH_FAIL_COOLDOWN_MS;
 }
 
 // True when the current access token is at/near/ past expiry by EITHER the
@@ -231,6 +246,7 @@ function _resetErrorStateForTests() {
     _persistAttempts = 0;
     _persistDurableError = false;
     _opportunisticRefreshDone = false;
+    _lastRefreshFailMono = 0n;
     _refreshInFlight = null;
 }
 
@@ -246,8 +262,12 @@ function _setStateForTests(patch) {
     if ('refreshDead' in patch) _refreshDead = patch.refreshDead;
     if ('tierGated' in patch) _tierGated = patch.tierGated;
     if ('persistPending' in patch) _persistPending = patch.persistPending;
+    if ('persistDurableError' in patch) _persistDurableError = patch.persistDurableError;
+    if ('persistAttempts' in patch) _persistAttempts = patch.persistAttempts;
+    if ('pendingPersistPayload' in patch) _pendingPersistPayload = patch.pendingPersistPayload;
     if ('oauth403RetriedOnce' in patch) _oauth403RetriedOnce = patch.oauth403RetriedOnce;
     if ('opportunisticRefreshDone' in patch) _opportunisticRefreshDone = patch.opportunisticRefreshDone;
+    if ('lastRefreshFailMono' in patch) _lastRefreshFailMono = patch.lastRefreshFailMono;
 }
 function _getStateForTests() {
     return {
@@ -391,7 +411,21 @@ function classifyNetworkError(err) {
 let _refreshInFlight = null;
 
 function refreshOAuthToken() {
-    _refreshInFlight ??= _performRefresh().finally(() => { _refreshInFlight = null; });
+    _refreshInFlight ??= _performRefresh()
+        .catch((e) => {
+            // BAT-1143: record the failure mode CENTRALLY so BOTH the proactive
+            // (ensureFreshToken) and reactive (handleUnauthorized) paths agree:
+            //  - invalid_grant → the refresh token is dead → suppress ALL further
+            //    refresh until re-pair (Copilot: handleUnauthorized used to miss this,
+            //    so a dead token got re-POSTed on every reactive 401/403).
+            //  - any OTHER failure (transport/timeout/5xx) → start a same-turn cooldown
+            //    so a second caller can't immediately re-POST and consume a SECOND
+            //    single-use rotation (D9/Q4 lost-refresh-response protection).
+            if (e && e.reLogin) _refreshDead = true;
+            else _lastRefreshFailMono = process.hrtime.bigint();
+            throw e;
+        })
+        .finally(() => { _refreshInFlight = null; });
     return _refreshInFlight;
 }
 
@@ -417,6 +451,7 @@ async function _performRefresh() {
     _mintedMonoValid = true;
     _refreshGeneration++;   // D8: this successful rotation is a new generation
     _refreshDead = false;   // a successful refresh clears any stale dead flag
+    _lastRefreshFailMono = 0n; // and clears any transport-failure cooldown
     log('[xAI] OAuth token refreshed', 'INFO');
     // D9: persist availability-first — a persist failure sets _persistPending and
     // keeps the valid in-memory token; it does NOT throw the turn away (resolving
@@ -518,11 +553,27 @@ async function _attemptPersist() {
     }
     const lastErr = (result && result.error) ? String(result.error) : 'no success acknowledgement';
     _persistPending = true;
+    // A bridge RATE-LIMIT (429: "Rate limit exceeded for /xai/oauth/save-tokens") is
+    // transient throttling, NOT a convergence failure — do NOT count it toward the
+    // durable-error budget (else a burst of turns falsely exhausts it and surfaces the
+    // "re-login may be required" error even though the write was merely throttled). Keep
+    // pending and retry next turn; the per-turn/heartbeat cadence outlasts the 5/60s limit.
+    if (/rate.?limit/i.test(lastErr)) {
+        log('[xAI] OAuth token persist throttled by the bridge (rate limit) — retry next turn', 'WARN');
+        return;
+    }
     _persistAttempts++;
     log(`[xAI] OAuth token persist attempt ${_persistAttempts} failed: ${lastErr}`, 'WARN');
-    if (_persistAttempts >= MAX_PERSIST_CONVERGENCE_ATTEMPTS && !_persistDurableError) {
+    if (_persistAttempts >= MAX_PERSIST_CONVERGENCE_ATTEMPTS) {
+        // Convergence exhausted (D9 step 4). STOP hammering the bridge AND stop blocking
+        // proactive refresh: surface a durable error (health stays 'degraded' via
+        // hasPersistDurableError) and CLEAR _persistPending so ensureFreshToken resumes
+        // normal refresh. A future rotation re-persists a fresh pair if the bridge
+        // recovers (which clears the durable error); the in-memory token works meanwhile.
         _persistDurableError = true;
-        log('[xAI] OAuth token rotated but could NOT be persisted after '
+        _persistPending = false;
+        _pendingPersistPayload = null;
+        log('[xAI] OAuth token could NOT be persisted after '
             + `${_persistAttempts} attempts — re-login may be required after a restart`, 'ERROR');
     }
 }
@@ -535,6 +586,27 @@ async function _attemptPersist() {
  */
 async function handleUnauthorized() {
     if (!(isOAuth && _currentRefreshToken)) return;
+    // BAT-1143: the reactive path MUST honor the same guards as ensureFreshToken —
+    // otherwise it can rotate a token that is already dead / tier-gated, re-POST during
+    // a transport-failure cooldown, or rotate AGAIN while a prior rotation is still
+    // unpersisted (orphaning the pending pair). classifyError already gates most of
+    // these off 'auth', but keep them here so the two refresh entry points can never
+    // diverge.
+    if (_refreshDead || _tierGated) return; // let the surviving error classify terminal
+    if (_refreshCoolingDown()) {
+        // D9/Q4: a refresh transport failure just happened — do NOT re-POST this turn.
+        const fatal = new Error('OAuth refresh cooling down after a transport failure — retry next turn');
+        fatal.retryable = false;
+        throw fatal;
+    }
+    if (_persistPending) {
+        // A prior rotation is unpersisted — converge THAT first, never rotate again
+        // (D9). Signal a retry so the caller re-sends on the valid in-memory bearer.
+        await _attemptPersist();
+        const retryError = new Error('OAuth persist retried — retry on current token');
+        retryError.retryable = true;
+        throw retryError;
+    }
     log('[xAI] OAuth 401 — attempting token refresh...', 'INFO');
     try {
         await refreshOAuthToken();
@@ -544,6 +616,9 @@ async function handleUnauthorized() {
         throw retryError;
     } catch (e) {
         if (e.retryable) throw e;
+        // _refreshDead (invalid_grant) and the transport-failure cooldown are already
+        // latched centrally in refreshOAuthToken's .catch — just surface a fatal so the
+        // caller stops retrying with the dead/failed token.
         log('[xAI] OAuth refresh failed: ' + e.message, 'ERROR');
         const fatal = new Error('OAuth token refresh failed: ' + e.message);
         fatal.retryable = false;
@@ -563,9 +638,15 @@ async function handleUnauthorized() {
 //      once when the expiry is unknown (D5).
 async function ensureFreshToken() {
     if (!isOAuth) return;
-    if (_persistPending) { await _attemptPersist(); return; }
+    // D9: converge an unpersisted rotation FIRST (never refresh while pending) — but
+    // ONLY while convergence is still viable. Once _persistDurableError latches, we
+    // stop hammering the bridge and let proactive refresh resume (a future rotation
+    // re-persists a fresh pair if the bridge recovers). Guarding on !_persistDurableError
+    // is what prevents the "block refresh forever + POST every turn" trap.
+    if (_persistPending && !_persistDurableError) { await _attemptPersist(); return; }
     if (_refreshDead || _tierGated) return;
     if (!_currentRefreshToken) return;
+    if (_refreshCoolingDown()) return; // D9/Q4: no re-POST during the post-transport-failure cooldown
 
     let doRefresh = false;
     if (_currentExpiresAtMs === 0) {
@@ -580,11 +661,9 @@ async function ensureFreshToken() {
     try {
         await refreshOAuthToken();
     } catch (e) {
-        // invalid_grant → the refresh token is dead: suppress further attempts and
-        // let the session-expiry path surface re-pair. Other (transient) failures
-        // are swallowed — proactive is best-effort; the reactive 403 backstop and
-        // the next turn's gate retry.
-        if (e && e.reLogin) _refreshDead = true;
+        // _refreshDead (invalid_grant) and the transport cooldown are latched centrally
+        // in refreshOAuthToken's .catch. Proactive is best-effort — swallow here; the
+        // reactive 403 backstop and the next turn's gate (after any cooldown) retry.
         log('[xAI] proactive refresh failed: ' + (e && e.message ? e.message : String(e)), 'WARN');
     }
 }
@@ -599,7 +678,11 @@ function markTierGated() { _tierGated = true; }
 function noteInferenceSuccess() { _tierGated = false; }
 
 // Re-pair / re-login clears ALL breaker + dead-token + pending state (D8/D9) so a
-// fresh sign-in starts clean.
+// fresh sign-in starts clean. In production a re-pair goes through a full setup →
+// service restart, which reloads this module with fresh state (so this is effectively
+// belt-and-suspenders there); it is the explicit contract expression of "re-pair
+// clears all state" and the seam the D8 unit test drives. Kept exported so a future
+// in-process re-pair signal (no restart) can call it without reintroducing the bug.
 function repairReset() {
     _tierGated = false;
     _refreshDead = false;
@@ -608,6 +691,7 @@ function repairReset() {
     _persistAttempts = 0;
     _persistDurableError = false;
     _opportunisticRefreshDone = false;
+    _lastRefreshFailMono = 0n;
 }
 
 // D8: ai.js tags each request with the generation it was built under, so a
@@ -618,6 +702,9 @@ function currentRefreshGeneration() { return _refreshGeneration; }
 // health (never "healthy" while the pair is memory-only) and surfaces the durable
 // error once convergence is exhausted.
 function isPersistPending() { return _persistPending; }
+// Convergence exhausted — the rotated pair could NOT be persisted after the bounded
+// retries. ai.js keeps health 'degraded' on this (never "healthy" while the on-disk
+// token is stale) even though _persistPending has been cleared to unblock refresh.
 function hasPersistDurableError() { return _persistDurableError; }
 
 // D9/D10: the refresh token is dead (invalid_grant) — ai.js counts this toward the

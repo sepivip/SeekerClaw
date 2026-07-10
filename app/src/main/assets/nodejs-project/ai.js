@@ -1931,9 +1931,14 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             // only in memory (persist pending) — a restart would then read a stale/
             // consumed refresh token. Surface degraded until the re-persist converges.
             if (!background) {
-                const persistPending = typeof adapter.isPersistPending === 'function' && adapter.isPersistPending();
-                updateAgentHealth(persistPending ? 'degraded' : 'healthy',
-                    persistPending ? { type: 'persist_pending', message: 'Session token rotated but not yet saved — retrying' } : null);
+                // Degraded (never "healthy") while a rotated pair is unpersisted OR after
+                // persist-convergence was exhausted (the on-disk token is then stale, so a
+                // restart could still force a re-pair) — the durable-error flag persists
+                // after _persistPending is cleared to unblock refresh.
+                const persistRisk = (typeof adapter.isPersistPending === 'function' && adapter.isPersistPending())
+                    || (typeof adapter.hasPersistDurableError === 'function' && adapter.hasPersistDurableError());
+                updateAgentHealth(persistRisk ? 'degraded' : 'healthy',
+                    persistRisk ? { type: 'persist_pending', message: 'Session token rotated but not yet saved — retrying' } : null);
             }
             // Reset auth failure counter on success
             _consecutiveAuthFailures = 0;
@@ -2388,7 +2393,13 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
         // does NOT cover it. On a turn crossing the ~6h boundary the summary can be the
         // FIRST API call, so refresh here too — else it 403s and silently degrades to
         // adaptive trim at every expiry boundary. No-op for api_key / non-OAuth.
+        // D8: snapshot the refresh generation so a 403 on a just-minted token here also
+        // trips the tier-gate breaker (else a gated account crossing the boundary in the
+        // summarizer-first path would re-rotate its single-use token every ~6h).
+        const _sumGenBefore = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
+        const _sumRefreshed = typeof adapter.currentRefreshGeneration === 'function'
+            && adapter.currentRefreshGeneration() !== _sumGenBefore;
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         const summaryPrompt = [
@@ -2423,9 +2434,17 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
         }, body); // formatRequest() already returns JSON string
 
         if (!res || res.status !== 200) {
+            // BAT-1143 D8: a 403 on a just-minted token here is a genuine tier-gate — trip
+            // the breaker (same as claudeApiCall) so the summarizer stops re-rotating a
+            // gated account at every ~6h boundary.
+            if (res && res.status === 403 && _sumRefreshed && typeof adapter.markTierGated === 'function') {
+                adapter.markTierGated();
+            }
             log(`[ContextSummary] Summarization API call failed: status=${res?.status || 'none'}`, 'WARN');
             return false; // Fall back to normal adaptive trim
         }
+        // BAT-1143 D8: a 200 proves the account can reach the model — clear the breaker.
+        if (typeof adapter.noteInferenceSuccess === 'function') adapter.noteInferenceSuccess();
 
         const parsed = adapter.fromApiResponse(res.data);
         if (!parsed.text) {

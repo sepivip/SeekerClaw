@@ -133,7 +133,8 @@ check('rejection reason is a non-empty string', typeof mc.hasCredentialsFor({}, 
 
 console.log();
 console.log('── KNOWN_PROVIDERS ──────────────────────────────');
-// BAT-1124: xai appended → 5 providers.
+// BAT-1124: xai added as a 5th provider (inserted 3rd, NOT last — openai stays
+// index 0; Custom stays last). Order is asserted separately below.
 check('KNOWN_PROVIDERS has 5 entries', mc.KNOWN_PROVIDERS.length, 5);
 check('includes claude', mc.KNOWN_PROVIDERS.includes('claude'), true);
 check('includes openai', mc.KNOWN_PROVIDERS.includes('openai'), true);
@@ -179,7 +180,8 @@ const REGISTRY = JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
 
 check('registry version is 1', REGISTRY.version, 1);
 check('registry has providers array', Array.isArray(REGISTRY.providers), true);
-// BAT-1124: xai appended → 5 providers.
+// BAT-1124: xai added as a 5th provider (inserted 3rd, NOT last — openai stays
+// index 0; Custom stays last). Order is asserted separately below.
 check('registry has 5 providers', REGISTRY.providers.length, 5);
 
 // Per-auth default-model invariant (Codex v2 Fix 4): for every
