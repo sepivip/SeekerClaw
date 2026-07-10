@@ -1,0 +1,2 @@
+# Keeps the per-mode fixture dir in git. Generated config.json + workspace
+# files are seeded at runtime and gitignored (see ../../.gitignore).

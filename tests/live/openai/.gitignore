@@ -1,0 +1,20 @@
+# Secrets — never commit.
+.env.test
+
+# …but DO keep the documented template (the repo-root `.env.*` rule would
+# otherwise sweep it up).
+!.env.test.example
+
+# Generated per-mode fixture config + any DB/log the harness writes at runtime.
+fixtures/**/config.json
+fixtures/**/*.db
+fixtures/**/node_debug.log
+fixtures/**/node_debug.log.old
+fixtures/**/*.md
+fixtures/**/memory/
+fixtures/**/api_usage_state
+fixtures/**/agent_health_state
+fixtures/**/runtime_state.json
+fixtures/**/agent_settings.json
+fixtures/**/skills/
+fixtures/**/tasks/
