@@ -94,14 +94,17 @@ function tryOpenBrowser(url) {
   try {
     let cmd, args;
     if (platform === 'win32') {
-      // `start` is a cmd builtin; empty title arg avoids quoting issues
-      cmd = 'cmd'; args = ['/c', 'start', '', url];
+      // `start` is a cmd builtin; the empty '' is the (required) title arg. The URL MUST
+      // be quoted — it contains `&` query separators that cmd.exe would otherwise treat as
+      // command separators (auto-open fails; a trailing `&...` could run as a command).
+      // windowsVerbatimArguments (below) keeps Node from re-escaping the quotes we add.
+      cmd = 'cmd'; args = ['/c', 'start', '', `"${url}"`];
     } else if (platform === 'darwin') {
       cmd = 'open'; args = [url];
     } else {
       cmd = 'xdg-open'; args = [url];
     }
-    const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsVerbatimArguments: platform === 'win32' });
     child.on('error', () => { /* ignore -- user can paste manually */ });
     child.unref();
     return true;

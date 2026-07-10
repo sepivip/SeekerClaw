@@ -374,9 +374,13 @@ function makePkce() { const verifier = b64url(crypto.randomBytes(32)); return { 
 
 function openBrowser(url) {
   try {
-    const [cmd, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+    // win32: `start` is a cmd builtin and cmd.exe treats `&` as a command separator, so
+    // the OAuth URL (full of `&` query params) MUST be quoted or auto-open fails (and a
+    // trailing `&...` could run as a separate command). windowsVerbatimArguments keeps
+    // Node from re-escaping the quotes we add.
+    const [cmd, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', `"${url}"`]]
       : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
-    const c = spawn(cmd, args, { stdio: 'ignore', detached: true }); c.on('error', () => {}); c.unref();
+    const c = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsVerbatimArguments: process.platform === 'win32' }); c.on('error', () => {}); c.unref();
   } catch (_) {}
 }
 
