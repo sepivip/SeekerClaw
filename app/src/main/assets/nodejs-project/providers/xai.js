@@ -620,6 +620,11 @@ function currentRefreshGeneration() { return _refreshGeneration; }
 function isPersistPending() { return _persistPending; }
 function hasPersistDurableError() { return _persistDurableError; }
 
+// D9/D10: the refresh token is dead (invalid_grant) — ai.js counts this toward the
+// re-pair threshold even when the surviving 403 classifies as 'provisioning', so a
+// genuinely dead session still surfaces re-pair (a fresh-token tier-gate does not).
+function isRefreshDead() { return _refreshDead; }
+
 // ── Connection test ─────────────────────────────────────────────────────────
 // NOTE (contract M5): the Kotlin-side connection test must use a 1-token
 // POST /v1/chat/completions ping — GET /v1/models 403s on first OAuth login
@@ -672,6 +677,7 @@ module.exports = {
     currentRefreshGeneration,
     isPersistPending,
     hasPersistDurableError,
+    isRefreshDead,
 
     // Capabilities
     supportsCache: false,

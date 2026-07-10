@@ -1715,6 +1715,23 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         const adapter = getAdapter(PROVIDER);
         const endpoint = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
         const apiKey = getProviderApiKey();
+        // BAT-1143 D6: PROACTIVE OAuth refresh — renew the access token BEFORE it
+        // expires, rather than waiting for a status code (xAI returns 403-not-401 on
+        // expiry, so a reactive-only path never fires and the agent dies every ~6h).
+        // Centralized here so it also covers the vision + session-summary calls that
+        // reach claudeApiCall. No-op for api_key / providers without the hook. Also
+        // performs D9 persist-convergence and is suppressed once the refresh token is
+        // dead / the account is tier-gated (see providers/xai.js ensureFreshToken).
+        // D8: snapshot the refresh generation around the proactive refresh. If it
+        // advances, THIS request rides a just-minted token — so a 403 on it is a genuine
+        // tier-gate (the fresh token still can't reach the model), not an expiry. This
+        // covers the PRIMARY (proactive) path; the reactive retry below also sets the
+        // marker. Without it, a genuinely tier-gated account would silently re-rotate at
+        // every ~6h expiry forever.
+        const _genBeforeRefresh = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
+        if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
+        let refreshedThisCall = typeof adapter.currentRefreshGeneration === 'function'
+            && adapter.currentRefreshGeneration() !== _genBeforeRefresh;
         // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
         // retry carries the freshly-rotated bearer, not the expired one.
         let headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
@@ -1811,6 +1828,16 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                 })}`, res.status === 200 ? 'DEBUG' : 'WARN');
             }
 
+            // BAT-1143 D8: a 403 on the retry IMMEDIATELY after a successful refresh
+            // in THIS chain is a genuine tier-gate — the fresh token STILL can't reach
+            // the model, so stop rotating a gated account every ~6h. Trip the breaker
+            // BEFORE classifyApiError so the 403 classifies terminal (not another
+            // provisioning retry). No-op for providers without the hook.
+            if (res.status === 403 && refreshedThisCall && typeof adapter.markTierGated === 'function') {
+                adapter.markTierGated();
+                log('[Auth] Fresh-token 403 immediately after refresh — tier-gate breaker tripped', 'WARN');
+            }
+
             // Classify error and decide whether to retry (BAT-22)
             if (res.status !== 200) {
                 const errClass = classifyApiError(res.status, res.data);
@@ -1833,6 +1860,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         // refresh path, so re-sending the stale bearer 401s again and burns a
                         // single-use refresh rotation on every attempt. No-op for api_key/claude.
                         headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+                        refreshedThisCall = true; // BAT-1143 D8: mark the post-refresh retry
                     }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
                     const retryAfterMs = Math.min(retryAfterRaw * 1000, 30000);
@@ -1896,7 +1924,17 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         // Report usage metrics + cache status + health state
         if (res.status === 200) {
             reportUsage(rawUsage);
-            if (!background) updateAgentHealth('healthy', null);
+            // BAT-1143 D8: a 200 proves the account can reach the model — clear the
+            // xAI tier-gate breaker (the "recovered" signal). No-op for other providers.
+            if (typeof adapter.noteInferenceSuccess === 'function') adapter.noteInferenceSuccess();
+            // BAT-1143 D9: never report "healthy" while a rotated token pair is still
+            // only in memory (persist pending) — a restart would then read a stale/
+            // consumed refresh token. Surface degraded until the re-persist converges.
+            if (!background) {
+                const persistPending = typeof adapter.isPersistPending === 'function' && adapter.isPersistPending();
+                updateAgentHealth(persistPending ? 'degraded' : 'healthy',
+                    persistPending ? { type: 'persist_pending', message: 'Session token rotated but not yet saved — retrying' } : null);
+            }
             // Reset auth failure counter on success
             _consecutiveAuthFailures = 0;
             if (_sessionExpired) {
@@ -1908,8 +1946,18 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             const errClass = classifyApiError(res.status, res.data);
             if (!background) updateAgentHealth('error', { type: errClass.type, status: res.status, message: errClass.userMessage });
 
-            // Track consecutive auth failures for session expiry detection
-            if (res.status === 401 || res.status === 403) {
+            // BAT-1143 D10: session-expiry accounting. The OLD code incremented
+            // _consecutiveAuthFailures on EVERY 401/403 regardless of classification,
+            // so a genuine xAI tier-gate reached the 3-strike threshold and emitted the
+            // misleading "session expired — re-pair" message (a tier-gate needs an API
+            // key, not a re-pair). Now: a fresh-token xAI tier-gate ('provisioning', and
+            // NOT because the refresh token is dead) does NOT count. A self-healed
+            // near-expiry 403 never reaches here (its retry 200s). Everything else — a
+            // surviving 'auth' failure, a dead refresh token (invalid_grant → re-pair),
+            // or any non-xAI 401/403 — still counts, so genuine expiry is unaffected.
+            const refreshDead = typeof adapter.isRefreshDead === 'function' && adapter.isRefreshDead();
+            const isFreshTierGate = errClass.type === 'provisioning' && !refreshDead;
+            if ((res.status === 401 || res.status === 403) && !isFreshTierGate) {
                 _consecutiveAuthFailures++;
                 if (_consecutiveAuthFailures >= AUTH_FAIL_THRESHOLD && !_sessionExpired) {
                     _sessionExpired = true;
@@ -2335,6 +2383,12 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
         const adapter = getAdapter(PROVIDER);
         const endpoint = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
         const apiKey = getProviderApiKey();
+        // BAT-1143 D6: this standalone context-summarizer bypasses claudeApiCall (it
+        // calls streamFn directly below), so the centralized proactive refresh there
+        // does NOT cover it. On a turn crossing the ~6h boundary the summary can be the
+        // FIRST API call, so refresh here too — else it 403s and silently degrades to
+        // adaptive trim at every expiry boundary. No-op for api_key / non-OAuth.
+        if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         const summaryPrompt = [

@@ -319,6 +319,7 @@ async function testRefreshMintStateD3() {
     ok('D3a: mono anchor valid after an in-process mint', after.mintedMonoValid === true);
     ok('D3a: ttl recorded (21600s)', after.ttlMs === 21600 * 1000, `ttlMs=${after.ttlMs}`);
     ok('D8: refresh generation bumped', after.refreshGeneration === before.refreshGeneration + 1, `gen ${before.refreshGeneration}→${after.refreshGeneration}`);
+    ok('D8: currentRefreshGeneration() getter exposes the bump (ai.js snapshots it)', xai.currentRefreshGeneration() === after.refreshGeneration, `getter=${xai.currentRefreshGeneration()}`);
     restoreHttps();
 }
 
@@ -503,8 +504,58 @@ async function testD9DeadToken() {
     await xai.ensureFreshToken();
     ok('D9: dead-token suppresses further proactive refresh (no 5-min hammering)', _httpsCallCount === httpsAfter, `https=${_httpsCallCount}`);
     ok('D9: dead token → 401 is NOT auth (nothing to refresh)', xai.classifyError(401, {}).type !== 'auth');
+    ok('D9/D10: isRefreshDead() getter reflects the dead state (ai.js counts it toward re-pair)', xai.isRefreshDead() === true);
     restoreHttps();
 }
+
+// ── BAT-1143 stage 3/4: ai.js wiring (source-level guards, like H3 above) ─────
+// ai.js can't be require()d in isolation (it boots the whole engine), so pin the
+// D6/D8/D9/D10 wiring at the source level — the adapter-side behaviour is covered
+// by the unit tests above; these prove ai.js actually calls the hooks in order.
+(function testAiJsRefreshWiring() {
+    console.log('\n── BAT-1143: ai.js wires ensureFreshToken + breaker + D10 accounting ──');
+    const aiSrc = fs.readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
+
+    // D6: claudeApiCall awaits ensureFreshToken BEFORE buildHeaders.
+    const capIdx = aiSrc.indexOf('async function claudeApiCall');
+    ok('ai.js declares claudeApiCall (anchor)', capIdx !== -1);
+    const capEnsureIdx = capIdx !== -1 ? aiSrc.indexOf('adapter.ensureFreshToken', capIdx) : -1;
+    const capBuildIdx = capIdx !== -1 ? aiSrc.indexOf('adapter.buildHeaders(', capIdx) : -1;
+    ok('D6: claudeApiCall awaits ensureFreshToken BEFORE its first buildHeaders',
+        capEnsureIdx !== -1 && capBuildIdx !== -1 && capEnsureIdx < capBuildIdx, `ensure=${capEnsureIdx} build=${capBuildIdx}`);
+    ok('D6: the ensureFreshToken call is awaited', /await adapter\.ensureFreshToken\(\)/.test(aiSrc));
+
+    // D6: the standalone summarizer also refreshes before ITS buildHeaders.
+    const sumIdx = aiSrc.indexOf('async function summarizeOldMessages');
+    ok('ai.js declares summarizeOldMessages (anchor)', sumIdx !== -1);
+    const sumEnsureIdx = sumIdx !== -1 ? aiSrc.indexOf('adapter.ensureFreshToken', sumIdx) : -1;
+    const sumBuildIdx = sumIdx !== -1 ? aiSrc.indexOf('adapter.buildHeaders(', sumIdx) : -1;
+    ok('D6: summarizeOldMessages awaits ensureFreshToken BEFORE its buildHeaders',
+        sumEnsureIdx !== -1 && sumBuildIdx !== -1 && sumEnsureIdx < sumBuildIdx, `ensure=${sumEnsureIdx} build=${sumBuildIdx}`);
+
+    // D8: breaker tripped on a post-refresh 403, cleared on 200.
+    ok('D8: ai.js trips markTierGated() on a post-refresh 403 (refreshedThisCall marker)',
+        /adapter\.markTierGated\(\)/.test(aiSrc) && /refreshedThisCall = true/.test(aiSrc));
+    // The marker must cover the PRIMARY proactive path too: snapshot the refresh
+    // generation around ensureFreshToken so a proactive-refresh-then-403 also trips
+    // the breaker (else a gated account re-rotates every ~6h forever).
+    ok('D8: ai.js snapshots currentRefreshGeneration around the proactive refresh',
+        /currentRefreshGeneration\(\)/.test(aiSrc) && /_genBeforeRefresh/.test(aiSrc));
+    ok('D8: ai.js clears the breaker via noteInferenceSuccess() on 200', /adapter\.noteInferenceSuccess\(\)/.test(aiSrc));
+
+    // D9: degraded health while a rotated pair is persist-pending.
+    ok('D9: ai.js reflects isPersistPending() as degraded health', /adapter\.isPersistPending\(\)/.test(aiSrc) && /'degraded'/.test(aiSrc));
+
+    // D10: the session-expiry counter increment is gated on !isFreshTierGate, NOT the
+    // old raw (res.status === 401 || res.status === 403). Pin the fix at the increment.
+    const incIdx = aiSrc.indexOf('_consecutiveAuthFailures++');
+    ok('ai.js still increments _consecutiveAuthFailures (anchor)', incIdx !== -1);
+    const gateRegion = incIdx !== -1 ? aiSrc.slice(Math.max(0, incIdx - 240), incIdx) : '';
+    ok('D10: the increment is gated on !isFreshTierGate (tier-gate no longer forces re-pair)',
+        /!isFreshTierGate/.test(gateRegion), gateRegion.slice(-90));
+    ok('D10: isFreshTierGate uses errClass.type provisioning + adapter.isRefreshDead',
+        /isFreshTierGate = errClass\.type === 'provisioning' && !refreshDead/.test(aiSrc) && /adapter\.isRefreshDead/.test(aiSrc));
+})();
 
 // ── handleUnauthorized wiring (401 → refresh → retry signal) ─────────────────
 
