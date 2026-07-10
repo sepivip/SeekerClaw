@@ -72,9 +72,12 @@ Flags:
                       the agent seam, and asserts the wire shape. Exit 0 all-pass.
   --mode <m>          apikey | oauth | both. Default: whichever creds exist.
   --models <csv|all|newest>
-                      Models to sweep. 'all' = the registry set for the mode.
-                      'newest' = resolve live from /v1/models (live only).
-                      Default: the registry set for the mode.
+                      Models to sweep. 'all' = the registry set for the mode
+                      (ignores TEST_MODELS). 'newest' currently sweeps the registry
+                      set too, but the worker prints a live /v1/models-vs-registry
+                      DIFF so newly-listed ids surface for show/hide review
+                      (auto-sweeping only the new ids is a follow-up).
+                      Default: TEST_MODELS if set, else the registry set.
   --diagnose          Also sweep the reasoning-effort ladder
                       (none/minimal/low/medium/high/xhigh/max) — clearly BEYOND
                       agent parity (the agent only sends medium/auto). Live only.
@@ -104,18 +107,25 @@ function loadRegistryOpenAI() {
 }
 
 function modelsForMode(mode, modelsFlag, regModels, testModelsEnv) {
+    const registrySet = () => (mode === 'oauth' ? regModels.oauth : regModels.apikey);
+    // Explicit CSV always wins.
     if (modelsFlag && modelsFlag !== 'all' && modelsFlag !== 'newest') {
         return modelsFlag.split(',').map((s) => s.trim()).filter(Boolean);
     }
-    if (modelsFlag === 'newest') {
-        // Live-only; the worker resolves /v1/models. Offline we can't — fall back.
-        return mode === 'oauth' ? regModels.oauth : regModels.apikey;
-    }
+    // `--models all` → the registry set for the mode, IGNORING TEST_MODELS. An
+    // explicit `all` must not be silently narrowed by the env default (CodeRabbit).
+    if (modelsFlag === 'all') return registrySet();
+    // `--models newest` currently maps to the registry set too; the worker still
+    // fetches /v1/models live and prints a registry-vs-listed DIFF for the show/hide
+    // decision, so newly-listed ids surface there. (Auto-sweeping only the newest
+    // ids from /v1/models is a documented follow-up — see README.)
+    if (modelsFlag === 'newest') return registrySet();
+    // No flag → the TEST_MODELS default if set, else the registry set.
     if (testModelsEnv) {
         const list = testModelsEnv.split(',').map((s) => s.trim()).filter(Boolean);
         if (list.length) return list;
     }
-    return mode === 'oauth' ? regModels.oauth : regModels.apikey;
+    return registrySet();
 }
 
 // ── fork a worker for one mode ────────────────────────────────────────────────

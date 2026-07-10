@@ -64,10 +64,14 @@ Exit: **0** whenever the sweep/self-check ran; **1** only on setup/credential/as
   `TOOLS.length`, and that the prompt reflects the **seeded mock workspace** —
   proving it's the real payload, not a fake). Prints both bodies (token-redacted).
 - `--mode apikey|oauth|both` — default: whichever creds exist.
-- `--models <csv|all|newest>` — `all` = the registry set for the mode; `newest` =
-  resolve live from `/v1/models` (live only; offline falls back to the registry
-  set); default = the registry set. **Verify live model ids** (e.g. `gpt-5.6-*`)
-  via a live `/v1/models` or context7 — do not hardcode from memory.
+- `--models <csv|all|newest>` — `all` = the registry set for the mode (ignores
+  `TEST_MODELS`); `newest` currently sweeps the registry set too, but the worker
+  fetches `/v1/models` live and prints a **registry-vs-listed diff** so newly-listed
+  ids surface for the show/hide decision. (Auto-sweeping *only* the new ids from
+  `/v1/models` is a documented follow-up — the plumbing to resolve them in the
+  parent before dispatch isn't in place yet.) Default = `TEST_MODELS` if set, else
+  the registry set. **Verify live model ids** (e.g. `gpt-5.6-*`) via a live
+  `/v1/models` or context7 — do not hardcode from memory.
 - `--diagnose` — also sweeps the reasoning-effort ladder
   `none/minimal/low/medium/high/xhigh/max`, clearly labelled **beyond agent
   parity — param exploration** (the agent only ever sends `medium/auto`). Live only.

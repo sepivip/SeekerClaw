@@ -39,16 +39,22 @@ const PROMPT = process.env.SC_PROMPT || 'Reply with the single word: pong';
 // reportedly adds 'max'. 'none' is a probe of the omit-vs-none boundary.
 const REASONING_LADDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
+// Secrets to scrub from ANY printed/IPC'd text (CodeRabbit). Declared with `let`
+// BEFORE the boot block so fail() can reference it without a TDZ (empty pre-boot —
+// boot errors are config-load failures that don't echo a token); populated once the
+// fixture config is loaded (below).
+let SECRETS = [];
+
 function send(result) {
     if (typeof process.send === 'function') process.send(result);
     else process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 }
 
 function fail(stage, err) {
-    send({
-        mode: MODE,
-        error: `[${stage}] ${err && err.stack ? err.stack.split('\n').slice(0, 4).join(' | ') : String(err)}`,
-    });
+    const raw = err && err.stack ? err.stack.split('\n').slice(0, 4).join(' | ') : String(err);
+    // Redact in case a runtime error (e.g. an auth failure) echoes a credential —
+    // upholds the harness's "tokens are NEVER printed" guarantee.
+    send({ mode: MODE, error: `[${stage}] ${redactIn(raw, SECRETS)}` });
     process.exit(3);
 }
 
@@ -75,8 +81,9 @@ if (cfg.OPENAI_AUTH_TYPE !== expectedAuth) {
     fail('boot', new Error(`OPENAI_AUTH_TYPE is "${cfg.OPENAI_AUTH_TYPE}", expected "${expectedAuth}" (fixture/mode mismatch)`));
 }
 
-// Secrets to scrub from any printed text (defense-in-depth; the body carries none).
-const SECRETS = [cfg.OPENAI_KEY, cfg.OPENAI_OAUTH_TOKEN, cfg.OPENAI_OAUTH_REFRESH, cfg.BOT_TOKEN].filter(Boolean);
+// Populate the redaction set now that config is loaded (declared above so fail() can
+// use it even during boot). Defense-in-depth; the built body itself carries none.
+SECRETS = [cfg.OPENAI_KEY, cfg.OPENAI_OAUTH_TOKEN, cfg.OPENAI_OAUTH_REFRESH, cfg.BOT_TOKEN].filter(Boolean);
 
 // ── The seam: build the body the EXACT way ai.js chat() does ──────────────────
 // Mirrors ai.js:
