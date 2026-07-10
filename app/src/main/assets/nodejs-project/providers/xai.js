@@ -36,6 +36,7 @@ const {
     XAI_KEY,
     XAI_OAUTH_TOKEN,
     XAI_OAUTH_REFRESH,
+    XAI_OAUTH_EXPIRES_AT,
     AUTH_TYPE,
 } = require('../config');
 const { androidBridgeCall } = require('../bridge');
@@ -56,6 +57,15 @@ const OAUTH_TOKEN_PATH = '/oauth2/token';
 
 // Access-token TTL fallback (~6h) if the refresh response omits expires_in.
 const _DEFAULT_EXPIRES_IN = 21600;
+
+// BAT-1143: refresh the access token this long BEFORE its absolute expiry, on
+// BOTH the proactive gate and the reactive-403 gate (Codex Q1 → 5 min).
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+// Bounded convergence for a rotation that succeeded server-side but failed to
+// persist (D9): after this many failed re-persist attempts across turns we stop
+// hammering the bridge and surface a durable error (re-pair may be needed after a
+// restart). The valid in-memory token keeps THIS session working throughout.
+const MAX_PERSIST_CONVERGENCE_ATTEMPTS = 5;
 
 // H4: SeekerClaw's OWN User-Agent (never Grok-CLI's). Version from the
 // AGENT_VERSION env var Kotlin injects (message-handler.js reads the same),
@@ -97,6 +107,50 @@ const endpoint = { ..._resolveXaiBase(), path: '/v1/chat/completions' };
 // Live in-memory token pair. Seeded from config; rotated by refreshOAuthToken.
 let _currentOAuthToken = XAI_OAUTH_TOKEN;
 let _currentRefreshToken = XAI_OAUTH_REFRESH;
+
+// ── BAT-1143: proactive-refresh state machine ────────────────────────────────
+// Absolute access-token expiry (ms since epoch). Seeded from the persisted
+// XAI_OAUTH_EXPIRES_AT (D4). 0 = "expiry unknown" → one opportunistic refresh on
+// first use (D5). Advanced SYNCHRONOUSLY on every in-process mint (D3).
+let _currentExpiresAtMs = Date.parse(XAI_OAUTH_EXPIRES_AT) || 0;
+// D3a: a MONOTONIC mint anchor (process.hrtime, immune to wall-clock/NTP jumps)
+// + a validity sentinel. Set ONLY when THIS process mints a token; the age gate
+// applies only when valid. A monotonic anchor does NOT survive a restart, so on
+// a fresh process we fall back to the absolute expiry above + the D5 one-shot.
+let _currentMintedAtMono = 0n;
+let _mintedMonoValid = false;
+let _currentTtlMs = _DEFAULT_EXPIRES_IN * 1000; // TTL of the last in-process mint (for the age gate)
+// D8: monotonic marker bumped on each successful refresh. ai.js tags each request
+// with the generation it was built under; a fresh-token 403 whose request shares
+// the just-refreshed generation is a genuine tier-gate → trip the breaker.
+let _refreshGeneration = 0;
+let _tierGated = false;   // circuit-breaker: stop rotating a genuinely tier-gated account
+let _refreshDead = false; // invalid_grant → suppress ALL further refresh until re-pair (D9)
+// D9: a rotation that succeeded server-side but failed to persist. Keep the pair
+// in memory, complete the turn, and re-persist the SAME pair on later calls.
+let _persistPending = false;
+let _pendingPersistPayload = null;
+let _persistAttempts = 0;
+let _persistDurableError = false; // convergence exhausted → surface re-pair (D9 step 4)
+// D5: one opportunistic refresh when expiry is unknown, at most once.
+let _opportunisticRefreshDone = false;
+
+// D3a: ms elapsed since the last IN-PROCESS mint, from the monotonic clock.
+// Only meaningful when _mintedMonoValid — callers must gate on that.
+function _elapsedMonoMs() {
+    return Number(process.hrtime.bigint() - _currentMintedAtMono) / 1e6;
+}
+
+// True when the current access token is at/near/ past expiry by EITHER the
+// absolute-expiry gate OR the monotonic age gate (D3a — immune to a backward
+// wall-clock jump). Shared by the proactive gate (ensureFreshToken) and the
+// reactive-403 backstop (classifyError) so both use the same boundary.
+function _isTokenExpiredish() {
+    const now = Date.now();
+    if (_currentExpiresAtMs > 0 && now >= _currentExpiresAtMs - REFRESH_BUFFER_MS) return true;
+    if (_mintedMonoValid && _elapsedMonoMs() >= _currentTtlMs - REFRESH_BUFFER_MS) return true;
+    return false;
+}
 
 function buildHeaders(apiKey) {
     // OAuth uses the (possibly-rotated) access token; api_key uses the key
@@ -165,6 +219,48 @@ let _oauth403RetriedOnce = false;
 // second-403 (terminal) branches deterministically. Not used in production.
 function _resetErrorStateForTests() {
     _oauth403RetriedOnce = false;
+    _currentExpiresAtMs = Date.parse(XAI_OAUTH_EXPIRES_AT) || 0;
+    _currentMintedAtMono = 0n;
+    _mintedMonoValid = false;
+    _currentTtlMs = _DEFAULT_EXPIRES_IN * 1000;
+    _refreshGeneration = 0;
+    _tierGated = false;
+    _refreshDead = false;
+    _persistPending = false;
+    _pendingPersistPayload = null;
+    _persistAttempts = 0;
+    _persistDurableError = false;
+    _opportunisticRefreshDone = false;
+    _refreshInFlight = null;
+}
+
+// Test seam — drive the BAT-1143 state machine deterministically without real
+// timers/tokens. Not used by production code paths.
+function _setStateForTests(patch) {
+    if (!patch) return;
+    if ('expiresAtMs' in patch) _currentExpiresAtMs = patch.expiresAtMs;
+    if ('mintedAtMono' in patch) _currentMintedAtMono = patch.mintedAtMono;
+    if ('mintedMonoValid' in patch) _mintedMonoValid = patch.mintedMonoValid;
+    if ('ttlMs' in patch) _currentTtlMs = patch.ttlMs;
+    if ('refreshToken' in patch) _currentRefreshToken = patch.refreshToken;
+    if ('refreshDead' in patch) _refreshDead = patch.refreshDead;
+    if ('tierGated' in patch) _tierGated = patch.tierGated;
+    if ('persistPending' in patch) _persistPending = patch.persistPending;
+    if ('oauth403RetriedOnce' in patch) _oauth403RetriedOnce = patch.oauth403RetriedOnce;
+    if ('opportunisticRefreshDone' in patch) _opportunisticRefreshDone = patch.opportunisticRefreshDone;
+}
+function _getStateForTests() {
+    return {
+        expiresAtMs: _currentExpiresAtMs,
+        mintedMonoValid: _mintedMonoValid,
+        ttlMs: _currentTtlMs,
+        refreshGeneration: _refreshGeneration,
+        tierGated: _tierGated,
+        refreshDead: _refreshDead,
+        persistPending: _persistPending,
+        persistDurableError: _persistDurableError,
+        opportunisticRefreshDone: _opportunisticRefreshDone,
+    };
 }
 
 function classifyError(status, data) {
@@ -173,7 +269,10 @@ function classifyError(status, data) {
         // handleUnauthorized() → single-flight refresh. Gated on OAuth mode
         // AND a refresh token actually being present; otherwise there is
         // nothing to refresh, so it's a non-retryable credential error.
-        const canRefresh = isOAuth && !!_currentRefreshToken;
+        // BAT-1143: don't attempt a refresh when the token is known-dead
+        // (invalid_grant) or the account is tier-gated — a refresh would just fail
+        // again or burn a rotation on a gated account.
+        const canRefresh = isOAuth && !!_currentRefreshToken && !_refreshDead && !_tierGated;
         return {
             type: canRefresh ? 'auth' : 'unknown',
             retryable: canRefresh,
@@ -183,16 +282,30 @@ function classifyError(status, data) {
         };
     }
     if (status === 403) {
-        // ⚠️ C1: NEVER type:'auth'. A 403 is provisioning/tier-gate, not an
-        // expired token — firing a refresh here would consume xAI's single-use
-        // refresh rotation.
+        // BAT-1143 D7 (reactive backstop) — MUST be the FIRST check inside 403.
+        // xAI returns a bare 403 (not 401) when the OAuth access token expires, so
+        // a 403 on an at/near-expired token IS refreshable auth, not a tier-gate.
+        // This has to precede the provisioning grace below: once _oauth403RetriedOnce
+        // latches (after the legitimate first-touch retry), a later 6h-expiry 403
+        // would otherwise fall through to the terminal tier-gate and never refresh.
+        // Gated on a live refresh token, not-dead, not-already-tier-gated so we never
+        // burn a rotation on a genuine tier-gate while the token is still valid.
+        if (isOAuth && _currentRefreshToken && !_refreshDead && !_tierGated && _isTokenExpiredish()) {
+            return {
+                type: 'auth', retryable: true,
+                userMessage: '🔐 Refreshing your Grok session…'
+            };
+        }
+        // ⚠️ C1: any OTHER 403 (fresh token) is NEVER type:'auth' — it's
+        // provisioning/tier-gate, and firing a refresh here would consume xAI's
+        // single-use rotation.
         //
         // The retry-once grace is OAuth-ONLY: xAI provisions API access lazily
         // on the first OAuth touch, so a freshly-signed-in user's first 403 is
         // likely still-provisioning and earns ONE grace retry. An api_key 403 is
-        // a real tier/credit gate — terminal on the first hit, with no retry and
-        // no misleading "provisioning" copy.
-        if (isOAuth && !_oauth403RetriedOnce) {
+        // a real tier/credit gate — terminal on the first hit. D8: once the
+        // circuit-breaker has tripped (_tierGated), skip the grace and stay terminal.
+        if (isOAuth && !_oauth403RetriedOnce && !_tierGated) {
             _oauth403RetriedOnce = true;
             return {
                 type: 'provisioning', retryable: true,
@@ -292,8 +405,22 @@ async function _performRefresh() {
     // the persist below succeeds — the new access token is valid server-side.
     _currentOAuthToken = parsed.access_token;
     if (parsed.refresh_token) _currentRefreshToken = parsed.refresh_token;
+    // BAT-1143 D3/D3a: advance the in-memory expiry + monotonic mint anchor +
+    // generation SYNCHRONOUSLY here, BEFORE the (D9) persist await below. If we
+    // advanced them only after the persist, a persist failure would leave the
+    // expiry in the past and every subsequent request would re-refresh — a
+    // refresh-storm that burns single-use rotations. Setting them now guarantees
+    // the next gate sees a future expiry even when persistence fails.
+    _currentTtlMs = (parsed.expires_in || _DEFAULT_EXPIRES_IN) * 1000;
+    _currentExpiresAtMs = Date.now() + _currentTtlMs;
+    _currentMintedAtMono = process.hrtime.bigint();
+    _mintedMonoValid = true;
+    _refreshGeneration++;   // D8: this successful rotation is a new generation
+    _refreshDead = false;   // a successful refresh clears any stale dead flag
     log('[xAI] OAuth token refreshed', 'INFO');
-    // H2: AWAIT the persist and treat failure as a HARD error.
+    // D9: persist availability-first — a persist failure sets _persistPending and
+    // keeps the valid in-memory token; it does NOT throw the turn away (resolving
+    // the old proactive-swallows-vs-reactive-fatal inconsistency).
     await _persistRotatedTokens(parsed);
     return true;
 }
@@ -354,37 +481,50 @@ function _requestRotatedTokens() {
     });
 }
 
-// H2: persist the rotated pair via the Android bridge with a bounded retry.
-// The bridge ALWAYS resolves (never rejects) — resolving `{ error }` on
-// failure and `{ success: true }` on a persisted write (mirrors the OpenAI
-// handler). A persist failure is a HARD error: we must NOT report the refresh
-// as succeeded when the server has rotated but disk hasn't — that would lock
-// the account out on the next restart with a stale refresh token.
+// BAT-1143 D9: persist the rotated pair via the Android bridge, AVAILABILITY-FIRST.
+// The bridge ALWAYS resolves (never rejects) — `{ error }` on failure, `{ success:
+// true }` on a persisted write. Unlike the old H2 (which threw a hard error and
+// killed the turn), a persist failure now:
+//   • keeps the valid in-memory rotated pair (the turn still succeeds);
+//   • records the SAME pair as pending so later ensureFreshToken() calls re-persist
+//     it (never a second rotation — the pending pair is reused verbatim);
+//   • after MAX_PERSIST_CONVERGENCE_ATTEMPTS surfaces a durable error (re-pair may
+//     be needed after a restart), but never silently reports "healthy".
 async function _persistRotatedTokens(parsed) {
-    const payload = {
+    _pendingPersistPayload = {
         accessToken: parsed.access_token,
         refreshToken: parsed.refresh_token || _currentRefreshToken,
-        expiresAt: new Date(Date.now() + (parsed.expires_in || _DEFAULT_EXPIRES_IN) * 1000).toISOString(),
+        // Use the same absolute expiry we advanced in _performRefresh (D3), so the
+        // persisted expiry matches the in-memory one exactly.
+        expiresAt: new Date(_currentExpiresAtMs).toISOString(),
     };
-    const PERSIST_ATTEMPTS = 2;
-    let lastErr = '';
-    for (let attempt = 1; attempt <= PERSIST_ATTEMPTS; attempt++) {
-        const result = await androidBridgeCall('/xai/oauth/save-tokens', payload);
-        if (result && result.success === true && !result.error) {
-            return; // persisted
-        }
-        lastErr = (result && result.error) ? String(result.error) : 'no success acknowledgement';
-        // A bridge-level failure (incl. a bridge 429 — distinct from an
-        // api.x.ai 429) is retried once, then surfaced.
-        log(`[xAI] OAuth token persist attempt ${attempt}/${PERSIST_ATTEMPTS} failed: ${lastErr}`, 'WARN');
+    _persistPending = true;
+    await _attemptPersist();
+}
+
+// One bounded persist attempt of the current _pendingPersistPayload. Clears the
+// pending/durable flags on success; escalates to a durable error once convergence
+// is exhausted. Never throws — the caller (refresh or ensureFreshToken) proceeds
+// on the valid in-memory token regardless.
+async function _attemptPersist() {
+    if (!_pendingPersistPayload) { _persistPending = false; return; }
+    const result = await androidBridgeCall('/xai/oauth/save-tokens', _pendingPersistPayload);
+    if (result && result.success === true && !result.error) {
+        _persistPending = false;
+        _pendingPersistPayload = null;
+        _persistAttempts = 0;
+        _persistDurableError = false;
+        return;
     }
-    // All attempts failed. Keep the in-memory rotated token so THIS session
-    // keeps working, but fail loud so the turn surfaces the problem and the
-    // user is warned a re-login may be needed after a restart.
-    log('[xAI] OAuth token rotated but could NOT be persisted — re-login may be required after restart', 'ERROR');
-    const fatal = new Error('xAI OAuth token persist failed: ' + lastErr);
-    fatal.persistFailed = true;
-    throw fatal;
+    const lastErr = (result && result.error) ? String(result.error) : 'no success acknowledgement';
+    _persistPending = true;
+    _persistAttempts++;
+    log(`[xAI] OAuth token persist attempt ${_persistAttempts} failed: ${lastErr}`, 'WARN');
+    if (_persistAttempts >= MAX_PERSIST_CONVERGENCE_ATTEMPTS && !_persistDurableError) {
+        _persistDurableError = true;
+        log('[xAI] OAuth token rotated but could NOT be persisted after '
+            + `${_persistAttempts} attempts — re-login may be required after a restart`, 'ERROR');
+    }
 }
 
 /**
@@ -410,6 +550,75 @@ async function handleUnauthorized() {
         throw fatal;
     }
 }
+
+// ── BAT-1143: proactive freshness + circuit-breaker hooks (ai.js drives these) ─
+
+// D1/D5/D6/D9: called by ai.js (centralized in claudeApiCall, before buildHeaders)
+// prior to EVERY OAuth request. No-op for api_key. Ordering is load-bearing:
+//   1. D9 — if a rotation is unpersisted, re-persist the SAME pair first and return;
+//      NEVER refresh while pending (that would rotate again and orphan the pending pair).
+//   2. suppressed once the refresh token is dead (invalid_grant) or the account is
+//      tier-gated (breaker) — until a re-pair/success clears them.
+//   3. refresh if at/near expiry (absolute OR monotonic-age, D2/D3a), or exactly
+//      once when the expiry is unknown (D5).
+async function ensureFreshToken() {
+    if (!isOAuth) return;
+    if (_persistPending) { await _attemptPersist(); return; }
+    if (_refreshDead || _tierGated) return;
+    if (!_currentRefreshToken) return;
+
+    let doRefresh = false;
+    if (_currentExpiresAtMs === 0) {
+        // D5 expiry-unknown: one opportunistic refresh on first use, at most once
+        // (guarded so a transient failure can't storm the endpoint).
+        if (!_opportunisticRefreshDone) { _opportunisticRefreshDone = true; doRefresh = true; }
+    } else if (_isTokenExpiredish()) {
+        doRefresh = true;
+    }
+    if (!doRefresh) return;
+
+    try {
+        await refreshOAuthToken();
+    } catch (e) {
+        // invalid_grant → the refresh token is dead: suppress further attempts and
+        // let the session-expiry path surface re-pair. Other (transient) failures
+        // are swallowed — proactive is best-effort; the reactive 403 backstop and
+        // the next turn's gate retry.
+        if (e && e.reLogin) _refreshDead = true;
+        log('[xAI] proactive refresh failed: ' + (e && e.message ? e.message : String(e)), 'WARN');
+    }
+}
+
+// D8: ai.js calls this when an inference call STILL 403s on the fresh token in the
+// SAME retry chain immediately after a successful refresh — a genuine tier-gate,
+// not an expiry. Trips the breaker so we stop rotating a gated account every ~6h.
+function markTierGated() { _tierGated = true; }
+
+// D8: ai.js calls this on any successful (200) inference — the account CAN reach
+// the model, so clear the breaker (the "recovered" signal).
+function noteInferenceSuccess() { _tierGated = false; }
+
+// Re-pair / re-login clears ALL breaker + dead-token + pending state (D8/D9) so a
+// fresh sign-in starts clean.
+function repairReset() {
+    _tierGated = false;
+    _refreshDead = false;
+    _persistPending = false;
+    _pendingPersistPayload = null;
+    _persistAttempts = 0;
+    _persistDurableError = false;
+    _opportunisticRefreshDone = false;
+}
+
+// D8: ai.js tags each request with the generation it was built under, so a
+// post-refresh 403 can be told apart from an unrelated fresh-token 403.
+function currentRefreshGeneration() { return _refreshGeneration; }
+
+// D9: a rotated pair still at persistence risk — ai.js reflects this as degraded
+// health (never "healthy" while the pair is memory-only) and surfaces the durable
+// error once convergence is exhausted.
+function isPersistPending() { return _persistPending; }
+function hasPersistDurableError() { return _persistDurableError; }
 
 // ── Connection test ─────────────────────────────────────────────────────────
 // NOTE (contract M5): the Kotlin-side connection test must use a 1-token
@@ -455,10 +664,21 @@ module.exports = {
     isOAuth,
     OAUTH_CLIENT_ID,
 
+    // BAT-1143: proactive-refresh state machine + circuit-breaker hooks (ai.js drives these)
+    ensureFreshToken,
+    markTierGated,
+    noteInferenceSuccess,
+    repairReset,
+    currentRefreshGeneration,
+    isPersistPending,
+    hasPersistDurableError,
+
     // Capabilities
     supportsCache: false,
     authTypes: ['api_key', 'oauth'],
 
     // Test seam (not used by production code paths)
     _resetErrorStateForTests,
+    _setStateForTests,
+    _getStateForTests,
 };

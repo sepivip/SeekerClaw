@@ -66,7 +66,7 @@ const _bridgeStub = {
 };
 
 // Load providers/xai.js fresh with a mocked config for the given auth scenario.
-function loadXai({ authType = 'api_key', oauthToken = '', refresh = '', apiKey = '' } = {}) {
+function loadXai({ authType = 'api_key', oauthToken = '', refresh = '', apiKey = '', expiresAt = '' } = {}) {
     for (const p of [configPath, bridgePath, securityPath, openrouterPath, reasoningGatingPath, xaiPath]) {
         delete require.cache[p];
     }
@@ -77,6 +77,9 @@ function loadXai({ authType = 'api_key', oauthToken = '', refresh = '', apiKey =
             XAI_KEY: apiKey,
             XAI_OAUTH_TOKEN: oauthToken,
             XAI_OAUTH_REFRESH: refresh,
+            // BAT-1143: seed the persisted expiry so _currentExpiresAtMs is non-zero
+            // when a test wants a "known expiry" (blank → 0 = expiry-unknown, D5).
+            XAI_OAUTH_EXPIRES_AT: expiresAt,
             AUTH_TYPE: authType,
             // openrouter.js (xai delegates message-shaping to it) reads this:
             OPENROUTER_FALLBACK_MODEL: '',
@@ -299,34 +302,207 @@ async function testRefreshSingleFlightAndPersist() {
     restoreHttps();
 }
 
-async function testPersistFailurePropagates() {
-    console.log('\n── refreshOAuthToken: persist-failure propagates a HARD error (H2) ──');
+// BAT-1143 D3/D3a: a successful refresh advances expiry + monotonic anchor +
+// generation SYNCHRONOUSLY (the anti-refresh-storm ordering).
+async function testRefreshMintStateD3() {
+    console.log('\n── D3/D3a: refresh advances expiry + mono anchor + generation ──');
+    _httpsCallCount = 0; _bridgeCalls.length = 0; _bridgeResult = { success: true };
+    installHttpsMock({ statusCode: 200, body: { access_token: 'a.b.c', refresh_token: 'r', expires_in: 21600 } });
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'old', refresh: 'r0', expiresAt: '' });
+    xai._resetErrorStateForTests();
+    const before = xai._getStateForTests();
+    ok('D3: expiry starts unknown (0) with a blank persisted expiry', before.expiresAtMs === 0);
+    ok('D3a: mono anchor invalid before any in-process mint', before.mintedMonoValid === false);
+    await xai.refreshOAuthToken();
+    const after = xai._getStateForTests();
+    ok('D3: _currentExpiresAtMs advanced to a FUTURE absolute time', after.expiresAtMs > Date.now(), `expiresAtMs=${after.expiresAtMs}`);
+    ok('D3a: mono anchor valid after an in-process mint', after.mintedMonoValid === true);
+    ok('D3a: ttl recorded (21600s)', after.ttlMs === 21600 * 1000, `ttlMs=${after.ttlMs}`);
+    ok('D8: refresh generation bumped', after.refreshGeneration === before.refreshGeneration + 1, `gen ${before.refreshGeneration}→${after.refreshGeneration}`);
+    restoreHttps();
+}
+
+// BAT-1143 D9: persist-failure is AVAILABILITY-FIRST (the old H2 hard-error is
+// replaced). Includes Codex's required "first persist fails → later same-pair
+// persist succeeds → no second rotation" case.
+async function testPersistFailureAvailabilityFirst() {
+    console.log('\n── D9: persist-failure availability-first (in-memory pair + bounded re-persist) ──');
 
     _httpsCallCount = 0;
     _bridgeCalls.length = 0;
     _registeredSecrets.length = 0;
     _bridgeResult = { error: 'disk full', code: 'XAI_OAUTH_SAVE_FAILED' };
-    installHttpsMock({
-        statusCode: 200,
-        body: { access_token: 'eyJx.y.z', refresh_token: 'r2', expires_in: 21600 },
-    });
+    installHttpsMock({ statusCode: 200, body: { access_token: 'eyJx.y.z', refresh_token: 'r2', expires_in: 21600 } });
 
     const xai = loadXai({ authType: 'oauth', oauthToken: 'eyJa.b.c', refresh: 'r1' });
-    let threw = false;
-    let err = null;
-    try {
-        await xai.refreshOAuthToken();
-    } catch (e) {
-        threw = true;
-        err = e;
-    }
-    ok('H2: an UNPERSISTED rotation rejects — never resolves true', threw === true);
-    ok('H2: the propagated error is flagged persistFailed', !!err && err.persistFailed === true, err && err.message);
-    // Bounded retry: the bridge was tried more than once before failing.
-    ok('H2: bridge persist was retried (bounded) before surfacing', _bridgeCalls.length >= 2, `calls=${_bridgeCalls.length}`);
-    // The rotated tokens were still registered (redaction covers the leaked-but-unpersisted case).
-    ok('H2: rotated tokens still registered for redaction even on persist failure', _registeredSecrets.includes('eyJx.y.z'));
+    xai._resetErrorStateForTests();
 
+    // The rotation succeeds server-side but the persist fails. D9: the refresh
+    // RESOLVES true (the turn continues on the valid in-memory token) — no throw.
+    let resolved = false, threw = false;
+    try { resolved = (await xai.refreshOAuthToken()) === true; } catch (_) { threw = true; }
+    ok('D9: an unpersisted rotation RESOLVES true (availability-first, no hard throw)', resolved === true && threw === false);
+    ok('D9: state is _persistPending after the failed persist', xai.isPersistPending() === true);
+    ok('D9: the rotated bearer is live in memory for THIS turn', xai.buildHeaders('x').Authorization === 'Bearer eyJx.y.z');
+    ok('D9: rotated tokens still registered for redaction', _registeredSecrets.includes('eyJx.y.z'));
+
+    // Codex-required: first persist fails → later SAME-pair persist succeeds → NO
+    // second refresh POST → recovery only afterward.
+    const httpsAfterRotation = _httpsCallCount;
+    const bridgeAfterRotation = _bridgeCalls.length;
+    _bridgeResult = { success: true }; // disk recovers
+    await xai.ensureFreshToken();       // D9 step 1: re-persist the SAME pair FIRST (not a refresh)
+    ok('D9: re-persist cleared the pending state', xai.isPersistPending() === false);
+    ok('D9: NO second token rotation (auth.x.ai POST count unchanged)', _httpsCallCount === httpsAfterRotation, `https=${_httpsCallCount}`);
+    ok('D9: the re-persist reused the SAME rotated pair', _bridgeCalls[_bridgeCalls.length - 1].data.accessToken === 'eyJx.y.z');
+    ok('D9: bridge was called again for the re-persist', _bridgeCalls.length > bridgeAfterRotation, `calls=${_bridgeCalls.length}`);
+
+    restoreHttps();
+}
+
+// BAT-1143 D2/D5/D8/D9: the proactive ensureFreshToken() gate.
+async function testEnsureFreshTokenGating() {
+    console.log('\n── ensureFreshToken: proactive gate (D2/D5) + suppression (D8/D9) ──');
+
+    // api_key → always a no-op.
+    _httpsCallCount = 0;
+    const xaiApi = loadXai({ authType: 'api_key', apiKey: 'k' });
+    await xaiApi.ensureFreshToken();
+    ok('api_key: ensureFreshToken is a no-op (no refresh POST)', _httpsCallCount === 0, `https=${_httpsCallCount}`);
+
+    // oauth FRESH token (>5min buffer away) → no refresh.
+    _httpsCallCount = 0; _bridgeResult = { success: true };
+    installHttpsMock({ statusCode: 200, body: { access_token: 'n.e.w', refresh_token: 'r', expires_in: 21600 } });
+    const xaiFresh = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0' });
+    xaiFresh._resetErrorStateForTests();
+    xaiFresh._setStateForTests({ expiresAtMs: Date.now() + 60 * 60 * 1000 });
+    await xaiFresh.ensureFreshToken();
+    ok('D2: fresh token (>5min buffer) → no proactive refresh', _httpsCallCount === 0, `https=${_httpsCallCount}`);
+
+    // oauth NEAR expiry (inside the 5min buffer) → refresh fires.
+    _httpsCallCount = 0;
+    const xaiNear = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0' });
+    xaiNear._resetErrorStateForTests();
+    xaiNear._setStateForTests({ expiresAtMs: Date.now() + 60 * 1000 }); // 60s out
+    await xaiNear.ensureFreshToken();
+    ok('D2: near-expiry (inside 5min buffer) → proactive refresh fires', _httpsCallCount === 1, `https=${_httpsCallCount}`);
+    restoreHttps();
+
+    // D5: expiry-unknown (0) → exactly ONE opportunistic refresh (prove at-most-once
+    // by making the attempt fail transiently so expiry stays 0).
+    _httpsCallCount = 0;
+    installHttpsMock({ statusCode: 500, body: {} });
+    const xaiUnk = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0', expiresAt: '' });
+    xaiUnk._resetErrorStateForTests();
+    await xaiUnk.ensureFreshToken();
+    const firstCount = _httpsCallCount;
+    await xaiUnk.ensureFreshToken();
+    ok('D5: expiry-unknown → one opportunistic refresh attempt', firstCount === 1, `first=${firstCount}`);
+    ok('D5: opportunistic refresh does NOT repeat (at-most-once, no storm)', _httpsCallCount === firstCount, `https=${_httpsCallCount}`);
+    restoreHttps();
+
+    // Suppression: _refreshDead and _tierGated both prevent any refresh.
+    _httpsCallCount = 0;
+    installHttpsMock({ statusCode: 200, body: { access_token: 'x', refresh_token: 'r', expires_in: 21600 } });
+    const xaiDead = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0' });
+    xaiDead._resetErrorStateForTests();
+    xaiDead._setStateForTests({ expiresAtMs: Date.now() - 1000, refreshDead: true });
+    await xaiDead.ensureFreshToken();
+    ok('D9: _refreshDead suppresses proactive refresh (no dead-token hammering)', _httpsCallCount === 0, `https=${_httpsCallCount}`);
+
+    const xaiGated = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0' });
+    xaiGated._resetErrorStateForTests();
+    xaiGated._setStateForTests({ expiresAtMs: Date.now() - 1000, tierGated: true });
+    await xaiGated.ensureFreshToken();
+    ok('D8: _tierGated suppresses proactive refresh (no rotation churn on a gated account)', _httpsCallCount === 0, `https=${_httpsCallCount}`);
+    restoreHttps();
+}
+
+// BAT-1143 D3a: monotonic age gate — uninitialized guard + backward-clock immunity.
+// Observed through classifyError(403), which shares _isTokenExpiredish() with the
+// proactive gate.
+function testMonotonicAgeGateD3a() {
+    console.log('\n── D3a: monotonic age gate (uninitialized guard + backward-clock immunity) ──');
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+
+    // (1) mono-invalid + FUTURE absolute expiry → NOT expiredish → 403 is a
+    // tier-gate, NOT auth. Guards the _currentMintedAtMs=0 refresh-storm trap.
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ expiresAtMs: Date.now() + 60 * 60 * 1000, mintedMonoValid: false });
+    ok('D3a: mono-invalid + fresh absolute expiry → 403 NOT auth (no first-request storm)',
+        xai.classifyError(403, {}).type !== 'auth');
+
+    // (2) Backward-clock skew: absolute expiry looks FRESH (device clock behind),
+    // but the monotonic age says expired → 403 IS refreshable auth — even after the
+    // provisioning grace has latched (D7 ordering).
+    xai._resetErrorStateForTests();
+    const ttlMs = 21600 * 1000;
+    xai._setStateForTests({
+        expiresAtMs: Date.now() + 60 * 60 * 1000,                       // absolute says fresh
+        mintedMonoValid: true,
+        ttlMs,
+        mintedAtMono: process.hrtime.bigint() - BigInt(ttlMs) * 1000000n, // aged past TTL
+        oauth403RetriedOnce: true,
+    });
+    const e = xai.classifyError(403, {});
+    ok('D3a: absolute-fresh but monotonic-aged → 403 IS auth (backward-skew caught)', e.type === 'auth' && e.retryable === true, e.type);
+}
+
+// BAT-1143 D7/D8: classifyError(403) expired-backstop ordering + tier-gate honoring.
+function testClassifyError403BackstopD7() {
+    console.log('\n── D7/D8: classifyError(403) expired-backstop ordering + tier-gate ──');
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+
+    // Expired token → 'auth', EVEN after _oauth403RetriedOnce latched (the point of D7).
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ expiresAtMs: Date.now() - 1000, oauth403RetriedOnce: true });
+    const eExp = xai.classifyError(403, {});
+    ok('D7: expired 403 → "auth" retryable EVEN after _oauth403RetriedOnce', eExp.type === 'auth' && eExp.retryable === true, eExp.type);
+
+    // Fresh token 403 → terminal tier-gate (C1 preserved), NOT auth.
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ expiresAtMs: Date.now() + 60 * 60 * 1000, oauth403RetriedOnce: true });
+    const eFresh = xai.classifyError(403, {});
+    ok('C1: fresh-token 403 stays terminal tier-gate (not auth)', eFresh.type !== 'auth' && eFresh.retryable === false, eFresh.type);
+
+    // Tier-gated (breaker tripped) → terminal, skips the grace.
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ expiresAtMs: Date.now() + 60 * 60 * 1000, tierGated: true });
+    const eGated = xai.classifyError(403, {});
+    ok('D8: _tierGated 403 is terminal (skips the provisioning grace)', eGated.type !== 'auth' && eGated.retryable === false, eGated.type);
+}
+
+// BAT-1143 D8: breaker hooks.
+function testD8BreakerHooks() {
+    console.log('\n── D8: breaker hooks (markTierGated / noteInferenceSuccess / repairReset) ──');
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+    xai._resetErrorStateForTests();
+    ok('breaker starts clear', xai._getStateForTests().tierGated === false);
+    xai.markTierGated();
+    ok('markTierGated() trips the breaker', xai._getStateForTests().tierGated === true);
+    xai.noteInferenceSuccess();
+    ok('noteInferenceSuccess() clears the breaker (a 200 = the account can reach the model)', xai._getStateForTests().tierGated === false);
+    xai._setStateForTests({ tierGated: true, refreshDead: true, persistPending: true });
+    xai.repairReset();
+    const s = xai._getStateForTests();
+    ok('repairReset() clears tierGated + refreshDead + persistPending', s.tierGated === false && s.refreshDead === false && s.persistPending === false);
+}
+
+// BAT-1143 D9: invalid_grant → _refreshDead → suppression + not-auth.
+async function testD9DeadToken() {
+    console.log('\n── D9: invalid_grant → _refreshDead → suppression + not-auth ──');
+    _httpsCallCount = 0; _bridgeResult = { success: true };
+    installHttpsMock({ statusCode: 400, body: { error: 'invalid_grant', error_description: 'refresh token revoked' } });
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'dead' });
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ expiresAtMs: Date.now() - 1000 }); // expired → ensureFreshToken will attempt
+
+    await xai.ensureFreshToken();
+    ok('D9: invalid_grant sets _refreshDead', xai._getStateForTests().refreshDead === true);
+    const httpsAfter = _httpsCallCount;
+    await xai.ensureFreshToken();
+    ok('D9: dead-token suppresses further proactive refresh (no 5-min hammering)', _httpsCallCount === httpsAfter, `https=${_httpsCallCount}`);
+    ok('D9: dead token → 401 is NOT auth (nothing to refresh)', xai.classifyError(401, {}).type !== 'auth');
     restoreHttps();
 }
 
@@ -417,7 +593,13 @@ async function testHandleUnauthorized() {
 (async function run() {
     try {
         await testRefreshSingleFlightAndPersist();
-        await testPersistFailurePropagates();
+        await testRefreshMintStateD3();
+        await testPersistFailureAvailabilityFirst();
+        await testEnsureFreshTokenGating();
+        testMonotonicAgeGateD3a();
+        testClassifyError403BackstopD7();
+        testD8BreakerHooks();
+        await testD9DeadToken();
         await testHandleUnauthorized();
     } catch (e) {
         console.log('FAIL: unexpected exception in async tests — ' + (e && e.stack || e));
