@@ -663,6 +663,11 @@ class XaiOAuthActivity : ComponentActivity() {
         val codeVerifier = generateCodeVerifier()
         val codeChallenge = generateCodeChallenge(codeVerifier)
         val state = generateState()
+        // BAT-1124 (Copilot): OIDC `nonce` — defense-in-depth for the `openid` id_token
+        // and parity with the --login spike harness (which sends one). Reuses the same
+        // CSPRNG b64url generator; a nonce needs the same unguessable-random property as
+        // state. (Primary CSRF/replay protection here is still state + PKCE.)
+        val nonce = generateState()
 
         resetActiveFlow()
 
@@ -729,6 +734,7 @@ class XaiOAuthActivity : ComponentActivity() {
             append("&state=").append(URLEncoder.encode(state, "UTF-8"))
             append("&code_challenge=").append(URLEncoder.encode(codeChallenge, "UTF-8"))
             append("&code_challenge_method=S256")
+            append("&nonce=").append(URLEncoder.encode(nonce, "UTF-8"))
         }
 
         try {
