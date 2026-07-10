@@ -55,6 +55,16 @@ function seedFixture(dir, opts) {
         agentName = 'TestBot',
     } = opts || {};
 
+    // Clear any stale state from a PRIOR run before re-seeding (Copilot): config.js
+    // prefers runtime_state.json over config.json, and buildSystemBlocks reads the
+    // workspace files — so a leftover runtime_state / memory file could silently poison
+    // the next seed (e.g. wrong provider/auth mode, or stale prompt content).
+    for (const f of ['config.json', 'runtime_state.json', 'agent_settings.json', 'node_debug.log',
+                     'SOUL.md', 'IDENTITY.md', 'USER.md', 'MEMORY.md', 'HEARTBEAT.md', 'BOOTSTRAP.md']) {
+        try { fs.rmSync(path.join(dir, f), { force: true }); } catch (_) { /* best-effort */ }
+    }
+    try { fs.rmSync(path.join(dir, 'memory'), { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+
     fs.mkdirSync(path.join(dir, 'memory'), { recursive: true });
 
     // ── config.json ──────────────────────────────────────────────────────────

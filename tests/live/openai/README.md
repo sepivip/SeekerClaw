@@ -39,7 +39,9 @@ module-load time from `OPENAI_AUTH_TYPE`. A single process can therefore only be
 ## Run
 
 ```bash
-# OFFLINE acceptance test — no secrets, no network. This is the gate.
+# OFFLINE acceptance test — no secrets, no OpenAI/external network. This is the gate.
+# (buildSystemBlocks fires a fire-and-forget localhost /burner/status probe that fails
+#  silently with no bridge server, so it's "no external network", not literally no sockets.)
 node tests/live/openai/live-models.probe.js --self-check
 
 # Live sweep (needs credentials):

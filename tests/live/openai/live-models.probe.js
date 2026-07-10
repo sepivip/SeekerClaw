@@ -20,11 +20,15 @@
 // Tokens are NEVER printed — only present(len=N). Node builtins only; no deps.
 //
 // USAGE
-//   node tests/live/openai/live-models.probe.js --self-check      # offline, no creds, no network
+//   node tests/live/openai/live-models.probe.js --self-check      # offline, no creds, no EXTERNAL network*
 //   node tests/live/openai/live-models.probe.js                   # live sweep (needs .env.test)
 //   node tests/live/openai/live-models.probe.js --mode oauth --diagnose
 //   node tests/live/openai/live-models.probe.js --models gpt-5.4,gpt-5.5
 //   node tests/live/openai/live-models.probe.js --base-url http://127.0.0.1:8080
+//
+//   * "no EXTERNAL network": --self-check makes no OpenAI/internet call, but the real
+//     buildSystemBlocks() fires a fire-and-forget /burner/status probe at the localhost
+//     bridge; with no bridge server it fails silently and doesn't affect the result.
 //
 // Exit: 0 whenever the sweep/self-check ran; 1 only on setup/credential/assert error.
 'use strict';
@@ -243,7 +247,7 @@ function printLive(result, reg) {
 
     // ── SELF-CHECK (offline) ──────────────────────────────────────────────────
     if (args.selfCheck) {
-        line('\nMODE: --self-check (offline, no network). Seeding both fixtures with placeholders.');
+        line('\nMODE: --self-check (offline, no external network). Seeding both fixtures with placeholders.');
         const results = [];
         for (const mode of modes) {
             const models = modelsForMode(mode, args.models, reg, testModelsEnv);
@@ -268,7 +272,7 @@ function printLive(result, reg) {
         line('\nNo credential found and no --self-check. Put ONE of these in tests/live/openai/.env.test:');
         line('  OPENAI_API_KEY=...        (api_key path)');
         line('  OPENAI_OAUTH_TOKEN=...    (oauth / Codex path)');
-        line('…or run with --self-check to validate the body offline (no creds, no network).');
+        line('…or run with --self-check to validate the body offline (no creds, no external network).');
         process.exit(1);
     }
     // A mode was requested/selected but its credential is missing → setup error.

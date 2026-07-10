@@ -11,7 +11,9 @@
 //
 // The worker imports the REAL modules and builds the wire body the EXACT way the
 // agent does (ai.js chat() seam), then either:
-//   • --self-check : validates the body's wire shape offline (no network), OR
+//   • --self-check : validates the body's wire shape offline — no OpenAI/external
+//                    network (a fire-and-forget localhost bridge probe during prompt
+//                    assembly fails silently), OR
 //   • live         : POSTs each model's body via the REAL httpOpenAIStreamingRequest.
 //
 // It reports back via IPC (process.send) when forked, else prints JSON to stdout.
@@ -113,7 +115,11 @@ function buildRequestOptions(model, { heartbeat = false } = {}) {
 
 function buildBody(model, { heartbeat = false, reasoningEffortOverride = null } = {}) {
     // Deterministic wallet block: seed a "no burner configured" snapshot so the
-    // Wallets section renders WITHOUT firing a localhost:8765 bridge call.
+    // Wallets section is STABLE. Note (Copilot): buildSystemBlocks() still fires a
+    // fire-and-forget /burner/status probe at the localhost bridge — but there is no
+    // bridge server here, so it fails silently and does NOT overwrite this seeded
+    // snapshot (the probe is why the self-check is "no EXTERNAL network", not literally
+    // "no sockets").
     ai._setWalletPromptSnapshotForTests({ configured: false });
 
     const { stable, dynamic } = ai.buildSystemBlocks([], null, model);
