@@ -268,6 +268,14 @@ const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
 const XAI_KEY = normalizeSecret(config.xaiApiKey || '');
 const XAI_OAUTH_TOKEN = normalizeSecret(config.xaiOAuthToken || '');
 const XAI_OAUTH_REFRESH = normalizeSecret(config.xaiOAuthRefresh || '');
+// BAT-1143: ISO-8601 access-token expiry (NOT a secret — a timestamp). Drives the
+// provider's proactive refresh so the OAuth access token is renewed before its ~6h
+// TTL, instead of dying on the 403-not-401 xAI returns at expiry. Blank when never
+// paired via OAuth or (pre-fix) never persisted → the adapter treats 0 as
+// "expiry-unknown" and does one opportunistic refresh on first use.
+const XAI_OAUTH_EXPIRES_AT = (typeof config.xaiOAuthExpiresAt === 'string' ? config.xaiOAuthExpiresAt.trim() : '');
+// OpenAI symmetry (data-plumbing only; the OpenAI proactive hook is a follow-up).
+const OPENAI_OAUTH_EXPIRES_AT = (typeof config.openaiOAuthExpiresAt === 'string' ? config.openaiOAuthExpiresAt.trim() : '');
 
 // Normalize authType (trim/lowercase) so values like " OAuth\n" don't silently fall
 // through to api_key. For OpenAI, alias known legacy values (e.g. "setup_token" left
@@ -929,8 +937,8 @@ module.exports = {
     PROVIDER,
     ANTHROPIC_KEY,
     OPENAI_KEY,
-    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE,
-    XAI_KEY, XAI_OAUTH_TOKEN, XAI_OAUTH_REFRESH,
+    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE, OPENAI_OAUTH_EXPIRES_AT,
+    XAI_KEY, XAI_OAUTH_TOKEN, XAI_OAUTH_REFRESH, XAI_OAUTH_EXPIRES_AT,
     OPENROUTER_KEY,
     CUSTOM_KEY,
     CUSTOM_BASE_URL,

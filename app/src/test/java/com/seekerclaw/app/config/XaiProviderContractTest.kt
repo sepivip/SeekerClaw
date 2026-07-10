@@ -116,6 +116,47 @@ class XaiProviderContractTest {
         )
     }
 
+    // ── BAT-1143: writeConfigJson must emit the OAuth expiry Node needs ──────────
+    //
+    // The full "read the actual generated config.json" round-trip (Context +
+    // SharedPreferences + KeystoreHelper) is device-deferred exactly like the L1
+    // persist→load note above — this repo has no Robolectric. These are source-contract
+    // drift guards for the specific put() that was MISSING before BAT-1143 and whose
+    // absence made the entire token-refresh fix inert: config.js would never see the
+    // expiry, so the adapter's _currentExpiresAtMs stayed 0 and neither the proactive
+    // nor the reactive refresh could ever fire. The Node CONSUMPTION half (config.js
+    // exposes XAI_OAUTH_EXPIRES_AT, the adapter seeds _currentExpiresAtMs from it) is a
+    // real behavioural test in tests/nodejs-project/xai.test.js; the on-device
+    // generated-config.json read is the acceptance gate (device soak).
+
+    @Test
+    fun `BAT-1143 - writeConfigJson emits xaiOAuthExpiresAt into config json`() {
+        val cm = readRepoFile(
+            "app/src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
+            "src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
+        )
+        // Pin the exact put() call. A bare contains("xaiOAuthExpiresAt") would also match
+        // the AppConfig field decl, the SharedPreferences key, and comments — so match the
+        // emission specifically (this is the line whose absence was the fix-defeating bug).
+        assertTrue(
+            "ConfigManager.writeConfigJson must put(\"xaiOAuthExpiresAt\", config.xaiOAuthExpiresAt) — " +
+                "without it config.js never sees the expiry and BAT-1143's refresh is dead code",
+            Regex("""put\(\s*"xaiOAuthExpiresAt"\s*,\s*config\.xaiOAuthExpiresAt\s*\)""").containsMatchIn(cm),
+        )
+    }
+
+    @Test
+    fun `BAT-1143 - writeConfigJson emits openaiOAuthExpiresAt for OpenAI symmetry`() {
+        val cm = readRepoFile(
+            "app/src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
+            "src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
+        )
+        assertTrue(
+            "writeConfigJson must also put(\"openaiOAuthExpiresAt\", ...) — Q6 data-plumbing symmetry",
+            Regex("""put\(\s*"openaiOAuthExpiresAt"\s*,\s*config\.openaiOAuthExpiresAt\s*\)""").containsMatchIn(cm),
+        )
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private val json = Json { ignoreUnknownKeys = true }

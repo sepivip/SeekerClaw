@@ -2092,14 +2092,26 @@ object ConfigManager {
             put("channel", config.channel)
             if (config.discordBotToken.isNotBlank()) put("discordBotToken", config.discordBotToken)
             if (config.discordOwnerId.isNotBlank()) put("discordOwnerId", config.discordOwnerId)
-            // Only the tokens are needed by Node — email/expiresAt are Android-only metadata.
+            // Email stays Android-only. BAT-1143: expiresAt is NO LONGER Android-only —
+            // Node needs it to proactively refresh the OAuth access token before the ~6h
+            // expiry (xAI returns 403-not-401 on expiry, so a reactive-only refresh never
+            // fires and the agent dies every ~6h). writeConfigJson runs at service boot and
+            // regenerates the ephemeral config.json from SharedPreferences, so emitting the
+            // expiry here is what makes `_currentExpiresAtMs` non-zero on the Node side.
+            // Each field is written only when non-blank (upgrade-safe; old configs untouched).
             if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
             if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
-            // BAT-1124: xAI — write each field only when non-blank (upgrade-safe; old
-            // configs stay untouched). Node reads xaiApiKey / xaiOAuthToken / xaiOAuthRefresh.
+            // openaiOAuthExpiresAt: data-plumbing only for OpenAI symmetry/readiness — the
+            // OpenAI proactive-refresh hook is a separate follow-up; adding the field now
+            // does not change OpenAI behavior (BAT-1143 Q6).
+            if (config.openaiOAuthExpiresAt.isNotBlank()) put("openaiOAuthExpiresAt", config.openaiOAuthExpiresAt)
+            // BAT-1124: xAI — write each field only when non-blank. Node reads
+            // xaiApiKey / xaiOAuthToken / xaiOAuthRefresh / xaiOAuthExpiresAt.
             if (config.xaiApiKey.isNotBlank()) put("xaiApiKey", config.xaiApiKey)
             if (config.xaiOAuthToken.isNotBlank()) put("xaiOAuthToken", config.xaiOAuthToken)
             if (config.xaiOAuthRefresh.isNotBlank()) put("xaiOAuthRefresh", config.xaiOAuthRefresh)
+            // BAT-1143: the ISO-8601 access-token expiry that drives Node's proactive refresh.
+            if (config.xaiOAuthExpiresAt.isNotBlank()) put("xaiOAuthExpiresAt", config.xaiOAuthExpiresAt)
             // NOTE: loadEnvVars() decrypts on the calling thread, matching the
             // pre-existing pattern in this function — every secret field above
             // (bot tokens, API keys, OAuth tokens, MCP tokens) is also decrypted
