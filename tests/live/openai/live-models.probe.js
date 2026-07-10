@@ -3,9 +3,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // LIVE OpenAI model-matrix probe — "EXACT AGENT COPY" edition (BAT-1144, Part 2).
 //
-// Unlike the xAI harness (tests/xai-models/live-models.test.js) which fakes the
-// system prompt + tools, THIS probe imports the REAL agent modules and builds the
-// Responses API request the EXACT way ai.js chat() does:
+// Unlike a black-box live harness that fakes the system prompt + tools, THIS probe
+// imports the REAL agent modules and builds the Responses API request the EXACT way
+// ai.js chat() does:
 //   • ai.buildSystemBlocks()  → the real ~54KB system prompt (seeded workspace)
 //   • tools/index TOOLS        → the real 64-tool telegram registry
 //   • providers/openai adapter → formatSystemPrompt / formatTools / toApiMessages /

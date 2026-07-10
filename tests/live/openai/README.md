@@ -5,9 +5,9 @@ model, whether it responds — but the point is _how_ it builds the request.
 
 ## What "exact copy" means
 
-The xAI harness (`tests/xai-models/live-models.test.js`) imports **zero** agent
-code: it hand-fakes a short system prompt and a handful of dummy tools. That
-means a "works here / breaks on device" gap can hide in everything it faked.
+Prior live harnesses fake the payload — a hand-written short system prompt and a
+handful of dummy tools. That means a "works here / breaks on device" gap can hide
+in everything they faked.
 
 This harness **imports the real agent modules** and builds the wire body the
 **exact way `ai.js chat()` does** — no re-implementation:

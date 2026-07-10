@@ -15,7 +15,7 @@ const fs = require('fs');
  *
  * @param {string} filePath absolute path to .env.test
  * @param {{assign?: boolean}} [opts] if assign (default true), copies parsed
- *        keys into process.env when not already set (mirrors the xai harness).
+ *        keys into process.env when not already set.
  * @returns {{loaded: boolean, values: Object<string,string>}}
  */
 function loadEnvTest(filePath, { assign = true } = {}) {
