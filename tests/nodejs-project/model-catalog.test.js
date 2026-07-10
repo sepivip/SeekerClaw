@@ -142,7 +142,8 @@ check('includes openrouter', mc.KNOWN_PROVIDERS.includes('openrouter'), true);
 check('includes custom', mc.KNOWN_PROVIDERS.includes('custom'), true);
 check('includes xai (BAT-1124)', mc.KNOWN_PROVIDERS.includes('xai'), true);
 // Provider order pin (BAT-517 Codex finding 1): preserve fallback target.
-// BAT-1124 appends xai, so providers[0]==openai still holds (append, not prepend).
+// BAT-1124 inserts xai as the 3rd provider but keeps openai at index 0 (never
+// prepends), so the unknown-id fallback target is unchanged.
 check('KNOWN_PROVIDERS[0] is openai (preserves pre-BAT-517 unknown-id fallback)', mc.KNOWN_PROVIDERS[0], 'openai');
 
 console.log();
