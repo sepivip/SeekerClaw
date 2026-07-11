@@ -19,7 +19,7 @@ const { logSuppression, SUPPRESSION_REASONS } = require('../reasoning-gating');
 // there is no `budget_tokens < max_tokens` constraint to satisfy, which
 // removes that entire 400 class (the reason BAT-558 existed).
 //
-// Verified live on the RAW api-key path (testing/test-thinking-matrix.js):
+// Verified live on the RAW api-key path (tests/live/anthropic/test-thinking-matrix.js):
 //   extended → fable-5/opus-4-8/opus-4-7/sonnet-5: 400 removed; opus-4-6/sonnet-4-6: 200
 //   adaptive → all six: 200
 // The 400 only surfaced for users on their own API key — setup_token's
@@ -230,7 +230,7 @@ function fromApiResponse(raw) {
 
 // BAT-1123: cc_version tracks the Claude Code CLI version we identify as on the
 // setup_token billing path. Bumped 2.1.116 → 2.1.195 (verified HTTP 200 on our
-// models via testing/test-cc-version.js). Keep in sync with testing/lib.js.
+// models via tests/live/anthropic/test-cc-version.js). Keep in sync with tests/live/anthropic/lib.js.
 const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.195; cc_entrypoint=cli; cch=00000;';
 
 // ── System prompt ───────────────────────────────────────────────────────────

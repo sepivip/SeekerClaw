@@ -190,7 +190,7 @@ function restoreHttps() { https.request = _origHttpsRequest; }
 // OpenRouter's `reasoning:{effort}` object. Sending neither leaves grok-4.5's
 // reasoning UNBOUNDED → >60s silent reasoning on big agent requests → the app's
 // socket-idle timeout fires (grok-4.3 tolerates it, grok-4.5 doesn't). Proven
-// live in tests/xai-models `--diagnose`. This pins the request shape so a
+// live in tests/live/xai `--diagnose`. This pins the request shape so a
 // refactor can't silently drop the param and reintroduce the hang.
 (function testFormatRequestReasoning() {
     console.log('\n── formatRequest: reasoning_effort bounding (grok-4.5 fix) ──');

@@ -57,7 +57,7 @@ Tokens, the auth code, and the id_token are **never printed raw** — only
 ### How to run
 
 ```bash
-cd testing/xai-oauth-spike
+cd tests/live/oauth-spikes
 node loopback-spike.js
 ```
 
@@ -146,7 +146,7 @@ Tokens are **never printed** — presence is shown `REDACTED` with lengths only.
 ### How to run
 
 ```bash
-cd testing/xai-oauth-spike
+cd tests/live/oauth-spikes
 node devicecode-spike.js
 ```
 

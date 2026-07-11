@@ -1,10 +1,10 @@
-// tests/live/openai/_shared/env.js
+// tests/live/_shared/env.js
 // ─────────────────────────────────────────────────────────────────────────────
 // Hand-rolled .env.test parser + secret redaction. Node builtins only (no dotenv).
 //
-// PART-1 NOTE: this lives under tests/live/openai/_shared/ for now. Part 1
-// (repo-wide) will move the shared bits to tests/live/_shared/. Keep the API
-// small (loadEnvTest / redact / redactIn) so the move is a path change only.
+// Shared across every live probe (openai/, xai/, anthropic/) from the repo-wide
+// tests/live/_shared/. Keep the API small (loadEnvTest / redact / redactIn) so
+// probes depend on a stable surface.
 'use strict';
 
 const fs = require('fs');

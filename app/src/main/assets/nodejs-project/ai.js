@@ -520,7 +520,7 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
     // to the Recent Sessions block, and the "HEARTBEAT_OK" ack text a summary
     // produces is what tripped Anthropic's setup_token content filter (mislabeled
     // as a "You're out of extra usage" 400), deadlocking every turn. The heartbeat
-    // mechanism itself (poll → HEARTBEAT_OK reply) is untouched. See testing/FINDINGS.md.
+    // mechanism itself (poll → HEARTBEAT_OK reply) is untouched. See tests/live/anthropic/FINDINGS.md.
     // Still perform the cheap housekeeping the full path used to do (reset the
     // session track, drop any pending idle-summary timer) so the heartbeat track
     // can't grow unbounded across polls now that it's never summarized.
@@ -1631,7 +1631,7 @@ function classifyApiError(status, data) {
 // BAT-1130: Anthropic's setup_token (Claude Code OAuth) path mislabels some
 // content-filter rejections as a billing "You're out of extra usage" 400 — even
 // when the account has usage left (proven: a tiny request on the same token
-// succeeds; see testing/FINDINGS.md). Detect that EXACT mislabelled message so
+// succeeds; see tests/live/anthropic/FINDINGS.md). Detect that EXACT mislabelled message so
 // the tool loop can self-heal by retrying without volatile agent-authored
 // memory. Matches the specific phrase (not just "extra usage") to avoid firing
 // on unrelated 400s; the call site additionally gates on the setup_token flow.
@@ -3047,7 +3047,7 @@ async function chat(chatId, userMessage, options = {}) {
                 // if that succeeds it was content, not usage. If the lean retry
                 // also fails, fall through and surface the real error. F1/F2
                 // fix the known heartbeat trigger; this is the general backstop
-                // so no future poison can permanently deadlock. See testing/FINDINGS.md.
+                // so no future poison can permanently deadlock. See tests/live/anthropic/FINDINGS.md.
                 // Gated to the setup_token flow — that's the only path Anthropic
                 // mislabels this way; a raw-API-key 400 with this text would be a
                 // genuine error, not a content-filter false-positive.

@@ -12,7 +12,7 @@
 //   B. signature: ''       (http.js poison)      → expect 400 "must contain thinking"
 //   C. signature stripped  (field deleted)       → expect 400
 //
-// Run: node testing/test-thinking-poison.js
+// Run: node tests/live/anthropic/test-thinking-poison.js
 'use strict';
 
 const https = require('https');
@@ -50,7 +50,7 @@ function classify(rr) {
 
 (async () => {
     const token = process.env.SETUP_TOKEN || process.env.ANTHROPIC_SETUP_TOKEN;
-    if (!token) { console.error('❌ Set SETUP_TOKEN in testing/.env'); process.exit(1); }
+    if (!token) { console.error('❌ Set SETUP_TOKEN in tests/live/anthropic/.env'); process.exit(1); }
     console.log(`🧪 BAT-1033 poison isolation — ${MODEL}\n`);
 
     // 1) Get a real assistant turn with a thinking block + tool_use.

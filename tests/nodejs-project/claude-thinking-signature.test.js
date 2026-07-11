@@ -10,7 +10,7 @@
 // signature from content_block_start. Echoing that block back on the next
 // tool-loop round → API 400 "each thinking block must contain thinking".
 //
-// PROVEN via live setup_token probe (testing/test-thinking-poison.js):
+// PROVEN via live setup_token probe (tests/live/anthropic/test-thinking-poison.js):
 //   - a signed EMPTY-TEXT thinking block replays 200 (empty text is fine)
 //   - the SAME block with signature:'' replays 400 (the exact prod error)
 // → the invariant is the SIGNATURE, not the text.

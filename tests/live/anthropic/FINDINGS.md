@@ -58,9 +58,9 @@ filter, not a usage cap.
 **How to fight it in future.**
 - Never trust the setup_token error *copy*. A 400 "out of extra usage" that a *tiny*
   probe on the same token does NOT reproduce = content-triggered, not billing.
-- Regression probe: `testing/test-content-filter-trigger.js` (LIVE=1) asserts the known
+- Regression probe: `tests/live/anthropic/test-content-filter-trigger.js` (LIVE=1) asserts the known
   trigger phrase still 400s and the neutralized form 200s — run it if this recurs.
-- Repro of a full captured request: `testing/test-recreate-failure.js`.
+- Repro of a full captured request: `tests/live/anthropic/test-recreate-failure.js`.
 
 **Fix shipped.** (see PR) — (1) drop/neutralize trivial heartbeat-ack session summaries
 before they enter the prompt; (2) self-heal: on a 400 whose minimal-probe doesn't

@@ -916,7 +916,7 @@ content_block_delta  { signature_delta: <the signature> }   ← easy to forget
 API error (400): messages.N.content.0.thinking: each thinking block must contain thinking
 ```
 
-**The message is misleading — the trigger is the empty SIGNATURE, not empty text.** Proven with a live probe (`testing/test-thinking-poison.js`): a signed *empty-text* thinking block replays 200; the *same* block with `signature:''` replays 400. So:
+**The message is misleading — the trigger is the empty SIGNATURE, not empty text.** Proven with a live probe (`tests/live/anthropic/test-thinking-poison.js`): a signed *empty-text* thinking block replays 200; the *same* block with `signature:''` replays 400. So:
 
 - **Capture side:** never lose the signature. `signature_delta` MUST be accumulated.
 - **Replay guard (`claude.js:_collectClaudeWireBlocks`):** skip a thinking block whose `signature` is empty/whitespace — **key on the signature, not the text** (an empty-text signed block is valid and must still replay). This also recovers checkpoints poisoned by an older build after upgrade.
@@ -926,14 +926,14 @@ API error (400): messages.N.content.0.thinking: each thinking block must contain
 
 **A second, distinct BAT-1033 bug:** with `/think` **ON**, `formatRequest` used to send `thinking:{type:'enabled', budget_tokens}` (extended thinking). Anthropic **removed** extended thinking from the current models — fable-5/opus-4-8/opus-4-7/sonnet-5 reject it with `400 "thinking.type.enabled is not supported for this model. Use thinking.type.adaptive"`. Fix: send `thinking:{type:'adaptive'}` uniformly (the model auto-sizes its budget; accepted by every reasoning model). This retired the BAT-558 budget clamp (no `budget_tokens` → no `budget_tokens < max_tokens` constraint).
 
-**The trap that nearly made us defer it — auth path matters.** The `cc_version` billing masquerade on the **setup_token** path still *tolerated* the deprecated `budget_tokens` (returned 200), so probing only that path made it look "latent." On the **raw API-key** path (the common dApp-Store user, QR `anthropic_api_key`), the same request **400s**. **Always verify a provider-shape claim on BOTH auth paths** — `testing/test-thinking-matrix.js` runs the per-model × extended/adaptive grid on the api-key path; `test-thinking-repro.js` covers setup_token.
+**The trap that nearly made us defer it — auth path matters.** The `cc_version` billing masquerade on the **setup_token** path still *tolerated* the deprecated `budget_tokens` (returned 200), so probing only that path made it look "latent." On the **raw API-key** path (the common dApp-Store user, QR `anthropic_api_key`), the same request **400s**. **Always verify a provider-shape claim on BOTH auth paths** — `tests/live/anthropic/test-thinking-matrix.js` runs the per-model × extended/adaptive grid on the api-key path; `test-thinking-repro.js` covers setup_token.
 
 ### Wire-Contract Bugs Need Live Probes, Not Just Mocks
 
 **A fully-mocked test cannot catch a bug in what the *live API* actually accepts.** BAT-1033 shipped even though `claude-reasoning-roundtrip.test.js` existed — its mocks only covered *missing*-signature/wrong-type blocks, never the *empty-string* signature the real stream produces. Two-layer defense:
 
 1. **Offline (CI/smoke):** extract wire-assembly into a pure exported reducer and feed it the EXACT bytes the API streams (`tests/nodejs-project/claude-thinking-signature.test.js` drives `http.js`'s real `assembleClaudeStreamMessage`). The test must fail if the fix is reverted — verify that.
-2. **Live (opt-in, `testing/`):** `test-thinking-repro.js` (per-model × reasoning on/off/extended/adaptive matrix) and `test-thinking-poison.js` (verbatim vs signature-stripped replay) hit the real endpoint with a setup_token. Run before any release that touches provider request/response shaping.
+2. **Live (opt-in, `tests/live/anthropic/`):** `test-thinking-repro.js` (per-model × reasoning on/off/extended/adaptive matrix) and `test-thinking-poison.js` (verbatim vs signature-stripped replay) hit the real endpoint with a setup_token. Run before any release that touches provider request/response shaping.
 
 ### Verify External API Contracts via context7 (not training memory)
 

@@ -25,7 +25,7 @@ const path = require('path');
 const BUNDLE = path.resolve(__dirname, '..', '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
 const req = (m) => require(path.join(BUNDLE, m));
 
-const { redact, redactIn } = require('./_shared/env');
+const { redact, redactIn } = require('../_shared/env');
 
 // ── Control inputs (from the parent via env; argv[2] is reserved for workDir) ──
 const MODE = (process.env.SC_MODE || 'apikey').toLowerCase();           // 'apikey' | 'oauth'

@@ -6,14 +6,14 @@
 // request. This sends the smallest possible request on the agent's exact model
 // (claude-sonnet-4-6) via the setup_token to confirm whether the account is
 // capped right now. Deliberately tiny — every setup_token call bills the user's
-// subscription quota. Run: node testing/test-usage-probe.js
+// subscription quota. Run: node tests/live/anthropic/test-usage-probe.js
 'use strict';
 const path = require('path');
 const https = require('https');
 const configPath = path.resolve(__dirname, '../app/src/main/assets/nodejs-project/config.js');
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true,
     exports: { log: () => {}, CHANNEL: 'telegram', config: {}, API_TIMEOUT_MS: 60000 } };
-const claude = require('../app/src/main/assets/nodejs-project/providers/claude');
+const claude = require('../../../app/src/main/assets/nodejs-project/providers/claude');
 const { loadEnv, CC_BILLING_HEADER } = require('./lib');
 loadEnv();
 
@@ -32,7 +32,7 @@ function post(token, body) {
 
 (async () => {
     const token = process.env.SETUP_TOKEN || process.env.ANTHROPIC_SETUP_TOKEN;
-    if (!token) { console.error('❌ no SETUP_TOKEN in testing/.env'); process.exit(1); }
+    if (!token) { console.error('❌ no SETUP_TOKEN in tests/live/anthropic/.env'); process.exit(1); }
     console.log(`token tail …${token.slice(-6)}  model=${MODEL}\n`);
     const r = await post(token, {
         model: MODEL, max_tokens: 8, stream: false,

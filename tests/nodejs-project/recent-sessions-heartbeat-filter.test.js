@@ -5,7 +5,7 @@
 // whose summary_excerpt contains the literal protocol token "HEARTBEAT_OK") so
 // they can't re-enter the system prompt and re-trigger Anthropic's setup_token
 // content filter (mislabeled as a "You're out of extra usage" 400 — see
-// testing/FINDINGS.md). New builds no longer create these rows (F1), but rows
+// tests/live/anthropic/FINDINGS.md). New builds no longer create these rows (F1), but rows
 // written by older builds persist across upgrade; this read-time filter fixes
 // existing installs with no schema change and no DB migration.
 //

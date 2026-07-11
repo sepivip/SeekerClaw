@@ -37,8 +37,8 @@ const path = require('path');
 const fs = require('fs');
 const { fork } = require('child_process');
 
-const { loadEnvTest, redact } = require('./_shared/env');
-const { seedFixture } = require('./_shared/fixture');
+const { loadEnvTest, redact } = require('../_shared/env');
+const { seedFixture } = require('../_shared/fixture');
 
 const HERE = __dirname;
 const WORKER = path.join(HERE, 'worker.js');

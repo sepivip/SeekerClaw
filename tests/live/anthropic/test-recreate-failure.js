@@ -7,14 +7,14 @@
 // the shared usage meter as hard as the device does. If the account is at its
 // ceiling, this returns the SAME 400. Sends the exact same bytes TWICE so you
 // can see cold vs (attempted) warm.
-// Run: node testing/test-recreate-failure.js
+// Run: node tests/live/anthropic/test-recreate-failure.js
 'use strict';
 const path = require('path');
 const https = require('https');
 const configPath = path.resolve(__dirname, '../app/src/main/assets/nodejs-project/config.js');
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true,
     exports: { log: () => {}, CHANNEL: 'telegram', config: {}, API_TIMEOUT_MS: 60000 } };
-const claude = require('../app/src/main/assets/nodejs-project/providers/claude');
+const claude = require('../../../app/src/main/assets/nodejs-project/providers/claude');
 const { loadEnv } = require('./lib');
 loadEnv();
 

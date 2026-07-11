@@ -540,7 +540,7 @@ function getRecentSessions(limit = 5) {
         // sessions (see ai.js saveSessionSummary), but rows written by older
         // builds persist — their "...HEARTBEAT_OK..." text is both noise AND trips
         // Anthropic's setup_token content filter (mislabeled "out of extra usage",
-        // see testing/FINDINGS.md). A JS post-filter over a fixed over-fetch would
+        // see tests/live/anthropic/FINDINGS.md). A JS post-filter over a fixed over-fetch would
         // return 0 sessions when the most-recent rows are ALL heartbeat-ack
         // (exactly the deadlock state), hiding real conversations further back — so
         // filter in SQL. The '_' in the LIKE pattern is a single-char wildcard, so

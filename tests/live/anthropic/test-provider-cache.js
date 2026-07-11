@@ -32,9 +32,9 @@
  *  AGENT_SIZE=full                                 (recreate the ~26K agent prompt; default small)
  *  LIVE=1                                          (actually send; default dry-run)
  *
- * Run: node testing/test-provider-cache.js
- *      TEST_PROVIDER=openrouter node testing/test-provider-cache.js
- *      LIVE=1 AGENT_SIZE=full node testing/test-provider-cache.js
+ * Run: node tests/live/anthropic/test-provider-cache.js
+ *      TEST_PROVIDER=openrouter node tests/live/anthropic/test-provider-cache.js
+ *      LIVE=1 AGENT_SIZE=full node tests/live/anthropic/test-provider-cache.js
  */
 'use strict';
 
@@ -208,7 +208,7 @@ function readUsage(data) {
 
     // ---- LIVE: send twice with a CHANGING dynamic block ----
     const secret = cfg.secret();
-    if (!secret) { console.error(`\n❌ LIVE requested but no credential for ${PROVIDER} (${PROVIDER === 'claude' ? (AUTH === 'api_key' ? 'ANTHROPIC_API_KEY' : 'SETUP_TOKEN') : PROVIDER.toUpperCase() + '_API_KEY'}) in testing/.env`); process.exit(1); }
+    if (!secret) { console.error(`\n❌ LIVE requested but no credential for ${PROVIDER} (${PROVIDER === 'claude' ? (AUTH === 'api_key' ? 'ANTHROPIC_API_KEY' : 'SETUP_TOKEN') : PROVIDER.toUpperCase() + '_API_KEY'}) in tests/live/anthropic/.env`); process.exit(1); }
     const headers = cfg.headers(a, secret);
     console.log('\nLIVE — sending twice (dynamic block changes between calls):');
     for (const [label, seed] of [['REQ 1 (cold)   ', 1001], ['REQ 2 (dyn ≠ 1) ', 2002]]) {
