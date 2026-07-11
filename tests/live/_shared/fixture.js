@@ -46,6 +46,8 @@ function write(p, content) {
 function seedFixture(dir, opts) {
     const {
         mode,
+        provider = 'openai',
+        authConfig = null,
         model = 'gpt-5.4',
         apiKey,
         oauthToken,
@@ -68,9 +70,15 @@ function seedFixture(dir, opts) {
     fs.mkdirSync(path.join(dir, 'memory'), { recursive: true });
 
     // ── config.json ──────────────────────────────────────────────────────────
+    // Provider-generic: pass `provider` + `authConfig` (the provider's own auth
+    // config.json fields, incl. `authType`) to seed any provider — e.g.
+    //   { provider:'claude',     authConfig:{ authType:'api_key', anthropicApiKey:'…' } }
+    //   { provider:'openrouter', authConfig:{ authType:'api_key', openrouterApiKey:'…' } }
+    //   { provider:'custom',     authConfig:{ authType:'api_key', customApiKey:'…', customBaseUrl:'…', customFormat:'chat_completions' } }
+    // The legacy OpenAI path (mode/apiKey/oauthToken, no authConfig) is preserved
+    // byte-for-byte so the Part-2 OpenAI harness is unchanged.
     const cfg = {
-        provider: 'openai',
-        authType: mode === 'oauth' ? 'oauth' : 'api_key',
+        provider,
         channel: 'telegram',
         botToken,
         ownerId,
@@ -78,11 +86,16 @@ function seedFixture(dir, opts) {
         agentName,
         bridgeToken: CANON_BRIDGE_TOKEN,
     };
-    if (mode === 'oauth') {
-        cfg.openaiOAuthToken = oauthToken || 'oauth-test-PLACEHOLDER';
-        if (oauthRefresh) cfg.openaiOAuthRefresh = oauthRefresh;
+    if (authConfig && typeof authConfig === 'object') {
+        Object.assign(cfg, authConfig);
     } else {
-        cfg.openaiApiKey = apiKey || 'sk-test-PLACEHOLDER';
+        cfg.authType = mode === 'oauth' ? 'oauth' : 'api_key';
+        if (mode === 'oauth') {
+            cfg.openaiOAuthToken = oauthToken || 'oauth-test-PLACEHOLDER';
+            if (oauthRefresh) cfg.openaiOAuthRefresh = oauthRefresh;
+        } else {
+            cfg.openaiApiKey = apiKey || 'sk-test-PLACEHOLDER';
+        }
     }
     write(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
 
@@ -95,7 +108,7 @@ function seedFixture(dir, opts) {
         '- **Born:** 2026-07-09 (fixture seed)',
         '- **Purpose:** exercise the REAL system prompt + tool payload offline',
         '',
-        'You are TestBot, a deterministic fixture persona used only by the OpenAI',
+        'You are TestBot, a deterministic fixture persona used only by the SeekerClaw',
         'live-model harness. This file is synthetic and contains no production data.',
         '',
     ].join('\n'));
@@ -128,7 +141,7 @@ function seedFixture(dir, opts) {
         '# MEMORY.md',
         '',
         '## Long-term (synthetic)',
-        '- 2026-07-01: Fixture created for the BAT-1144 OpenAI live-model harness.',
+        '- 2026-07-01: Fixture created for the BAT-1144 live-model harness.',
         '- 2026-07-05: Confirmed the harness builds the real agent payload, not a mock.',
         '- Test User prefers concise, direct answers (synthetic preference).',
         '',
