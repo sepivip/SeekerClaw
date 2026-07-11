@@ -40,7 +40,7 @@ async function testAuth(label, key, authType) {
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`🔑 Testing: ${label}`);
     console.log(`   Auth type: ${authType}`);
-    console.log(`   Key prefix: ${key.slice(0, 10)}...`);
+    console.log(`   Key: [redacted] (len=${key.length})`);
     console.log(`   Beta header: ${betaHeaders}`);
 
     try {

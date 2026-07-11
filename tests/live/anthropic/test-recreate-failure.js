@@ -11,7 +11,7 @@
 'use strict';
 const path = require('path');
 const https = require('https');
-const configPath = path.resolve(__dirname, '../app/src/main/assets/nodejs-project/config.js');
+const configPath = path.resolve(__dirname, '../../../app/src/main/assets/nodejs-project/config.js');
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true,
     exports: { log: () => {}, CHANNEL: 'telegram', config: {}, API_TIMEOUT_MS: 60000 } };
 const claude = require('../../../app/src/main/assets/nodejs-project/providers/claude');

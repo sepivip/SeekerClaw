@@ -42,7 +42,7 @@ const path = require('path');
 const https = require('https');
 
 // Stub config.js so provider adapters load standalone.
-const NP = path.resolve(__dirname, '../app/src/main/assets/nodejs-project');
+const NP = path.resolve(__dirname, '../../../app/src/main/assets/nodejs-project');
 const configPath = path.join(NP, 'config.js');
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true,
     exports: { log: () => {}, CHANNEL: 'telegram', config: {}, API_TIMEOUT_MS: 60000 } };

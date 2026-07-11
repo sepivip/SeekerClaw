@@ -230,7 +230,7 @@ function fromApiResponse(raw) {
 
 // BAT-1123: cc_version tracks the Claude Code CLI version we identify as on the
 // setup_token billing path. Bumped 2.1.116 → 2.1.195 (verified HTTP 200 on our
-// models via tests/live/anthropic/test-cc-version.js). Keep in sync with tests/live/anthropic/lib.js.
+// models on the setup_token path via tests/live/anthropic/test-messages.js). Keep in sync with tests/live/anthropic/lib.js.
 const CC_BILLING_HEADER = 'x-anthropic-billing-header: cc_version=2.1.195; cc_entrypoint=cli; cch=00000;';
 
 // ── System prompt ───────────────────────────────────────────────────────────
