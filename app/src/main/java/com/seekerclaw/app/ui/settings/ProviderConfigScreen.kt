@@ -46,10 +46,12 @@ import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.ProviderPicker
 import com.seekerclaw.app.ui.components.OpenAIOAuthSection
+import com.seekerclaw.app.ui.components.XaiOAuthSection
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
+import com.seekerclaw.app.ui.components.rememberXaiOAuthController
 import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.ModelRegistry
@@ -122,6 +124,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         config?.setupToken,
         config?.openaiApiKey,
         config?.openaiOAuthToken,
+        config?.xaiApiKey,
+        config?.xaiOAuthToken,
         config?.openrouterApiKey,
         config?.customBaseUrl,
         config?.customApiKey,
@@ -130,8 +134,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     }
     var showRestartDialog by remember { mutableStateOf(false) }
 
-    // Shared OAuth controller — same instance used by onboarding's ProviderSetupStep.
+    // Shared OAuth controllers — same instances used by onboarding's ProviderSetupStep.
     val oauthController = rememberOpenAIOAuthController(
+        context = context,
+        onSignedIn = { showRestartDialog = true },
+        onSignedOut = { showRestartDialog = true },
+    )
+    val xaiOAuthController = rememberXaiOAuthController(
         context = context,
         onSignedIn = { showRestartDialog = true },
         onSignedOut = { showRestartDialog = true },
@@ -243,6 +252,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         if (oldProviderId == "openai" && newProviderId != "openai") {
             oauthController.cancel()
         }
+        if (oldProviderId == "xai" && newProviderId != "xai") {
+            xaiOAuthController.cancel()
+        }
 
         // Remember per-provider last-used model and authType (similar to lastModel_*)
         // so explicit choices survive a round-trip through another provider. These are
@@ -264,6 +276,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             "openai" -> when (savedNewAuthType) {
                 "oauth", "api_key" -> savedNewAuthType
                 else -> "oauth" // first-time switch-in default
+            }
+            // BAT-1124: xAI defaults to OAuth (Sign in with Grok) on first switch-in, same as OpenAI.
+            "xai" -> when (savedNewAuthType) {
+                "oauth", "api_key" -> savedNewAuthType
+                else -> "oauth"
             }
             "claude" -> when (savedNewAuthType) {
                 "api_key", "setup_token" -> savedNewAuthType
@@ -463,6 +480,56 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             )
                         }
                     }
+                    "xai" -> {
+                        // BAT-1124 — mirror of the OpenAI branch. Only "oauth" is OAuth; any
+                        // other value normalizes to "api_key". switchProvider() defaults xAI to
+                        // "oauth" on first switch-in.
+                        val xaiAuthType = if (config?.authType == "oauth") "oauth" else "api_key"
+                        val xaiModelList = modelsForProvider("xai", xaiAuthType)
+                        val xaiAuthLabel = if (xaiAuthType == "oauth") "Grok OAuth" else "API Key"
+                        ConfigField(
+                            label = "Auth Type",
+                            value = xaiAuthLabel,
+                            onClick = { showAuthTypePicker = true },
+                            info = "API Key uses your console.x.ai key. OAuth uses your Grok (SuperGrok / X Premium+) subscription.",
+                        )
+                        ConfigField(
+                            label = "Model",
+                            value = xaiModelList.find { it.id == config?.model }
+                                ?.displayName
+                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                            onClick = { showModelPicker = true },
+                            info = SettingsHelpTexts.MODEL,
+                        )
+                        val xaiOAuthState = xaiOAuthController.state
+                        val showXaiOAuthSection = xaiAuthType == "oauth" || xaiOAuthState.isPolling || xaiOAuthState.error != null
+                        if (!showXaiOAuthSection) {
+                            ConfigField(
+                                label = "API Key",
+                                value = maskKey(config?.xaiApiKey),
+                                onClick = {
+                                    editField = "xaiApiKey"
+                                    editLabel = "xAI API Key"
+                                    editValue = config?.xaiApiKey ?: ""
+                                },
+                                info = "Get your key at console.x.ai",
+                                isRequired = true,
+                                showDivider = false,
+                            )
+                        } else {
+                            HorizontalDivider(
+                                color = SeekerClawColors.CardBorder,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            XaiOAuthSection(
+                                state = xaiOAuthState,
+                                onSignIn = xaiOAuthController.signIn,
+                                onSignOut = xaiOAuthController.signOut,
+                                onCancel = xaiOAuthController.cancel,
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                    }
                     "openrouter" -> {
                         val modelCtxDisplay = config?.openrouterModelContext?.ifBlank { null }
                             ?.let { " ($it ctx)" } ?: ""
@@ -596,6 +663,17 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                         testOpenAIOAuthConnection(config?.openaiOAuthToken ?: "")
                                     } else {
                                         testOpenAIConnection(config?.openaiApiKey ?: "")
+                                    }
+                                }
+                                "xai" -> {
+                                    // BAT-1124 M5: BOTH auth paths use a 1-token POST /v1/chat/completions
+                                    // ping (NOT GET /v1/models — that 403s on first OAuth login and would
+                                    // falsely report a signed-in user as "not connected").
+                                    val authType = config?.authType ?: "api_key"
+                                    if (authType == "oauth") {
+                                        testXaiOAuthConnection(config?.xaiOAuthToken ?: "")
+                                    } else {
+                                        testXaiConnection(config?.xaiApiKey ?: "")
                                     }
                                 }
                                 "custom" -> testCustomConnection(
@@ -925,14 +1003,15 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
     if (showAuthTypePicker) {
         val authOptions = when (activeProvider) {
             "openai" -> listOf("oauth" to "ChatGPT OAuth", "api_key" to "API Key")
+            "xai" -> listOf("oauth" to "Grok OAuth", "api_key" to "API Key") // BAT-1124
             else -> listOf("api_key" to "API Key", "setup_token" to "Pro/Max Setup Token")
         }
         // Normalize: ensure selectedAuth is a valid option for the current provider
         val validAuthTypes = authOptions.map { it.first }.toSet()
         var selectedAuth by remember {
-            // Default to "oauth" when on OpenAI with no saved config, matching
-            // the SetupScreen fresh-install default (BAT-489 / BAT-495).
-            val fallbackAuth = if (activeProvider == "openai") "oauth" else "api_key"
+            // Default to "oauth" when on OpenAI/xAI with no saved config, matching
+            // the SetupScreen fresh-install default (BAT-489 / BAT-495 / BAT-1124).
+            val fallbackAuth = if (activeProvider == "openai" || activeProvider == "xai") "oauth" else "api_key"
             mutableStateOf((config?.authType ?: fallbackAuth).let { if (it in validAuthTypes) it else fallbackAuth })
         }
 
@@ -970,8 +1049,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = if (activeProvider == "openai") "Switching auth type changes how you authenticate with OpenAI."
-                               else "Both credentials are stored. Switching just changes which one is used.",
+                        text = when (activeProvider) {
+                            "openai" -> "Switching auth type changes how you authenticate with OpenAI."
+                            "xai" -> "Switching auth type changes how you authenticate with xAI."
+                            else -> "Both credentials are stored. Switching just changes which one is used."
+                        },
                         fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextDim,
@@ -1005,18 +1087,19 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 .putString("lastAuthType_$activeProvider", selectedAuth)
                                 .apply()
                         }
-                        if (authSaved && activeProvider == "openai") {
+                        if (authSaved && (activeProvider == "openai" || activeProvider == "xai")) {
                             val currentModel = config?.model ?: ""
-                            val allowedModels = modelsForProvider("openai", selectedAuth)
+                            val allowedModels = modelsForProvider(activeProvider, selectedAuth)
                             // Only clamp models that belonged to the OLD auth
                             // mode's list (e.g. gpt-5.4-mini is oauth-only and
                             // must not survive oauth→api_key). A model on
                             // NEITHER list is a user-typed custom ID — leave
-                            // it alone (BAT-1032).
-                            val wasOldListModel = modelsForProvider("openai", previousAuth).any { it.id == currentModel }
+                            // it alone (BAT-1032). For xAI both auth lists are
+                            // identical today, so this is a no-op there.
+                            val wasOldListModel = modelsForProvider(activeProvider, previousAuth).any { it.id == currentModel }
                             if (allowedModels.none { it.id == currentModel } && wasOldListModel) {
                                 // Use safe default, NOT list order (newer models may be tier-gated).
-                                val fallback = defaultModelForProvider("openai", selectedAuth)
+                                val fallback = defaultModelForProvider(activeProvider, selectedAuth)
                                 // Multi-step save contract (saveField KDoc): check the
                                 // Boolean. On failure saveField already toasted and
                                 // reverted the displayed triple; the stale model
@@ -1033,7 +1116,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             // is forced on by oauthError/oauthPolling — without this clear, a
                             // prior OAuth error would keep the OAuth section visible.
                             if (selectedAuth == "api_key") {
-                                oauthController.cancel()
+                                if (activeProvider == "openai") oauthController.cancel()
+                                else xaiOAuthController.cancel()
                             }
                         }
                         Analytics.authTypeChanged(selectedAuth)
@@ -1243,6 +1327,85 @@ private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withCon
         } catch (_: java.io.IOException) {
             error("Network unreachable or timeout")
         } finally { conn.disconnect() }
+    }
+}
+
+private suspend fun testXaiOAuthConnection(accessToken: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (accessToken.isBlank()) error("OAuth token is empty — please sign in first")
+        xaiChatPing(accessToken, isOAuth = true)
+    }
+}
+
+private suspend fun testXaiConnection(apiKey: String): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        if (apiKey.isBlank()) error("API key is empty")
+        xaiChatPing(apiKey, isOAuth = false)
+    }
+}
+
+/**
+ * BAT-1124 M5 — the xAI connection test is a 1-token `POST /v1/chat/completions` ping
+ * (model `grok-4.3`), NOT `GET /v1/models`. On the FIRST OAuth login `/v1/models` returns
+ * 403 (API access provisions lazily on first touch), which would falsely report a
+ * freshly-signed-in user as "not connected". A minimal chat completion returns 200 instead.
+ *
+ * The ping model is deliberately `grok-4.3` (the stable always-available survivor — xAI's
+ * May-2026 retirements redirect TO it), NOT the registry default `grok-4.5`: a newer default
+ * can be tier-gated on some accounts and would make a working sign-in fail the connection test.
+ */
+private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
+    val url = URL("https://api.x.ai/v1/chat/completions")
+    val conn = url.openConnection() as HttpURLConnection
+    conn.requestMethod = "POST"
+    conn.doOutput = true
+    conn.setRequestProperty("Content-Type", "application/json")
+    conn.setRequestProperty("Authorization", "Bearer $bearer")
+    // H4: SeekerClaw's own versioned UA — matches XaiOAuthActivity.TOKEN_UA (auth.x.ai is
+    // CF-UA-gated; api.x.ai isn't today, but keep the house-style versioned UA on every call).
+    conn.setRequestProperty("User-Agent", "SeekerClaw/${com.seekerclaw.app.BuildConfig.VERSION_NAME}")
+    conn.connectTimeout = 15000
+    conn.readTimeout = 15000
+    val payload = JSONObject().apply {
+        put("model", "grok-4.3") // stable ping target, NOT the default grok-4.5 (see kdoc)
+        put("max_tokens", 1)
+        put(
+            "messages",
+            org.json.JSONArray().put(JSONObject().apply { put("role", "user"); put("content", "ping") }),
+        )
+    }
+    try {
+        conn.outputStream.bufferedWriter().use { it.write(payload.toString()) }
+        val status = conn.responseCode
+        if (status in 200..299) return
+        val errorBody = try {
+            (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
+        } catch (_: Exception) { "" }
+        val apiMessage = try {
+            JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""
+        } catch (_: Exception) { "" }
+        val errorMessage = when {
+            status == 401 -> apiMessage.ifBlank {
+                if (isOAuth) "Unauthorized — your Grok sign-in may have expired; sign in again"
+                else "Unauthorized — check your xAI API key"
+            }
+            status == 403 -> apiMessage.ifBlank {
+                // Path-specific: an OAuth user needs an API key (tier-gate); an api_key user
+                // already has one, so their 403 means the key lacks access/credits.
+                if (isOAuth) "Your Grok subscription tier doesn't include API access — add an xAI API key instead"
+                else "This API key lacks API access or credits — check your plan at console.x.ai"
+            }
+            status == 429 -> "Rate limited — try again in a moment"
+            status in 500..599 -> "xAI unavailable"
+            else -> apiMessage.ifBlank { "HTTP $status" }
+        }
+        error("Connection failed ($errorMessage)")
+    } catch (_: java.net.SocketTimeoutException) {
+        error("Connection timed out")
+    } catch (_: java.io.IOException) {
+        error("Network unreachable or timeout")
+    } finally {
+        conn.disconnect()
     }
 }
 

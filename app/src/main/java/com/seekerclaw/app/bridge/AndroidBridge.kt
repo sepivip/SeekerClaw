@@ -84,6 +84,7 @@ class AndroidBridge(
         "/contacts/add" to Pair(10, 60_000L),
         "/location" to Pair(10, 60_000L),
         "/openai/oauth/save-tokens" to Pair(5, 60_000L),
+        "/xai/oauth/save-tokens" to Pair(5, 60_000L), // BAT-1124 (5/60s parity with OpenAI)
         // /config/credentials loads AppConfig (Keystore decrypt +
         // agent_settings reconciliation) on every call — rate-limit so
         // a misbehaving Node caller can't spin it. 10/min is ample for
@@ -208,6 +209,7 @@ class AndroidBridge(
                 "/solana/send" -> handleSolanaSend(params)
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
+                "/xai/oauth/save-tokens" -> handleXaiOAuthSaveTokens(params)
                 "/config/credentials" -> handleConfigCredentials()
                 "/config/mcp-token" -> handleConfigMcpToken(params)
                 "/service/restart" -> handleServiceRestart()
@@ -281,6 +283,9 @@ class AndroidBridge(
             "setupToken" to if (config.setupToken.isNotBlank()) placeholder else "",
             "openaiApiKey" to if (config.openaiApiKey.isNotBlank()) placeholder else "",
             "openaiOAuthToken" to if (config.openaiOAuthToken.isNotBlank()) placeholder else "",
+            // BAT-1124: Node's /provider xai gate reads these presence flags.
+            "xaiApiKey" to if (config.xaiApiKey.isNotBlank()) placeholder else "",
+            "xaiOAuthToken" to if (config.xaiOAuthToken.isNotBlank()) placeholder else "",
             "openrouterApiKey" to if (config.openrouterApiKey.isNotBlank()) placeholder else "",
             "customApiKey" to if (config.customApiKey.isNotBlank()) placeholder else "",
             "customBaseUrl" to if (config.customBaseUrl.isNotBlank()) placeholder else "",
@@ -945,6 +950,57 @@ class AndroidBridge(
             jsonResponse(500, mapOf(
                 "error" to "Failed to save OpenAI OAuth tokens",
                 "code" to "OPENAI_OAUTH_SAVE_FAILED",
+            ))
+        }
+    }
+
+    // ==================== xAI Grok OAuth (BAT-1124) ====================
+
+    /**
+     * Node's `providers/xai.js refreshOAuthToken()` POSTs the rotated tokens here after a
+     * 401-driven single-flight refresh. Contract M1: this is a TARGETED write of ONLY the
+     * three xai_oauth_{token,refresh,expires_at} prefs via [ConfigManager.persistXaiOAuthTokens]
+     * (NOT a full saveConfig — provider/authType/model are untouched, so a rotated-token save
+     * can never seed the H5 boot-loop pair). Refresh is single-use + rotates, so a persist
+     * failure is account-locking — we return {error} and Node fails the turn loud + retries.
+     * "keep-old-if-blank" for refresh (a refresh response may omit a new refresh_token) and
+     * email is preserved verbatim (Node never sends it).
+     */
+    private fun handleXaiOAuthSaveTokens(params: JSONObject): Response {
+        val accessToken = params.optString("accessToken", "")
+        val refreshToken = params.optString("refreshToken", "")
+        val expiresAt = params.optString("expiresAt", "")
+        if (accessToken.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "accessToken required"))
+        }
+        return try {
+            val config = ConfigManager.loadConfig(context)
+                ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
+            val persisted = ConfigManager.persistXaiOAuthTokens(
+                context = context,
+                accessToken = accessToken,
+                // keep-old-if-blank: a refresh response can omit a new refresh_token.
+                refreshToken = if (refreshToken.isNotBlank()) refreshToken else config.xaiOAuthRefresh,
+                email = config.xaiOAuthEmail, // preserve — Node never sends email
+                expiresAt = if (expiresAt.isNotBlank()) expiresAt else config.xaiOAuthExpiresAt,
+            )
+            if (persisted) {
+                jsonResponse(200, mapOf("success" to true))
+            } else {
+                // commit=false → the rotated token did NOT hit disk. Tell Node so its
+                // single-flight refresh fails loud (H2) rather than assuming success and
+                // losing the single-use rotated refresh token on the next restart.
+                Log.w(TAG, "xAI OAuth token persist failed (commit=false)")
+                jsonResponse(500, mapOf(
+                    "error" to "Failed to persist xAI OAuth tokens",
+                    "code" to "XAI_OAUTH_SAVE_FAILED",
+                ))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to save xAI OAuth tokens", e)
+            jsonResponse(500, mapOf(
+                "error" to "Failed to save xAI OAuth tokens",
+                "code" to "XAI_OAUTH_SAVE_FAILED",
             ))
         }
     }

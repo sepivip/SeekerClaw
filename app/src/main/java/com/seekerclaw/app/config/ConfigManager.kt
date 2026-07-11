@@ -74,6 +74,14 @@ data class AppConfig(
     val openaiOAuthRefresh: String = "",
     val openaiOAuthEmail: String = "",
     val openaiOAuthExpiresAt: String = "",
+    // BAT-1124: xAI Grok. `xaiApiKey` = console.x.ai key (api_key path); the four
+    // `xaiOAuth*` fields = "Sign in with Grok" OAuth. All default "" so old configs
+    // are untouched and writeConfigJson only emits them when non-blank (upgrade-safe).
+    val xaiApiKey: String = "",
+    val xaiOAuthToken: String = "",
+    val xaiOAuthRefresh: String = "",
+    val xaiOAuthEmail: String = "",
+    val xaiOAuthExpiresAt: String = "",
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -253,6 +261,12 @@ object ConfigManager {
     private const val KEY_OPENAI_OAUTH_TOKEN_ENC = "openai_oauth_token_enc"
     private const val KEY_OPENAI_OAUTH_REFRESH_ENC = "openai_oauth_refresh_enc"
     private const val KEY_OPENAI_OAUTH_EMAIL_ENC = "openai_oauth_email_enc"
+    // BAT-1124: xAI Grok. Secrets Keystore-encrypted+Base64 (mirror OpenAI); expiry plaintext.
+    private const val KEY_XAI_API_KEY_ENC = "xai_api_key_enc"
+    private const val KEY_XAI_OAUTH_TOKEN_ENC = "xai_oauth_token_enc"
+    private const val KEY_XAI_OAUTH_REFRESH_ENC = "xai_oauth_refresh_enc"
+    private const val KEY_XAI_OAUTH_EMAIL_ENC = "xai_oauth_email_enc"
+    private const val KEY_XAI_OAUTH_EXPIRES_AT = "xai_oauth_expires_at"
 
     // Email migration is a true one-shot: legacy plaintext key is consumed exactly once
     // and the encrypted form persists thereafter. Process flag avoids re-checking the
@@ -277,6 +291,8 @@ object ConfigManager {
         val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
         val normalized = when {
             provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
+            // BAT-1124: xai supports oauth|api_key only (same generic authType, no xai-specific type).
+            provider == "xai" && raw != "oauth" && raw != "api_key" -> "api_key"
             provider != "claude" && raw == "setup_token" -> "api_key"
             else -> raw
         }
@@ -577,6 +593,34 @@ object ConfigManager {
         }
         editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
 
+        // BAT-1124: xAI api-key + OAuth secrets (mirror the OpenAI block above).
+        if (config.xaiApiKey.isNotBlank()) {
+            val encXai = KeystoreHelper.encrypt(config.xaiApiKey)
+            editor.putString(KEY_XAI_API_KEY_ENC, Base64.encodeToString(encXai, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_XAI_API_KEY_ENC)
+        }
+        if (config.xaiOAuthToken.isNotBlank()) {
+            val encXaiToken = KeystoreHelper.encrypt(config.xaiOAuthToken)
+            editor.putString(KEY_XAI_OAUTH_TOKEN_ENC, Base64.encodeToString(encXaiToken, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_XAI_OAUTH_TOKEN_ENC)
+        }
+        if (config.xaiOAuthRefresh.isNotBlank()) {
+            val encXaiRefresh = KeystoreHelper.encrypt(config.xaiOAuthRefresh)
+            editor.putString(KEY_XAI_OAUTH_REFRESH_ENC, Base64.encodeToString(encXaiRefresh, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_XAI_OAUTH_REFRESH_ENC)
+        }
+        if (config.xaiOAuthEmail.isNotBlank()) {
+            // Email is PII — encrypt at rest like other OAuth fields.
+            val encXaiEmail = KeystoreHelper.encrypt(config.xaiOAuthEmail)
+            editor.putString(KEY_XAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encXaiEmail, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_XAI_OAUTH_EMAIL_ENC)
+        }
+        editor.putString(KEY_XAI_OAUTH_EXPIRES_AT, config.xaiOAuthExpiresAt)
+
         val persisted = editor.commit()
         if (!persisted) {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
@@ -698,7 +742,9 @@ object ConfigManager {
                     }
                     current.copy(
                         provider = config.provider,
-                        authType = config.authType,
+                        // BAT-1124 H5: gate (xai, oauth) with a blank token → api_key so
+                        // runtime_state.json never advertises an unstartable oauth pair.
+                        authType = runtimeAuthTypeFor(config),
                         model = config.model,
                         // reasoningEnabled / reasoningDisplayInChat
                         // are preserved verbatim from `current` — no
@@ -1152,6 +1198,43 @@ object ConfigManager {
             ""
         }
 
+        // BAT-1124: xAI api-key + OAuth secrets (mirror the OpenAI decrypt blocks above).
+        val xaiApiKey = try {
+            val enc = p.getString(KEY_XAI_API_KEY_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt xAI API key", e)
+            LogCollector.append("[Config] Failed to decrypt xAI API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val xaiOAuthToken = try {
+            val enc = p.getString(KEY_XAI_OAUTH_TOKEN_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt xAI OAuth token", e)
+            LogCollector.append("[Config] Failed to decrypt xAI OAuth token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val xaiOAuthRefresh = try {
+            val enc = p.getString(KEY_XAI_OAUTH_REFRESH_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt xAI OAuth refresh token", e)
+            LogCollector.append("[Config] Failed to decrypt xAI OAuth refresh token: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
+        val xaiOAuthEmail = try {
+            val enc = p.getString(KEY_XAI_OAUTH_EMAIL_ENC, null)
+            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt xAI OAuth email", e)
+            LogCollector.append("[Config] Failed to decrypt xAI OAuth email: ${e.javaClass.simpleName}", LogLevel.ERROR)
+            ""
+        }
+
         // BAT-515 v3 §4: prefer live AgentPreferencesStore values over
         // raw prefs. The observe-and-mirror collector already keeps
         // prefs in sync with `agent_preferences.json`, but a fresh
@@ -1212,6 +1295,11 @@ object ConfigManager {
             openaiOAuthRefresh = openaiOAuthRefresh,
             openaiOAuthEmail = openaiOAuthEmail,
             openaiOAuthExpiresAt = p.getString(KEY_OPENAI_OAUTH_EXPIRES_AT, "") ?: "",
+            xaiApiKey = xaiApiKey,
+            xaiOAuthToken = xaiOAuthToken,
+            xaiOAuthRefresh = xaiOAuthRefresh,
+            xaiOAuthEmail = xaiOAuthEmail,
+            xaiOAuthExpiresAt = p.getString(KEY_XAI_OAUTH_EXPIRES_AT, "") ?: "",
         )
 
         // Reconcile with agent_settings.json so TG-initiated changes (via
@@ -1275,6 +1363,7 @@ object ConfigManager {
         val effectiveProvider = validProvider ?: fromPrefs.provider
         val allowedAuthTypes = when (effectiveProvider) {
             "openai" -> setOf("api_key", "oauth")
+            "xai" -> setOf("api_key", "oauth") // BAT-1124
             "claude" -> setOf("api_key", "setup_token")
             else -> setOf("api_key")
         }
@@ -1413,7 +1502,9 @@ object ConfigManager {
             val runtimeWritten = RuntimeStateStore.write(
                 RuntimeState(
                     provider = reconciled.provider,
-                    authType = reconciled.authType,
+                    // BAT-1124 H5: same (xai, oauth)+blank-token → api_key gate as saveConfig,
+                    // so a reconcile can't seed the boot-loop pair into runtime_state.json.
+                    authType = runtimeAuthTypeFor(reconciled),
                     model = reconciled.model,
                 ),
             )
@@ -1685,6 +1776,86 @@ object ConfigManager {
     }
 
     /**
+     * BAT-1124 — persist xAI Grok OAuth tokens directly to SharedPreferences, bypassing
+     * the full [saveConfig] path. Mirror of [persistOpenAIOAuthTokens]: used by
+     * [com.seekerclaw.app.oauth.XaiOAuthActivity] during the post-callback token exchange
+     * (works on a fresh install where saveConfig's prerequisites don't exist yet) AND by
+     * [com.seekerclaw.app.bridge.AndroidBridge] on Node's rotated-token refresh callback.
+     *
+     * Deliberately does NOT set `KEY_SETUP_COMPLETE` and does NOT touch provider/authType
+     * (so it can never seed the H5 boot-loop pair). Writes only the four xAI OAuth prefs
+     * (token + refresh + email + expiry) and bumps [configVersion] so reactive UI updates.
+     */
+    fun persistXaiOAuthTokens(
+        context: Context,
+        accessToken: String,
+        refreshToken: String,
+        email: String,
+        expiresAt: String,
+    ): Boolean {
+        val editor = prefs(context).edit()
+
+        if (accessToken.isNotBlank()) {
+            val enc = KeystoreHelper.encrypt(accessToken)
+            editor.putString(KEY_XAI_OAUTH_TOKEN_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_XAI_OAUTH_TOKEN_ENC)
+        }
+
+        if (refreshToken.isNotBlank()) {
+            val enc = KeystoreHelper.encrypt(refreshToken)
+            editor.putString(KEY_XAI_OAUTH_REFRESH_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_XAI_OAUTH_REFRESH_ENC)
+        }
+
+        if (email.isNotBlank()) {
+            val enc = KeystoreHelper.encrypt(email)
+            editor.putString(KEY_XAI_OAUTH_EMAIL_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+        } else {
+            editor.remove(KEY_XAI_OAUTH_EMAIL_ENC)
+        }
+
+        editor.putString(KEY_XAI_OAUTH_EXPIRES_AT, expiresAt)
+
+        val persisted = editor.commit()
+        if (persisted) {
+            bumpConfigVersionOnMain()
+            // BAT-1124 H5: persistXaiOAuthTokens bypasses saveConfig's runtime_state
+            // write, so a Settings-screen "Sign in with Grok" (or sign-out) would leave
+            // runtime_state.json stale. Node reads authType from runtime_state FIRST, so a
+            // stale (xai, api_key) after sign-in makes Node boot with a blank key →
+            // process.exit(1) DESPITE a valid token; a stale (xai, oauth) after sign-out
+            // re-opens the boot-loop. Re-derive the xai runtime authType through the same
+            // H5 gate so runtime_state and config.json can never disagree on the xai auth
+            // mode. Main-process only (:node never inits the store); best-effort — a failure
+            // here does NOT invalidate the token we just persisted.
+            if (RuntimeStateStore.isInitialized) {
+                try {
+                    val reloaded = loadConfig(context)
+                    if (reloaded != null && reloaded.provider == "xai") {
+                        kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                            RuntimeStateStore.update { current ->
+                                if (current.provider == "xai") current.copy(authType = runtimeAuthTypeFor(reloaded))
+                                else current
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
+                }
+            }
+        } else {
+            LogCollector.append("[Config] Failed to persist xAI OAuth tokens (commit=false)", LogLevel.ERROR)
+        }
+        // BAT-1124 (CodeRabbit): return the commit result so the bridge can PROPAGATE a
+        // persist failure to Node — H2 relies on the bridge returning {error} (not success)
+        // on an unpersisted rotation, so the turn fails loud instead of silently losing the
+        // rotated single-use refresh token (which would lock the account out on restart).
+        return persisted
+    }
+
+    /**
      * Update a single config field and persist via [saveConfig].
      *
      * Returns the persistence result from [saveConfig] — `true` on
@@ -1745,6 +1916,11 @@ object ConfigManager {
             "openaiOAuthRefresh" -> config.copy(openaiOAuthRefresh = value)
             "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
             "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
+            "xaiApiKey" -> config.copy(xaiApiKey = value)
+            "xaiOAuthToken" -> config.copy(xaiOAuthToken = value)
+            "xaiOAuthRefresh" -> config.copy(xaiOAuthRefresh = value)
+            "xaiOAuthEmail" -> config.copy(xaiOAuthEmail = value)
+            "xaiOAuthExpiresAt" -> config.copy(xaiOAuthExpiresAt = value)
             else -> return false
         }
         // saveConfig now syncs the agent_settings.json overlay
@@ -1840,6 +2016,21 @@ object ConfigManager {
     }
 
     /**
+     * BAT-1124 H5 — cross-process boot-loop guard. Node reads `runtime_state.json`
+     * BEFORE `config.json`, so if runtime_state advertises `(xai, oauth)` with a blank
+     * token, Node loads oauth+blank and `process.exit(1)`s in a restart loop (the
+     * config.json downgrade is SHADOWED because runtime_state wins). Downgrade the
+     * runtime authType to `api_key` for `(xai, oauth)` with no token so runtime_state
+     * never advertises an unstartable oauth pair. Applied at EVERY runtime-state write
+     * site (saveConfig transform + reconcile). Once the token is present the real
+     * `oauth` value is written. (OpenAI is intentionally NOT downgraded here — it keeps
+     * its existing behaviour; only the xAI single-use-token path needs this gate.)
+     */
+    internal fun runtimeAuthTypeFor(config: AppConfig): String =
+        if (config.provider == "xai" && config.authType == "oauth" && config.xaiOAuthToken.isBlank())
+            "api_key" else config.authType
+
+    /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
      * Uses JSONObject to prevent JSON injection via user-supplied values.
@@ -1866,11 +2057,13 @@ object ConfigManager {
             // is blank), write api_key to the workspace JSON so Node's strict validation
             // doesn't crash on startup. The UI keeps the user's intended "oauth" choice
             // in SharedPreferences so the OAuth section remains visible.
-            val effectiveAuthType = if (
-                config.provider == "openai" &&
-                config.authType == "oauth" &&
-                config.openaiOAuthToken.isBlank()
-            ) "api_key" else config.authType
+            // BAT-1124: same oauth-blank → api_key downgrade for xAI (lets the api-key
+            // fallback engage; if there is also no xaiApiKey, Node cleanly process.exit(1)s).
+            val effectiveAuthType = when {
+                config.provider == "openai" && config.authType == "oauth" && config.openaiOAuthToken.isBlank() -> "api_key"
+                config.provider == "xai" && config.authType == "oauth" && config.xaiOAuthToken.isBlank() -> "api_key"
+                else -> config.authType
+            }
             put("authType", effectiveAuthType)
             put("provider", config.provider)
             put("model", config.model)
@@ -1899,9 +2092,26 @@ object ConfigManager {
             put("channel", config.channel)
             if (config.discordBotToken.isNotBlank()) put("discordBotToken", config.discordBotToken)
             if (config.discordOwnerId.isNotBlank()) put("discordOwnerId", config.discordOwnerId)
-            // Only the tokens are needed by Node — email/expiresAt are Android-only metadata.
+            // Email stays Android-only. BAT-1143: expiresAt is NO LONGER Android-only —
+            // Node needs it to proactively refresh the OAuth access token before the ~6h
+            // expiry (xAI returns 403-not-401 on expiry, so a reactive-only refresh never
+            // fires and the agent dies every ~6h). writeConfigJson runs at service boot and
+            // regenerates the ephemeral config.json from SharedPreferences, so emitting the
+            // expiry here is what makes `_currentExpiresAtMs` non-zero on the Node side.
+            // Each field is written only when non-blank (upgrade-safe; old configs untouched).
             if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
             if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
+            // openaiOAuthExpiresAt: data-plumbing only for OpenAI symmetry/readiness — the
+            // OpenAI proactive-refresh hook is a separate follow-up; adding the field now
+            // does not change OpenAI behavior (BAT-1143 Q6).
+            if (config.openaiOAuthExpiresAt.isNotBlank()) put("openaiOAuthExpiresAt", config.openaiOAuthExpiresAt)
+            // BAT-1124: xAI — write each field only when non-blank. Node reads
+            // xaiApiKey / xaiOAuthToken / xaiOAuthRefresh / xaiOAuthExpiresAt.
+            if (config.xaiApiKey.isNotBlank()) put("xaiApiKey", config.xaiApiKey)
+            if (config.xaiOAuthToken.isNotBlank()) put("xaiOAuthToken", config.xaiOAuthToken)
+            if (config.xaiOAuthRefresh.isNotBlank()) put("xaiOAuthRefresh", config.xaiOAuthRefresh)
+            // BAT-1143: the ISO-8601 access-token expiry that drives Node's proactive refresh.
+            if (config.xaiOAuthExpiresAt.isNotBlank()) put("xaiOAuthExpiresAt", config.xaiOAuthExpiresAt)
             // NOTE: loadEnvVars() decrypts on the calling thread, matching the
             // pre-existing pattern in this function — every secret field above
             // (bot tokens, API keys, OAuth tokens, MCP tokens) is also decrypted
@@ -1996,6 +2206,15 @@ object ConfigManager {
                 // valid credentials.
                 config.openaiOAuthToken.isNotBlank() || config.openaiApiKey.isNotBlank()
             }
+            // BAT-1124 (CodeRabbit): validate the credential for the EFFECTIVE auth mode
+            // (matching writeConfigJson's oauth+blank→api_key downgrade), not "either".
+            // Otherwise api_key mode with a blank key but a STALE xaiOAuthToken would report
+            // "startable" while Node, on api_key, finds a blank key → process.exit(1).
+            "xai" -> if (config.authType == "oauth" && config.xaiOAuthToken.isNotBlank()) {
+                true // oauth mode with a live token
+            } else {
+                config.xaiApiKey.isNotBlank() // api_key mode, or oauth downgraded to api_key
+            }
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()
             else -> config.activeCredential.isNotBlank()
@@ -2011,6 +2230,7 @@ object ConfigManager {
             "apiSet=${config.anthropicApiKey.isNotBlank()} setupTokenSet=${config.setupToken.isNotBlank()} " +
             "openaiSet=${config.openaiApiKey.isNotBlank()} openrouterSet=${config.openrouterApiKey.isNotBlank()} " +
             "customSet=${config.customApiKey.isNotBlank()} " +
+            "xaiSet=${config.xaiApiKey.isNotBlank()} xaiOAuthSet=${config.xaiOAuthToken.isNotBlank()} " +
             "activeSet=${config.activeCredential.isNotBlank()} model=${config.model} " +
             "channel=${config.channel} discordSet=${config.discordBotToken.isNotBlank()}"
     }
@@ -2267,11 +2487,13 @@ object ConfigManager {
             "openai" -> "OpenAI"
             "openrouter" -> "OpenRouter"
             "custom" -> "Custom"
+            "xai" -> "xAI"
             else -> "Anthropic"
         }
-        // Auth type is only relevant for Claude (api_key vs setup_token)
+        // Auth type is relevant for Claude (api_key vs setup_token) and OAuth-capable providers.
         val authLabel = when (provider) {
             "claude" -> if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API key"
+            "openai", "xai" -> if (config?.authType == "oauth") "OAuth" else "API key"
             else -> "API key"
         }
         val aiModel = config?.model ?: "claude-opus-4-8"

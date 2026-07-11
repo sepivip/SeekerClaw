@@ -8,7 +8,7 @@ const crypto = require('crypto');
 // ── Imports from other SeekerClaw modules ──────────────────────────────────
 
 const {
-    workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
+    workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, XAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
     TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     RICH_MESSAGES_ENABLED,
@@ -150,6 +150,11 @@ function _setWalletPromptSnapshotForTests(snapshot) {
 
 function getProviderApiKey() {
     return PROVIDER === 'openai' ? OPENAI_KEY
+        // BAT-1124 H3: xai MUST resolve to XAI_KEY, never fall through to
+        // ANTHROPIC_KEY — otherwise xai+api_key would Bearer the Anthropic key
+        // to api.x.ai (auth fail + secret exfiltration). In oauth mode XAI_KEY
+        // is blank and xai.buildHeaders uses the OAuth token instead.
+        : PROVIDER === 'xai' ? XAI_KEY
         : PROVIDER === 'openrouter' ? OPENROUTER_KEY
         : PROVIDER === 'custom' ? CUSTOM_KEY
         : ANTHROPIC_KEY;
@@ -1058,7 +1063,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('');
     lines.push('Note: Keys in agent_settings.json persist across restarts. After saving a key, built-in tools (web_search, Jupiter, etc.) pick it up immediately — no restart needed.');
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
-    lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
+    lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom|xai>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
     lines.push('**Your model can change mid-conversation (BAT-1083):** The active model is re-resolved every turn, so a switch in Settings or via `/model` takes effect on your very next reply — your "Model:" line above always reflects the CURRENT model. You cannot see your own PAST model values across a conversation. If a user asks why an earlier reply named a different model, say it was most likely switched between turns — do NOT guess or claim you "misread" it.');
     lines.push('**Custom model IDs (BAT-1032):** The Settings model picker has a "Custom model" entry — users can type ANY model ID for Anthropic/OpenAI; it persists across restarts and is NOT clamped to the known list. `/model` only accepts registry-listed IDs by design — for an off-list ID, point users to Settings > AI Provider > Model > Custom model. See DIAGNOSTICS.md "/model Rejects a Model ID That Settings Accepted".');
     lines.push('');
@@ -1163,10 +1168,12 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('3. Rate limit (429): slow down — reduce tool calls and response length');
     lines.push('4. Model not found (404): the configured model ID is wrong — likely a custom model ID typo. /model <valid-id> or Settings > AI Provider fixes it (slash commands work even when AI turns fail).');
     const billingUrl = PROVIDER === 'openai' ? 'platform.openai.com'
+        : PROVIDER === 'xai' ? 'console.x.ai'
         : PROVIDER === 'openrouter' ? 'openrouter.ai/credits'
         : PROVIDER === 'custom' ? (CUSTOM_BASE_URL || 'your custom endpoint')
         : 'console.anthropic.com';
     const apiHost = PROVIDER === 'openai' ? 'api.openai.com'
+        : PROVIDER === 'xai' ? 'api.x.ai'
         : PROVIDER === 'openrouter' ? 'openrouter.ai'
         : PROVIDER === 'custom' ? (getAdapter(PROVIDER).getEndpoint().hostname || 'custom endpoint')
         : 'api.anthropic.com';
@@ -1183,6 +1190,17 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('2. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider. The OAuth section stays visible after a failed sign-in — they can tap "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.');
         lines.push('3. If OAuth refresh persistently fails: suggest the user sign out (clears OAuth tokens but keeps OAuth as the chosen auth type) and sign back in. As a fallback, they can switch to API Key in the auth picker if they have a platform key.');
         lines.push('4. Check `grep -i "oauth\\|codex" node_debug.log | tail -20` for OAuth-specific errors.');
+        lines.push('');
+    }
+
+    // xAI Grok OAuth-specific playbook (only injected when running on OAuth)
+    if (PROVIDER === 'xai' && AUTH_TYPE === 'oauth') {
+        lines.push('**If xAI (Grok) OAuth fails:**');
+        lines.push('1. 403 tier-gate: a persistent 403 means your Grok subscription tier does NOT include API access on api.x.ai. The system retries a 403 ONCE (access can provision lazily on first touch), then stops. If it keeps failing, the fix is to add an xAI API key in Settings > AI Provider > xAI — do NOT keep retrying, and this is NOT a sign-in expiry.');
+        lines.push('2. Token expired (401): the system auto-refreshes via the refresh token. If you see "OAuth refresh failed" in node_debug.log, the refresh token is invalid (revoked, or already rotated) — the user must re-sign-in via Settings > AI Provider > xAI > Sign in with Grok.');
+        lines.push('3. "token persist failed" in node_debug.log: the rotated token could not be saved. The current session keeps working, but a re-login may be needed after the next restart — tell the user to sign in again if Grok stops responding after a restart.');
+        lines.push('4. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider > xAI. They can also switch to API Key in the auth picker if they have a console.x.ai key.');
+        lines.push('5. Check `grep -i "xai\\|grok" node_debug.log | tail -20` for xAI-specific errors.');
         lines.push('');
     }
 
@@ -1405,6 +1423,15 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
         } else {
             lines.push('Auth mode: **API Key** — the user configured an OpenAI platform API key. Requests route through api.openai.com. To switch to ChatGPT OAuth (free with a Plus/Pro subscription), the user can change auth type in Settings > AI Provider > OpenAI.');
+        }
+        lines.push('');
+    } else if (PROVIDER === 'xai') {
+        lines.push('## Provider');
+        lines.push(`You are running on xAI Grok (model: ${activeModel}, auth: ${AUTH_TYPE}).`);
+        if (AUTH_TYPE === 'oauth') {
+            lines.push('Auth mode: **Sign in with Grok (OAuth)** — the user signed in with their SuperGrok / X Premium+ subscription instead of using an API key. Requests route through api.x.ai/v1/chat/completions with the subscription\'s OAuth token (auto-refreshed on expiry). If the tier does not include API access you will get a 403 tier-gate — the fix is to add an xAI API key, NOT to re-sign-in. If refresh fails, the user must re-sign-in via Settings > AI Provider > xAI > Sign in with Grok.');
+        } else {
+            lines.push('Auth mode: **API Key** — the user configured an xAI API key from console.x.ai. Requests route through api.x.ai/v1/chat/completions. To use a Grok subscription instead (SuperGrok / X Premium+), the user can switch to "Sign in with Grok" in Settings > AI Provider > xAI.');
         }
         lines.push('');
     }
@@ -1688,7 +1715,26 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         const adapter = getAdapter(PROVIDER);
         const endpoint = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
         const apiKey = getProviderApiKey();
-        const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+        // BAT-1143 D6: PROACTIVE OAuth refresh — renew the access token BEFORE it
+        // expires, rather than waiting for a status code (xAI returns 403-not-401 on
+        // expiry, so a reactive-only path never fires and the agent dies every ~6h).
+        // Centralized here so it also covers the vision + session-summary calls that
+        // reach claudeApiCall. No-op for api_key / providers without the hook. Also
+        // performs D9 persist-convergence and is suppressed once the refresh token is
+        // dead / the account is tier-gated (see providers/xai.js ensureFreshToken).
+        // D8: snapshot the refresh generation around the proactive refresh. If it
+        // advances, THIS request rides a just-minted token — so a 403 on it is a genuine
+        // tier-gate (the fresh token still can't reach the model), not an expiry. This
+        // covers the PRIMARY (proactive) path; the reactive retry below also sets the
+        // marker. Without it, a genuinely tier-gated account would silently re-rotate at
+        // every ~6h expiry forever.
+        const _genBeforeRefresh = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
+        if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
+        let refreshedThisCall = typeof adapter.currentRefreshGeneration === 'function'
+            && adapter.currentRefreshGeneration() !== _genBeforeRefresh;
+        // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
+        // retry carries the freshly-rotated bearer, not the expired one.
+        let headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -1782,15 +1828,39 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                 })}`, res.status === 200 ? 'DEBUG' : 'WARN');
             }
 
+            // BAT-1143 D8: a 403 on the retry IMMEDIATELY after a successful refresh
+            // in THIS chain is a genuine tier-gate — the fresh token STILL can't reach
+            // the model, so stop rotating a gated account every ~6h. Trip the breaker
+            // BEFORE classifyApiError so the 403 classifies terminal (not another
+            // provisioning retry). No-op for providers without the hook.
+            if (res.status === 403 && refreshedThisCall && typeof adapter.markTierGated === 'function') {
+                adapter.markTierGated();
+                log('[Auth] Fresh-token 403 immediately after refresh — tier-gate breaker tripped', 'WARN');
+            }
+
             // Classify error and decide whether to retry (BAT-22)
             if (res.status !== 200) {
                 const errClass = classifyApiError(res.status, res.data);
                 if (errClass.retryable && retries < MAX_RETRIES) {
                     // OAuth 401: refresh token before retry so the next attempt uses new credentials
-                    if (errClass.type === 'auth' && typeof getAdapter(PROVIDER).handleUnauthorized === 'function') {
-                        try { await getAdapter(PROVIDER).handleUnauthorized(); } catch (e) {
+                    if (errClass.type === 'auth' && typeof adapter.handleUnauthorized === 'function') {
+                        try {
+                            await adapter.handleUnauthorized();
+                        } catch (e) {
                             if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
                         }
+                        // IMPORTANT: handleUnauthorized signals a SUCCESSFUL refresh by
+                        // THROWING { retryable:true } (see xai.js/openai.js docstrings), and a
+                        // no-op (api_key mode) by returning normally — both mean "refreshed,
+                        // retry now". A non-retryable throw already `break`ed out above. So the
+                        // header rebuild MUST live HERE, after the try/catch: rebuilding inside
+                        // the try (before the throw) is unreachable on the success path. This
+                        // makes the retry carry the freshly-rotated bearer instead of the
+                        // pre-loop EXPIRED token — critical because this loop is xAI's ONLY
+                        // refresh path, so re-sending the stale bearer 401s again and burns a
+                        // single-use refresh rotation on every attempt. No-op for api_key/claude.
+                        headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+                        refreshedThisCall = true; // BAT-1143 D8: mark the post-refresh retry
                     }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
                     const retryAfterMs = Math.min(retryAfterRaw * 1000, 30000);
@@ -1854,7 +1924,22 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         // Report usage metrics + cache status + health state
         if (res.status === 200) {
             reportUsage(rawUsage);
-            if (!background) updateAgentHealth('healthy', null);
+            // BAT-1143 D8: a 200 proves the account can reach the model — clear the
+            // xAI tier-gate breaker (the "recovered" signal). No-op for other providers.
+            if (typeof adapter.noteInferenceSuccess === 'function') adapter.noteInferenceSuccess();
+            // BAT-1143 D9: never report "healthy" while a rotated token pair is still
+            // only in memory (persist pending) — a restart would then read a stale/
+            // consumed refresh token. Surface degraded until the re-persist converges.
+            if (!background) {
+                // Degraded (never "healthy") while a rotated pair is unpersisted OR after
+                // persist-convergence was exhausted (the on-disk token is then stale, so a
+                // restart could still force a re-pair) — the durable-error flag persists
+                // after _persistPending is cleared to unblock refresh.
+                const persistRisk = (typeof adapter.isPersistPending === 'function' && adapter.isPersistPending())
+                    || (typeof adapter.hasPersistDurableError === 'function' && adapter.hasPersistDurableError());
+                updateAgentHealth(persistRisk ? 'degraded' : 'healthy',
+                    persistRisk ? { type: 'persist_pending', message: 'Session token rotated but not yet saved — retrying' } : null);
+            }
             // Reset auth failure counter on success
             _consecutiveAuthFailures = 0;
             if (_sessionExpired) {
@@ -1866,8 +1951,18 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             const errClass = classifyApiError(res.status, res.data);
             if (!background) updateAgentHealth('error', { type: errClass.type, status: res.status, message: errClass.userMessage });
 
-            // Track consecutive auth failures for session expiry detection
-            if (res.status === 401 || res.status === 403) {
+            // BAT-1143 D10: session-expiry accounting. The OLD code incremented
+            // _consecutiveAuthFailures on EVERY 401/403 regardless of classification,
+            // so a genuine xAI tier-gate reached the 3-strike threshold and emitted the
+            // misleading "session expired — re-pair" message (a tier-gate needs an API
+            // key, not a re-pair). Now: a fresh-token xAI tier-gate ('provisioning', and
+            // NOT because the refresh token is dead) does NOT count. A self-healed
+            // near-expiry 403 never reaches here (its retry 200s). Everything else — a
+            // surviving 'auth' failure, a dead refresh token (invalid_grant → re-pair),
+            // or any non-xAI 401/403 — still counts, so genuine expiry is unaffected.
+            const refreshDead = typeof adapter.isRefreshDead === 'function' && adapter.isRefreshDead();
+            const isFreshTierGate = errClass.type === 'provisioning' && !refreshDead;
+            if ((res.status === 401 || res.status === 403) && !isFreshTierGate) {
                 _consecutiveAuthFailures++;
                 if (_consecutiveAuthFailures >= AUTH_FAIL_THRESHOLD && !_sessionExpired) {
                     _sessionExpired = true;
@@ -2081,6 +2176,11 @@ const MODEL_CONTEXT_LIMITS = {
     'gpt-5.4-mini':        200000,
     'gpt-5.2':             200000, // kept for existing users with 5.2 still selected (removed from UI dropdown)
     'gpt-5.3-codex':       200000,
+    // BAT-1124: xAI Grok context windows. grok-4.x is ~256k+ actual (grok-4.5 ~500k) →
+    // 200000 mobile cap (consistent with the claude/gpt caps above). Registry ships
+    // only grok-4.3 + grok-4.5; anything else is a user-typed Custom model.
+    'grok-4.5':                     200000,
+    'grok-4.3':                     200000,
 };
 const DEFAULT_CONTEXT_LIMIT = 128000; // conservative fallback for unknown models
 let _unknownModelWarned = false; // throttle: only warn once per process about unknown model
@@ -2288,6 +2388,18 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
         const adapter = getAdapter(PROVIDER);
         const endpoint = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
         const apiKey = getProviderApiKey();
+        // BAT-1143 D6: this standalone context-summarizer bypasses claudeApiCall (it
+        // calls streamFn directly below), so the centralized proactive refresh there
+        // does NOT cover it. On a turn crossing the ~6h boundary the summary can be the
+        // FIRST API call, so refresh here too — else it 403s and silently degrades to
+        // adaptive trim at every expiry boundary. No-op for api_key / non-OAuth.
+        // D8: snapshot the refresh generation so a 403 on a just-minted token here also
+        // trips the tier-gate breaker (else a gated account crossing the boundary in the
+        // summarizer-first path would re-rotate its single-use token every ~6h).
+        const _sumGenBefore = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
+        if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
+        const _sumRefreshed = typeof adapter.currentRefreshGeneration === 'function'
+            && adapter.currentRefreshGeneration() !== _sumGenBefore;
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         const summaryPrompt = [
@@ -2322,9 +2434,17 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
         }, body); // formatRequest() already returns JSON string
 
         if (!res || res.status !== 200) {
+            // BAT-1143 D8: a 403 on a just-minted token here is a genuine tier-gate — trip
+            // the breaker (same as claudeApiCall) so the summarizer stops re-rotating a
+            // gated account at every ~6h boundary.
+            if (res && res.status === 403 && _sumRefreshed && typeof adapter.markTierGated === 'function') {
+                adapter.markTierGated();
+            }
             log(`[ContextSummary] Summarization API call failed: status=${res?.status || 'none'}`, 'WARN');
             return false; // Fall back to normal adaptive trim
         }
+        // BAT-1143 D8: a 200 proves the account can reach the model — clear the breaker.
+        if (typeof adapter.noteInferenceSuccess === 'function') adapter.noteInferenceSuccess();
 
         const parsed = adapter.fromApiResponse(res.data);
         if (!parsed.text) {

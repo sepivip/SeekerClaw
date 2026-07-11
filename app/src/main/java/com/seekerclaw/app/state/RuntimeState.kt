@@ -38,8 +38,14 @@ import kotlinx.serialization.Serializable
  * |--------------|---------------------------|
  * | `claude`     | `api_key`, `setup_token`  |
  * | `openai`     | `api_key`, `oauth`        |
+ * | `xai`        | `api_key`, `oauth`        |
  * | `openrouter` | `api_key`                 |
  * | `custom`     | `api_key`                 |
+ *
+ * BAT-1124: `(xai, oauth)` with a blank OAuth token is downgraded to
+ * `api_key` at the ConfigManager write site (`runtimeAuthTypeFor`) so
+ * runtime_state.json never advertises an unstartable oauth pair (Node
+ * reads runtime_state before config.json — H5 boot-loop guard).
  *
  * Validation lives in [RuntimeStateStore.isValidPair]; both
  * [RuntimeStateStore.write] and the observe-and-mirror collector gate

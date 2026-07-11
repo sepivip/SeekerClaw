@@ -86,6 +86,8 @@ _VALID_AUTH_TYPES.claude = new Set(['api_key', 'setup_token']);
 _VALID_AUTH_TYPES.openai = new Set(['api_key', 'oauth']);
 _VALID_AUTH_TYPES.openrouter = new Set(['api_key']);
 _VALID_AUTH_TYPES.custom = new Set(['api_key']);
+// BAT-1124: xAI Grok — api_key (console.x.ai) or oauth ("Sign in with Grok").
+_VALID_AUTH_TYPES.xai = new Set(['api_key', 'oauth']);
 const VALID_AUTH_TYPES = Object.freeze(_VALID_AUTH_TYPES);
 
 function validateMatrix(provider, authType) {

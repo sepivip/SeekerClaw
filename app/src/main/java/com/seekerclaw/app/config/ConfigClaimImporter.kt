@@ -91,6 +91,11 @@ object ConfigClaimImporter {
             cfg.optString("customApiKey"),
             root.optString("customApiKey"),
         )
+        val rawXaiKey = firstNonBlank(
+            auth?.optString("xaiApiKey"),
+            cfg.optString("xaiApiKey"),
+            root.optString("xaiApiKey"),
+        )
         val rawCustomBaseUrl = firstNonBlank(
             auth?.optString("customBaseUrl"),
             cfg.optString("customBaseUrl"),
@@ -172,6 +177,7 @@ object ConfigClaimImporter {
             "openai" -> "gpt-5.4"
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
+            "xai" -> "grok-4.5" // BAT-1124
             else -> "claude-opus-4-8"
         }
         // Trim like botToken/ownerId above: reconcile's equality gate
@@ -197,6 +203,7 @@ object ConfigClaimImporter {
                 "openai" -> rawOpenaiKey.trim()
                 "openrouter" -> rawOpenrouterKey.trim()
                 "custom" -> rawCustomKey.trim()
+                "xai" -> rawXaiKey.trim() // BAT-1124 (api-key only; OAuth-via-QR out of scope)
                 else -> ""
             } }
             .ifBlank { resolvedApiKey.trim() }
@@ -237,6 +244,17 @@ object ConfigClaimImporter {
                 agentName = agentName,
                 braveApiKey = braveApiKey.trim(),
             )
+            "xai" -> AppConfig(
+                anthropicApiKey = "",
+                xaiApiKey = trimmedCredential,
+                provider = "xai",
+                authType = "api_key", // OAuth-via-QR out of scope (matches OpenAI QR behaviour)
+                telegramBotToken = botToken,
+                telegramOwnerId = ownerId,
+                model = model,
+                agentName = agentName,
+                braveApiKey = braveApiKey.trim(),
+            )
             else -> AppConfig(
                 anthropicApiKey = resolvedApiKey.trim(),
                 setupToken = resolvedSetupToken.trim(),
@@ -255,6 +273,7 @@ object ConfigClaimImporter {
             "openai" -> appConfig.openaiApiKey.isNotBlank()
             "openrouter" -> appConfig.openrouterApiKey.isNotBlank()
             "custom" -> appConfig.customApiKey.isNotBlank() && appConfig.customBaseUrl.isNotBlank() && appConfig.model.isNotBlank()
+            "xai" -> appConfig.xaiApiKey.isNotBlank() // BAT-1124
             else -> appConfig.activeCredential.isNotBlank()
         }
         require(hasCredential) {

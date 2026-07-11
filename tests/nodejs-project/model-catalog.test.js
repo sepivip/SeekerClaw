@@ -133,13 +133,37 @@ check('rejection reason is a non-empty string', typeof mc.hasCredentialsFor({}, 
 
 console.log();
 console.log('── KNOWN_PROVIDERS ──────────────────────────────');
-check('KNOWN_PROVIDERS has 4 entries', mc.KNOWN_PROVIDERS.length, 4);
+// BAT-1124: xai added as a 5th provider (inserted 3rd, NOT last — openai stays
+// index 0; Custom stays last). Order is asserted separately below.
+check('KNOWN_PROVIDERS has 5 entries', mc.KNOWN_PROVIDERS.length, 5);
 check('includes claude', mc.KNOWN_PROVIDERS.includes('claude'), true);
 check('includes openai', mc.KNOWN_PROVIDERS.includes('openai'), true);
 check('includes openrouter', mc.KNOWN_PROVIDERS.includes('openrouter'), true);
 check('includes custom', mc.KNOWN_PROVIDERS.includes('custom'), true);
+check('includes xai (BAT-1124)', mc.KNOWN_PROVIDERS.includes('xai'), true);
 // Provider order pin (BAT-517 Codex finding 1): preserve fallback target.
+// BAT-1124 inserts xai as the 3rd provider but keeps openai at index 0 (never
+// prepends), so the unknown-id fallback target is unchanged.
 check('KNOWN_PROVIDERS[0] is openai (preserves pre-BAT-517 unknown-id fallback)', mc.KNOWN_PROVIDERS[0], 'openai');
+
+console.log();
+console.log('── xai (BAT-1124) ───────────────────────────────');
+check('xai → xAI display name', mc.displayNameForProvider('xai'), 'xAI');
+check('xai has api_key + oauth', mc.authTypesForProvider('xai'), ['api_key', 'oauth']);
+check('provider order = openai, claude, xai, openrouter, custom (xAI 3rd, Custom always last — BAT-1124)', mc.KNOWN_PROVIDERS, ['openai', 'claude', 'xai', 'openrouter', 'custom']);
+check('xai default is grok-4.5 (reasoning fix device-verified 2026-07-09)', mc.defaultModelForProvider('xai', 'oauth'), 'grok-4.5');
+check('xai list trimmed to exactly 2 models (grok-4.3 + grok-4.5)', mc.modelsForProvider('xai', 'api_key').length, 2);
+check('xai model list includes grok-4.5', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.5'), true);
+check('xai model list includes grok-4.3', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.3'), true);
+check('xai dropped grok-4.20-multi-agent-0309 (broken on chat/completions)', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.20-multi-agent-0309'), false);
+check('xai is NOT freeform — rejects unknown model', mc.validateModelForProvider('xai', 'api_key', 'grok-nope').ok, false);
+check('xai accepts grok-4.5', mc.validateModelForProvider('xai', 'api_key', 'grok-4.5').ok, true);
+check('xai accepts grok-4.3', mc.validateModelForProvider('xai', 'api_key', 'grok-4.3').ok, true);
+check('xai does NOT ship image/video models', mc.modelsForProvider('xai', 'api_key').some((m) => /imagine/.test(m.id)), false);
+check('xai oauth creds present', mc.hasCredentialsFor({ xaiOAuthToken: 'eyJabc' }, 'xai', 'oauth').ok, true);
+check('xai oauth creds missing → rejected', mc.hasCredentialsFor({}, 'xai', 'oauth').ok, false);
+check('xai api_key creds present', mc.hasCredentialsFor({ xaiApiKey: 'xai-abc' }, 'xai', 'api_key').ok, true);
+check('xai api_key creds missing → rejected', mc.hasCredentialsFor({}, 'xai', 'api_key').ok, false);
 
 console.log();
 console.log('── BAT-517 schema invariants (model-registry.json contract) ──');
@@ -157,7 +181,9 @@ const REGISTRY = JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
 
 check('registry version is 1', REGISTRY.version, 1);
 check('registry has providers array', Array.isArray(REGISTRY.providers), true);
-check('registry has 4 providers', REGISTRY.providers.length, 4);
+// BAT-1124: xai added as a 5th provider (inserted 3rd, NOT last — openai stays
+// index 0; Custom stays last). Order is asserted separately below.
+check('registry has 5 providers', REGISTRY.providers.length, 5);
 
 // Per-auth default-model invariant (Codex v2 Fix 4): for every
 // non-freeform provider AND every authType in `authTypes`,

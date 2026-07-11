@@ -141,6 +141,10 @@ fun DashboardScreen(
             // startable as long as one of the two is non-blank.
             "openai" -> config?.openaiOAuthToken?.isNotBlank() == true ||
                 config?.openaiApiKey?.isNotBlank() == true
+            // BAT-1124: valid on EITHER credential (else-branch uses Anthropic activeCredential
+            // and would misreport a configured xai user as unconfigured).
+            "xai" -> config?.xaiOAuthToken?.isNotBlank() == true ||
+                config?.xaiApiKey?.isNotBlank() == true
             "openrouter" -> config?.openrouterApiKey?.isNotBlank() == true
             "custom" -> config?.customApiKey?.isNotBlank() == true && config?.customBaseUrl?.isNotBlank() == true
             else -> config?.activeCredential?.isNotBlank() == true

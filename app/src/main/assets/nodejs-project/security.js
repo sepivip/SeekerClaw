@@ -119,6 +119,14 @@ function redactSecrets(msg) {
     // Redact OpenAI API keys (sk-proj-..., sk-...)
     msg = msg.replace(/sk-proj-[a-zA-Z0-9_-]{20,}/g, 'sk-proj-***');
     msg = msg.replace(/sk-[a-zA-Z0-9_-]{20,}/g, 'sk-***');
+    // BAT-1124 H1: generic JWT redaction (defense-in-depth for OAuth bearer/
+    // refresh tokens — e.g. auth.x.ai access tokens). A JWT is three
+    // dot-separated base64url segments; `eyJ` is the base64url of `{"`, which
+    // begins every JWT header, so this is unmistakably a token and won't
+    // over-redact ordinary prose. Runtime-registered tokens (registerRedactedSecret
+    // in main.js + xai.js.refreshOAuthToken) are the primary cover; this is the
+    // backstop for any JWT that surfaces before/without registration.
+    msg = msg.replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, 'eyJ***');
     // Redact bridge tokens (UUID format). BAT-1001: per-call read so a
     // mid-session rotation doesn't leak the new token in any log line.
     // Length-gate the getter call: msgs shorter than the UUID min

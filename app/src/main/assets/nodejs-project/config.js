@@ -243,7 +243,7 @@ if (fs.existsSync(_runtimeState.filePath)) {
     log('[Config] runtime_state.json not present — falling back to config.json values', 'DEBUG');
 }
 
-const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom']);
+const _SUPPORTED_PROVIDERS = new Set(['claude', 'openai', 'openrouter', 'custom', 'xai']);
 // Resolution order: runtime_state.json (live, BAT-513) → config.json (cold-start).
 // Fall back to 'claude' if neither has a valid value.
 const _runtimeProvider = (_runtimeStateValues && typeof _runtimeStateValues.provider === 'string')
@@ -261,6 +261,21 @@ const PROVIDER = _SUPPORTED_PROVIDERS.has(_rawProvider) ? _rawProvider : 'claude
 const OPENAI_KEY = normalizeSecret(config.openaiApiKey || '');
 const OPENAI_OAUTH_TOKEN = normalizeSecret(config.openaiOAuthToken || '');
 const OPENAI_OAUTH_REFRESH = normalizeSecret(config.openaiOAuthRefresh || '');
+
+// BAT-1124: xAI Grok credentials. api_key path uses xaiApiKey; oauth path
+// ("Sign in with Grok") uses xaiOAuthToken/Refresh. xai REUSES the generic
+// AUTH_TYPE below (like claude/openrouter/custom) — no separate XAI_AUTH_TYPE.
+const XAI_KEY = normalizeSecret(config.xaiApiKey || '');
+const XAI_OAUTH_TOKEN = normalizeSecret(config.xaiOAuthToken || '');
+const XAI_OAUTH_REFRESH = normalizeSecret(config.xaiOAuthRefresh || '');
+// BAT-1143: ISO-8601 access-token expiry (NOT a secret — a timestamp). Drives the
+// provider's proactive refresh so the OAuth access token is renewed before its ~6h
+// TTL, instead of dying on the 403-not-401 xAI returns at expiry. Blank when never
+// paired via OAuth or (pre-fix) never persisted → the adapter treats 0 as
+// "expiry-unknown" and does one opportunistic refresh on first use.
+const XAI_OAUTH_EXPIRES_AT = (typeof config.xaiOAuthExpiresAt === 'string' ? config.xaiOAuthExpiresAt.trim() : '');
+// OpenAI symmetry (data-plumbing only; the OpenAI proactive hook is a follow-up).
+const OPENAI_OAUTH_EXPIRES_AT = (typeof config.openaiOAuthExpiresAt === 'string' ? config.openaiOAuthExpiresAt.trim() : '');
 
 // Normalize authType (trim/lowercase) so values like " OAuth\n" don't silently fall
 // through to api_key. For OpenAI, alias known legacy values (e.g. "setup_token" left
@@ -320,6 +335,7 @@ const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 1
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.4'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
+    : PROVIDER === 'xai' ? 'grok-4.5'
     : 'claude-opus-4-8';
 // BAT-513: model resolves from runtime_state.json first, then
 // config.json, then the per-provider safe default. The agent_settings.json
@@ -596,6 +612,7 @@ const MCP_SERVERS = (config.mcpServers || [])
 // Validate: channel token required per channel; API key required for active provider only
 // For OpenAI: validate based on effective auth type (api_key needs API key, oauth needs OAuth token)
 const _activeKey = PROVIDER === 'openai' ? (OPENAI_AUTH_TYPE === 'oauth' ? OPENAI_OAUTH_TOKEN : OPENAI_KEY)
+    : PROVIDER === 'xai' ? (AUTH_TYPE === 'oauth' ? XAI_OAUTH_TOKEN : XAI_KEY)
     : PROVIDER === 'openrouter' ? OPENROUTER_KEY
     : PROVIDER === 'custom' ? CUSTOM_KEY
     : ANTHROPIC_KEY;
@@ -609,6 +626,7 @@ if (CHANNEL === 'discord' && !DISCORD_TOKEN) {
 }
 if (!_activeKey) {
     const keyName = PROVIDER === 'openai' ? 'openaiApiKey or openaiOAuthToken'
+        : PROVIDER === 'xai' ? 'xaiApiKey or xaiOAuthToken'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
         : PROVIDER === 'custom' ? 'customApiKey'
         : AUTH_TYPE === 'setup_token' ? 'setupToken'
@@ -633,7 +651,12 @@ if (!OWNER_ID) {
     log('WARNING: Owner ID not set — first inbound message will claim ownership. ' +
         'This is expected on first run; use the Android setup flow to set or reset the owner.', 'WARN');
 } else {
-    const authLabel = PROVIDER === 'claude' ? (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key') : 'api-key';
+    // Non-claude providers use the generic AUTH_TYPE — reflect oauth vs api-key
+    // accurately (an xAI/OpenAI OAuth session was previously mislabelled 'api-key'
+    // in node_debug.log, which misleads device-test log triage).
+    const authLabel = PROVIDER === 'claude'
+        ? (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key')
+        : (AUTH_TYPE === 'oauth' ? 'oauth' : 'api-key');
     log(`Agent: ${getAgentName()} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
 }
 
@@ -914,7 +937,8 @@ module.exports = {
     PROVIDER,
     ANTHROPIC_KEY,
     OPENAI_KEY,
-    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE,
+    OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE, OPENAI_OAUTH_EXPIRES_AT,
+    XAI_KEY, XAI_OAUTH_TOKEN, XAI_OAUTH_REFRESH, XAI_OAUTH_EXPIRES_AT,
     OPENROUTER_KEY,
     CUSTOM_KEY,
     CUSTOM_BASE_URL,
