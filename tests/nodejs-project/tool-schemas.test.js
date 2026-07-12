@@ -52,7 +52,12 @@ require.cache[configPath] = {
         CHANNEL: 'telegram',
         log: () => {},
         workDir: '/tmp/seekerclaw-test',
-        config: {},
+        // BAT-1148: V2 is now the DEFAULT order path. Mirror the production
+        // default (jupiter/trigger-flag.js resolveUseTriggerV2 → true, unit-
+        // tested in trigger-v2-flag.test.js) so the top-of-file TOOLS load
+        // validates the V2 schema. The forced-off (V1) kill-switch is exercised
+        // in the second load below.
+        config: { useTriggerV2: true },
         REASONING_ENABLED: false,
         MAX_TOOL_USES: 25,
         HARD_MAX_TOOL_RESULT_CHARS: 50_000,
@@ -179,46 +184,50 @@ if (synthIssues.length === 0) {
 }
 console.log(`✓ Meta-check: validator correctly flags the BAT-664 bug shape (${synthIssues.length} issue${synthIssues.length === 1 ? '' : 's'})`);
 
-// ── PR #388 R9: flag-on schema smoke (Jupiter Trigger V2) ───────────────────
-// The jupiter_trigger_create schema is constructed flag-aware at module load
-// (see tools/solana.js IIFE around line 145). The default flag-off pass above
-// only validates the V1 schema. Reload tools/index.js with
-// `config.useTriggerV2: true` so the V2 schema (incl. its `anyOf` expiry
-// disjunction) goes through findSchemaIssues. Without this, a flag-on
-// rollout could ship a malformed V2 schema undetected — the whole toolset
-// would be rejected by the Anthropic API on first agent turn.
-require.cache[configPath].exports.config = { useTriggerV2: true };
+// ── BAT-1148: default-on (V2) + forced-off (V1) schema smoke ────────────────
+// jupiter_trigger_create's schema is built flag-aware at module load
+// (tools/solana.js IIFE). Since BAT-1148, V2 is the DEFAULT — the top-of-file
+// TOOLS pass above already walked the full V2 toolset. Here we (a) assert the
+// default schema really is the V2 shape, then (b) force the V1 kill-switch
+// (useTriggerV2:false), reload, and validate the V1 toolset — so a regression
+// in EITHER flag state (a malformed V2 anyOf, or a broken V1 fallback) is
+// caught before the Anthropic API rejects the whole toolset on the first turn.
+
+// (a) DEFAULT = V2 — assert the shape on the already-loaded TOOLS.
+const triggerCreateV2 = TOOLS.find(t => t.name === 'jupiter_trigger_create');
+assert.ok(triggerCreateV2, 'jupiter_trigger_create must be present in the default (V2) load');
+assert.ok(Array.isArray(triggerCreateV2.input_schema.anyOf),
+    'DEFAULT V2 schema must declare an anyOf for the expiry disjunction (BAT-1148: V2 is now default)');
+assert.ok(triggerCreateV2.input_schema.required.includes('triggerPriceUsd'),
+    'DEFAULT V2 schema must require triggerPriceUsd (BAT-1148: V2 is now default)');
+console.log('✓ Default-on (V2): jupiter_trigger_create has anyOf expiry + requires triggerPriceUsd');
+
+// (b) FORCED-OFF = V1 kill-switch — reload with useTriggerV2:false and validate.
+require.cache[configPath].exports.config = { useTriggerV2: false };
 for (const key of Object.keys(require.cache)) {
     if (key.startsWith(BUNDLE) && key !== configPath) delete require.cache[key];
 }
-const { TOOLS: TOOLS_V2 } = require(path.join(BUNDLE, 'tools', 'index.js'));
-const triggerCreateV2 = TOOLS_V2.find(t => t.name === 'jupiter_trigger_create');
-assert.ok(triggerCreateV2, 'jupiter_trigger_create must be present in flag-on load');
-assert.ok(Array.isArray(triggerCreateV2.input_schema.anyOf),
-    'V2 schema must declare an anyOf for the expiry disjunction (PR #388 R7 contract)');
-assert.ok(triggerCreateV2.input_schema.required.includes('triggerPriceUsd'),
-    'V2 schema must require triggerPriceUsd (PR #388 R6 contract)');
-const v2Issues = findSchemaIssues(triggerCreateV2.input_schema, '[jupiter_trigger_create.V2].input_schema');
-if (v2Issues.length > 0) {
-    console.error('\n✗ V2 jupiter_trigger_create schema has issues (flag-on load):');
-    for (const issue of v2Issues) console.error(`    - ${issue}`);
-    console.error('\nThis would take down the entire agent on a flag-on rollout.');
-    process.exit(1);
+const { TOOLS: TOOLS_V1 } = require(path.join(BUNDLE, 'tools', 'index.js'));
+const triggerCreateV1 = TOOLS_V1.find(t => t.name === 'jupiter_trigger_create');
+assert.ok(triggerCreateV1, 'jupiter_trigger_create must be present in the forced-off (V1) load');
+assert.ok(triggerCreateV1.input_schema.required.includes('triggerPrice'),
+    'V1 kill-switch schema must require triggerPrice');
+assert.ok(!triggerCreateV1.input_schema.required.includes('triggerPriceUsd'),
+    'V1 kill-switch schema must NOT require the V2-only triggerPriceUsd');
+assert.ok(!Array.isArray(triggerCreateV1.input_schema.anyOf),
+    'V1 kill-switch schema must NOT carry the V2 anyOf expiry disjunction');
+let v1Failed = 0;
+const v1AllIssues = [];
+for (const tool of TOOLS_V1) {
+    const issues = findSchemaIssues(tool.input_schema, `[V1][${tool.name}].input_schema`);
+    if (issues.length > 0) { v1Failed++; v1AllIssues.push({ tool: tool.name, issues }); }
 }
-// Walk the full flag-on TOOLS set too — any other tool that conditions its
-// schema on the flag is now covered.
-let v2Failed = 0;
-const v2AllIssues = [];
-for (const tool of TOOLS_V2) {
-    const issues = findSchemaIssues(tool.input_schema, `[V2][${tool.name}].input_schema`);
-    if (issues.length > 0) { v2Failed++; v2AllIssues.push({ tool: tool.name, issues }); }
-}
-if (v2Failed > 0) {
-    console.error(`\n✗ ${v2Failed} tool(s) have schema issues under useTriggerV2=true:\n`);
-    for (const { tool, issues } of v2AllIssues) {
+if (v1Failed > 0) {
+    console.error(`\n✗ ${v1Failed} tool(s) have schema issues under useTriggerV2=false (V1 kill-switch):\n`);
+    for (const { tool, issues } of v1AllIssues) {
         console.error(`  ${tool}:`);
         for (const issue of issues) console.error(`    - ${issue}`);
     }
     process.exit(1);
 }
-console.log(`✓ Flag-on (useTriggerV2=true): all ${TOOLS_V2.length} schemas pass + V2 jupiter_trigger_create has anyOf expiry + requires triggerPriceUsd`);
+console.log(`✓ Forced-off (useTriggerV2=false / V1 kill-switch): all ${TOOLS_V1.length} schemas pass + V1 jupiter_trigger_create requires triggerPrice (no anyOf)`);

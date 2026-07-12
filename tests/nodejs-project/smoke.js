@@ -101,6 +101,9 @@ const LOAD_TARGETS = [
     'wallet/spl-token-layout.js',
     'wallet/public-rpc-shaper.js',
     'wallet/ata.js',
+    // BAT-1148: pure Jupiter Trigger V2 flag resolver (triBool + env>config>
+    // default precedence). No IO, no config dependency — safe to require().
+    'jupiter/trigger-flag.js',
     'wallet/token2022-mint.js', // BAT-1057: pure require-safe Token-2022 fee parser
 
     'payment/protocol.js',
