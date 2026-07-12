@@ -62,18 +62,44 @@ function postJson(pathname, body) {
             let data = '';
             res.on('data', (c) => { data += c; });
             res.on('end', () => {
+                clearTimeout(timer);
                 let json = null;
                 try { json = JSON.parse(data); } catch { /* leave null */ }
                 resolve({ status: res.statusCode, data: json, raw: data });
             });
         });
-        req.on('error', reject);
+        // Bound the call — a DNS/TLS/socket stall must not hang this release gate.
+        const timer = setTimeout(() => req.destroy(new Error('request timed out after 15s')), 15_000);
+        req.on('error', (e) => { clearTimeout(timer); reject(e); });
         req.write(payload);
         req.end();
     });
 }
 
 (async () => {
+    // (1) Message challenge — the adapter tries this FIRST, then falls back to
+    // transaction (no signMessage bridge endpoint ships today, so in practice it
+    // falls back). Lenient: validate the envelope IF Jupiter offers a message
+    // challenge; a non-200 / non-message response IS the expected fall-back, not
+    // a failure — so it must not fail the probe.
+    try {
+        const m = await postJson('/trigger/v2/auth/challenge', { walletPubkey: PUBKEY, type: 'message' });
+        if (m.status === 200 && m.data && m.data.type === 'message') {
+            const menv = _validateChallengePayload(m.data, PUBKEY);
+            if (!menv.ok) {
+                console.error(`✗ LIVE message challenge envelope rejected: ${menv.error} — ${menv.reason}`);
+                console.error('  Jupiter changed the message-challenge payload shape.');
+                process.exit(1);
+            }
+            console.log('✓ Message challenge offered + envelope valid.');
+        } else {
+            console.log(`• Message challenge not offered (status=${m.status}, type=${m.data && m.data.type}) — adapter falls back to transaction. OK.`);
+        }
+    } catch (e) {
+        console.log(`• Message challenge probe skipped (${e.message}) — continuing to the transaction check.`);
+    }
+
+    // (2) Transaction challenge — the path that actually ships today.
     console.log(`Requesting a LIVE transaction challenge from api.jup.ag for ${PUBKEY.slice(0, 6)}…`);
     let res;
     try {

@@ -284,7 +284,7 @@ const tools = [
         return {
             name: 'jupiter_trigger_create',
             description: v2Enabled
-                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
+                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. If this returns `create_ambiguous_no_recovery` the order\'s existence is UNCERTAIN (lost create response) — verify via jupiter_trigger_list (check active AND history) before re-creating; never assume it failed. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
                 : 'Create a trigger (limit) order on Jupiter (V1 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the output/input price ratio reaches `triggerPrice`. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
             input_schema: v2Enabled ? v2Schema : v1Schema,
         };
