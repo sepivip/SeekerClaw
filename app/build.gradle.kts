@@ -38,8 +38,8 @@ android {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
         targetSdk = 35
-        versionCode = 22
-        versionName = "2.1.1"
+        versionCode = 23
+        versionName = "2.2.0"
 
         // Keep these in sync when updating OpenClaw or nodejs-mobile
         buildConfigField("String", "OPENCLAW_VERSION", "\"2026.4.10\"")
@@ -262,16 +262,15 @@ dependencies {
     // Custom Tabs for OAuth browser flows
     implementation("androidx.browser:browser:1.8.0")
 
-    // Solana Mobile Wallet Adapter
-    // Bumped 2.0.3 → 2.0.4 (BAT-697 commit 1). 2.0.4 ships the security fix
-    // ("Address Security Alerts 58, 63-66" — solana-mobile/mobile-wallet-adapter#791)
-    // without bumping androidx.core transitively past 1.16.x. Going to 2.0.5+
-    // (or 2.1.0) pulls androidx.core:1.17.0 which requires compileSdk 36 — out
-    // of scope for this BAT (we're on compileSdk 35; bumping it cascades to AGP /
-    // target-SDK migration work). Tracked as a follow-up.
-    // Must device-test existing solana_send / solana_swap flows BEFORE adding
-    // any V2 trigger code (per Codex round-2: stage MWA bump as its own commit,
-    // regression-check first).
+    // Solana Mobile Wallet Adapter — pinned at 2.0.4 (BAT-697 security baseline:
+    // "Address Security Alerts 58, 63-66" — mobile-wallet-adapter#791).
+    // BAT-1148 attempted MWA 2.1.x + compileSdk 36 (BAT-1092) but BOTH 2.1.0 and
+    // 2.1.1 ship Kotlin-2.2 metadata (stdlib 2.2.10/2.2.21, web3-solana 0.3.1),
+    // which the repo's Kotlin 2.0.21 compiler rejects (incompatible-class binary
+    // metadata + an internal compiler crash). The whole MWA 2.1.x / compileSdk 36
+    // bump is therefore gated on a Kotlin 2.0 → 2.2 toolchain upgrade (Compose
+    // compiler cascade) — deferred to BAT-1149; MWA/compileSdk (BAT-1092) follow
+    // once it lands. v2.2.0 ships the Trigger V2 default flip (BAT-1091) only.
     implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.4")
 
     // Solana transaction building (pure Kotlin)
