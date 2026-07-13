@@ -482,6 +482,15 @@ body = JSON.parse(claude.formatRequest('claude-opus-4-7', 1024, [], [], [], {
 ok('Claude maxTokens=1024: thinking SKIPPED',
     body.thinking === undefined);
 
+// Exact boundary: maxTokens === MIN_THINKING_TURN (2048) → adaptive thinking.
+// claude.js gates with `maxTokens < MIN_THINKING_TURN`, so the floor itself
+// must EMIT. Pins the boundary so a future `<` → `<=` flip can't regress silently.
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 2048, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes',
+}));
+eq('Claude maxTokens=2048 (exact floor): adaptive thinking, no budget_tokens',
+    body.thinking, { type: 'adaptive' });
+
 // Large turns stay adaptive with NO budget_tokens (guard against the
 // clamp/budget mechanism silently returning on big turns).
 for (const mt of [32000, 64000]) {

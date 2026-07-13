@@ -475,7 +475,7 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 **Symptoms:** User toggled `/think on` (or Settings > AI Provider > Reasoning > Extended thinking ON) but responses look the same as before.
 **Diagnosis:** The toggle is a no-op for models the registry doesn't list as supporting reasoning (Haiku 4.5; any freeform / unregistered model id). Run `/think` (no args) — it surfaces a user-facing hint when the active model isn't supported, e.g. "This model does not support extended thinking..." or "This model is not in SeekerClaw's known model list...". The agent's system prompt also exposes this state — the agent itself can tell the user.
 **Fix:**
-- "does not support" hint: switch to a yes-supporting model (Fable 5, Opus 4.8/4.7/4.6, Sonnet 4.6, GPT-5.4/5.5, Codex models) via `/model` or Settings.
+- "does not support" hint: switch to a yes-supporting model (Fable 5, Opus 4.8/4.7/4.6, Sonnet 4.6, GPT-5.6 Sol/Terra/Luna, GPT-5.5/5.4) via `/model` or Settings.
 - "not in known model list" hint: this is the safe default for models not in the registry. If the user is on Custom — or typed a custom model ID on Anthropic/OpenAI (supported since BAT-1032) — and knows their endpoint supports thinking, ask them to confirm — the request param genuinely isn't sent because the registry is the source of truth (a "thinking" status that lies about whether thinking is happening would be worse than no status).
 
 ### Custom + DeepSeek V4: 400 Loop on `/resume` After Tool Calls
