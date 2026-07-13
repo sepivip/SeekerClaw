@@ -1,0 +1,122 @@
+# BAT-1155 — xAI OAuth token durability (single-writer cross-process store + expiry round-trip) + revoked-token UX
+
+> **Severity:** High. The always-on agent on xAI "Sign in with Grok" (OAuth) **bricks** when a restart reloads an already-consumed refresh token: xAI's single-use reuse-detection revokes the whole token family, and every subsequent restart re-loads the same dead token. Recovery needs a manual re-pair (or switching to an API key). Live device incident (2026-07-13, agent "Cortana", grok-4.5).
+
+> **Status:** DRAFT v2 — hardened after an adversarial 3-lens validation (soundness / security / completeness) against the real code. Ready for **Codex sign-off**. No implementation until Codex review + owner OK.
+
+---
+
+## 1. Incident — the proven fact
+
+From the device `node_debug.log` (root-caused via a 4-investigator + adversarial-verify pass):
+
+- The agent ran healthy ~2 days on xAI OAuth, rotating the refresh token cleanly **9 times** at the ~6h cadence; heartbeats `200` up to **12:12**.
+- After a **USER_STOP → restart**, the first refresh on that boot (~13:10) returned `HTTP 400 "Refresh token has been revoked"`. Every request since 403s; the agent shows `"session expired — re-pair"` (Telegram) and, per-turn, the **wrong** `"add an xAI API key"`.
+- **The revocation is the load-bearing proof:** a token freshly minted at the last good rotation (09:42) is unused and could never return "revoked". So the boot POSTed an **already-consumed** refresh token. There is **no** `[xAI] OAuth token persist attempt N failed` line — the stale token reached disk via a **write that reverted it**, not a failed persist.
+
+**Minimal proven fact:** `config.json` at the doomed boot carried an already-consumed refresh token. The exact staling *writer* is not observable from `node_debug.log` alone (needs MAIN-process logcat around 09:42–12:40) — but two code-verified hazards both produce it, and the fix must close **both**.
+
+---
+
+## 2. Root cause + the dominant contributing defect
+
+### 2a. Cross-process token clobber (durability root)
+`seekerclaw_prefs` is opened `MODE_PRIVATE` (`ConfigManager.kt:307-308`) — **no** cross-process coherence. The rotation-owned keys `KEY_XAI_OAUTH_TOKEN_ENC / REFRESH_ENC / EXPIRES_AT` are written by **two processes**: `:node` on each rotation (`persistXaiOAuthTokens`, `ConfigManager.kt:1789-1856`) AND **MAIN/UI** on any full-config save (`saveConfig`, `605-624`), plus the `loadConfig` reconcile write-back (`1437-1451`). A MAIN `editor.commit()` **flushes that process's entire stale in-memory prefs map to disk** — reverting the `:node`-rotated token to an older, consumed pair, no error either side. `CrossProcessStore.kt`'s own header names this exact class: *"SharedPreferences … credentials are all latent instances of the same [staleness] bug."* This is that instance surfacing.
+
+> The reconcile write-back (`1438-1440`) puts only `KEY_PROVIDER/AUTH_TYPE/MODEL` — but its `commit()` at `1451` still flushes the whole stale map, so it is a clobber vector via whole-map flush, not via the keys. This is why the fix is to **move the tokens out of `seekerclaw_prefs` entirely**, not to edit which keys any editor puts.
+
+### 2b. Expiry never round-trips → boot-churn (the dominant real-world amplifier)
+The log proves `_currentExpiresAtMs` seeds to **0 on essentially every boot**: a **14-minute-old** token (mint 15:22:53 → boot → refresh 15:36:17, both `200`, `node_debug.log:28891-28892 / 28971-28972`) still fired a boot-time proactive refresh. So the **D5 opportunistic refresh fires on the first use after every restart, consuming + rotating the single-use token each boot.** With **123 starts / 66 stops**, the token was rotated **60+ extra times purely by boots** — this churn is what makes any clobber/kill-window fatal.
+> **Correct citation:** MAIN `saveConfig` writes `KEY_XAI_OAUTH_EXPIRES_AT` **unconditionally** (`ConfigManager.kt:622`) from the MAIN `AppConfig` snapshot; the `isNotBlank` guard is in `writeConfigJson` (`~2114`). An unconditional overwrite from a stale/blank MAIN snapshot is a *stronger* clobber than a guarded one — it can blank the expiry outright — which is why the persisted expiry never reaches Node's boot seed.
+
+### 2c. Secondary bugs (confirmed, independently valid)
+- **Misclassification (user-facing):** terminal 403 branch (`xai.js:335-340`) returns `type:'provisioning'` + *"add an xAI API key"* with **no `_refreshDead` guard** — dressing a revoked OAuth token as a subscription/tier gate, contradicting the `re-pair` Telegram (`ai.js:1974`).
+- **Dead-token recognition is one-error-code-fragile:** `xai.js:504` latches `_refreshDead` only on `parsed.error === 'invalid_grant'`. (It DID latch here — D10 reached 3 strikes, which requires `refreshDead===true`.)
+- **Restart re-notify loop:** the revoked token is never marked dead **on disk** (persist runs only on a *successful* rotation), so each restart re-seeds it, resets `_refreshDead=false`, and re-runs the doomed cycle (three "session marked expired" events across restarts: `node_debug.log:27619 / 31213 / 31352`).
+- **Grace-retry** (`xai.js:328`) is not gated on `!_refreshDead`.
+
+### 2d. Explicitly NOT a bug (do not change)
+D10 session-expiry counting (`ai.js:1963-1965`): a dead/revoked token (`refreshDead=true` → `isFreshTierGate=false`) correctly counts toward re-pair; a fresh-token tier-gate is correctly excluded. Verified correct by all three lenses.
+
+---
+
+## 3. Design decisions
+
+### D1 — Move the xAI OAuth record to a dedicated single-domain `CrossProcessStore` (durability root fix)
+Migrate `{ accessToken, refreshToken, expiresAt, email, reauthRequired, epoch }` out of `seekerclaw_prefs` into a **dedicated `CrossProcessStore<XaiOAuthTokens>`**, reusing the canonical atomic pattern (`.tmp` + `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`; `read()` reads fresh from disk every call — no cached map; FileObserver/broadcast reload).
+
+- **Location — `files/xai_oauth.json` (applicationContext.filesDir root), a SIBLING of `runtime_state.json`/`bridge_token`, explicitly NOT under `workspace/`.** `CrossProcessStore` roots at `filesDir` and `isValidFileName` rejects `/` (`CrossProcessStore.kt:161, 766-771`), so a `workspace/…` path is literally unconstructible AND unsafe: the agent's file tools are `safePath`-confined to `workDir=files/workspace` (`config.js:13`), so a workspace-resident store would be **readable** (leaks base64 ciphertext + expiry + `reauthRequired`) and **deletable** (one tool call → `read()` falls back to empty → tokens vanish → forced re-pair) by a prompt-injected agent. `filesDir` keeps it outside `safePath` exactly like `runtime_state.json` today, and avoids a second FileObserver on the workspace dir (one-observer-per-dir rule).
+- **Defense-in-depth:** add `xai_oauth.json` to `SECRETS_BLOCKED` (`config.js:768`) so the agent `read`/`write`/`delete` tools refuse it even if `workDir` is ever relocated.
+- **Secrets at rest:** `accessToken`/`refreshToken`/`email` are stored as **KeystoreHelper AES-256-GCM ciphertext (base64, `IV||ciphertext`)** inside the JSON — identical key/format to today's prefs, so migration is a **ciphertext passthrough** (no cleartext ever materializes). `expiresAt`, `reauthRequired`, `epoch` are plaintext (non-secret). **Integrity of the plaintext control fields is a security property** — the `filesDir` location (out of agent write-reach) is what protects them from prompt-injection tampering (a forged `reauthRequired=false` or far-future `expiresAt` would re-open the churn/brick).
+- **Writers (exactly two, both legitimately own the token):** (1) `:node` rotation via the existing `/xai/oauth/save-tokens` bridge (now writes the store, not prefs); (2) MAIN sign-in/sign-out (`XaiOAuthActivity` + Settings). `saveConfig` / `loadConfig` reconcile **never touch these keys again** → the whole-map-flush clobber is structurally impossible (an editor that doesn't own the key can't flush it).
+- **Reader — SINGLE SOURCE OF TRUTH:** **every** reader of the xAI OAuth record sources it from the store, not prefs: `loadConfig` (`ConfigManager.kt:1211-1302`), `writeConfigJson` (which reads via `loadConfig`, `2039→2111`), the readiness/health surface (`xaiOAuthSet`, `2211-2233`), `updateConfigField` (`1920-1923`), and the Settings sign-in-state UI. **No divergent prefs copy survives migration** — otherwise `loadConfig` returns a stale/blank token while rotations only hit the store, and `writeConfigJson` emits a consumed/missing token → the live `"Missing required config (xaiApiKey or xaiOAuthToken)"` crash (`config.js:627-636`; `node_debug.log:26276-26291`).
+- **Node’s decrypted surface is unchanged:** Node still receives decrypted tokens only via the ephemeral `config.json` (deleted ~5s after boot); it never reads the store directly (it can't decrypt Keystore blobs). Value-level `registerRedactedSecret` for the decrypted access/refresh tokens stays as-is (`main.js:64-65`). **There is no `redactor` "file-path/no-log" primitive** — do NOT prescribe one; confidentiality = Keystore ciphertext, reachability protection = `filesDir` + `SECRETS_BLOCKED`.
+
+**Concurrency (corrected — the rotation write is a MERGE, not a full snapshot):** Node holds only `{accessToken, refreshToken, expiresAt}` (`xai.js:529-535`) — no `email`, no `reauthRequired`. The bridge handler already does a read-modify-write to preserve `email` + keep-old-refresh (`AndroidBridge.kt:977-985`); against the store this is a **cross-process RMW on last-writer-wins storage** (`CrossProcessStore.update{}` is same-process-only, `CrossProcessStore.kt:521-523`). Genuine lost-update windows exist for sign-in-vs-rotation, sign-out-vs-rotation, and migration-vs-rotation (**most likely exactly during failure/recovery**). Guard with a **monotonic `epoch`** in the record: a **rotation MUST NOT overwrite a record whose `epoch` is newer than the family it rotated**; **sign-in/sign-out bumps `epoch`** (new family); **migration is fill-only** (no-op if any token already present). The account-brick is averted regardless (no writer ever writes a *consumed* token); `epoch` additionally prevents a stale rotation from clobbering a fresh sign-in or re-introducing an old token.
+
+### D2 — Round-trip the expiry so healthy boots skip the D5 refresh
+With `expiresAt` in the D1 store (never blanked by an unrelated `saveConfig`), `writeConfigJson` always emits the last-rotation expiry into `config.json`, and `config.js:276 → xai.js:120` seeds `_currentExpiresAtMs`. **Acceptance:** a boot with a still-valid (future) expiry fires **zero** refresh POSTs on first use; only an expiredish or unknown (`0`) expiry triggers the D5 one-shot. Removes the boot-churn.
+
+### D3 — `_refreshDead`-aware terminal 403 classification (UX fix)
+Before the terminal `provisioning` return (`xai.js:335-340`):
+```
+if (isOAuth && _refreshDead) return { type: 'reauth', retryable: false,
+    userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.' };
+```
+Keep *"add an xAI API key"* ONLY for a genuine fresh-token tier-gate (`_refreshDead === false`). `reauth` is `retryable:false` (skips the retry gate `ai.js:1844`) and still counts toward re-pair (D10: `isFreshTierGate` stays false). **D3 depends on D7** (below) or the first dead-token 403 is preempted.
+
+### D4 — Persisted `reauthRequired` flag with a FULL round-trip (stops the re-POST / re-notify loop)
+- **Write path (token-less):** a **new dedicated bridge endpoint `/xai/oauth/mark-reauth`** sets `reauthRequired=true` in the D1 store **without touching the token fields** — idempotent, and **exempt from / on a separate bucket than** the `5/60s` `/xai/oauth/save-tokens` rate limit (a dead-token heartbeat storm must not be throttled). The existing save-tokens path can't carry it (it requires an `accessToken`, `AndroidBridge.kt:973`, and a dead token has none).
+- **Read path (must be plumbed — mirror the expiry):** store → `writeConfigJson` emits `reauthRequired` into `config.json` → `config.js` exports it → `xai.js` seeds skip-refresh/`_refreshDead` from it **on boot**. Without this, boot starts `_refreshDead=false` and re-runs the doomed cycle — D4 is inert.
+- **Behavior when set:** skip **all** refresh POSTs, surface the `reauth` message **once** (persist a `notified` marker so restarts don't re-notify), do not run the rotation cycle.
+- **Self-clear:** cleared by a successful re-pair/sign-in (the sign-in store write clears `reauthRequired` **in the same atomic snapshot**). Keep `xai.js:453`'s clear as belt-and-suspenders for the non-dead path (it can't fire in the dead path since D4 suppresses refresh).
+
+### D5 — Broaden dead-token detection **narrowly** + deterministic logging
+At `xai.js:504`, latch `err.reLogin` on `parsed.error === 'invalid_grant'` (primary) **OR** a specific description match `/revoked|already been used|token expired/i` on `parsed.error_description` for an HTTP 400 from the refresh endpoint. **Never** match the bare `refresh[_ ]?token` substring (it appears in benign transient 400s like *"refresh_token parameter is required"* → a single false match would persist `reauthRequired` and permanently brick a working account, since D4 then suppresses the refresh that would self-clear it). Only latch on a death **observed on an actual refresh attempt**, never inferred. Add a one-line **redacted** log of `parsed.error` on refresh failure so xAI's exact revoke code becomes deterministic.
+
+### D6 — Drain the pending token persist on USER_STOP, within the hard shutdown ceiling
+`/shutdown/flush` runs inside `SeekerClawService.flushNodeBeforeProcessKill`'s `withTimeoutOrNull(2000ms)` (`706-712`) before the unconditional `killProcess` (`685`); the summary path already consumes ~1200-1750ms (`internal-control-server.js:404-427`). So the token drain must **run FIRST (before the session summary)** and/or **in parallel**, with its own tight bound (a few hundred ms) that **bypasses the `5/60s` rate limit for the shutdown write**; the outer `2000ms` cap must not be able to preempt it (widen it if needed). Closes the kill-window where xAI consumed the old token (`xai.js:433`) before the new one is persisted (`xai.js:459`).
+
+### D7 — Gate grace-retry on `!_refreshDead` (REQUIRED, not cosmetic)
+Add `!_refreshDead` to the guard at `xai.js:328` (`!_oauth403RetriedOnce && !_tierGated`). Without it, on a dead-token boot the **first** 403 hits the grace-retry (returns `provisioning`/`retrying`) and only the **second** reaches D3's reauth message — re-showing the wrong copy once per boot in the exact incident scenario. **D3 + D7 are interdependent.**
+
+### D-recover — Reconcile remediation surfaces + in-place recovery
+- **One message:** on a reauth boot, D4's `reauth` surface and D10's `ai.js:1974` "session has expired — re-pair" must not both fire. Emit **exactly one** consistent remediation on both the per-turn and Telegram surfaces (reconnect/re-pair — never "add an API key").
+- **In-place sign-in recovery:** a Settings "Sign in with Grok" writes the store but does NOT reload Node's in-memory `_refreshDead` (Node reads `config.json` only at boot; `repairReset` at `xai.js:686` *assumes* a full setup → service restart). Specify that a successful sign-in **triggers a `:node` restart** (or a bridge reload signal) that clears `_refreshDead`/`reauthRequired` so recovery doesn't need a manual restart.
+
+---
+
+## 4. Upgrade & downgrade safety
+- **Migration runs in `:node`, inside `loadConfig`/`writeConfigJson`, BEFORE the first `config.json` emit**, so the store is populated before Node reads it (never a boot with an empty store → api_key downgrade / "Missing required config" crash).
+- **Gate on a persisted `migration-done` marker** (or "store has no token AND legacy prefs has a token") — **never on file presence** (an empty/corrupt partial-first-write store must not masquerade as migrated → blank token → forced re-pair).
+- **Ciphertext passthrough:** copy the legacy base64 blobs verbatim (same Keystore key/format); `email` stays ciphertext; `expiresAt` moves as-is. The migration path and every failure branch **must never log decrypted values** and must **fall back silently to legacy behavior on any error — never wipe a working token**.
+- **Downgrade posture (MEMORY mandates verifying upgrade safety):** keep a **best-effort prefs shadow** of the latest token (as `RuntimeStateStore` does) so a downgrade to a pre-D1 build still finds a token — OR explicitly document "downgrade forces re-pair" as an accepted limitation. Decide at sign-off.
+- **Preserve H5:** the store sign-in write must retain the `runtime_state` authType re-derivation (`ConfigManager.kt:1833-1847`) that prevents the `(xai,api_key)/(xai,oauth)` boot-loop.
+
+## 5. Scope — OpenAI Codex OAuth deferred (with justification)
+`openai.js` persists via `/openai/oauth/save-tokens` into the same `MODE_PRIVATE` prefs — the same clobber (2a) exposure. **But OpenAI has no proactive-refresh hook** (`writeConfigJson:2104-2107`), so it does **not** boot-churn (2b) — materially lower risk than xAI. This contract fixes **xAI only** (the live incident); D1 is written generically so an OpenAI follow-up reuses the store type. **Open:** confirm whether OpenAI's server family-revokes single-use refresh tokens on reuse; if it does, note the residual one-restart-clobber risk for OpenAI OAuth users and prioritize the follow-up.
+
+---
+
+## 6. Test plan (reusable regression-catchers)
+1. **Cross-process durability (instrumentation, NOT single-process Robolectric — that gives a false green):** two processes sharing the real store; assert a MAIN full-config save can never revert a `:node`-written token; atomic-move never observed torn. *(Note: the trivial "saveConfig no longer touches the keys" is necessary but insufficient — must exercise the real cross-process races below.)*
+2. **Upgrade migration (instrumentation):** install over a legacy-prefs build → token preserved; idempotent; **empty/corrupt store never forces re-pair**; a migration write that **loses a race to a concurrent rotation** does not revert the fresh token (epoch fill-only).
+3. **Concurrency:** sign-in-vs-rotation and sign-out-vs-rotation interleavings → no consumed token on disk, no fresh-sign-in clobbered by a stale rotation (epoch guard).
+4. **`ensureFreshToken` (xai.js):** future expiry seed → **0** refresh POSTs on first use; `0` → exactly **one** D5 POST; `reauthRequired=true` (via the boot round-trip) → **0** POSTs + one `reauth` surface.
+5. **`classifyError` (xai.js):** terminal 403 → `reauth`+reconnect when `_refreshDead`, tier-gate copy only when not; `err.reLogin` latches on `invalid_grant` and on `/revoked|already been used|token expired/` but **NOT** on bare "refresh token"; grace-retry (D7) suppressed when dead so the **first** 403 yields reauth.
+6. **`reauthRequired` boot round-trip:** store flag → `config.json` → `config.js` → `xai.js` boot gate → no refresh + one notify; `notified` marker prevents re-notify across restarts.
+7. **Node integration:** boot from valid-future-expiry token → 0 refreshes; boot from consumed token → `reauth` + one re-pair message, **never** "add an xAI API key".
+8. **Device soak (Seeker, xai/oauth, grok-4.5) — ACCEPTANCE:** ≥24h across **≥3** USER_STOP/restart cycles **and** ≥1 Settings save between rotations, **plus an upgrade-install leg** (install over a legacy build). Use a **deterministic force-revoke** (a second consumer of the refresh token, or admin revoke) to exercise the dead path. Verify from `node_debug.log`: (i) ZERO "Refresh token has been revoked"; (ii) every boot's `[Config]` load carries the last rotation's expiry (no proactive refresh with TTL remaining); (iii) a forced-revoked token yields **ONE** consistent reconnect/re-pair message on both surfaces, never "add an xAI API key"; (iv) an in-place Settings sign-in recovers without a manual restart.
+
+## 7. Invariants
+- D10 counting (`ai.js:1963-1965`) unchanged (§2d).
+- No new plaintext-secret surface; `email` stays Keystore ciphertext; only non-secret `expiresAt`/`reauthRequired`/`epoch` are plaintext, protected by the `filesDir` location + `SECRETS_BLOCKED`.
+- Rotation cadence stays ~1/6h on the happy path (D2 removes the extra boot rotations); no new refresh-storm.
+- The `H5` runtime_state authType sync is preserved through the rewrite.
+
+## 8. Open questions for Codex
+1. **Dedicated new store vs. extend `RuntimeStateStore`** — recommendation: dedicated (tokens must not land in a Node-readable plaintext file; RuntimeStateStore is plaintext and Node-read).
+2. **Downgrade posture:** prefs rollback-shadow vs. accepted "downgrade forces re-pair" (§4).
+3. **`epoch` semantics:** is a monotonic counter per family sufficient, or is a stronger CAS/lock needed given `CrossProcessStore` is last-writer-wins across processes? Is the rarity-plus-epoch bound acceptable, or is a single-writer funnel (route the MAIN sign-in write through a `:node` bridge call too) preferable?
+4. **OpenAI parallel:** does xAI/OpenAI actually family-revoke on reuse (confirm the exact server behavior + error code via the redacted `parsed.error` log)?
+5. **In-place recovery:** restart `:node` on sign-in vs. a lighter bridge "reload tokens + clear dead flags" signal — which is safer given the boot-loop history (H5)?
