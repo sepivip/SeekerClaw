@@ -10,7 +10,7 @@
 //   - adaptive : {type:adaptive}              (the proposed fix)
 //
 // Run for claude-opus-4-8 (works in prod) + claude-sonnet-5 (breaks).
-// Setup: SETUP_TOKEN=sk-ant-oat01-… in testing/.env    Run: node testing/test-thinking-repro.js
+// Setup: SETUP_TOKEN=sk-ant-oat01-… in tests/live/anthropic/.env    Run: node tests/live/anthropic/test-thinking-repro.js
 'use strict';
 
 const https = require('https');
@@ -78,7 +78,7 @@ async function probe(model, token, cfg) {
 
 (async () => {
     const token = process.env.SETUP_TOKEN || process.env.ANTHROPIC_SETUP_TOKEN;
-    if (!token) { console.error('❌ Set SETUP_TOKEN in testing/.env'); process.exit(1); }
+    if (!token) { console.error('❌ Set SETUP_TOKEN in tests/live/anthropic/.env'); process.exit(1); }
     console.log('🧪 BAT-1033 live recreation — setup_token + interleaved-thinking beta + tool');
     for (const model of MODELS) {
         console.log(`\n=== ${model} ===`);

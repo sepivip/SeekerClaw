@@ -16,6 +16,7 @@
     <img src="https://img.shields.io/badge/Solana-Seeker-9945FF?logo=solana&logoColor=white" alt="Solana">
     <img src="https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white" alt="Telegram">
     <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
+    <a href="https://coderabbit.ai"><img src="https://img.shields.io/coderabbit/prs/github/sepivip/SeekerClaw?utm_source=oss&utm_medium=github&utm_campaign=sepivip%2FSeekerClaw&labelColor=171717&color=FF570A&label=CodeRabbit+Reviews" alt="CodeRabbit Pull Request Reviews"></a>
   </p>
   <p>
     <a href="https://play.google.com/store/apps/details?id=com.seekerclaw.app"><img src="https://img.shields.io/badge/Google_Play-Download-414141?logo=google-play&logoColor=white&style=for-the-badge" alt="Google Play"></a>

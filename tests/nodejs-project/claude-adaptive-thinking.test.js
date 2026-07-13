@@ -4,7 +4,7 @@
 // Anthropic REMOVED extended thinking (`thinking.type:'enabled'` +
 // `budget_tokens`) from the current models — fable-5/opus-4-8/opus-4-7/sonnet-5
 // reject it with 400 "thinking.type.enabled is not supported for this model.
-// Use thinking.type.adaptive". Verified live (testing/test-thinking-matrix.js):
+// Use thinking.type.adaptive". Verified live (tests/live/anthropic/test-thinking-matrix.js):
 // adaptive is accepted by every reasoning model. So formatRequest now emits
 // `thinking: { type: 'adaptive' }` uniformly (no budget_tokens).
 //

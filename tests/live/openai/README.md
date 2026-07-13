@@ -105,16 +105,17 @@ simply omits the Recent-Sessions rollup. Seeding real rows means driving the
 SQL.js WASM loader (async) + the `api_request_log` schema — punted to a follow-up
 so the harness stays synchronous and dependency-free.
 
-## Part-1 note
+## Shared helpers
 
-`_shared/` currently lives here (`tests/live/openai/_shared/`). Part 1 (repo-wide)
-will introduce a shared `tests/live/_shared/`; `env.js` + `fixture.js` move there
-then and the two `require('./_shared/…')` paths become `require('../_shared/…')`.
+`env.js` + `fixture.js` live in the repo-wide `tests/live/_shared/` (shared by
+every live probe — `openai/`, `xai/`, `anthropic/`); this harness imports them as
+`require('../_shared/…')`.
 
 ## Notes
 
-- Real telegram tool count is **64** (no MCP). The "66" in project memory and the
-  `~67` `input_schema` string count in `tools/*.js` count schema occurrences in
-  source, which differ from the assembled runtime array — reconciling that memory
-  note is a follow-up. The harness asserts against the **live** `TOOLS.length`, so
-  it stays correct if the real count changes.
+- Real telegram tool count is **64** (no MCP) — the authoritative figure, assembled
+  from `tools/index` `TOOLS` and asserted live by the self-check. Older "66" (project
+  memory) and "~67" (`grep -c input_schema tools/*.js`) were miscounts: the raw grep
+  catches 3 comment mentions of "input_schema" (agent_pay.js ×2, system.js ×1) on top
+  of the 64 real schema keys. Reconciled in BAT-1144 Part 1. The harness asserts
+  against the **live** `TOOLS.length`, so it stays correct if the real count changes.

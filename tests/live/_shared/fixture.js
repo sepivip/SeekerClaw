@@ -1,4 +1,4 @@
-// tests/live/openai/_shared/fixture.js
+// tests/live/_shared/fixture.js
 // ─────────────────────────────────────────────────────────────────────────────
 // Seeds a per-mode fixture workDir that the REAL agent modules can boot against:
 //   • config.json  — provider=openai, channel=telegram, the mode's auth fields,

@@ -190,7 +190,7 @@ function buildHeaders(apiKey) {
 // branch. Deliberately NO cache_control / models-fallback (openrouter.js) and
 // NO store:false (openai.js Codex).
 //
-// BAT-1124 reasoning fix (proven live in tests/xai-models `--diagnose`): xAI
+// BAT-1124 reasoning fix (proven live in tests/live/xai `--diagnose`): xAI
 // HONORS the OpenAI-style `reasoning_effort` STRING; it does NOT honor
 // OpenRouter's `reasoning:{effort}` object. With NO effort bound, a reasoning
 // model (grok-4.5) reasons UNBOUNDED — on a large agent request (64 tools + big

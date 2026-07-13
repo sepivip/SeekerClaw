@@ -5,7 +5,7 @@ Standalone scripts to test Anthropic API calls without building the app.
 ## Setup
 
 ```bash
-cd testing
+cd tests/live/anthropic
 cp .env.example .env
 # Edit .env with your credentials
 ```
@@ -37,7 +37,10 @@ SETUP_TOKEN=                # Max Pro setup token (sk-ant-oat01-...)
 TEST_MODELS=all             # "all" or comma-separated: claude-opus-4-7,claude-haiku-4-5
 ```
 
-## Test Results (2026-04-21, `cc_version=2.1.116`)
+## Test Results (2026-04-21, `cc_version=2.1.116` — historical)
+
+> The harness now sends `cc_version=2.1.195` (BAT-1123 — see `providers/claude.js`).
+> The table below is the historical `2.1.116` run; re-run `test-messages.js` to refresh it.
 
 Re-run against the current model set when the `cc_version` was bumped in BAT-498.
 The original 2026-03-18 run used `cc_version=2.1.78` and returned the same pass/fail
@@ -69,7 +72,7 @@ tokens (`sk-ant-oat01-*`) to access non-Haiku models. This string identifies the
 request as originating from a Claude Code-compatible client:
 
 ```
-x-anthropic-billing-header: cc_version=2.1.116; cc_entrypoint=cli; cch=00000;
+x-anthropic-billing-header: cc_version=2.1.195; cc_entrypoint=cli; cch=00000;
 ```
 
 - Must be a **separate text block** in the `system` array (not concatenated)

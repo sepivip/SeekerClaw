@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  * test-content-filter-trigger.js — regression probe for the 2026-07-07 outage
- * (see testing/FINDINGS.md). Anthropic's setup_token path rejects a request whose
+ * (see tests/live/anthropic/FINDINGS.md). Anthropic's setup_token path rejects a request whose
  * content contains the co-occurrence of `heartbeat` + `acknowledgment` +
  * `HEARTBEAT_OK`, and MISLABELS it as `400 "You're out of extra usage"`. This
  * poison entered the agent's "Recent Sessions" system-prompt block via an
@@ -12,15 +12,15 @@
  *   - the neutralized phrasing 200s (so our sanitizer's target stays valid)
  *
  * Deliberately tiny (~40-char system) so a 400 can ONLY be the content filter,
- * never usage. LIVE — needs SETUP_TOKEN in testing/.env. Run: node testing/test-content-filter-trigger.js
+ * never usage. LIVE — needs SETUP_TOKEN in tests/live/anthropic/.env. Run: node tests/live/anthropic/test-content-filter-trigger.js
  */
 'use strict';
 const path = require('path');
 const https = require('https');
-const configPath = path.resolve(__dirname, '../app/src/main/assets/nodejs-project/config.js');
+const configPath = path.resolve(__dirname, '../../../app/src/main/assets/nodejs-project/config.js');
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true,
     exports: { log: () => {}, CHANNEL: 'telegram', config: {}, API_TIMEOUT_MS: 60000 } };
-const claude = require('../app/src/main/assets/nodejs-project/providers/claude');
+const claude = require('../../../app/src/main/assets/nodejs-project/providers/claude');
 const { loadEnv, CC_BILLING_HEADER } = require('./lib');
 loadEnv();
 
@@ -52,7 +52,7 @@ function probe(text) {
 }
 
 (async () => {
-    if (!TOKEN) { console.error('❌ SETUP_TOKEN (or ANTHROPIC_SETUP_TOKEN) required in testing/.env'); process.exit(1); }
+    if (!TOKEN) { console.error('❌ SETUP_TOKEN (or ANTHROPIC_SETUP_TOKEN) required in tests/live/anthropic/.env'); process.exit(1); }
     console.log(`🧪 content-filter regression probe (setup_token, ${MODEL})\n`);
     let fails = 0;
     for (const [text, expect] of CASES) {

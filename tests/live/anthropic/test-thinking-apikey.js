@@ -15,8 +15,8 @@
 //   extended {type:'enabled', budget_tokens}  → 200 or 400?  (is the migration LIVE for api-key users?)
 //   adaptive {type:'adaptive'}                → 200?          (does the proposed fix work on api-key?)
 //
-// Setup: ANTHROPIC_API_KEY=sk-ant-api03-… in testing/.env
-// Run:   node testing/test-thinking-apikey.js
+// Setup: ANTHROPIC_API_KEY=sk-ant-api03-… in tests/live/anthropic/.env
+// Run:   node tests/live/anthropic/test-thinking-apikey.js
 'use strict';
 
 const https = require('https');
@@ -86,7 +86,7 @@ async function probe(model, key, cfg) {
 
 (async () => {
     const key = process.env.ANTHROPIC_API_KEY;
-    if (!key) { console.error('❌ Set ANTHROPIC_API_KEY in testing/.env'); process.exit(1); }
+    if (!key) { console.error('❌ Set ANTHROPIC_API_KEY in tests/live/anthropic/.env'); process.exit(1); }
     if (!/^sk-ant-/.test(key)) { console.error('❌ ANTHROPIC_API_KEY does not look like a raw sk-ant-… key'); process.exit(1); }
     console.log('🧪 BAT-1033 #2 — RAW API-KEY path (x-api-key, no billing masquerade) — is budget_tokens live?');
     for (const model of MODELS) {

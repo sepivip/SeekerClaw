@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// tests/xai-models/live-models.test.js
+// tests/live/xai/live-models.probe.js
 // ─────────────────────────────────────────────────────────────────────────────
 // LIVE xAI model-matrix probe (BAT-1124). Hits api.x.ai directly with YOUR
 // credential and reports, per Grok model:
@@ -11,19 +11,19 @@
 // compare this output directly against on-device behaviour.
 //
 // SECURITY
-//   • Credentials are read ONLY from tests/xai-models/.env.test (gitignored via
+//   • Credentials are read ONLY from tests/live/xai/.env.test (gitignored via
 //     `.env.*`). Never commit it. Tokens are NEVER printed — only presence+length.
 //   • Node builtins only (https/http/fs/crypto/url) — no npm install, no deps.
 //
 // USAGE
-//   1) cp tests/xai-models/.env.example tests/xai-models/.env.test
+//   1) cp tests/live/xai/.env.example tests/live/xai/.env.test
 //      …and fill in AT LEAST ONE credential:
 //        XAI_API_KEY=...          (console.x.ai key — api_key path; easiest to get)
 //        XAI_OAUTH_TOKEN=...      (SuperGrok access token — the DEVICE path)
-//   2) node tests/xai-models/live-models.test.js
+//   2) node tests/live/xai/live-models.probe.js
 //
 //   OR test the real OAuth path with NO token on disk (in-memory only):
-//      node tests/xai-models/live-models.test.js --login
+//      node tests/live/xai/live-models.probe.js --login
 //   …which does the loopback+PKCE "Sign in with Grok" flow in a browser, exactly
 //   like the device, then runs the sweep with the freshly-issued OAuth token.
 //
@@ -452,7 +452,7 @@ async function loginForToken() {
   }
 
   if (!useLogin && !apiKey && !oauthTok) {
-    console.error('No credential found. Put ONE of these in tests/xai-models/.env.test:');
+    console.error('No credential found. Put ONE of these in tests/live/xai/.env.test:');
     console.error('  XAI_API_KEY=...       (console.x.ai key — api_key path)');
     console.error('  XAI_OAUTH_TOKEN=...   (SuperGrok access token — the device path)');
     console.error('…or run with --login to do the OAuth flow in-browser (no token on disk).');

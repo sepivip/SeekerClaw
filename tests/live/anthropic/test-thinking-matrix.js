@@ -3,8 +3,8 @@
 // RAW API-KEY path. One request per (model × shape); reports 200/400 so we get
 // the exact extended-vs-adaptive mapping straight from the API (no doc-trust).
 //
-// Setup: ANTHROPIC_API_KEY=sk-ant-api03-… in testing/.env
-// Run:   node testing/test-thinking-matrix.js
+// Setup: ANTHROPIC_API_KEY=sk-ant-api03-… in tests/live/anthropic/.env
+// Run:   node tests/live/anthropic/test-thinking-matrix.js
 'use strict';
 
 const https = require('https');
@@ -33,7 +33,7 @@ function httpPost(key, bodyObj) {
 
 (async () => {
     const key = process.env.ANTHROPIC_API_KEY;
-    if (!key) { console.error('❌ Set ANTHROPIC_API_KEY in testing/.env'); process.exit(1); }
+    if (!key) { console.error('❌ Set ANTHROPIC_API_KEY in tests/live/anthropic/.env'); process.exit(1); }
     console.log('🧪 Per-model thinking-shape matrix (raw api-key path)\n');
     console.log('model'.padEnd(20) + 'extended'.padEnd(14) + 'adaptive');
     console.log('─'.repeat(48));

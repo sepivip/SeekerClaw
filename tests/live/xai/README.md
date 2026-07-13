@@ -13,16 +13,16 @@ compare this output directly against on-device behaviour.
 ## Run
 
 ```bash
-cp tests/xai-models/.env.example tests/xai-models/.env.test
+cp tests/live/xai/.env.example tests/live/xai/.env.test
 # edit .env.test — set XAI_API_KEY and/or XAI_OAUTH_TOKEN
-node tests/xai-models/live-models.test.js
+node tests/live/xai/live-models.probe.js
 ```
 
 Or test the **real OAuth path** with no token on disk (in-browser login, token
 held in memory only — this is the closest possible match to the device):
 
 ```bash
-node tests/xai-models/live-models.test.js --login
+node tests/live/xai/live-models.probe.js --login
 ```
 
 ## Output

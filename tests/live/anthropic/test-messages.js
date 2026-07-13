@@ -109,14 +109,15 @@ async function main() {
 
     const models = getModels();
     console.log(`   Models: ${models.join(', ')}`);
+    const results = [];
 
     // Test with API key
     if (apiKey) {
         console.log(`\n${'─'.repeat(60)}`);
         console.log(`🔑 API Key auth (x-api-key)`);
-        console.log(`   Key: ${apiKey.slice(0, 10)}...`);
+        console.log(`   Key: [redacted] (len=${apiKey.length})`);
         for (const model of models) {
-            await testModel(model, apiKey, 'api_key');
+            results.push(await testModel(model, apiKey, 'api_key'));
             await new Promise(r => setTimeout(r, 1000));
         }
     }
@@ -125,15 +126,17 @@ async function main() {
     if (setupToken) {
         console.log(`\n${'─'.repeat(60)}`);
         console.log(`🔑 Setup Token auth (Bearer + oauth beta + billing attribution)`);
-        console.log(`   Token: ${setupToken.slice(0, 10)}...`);
+        console.log(`   Token: [redacted] (len=${setupToken.length})`);
         for (const model of models) {
-            await testModel(model, setupToken, 'setup_token');
+            results.push(await testModel(model, setupToken, 'setup_token'));
             await new Promise(r => setTimeout(r, 1000));
         }
     }
 
+    const failed = results.filter((r) => r.status === 'error');
     console.log(`\n${'─'.repeat(60)}`);
-    console.log('Done.\n');
+    console.log(`Done. ${results.length - failed.length}/${results.length} ok.\n`);
+    if (failed.length) process.exit(1); // propagate probe failures to the exit code
 }
 
-main();
+main().catch((err) => { console.error(err); process.exit(1); });
