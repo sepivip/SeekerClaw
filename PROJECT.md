@@ -12,7 +12,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent that can pa
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **37 skills (22 bundled incl. burner-wallet + paysh-catalog + 13 workspace + 2 user-created)**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **37 skills (22 bundled incl. burner-wallet + paysh-catalog + 13 workspace + 2 user-created)**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + xAI/Grok + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
 
 ## What It Is
 
@@ -34,7 +34,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + Custom (any OpenAI-compatible gateway) | Claude Opus 4.8 default; OpenAI + OpenRouter + Custom via adapters |
+| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + xAI Grok (Chat Completions) + Custom (any OpenAI-compatible gateway) | Claude Opus 4.8 default; OpenAI + OpenRouter + xAI + Custom via adapters |
 | Messaging | Telegram Bot API (grammy) | — |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.4.10 |
@@ -45,8 +45,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ## Features — Shipped
 
 ### AI Agent Core
-- **Claude integration** — Fable 5, Opus 4.8 (default), Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5 selectable (+ custom model IDs). Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
-- **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter/custom) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. Custom provider for any OpenAI-compatible gateway — user-configurable base URL, API key, custom headers, and Chat Completions or Responses API format. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
+- **Claude integration** — Fable 5, Opus 4.8 (default), Opus 4.7, Opus 4.6, Sonnet 5, Sonnet 4.6, Haiku 4.5 selectable (+ custom model IDs). Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
+- **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter/xai/custom) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. xAI (Grok) adapter via `api.x.ai/v1/chat/completions` for both API-key and "Sign in with Grok" OAuth (PKCE; SuperGrok / X subscription token) — Grok 4.5 (default) + Grok 4.3, OpenAI-style `reasoning_effort`, full tool + vision parity. Custom provider for any OpenAI-compatible gateway — user-configurable base URL, API key, custom headers, and Chat Completions or Responses API format. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
 - **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
 - **Context token estimation + adaptive trimming** — Token-aware conversation management that estimates context size and trims oldest messages to stay within limits, preventing API failures from oversized contexts
@@ -265,15 +265,16 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 600+ |
-| PRs merged | 383+ |
-| Tools | 63 (17 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram, 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
+| Total commits | 740+ |
+| PRs merged | 437+ |
+| AI Providers | 5 (Claude, OpenAI, OpenRouter, xAI/Grok, Custom) |
+| Tools | 64 (18 Solana/Jupiter [+solana_send_token], 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram, 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
 | Skills | 37 (22 bundled incl. paysh-catalog + burner-wallet + 13 workspace + 2 user-created) |
 | Paysh-catalog entries | 44 across 10 services (OPT-IN only; 63 unsupported with structured "why not" reasons) |
 | Android Bridge endpoints | 18+ |
 | Telegram commands | 12 |
 | Channels | 2 (Telegram + Discord) |
-| Lines of JS | ~17,800 (main.js + message-handler.js + ai.js + 18 modules + 4 provider adapters + tools/env.js) |
+| Lines of JS | ~20,000 (main.js + message-handler.js + ai.js + 18 modules + 5 provider adapters incl. xai.js + tools/env.js) |
 | Lines of Kotlin | ~15,000+ (50 files) |
 | SQL.js tables | 4 |
 | Themes | 1 (DarkOps only) |
@@ -309,6 +310,12 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-07-11 | Feat: **xAI "Sign in with Grok" OAuth provider** (BAT-1124) — 4th first-class provider alongside Claude / OpenAI / OpenRouter (+ Custom). `api.x.ai/v1/chat/completions` for both API-key and OAuth (PKCE; SuperGrok / X subscription token); Grok 4.5 (default) + Grok 4.3, OpenAI-style `reasoning_effort`, full tool + vision parity. Plus exact-agent-copy OpenAI live-model test harness (BAT-1144). SAB-AUDIT-v43. | #434, #437 |
+| 2026-07-08 | Fix: content-filter deadlock — auto-generated heartbeat / recent-activity notes could contain a phrase Anthropic's content filter rejects, blocking all replies on a Pro/Max (setup_token) sign-in until the note aged out. Notes no longer generated, legacy ones filtered out, + one automatic retry without recent-activity context; cc_version → 2.1.195 (BAT-1130, BAT-1123). | #435 |
+| 2026-07-06 | Security: `web_fetch` drops caller-supplied headers + blocks 307/308 body forwarding on cross-origin redirects (BAT-1086); `agent_settings.json` API keys masked before reaching the model, `js_eval`/`shell_exec` blocked for that file (BAT-1087); `web_fetch` SSRF guard blocks private/loopback/link-local across all IPv4/IPv6 encodings, same guard applied to the file-download path (BAT-1088). | #433 |
+| 2026-07-03 | **Release: v2.1.1** — reasoning & message-delivery hotfix for current Claude models: reasoning (thinking-block signature) carried across tool turns + adaptive thinking on a personal API key (BAT-1033), interim / pre-tool assistant text now delivered, not just the final reply (BAT-1109). | #431, #432 |
+| 2026-07-01 | Feat: Claude **Sonnet 5** added to the model registry (#426); self-awareness door — the agent can change its own model mid-session (BAT-1083, #427). | #426, #427 |
+| 2026-06-30 | **Release: v2.1.0** — autonomous on-chain trading from the burner wallet: swaps + SOL/SPL sends (`solana_send_token`, BAT-1036), convert held tokens → USDC/SOL with no oracle (BAT-1057), Token-2022-aware ATA + `solana_balance` visibility (BAT-1038/1055), auto-re-quote/retry on transient slippage (BAT-1061/1062), single-confirmation fund-tool model + fail-closed burner routing (BAT-1066/1067), two-pass per-account loss invariant (BAT-1027); Telegram Rich Messages (Bot API 10.1, BAT-1050); bridge-token UUID hardening (BAT-1071). All burner actions bounded by per-tx + daily caps. SAB-AUDIT-v40. | #404–#425 |
 | 2026-06-09 | Fix: custom model silently reverted by config reconcile — equality gate trusts UI-saved values; UI/agent split-brain + restart-revert resolved. Feat: add Fable 5 + Opus 4.8 (new Anthropic default); Opus 4.6 retained (registry drives Extended Thinking) (BAT-1032). | #403 |
 | 2026-05-31 | Docs (BAT-990): README + PROJECT.md v2 sync — rewrite intro to lead with v2 thesis (autonomous USDC payments + hackathon win), add Autonomous Payments section, new x402 features row, rename to Solana Wallets, expand Live Settings, fix Extended Thinking model list, add Graceful Stop row, bundled-skills note, burner-wallet safety bullet. Tool count reconciled to 63 across 13 modules; bundled skills 22. Burner wording paste/import-only per BAT-936. | direct |
 | 2026-05-30 | Docs: add Solana Mobile Hackathon Winner badge + Award section in README; add Compose / Node.js / MCP badges | direct |
