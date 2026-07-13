@@ -174,7 +174,7 @@ object ConfigClaimImporter {
         ).trim().lowercase().ifBlank { "claude" }
 
         val defaultModel = when (provider) {
-            "openai" -> "gpt-5.4"
+            "openai" -> "gpt-5.6-sol" // BAT-1151: keep in sync with model-registry.json openai defaultModel
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
             "xai" -> "grok-4.5" // BAT-1124

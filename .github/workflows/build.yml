@@ -108,6 +108,8 @@ jobs:
             web-fetch-ssrf-guard \
             claude-thinking-signature \
             claude-adaptive-thinking \
+            model-catalog \
+            reasoning-request-enablement \
             xai \
             quiesce \
             shutdown-flush-durability-only \

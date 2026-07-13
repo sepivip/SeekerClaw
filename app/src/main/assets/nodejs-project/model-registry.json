@@ -9,18 +9,21 @@
       "consoleUrl": "https://platform.openai.com",
       "keysUrl": "https://platform.openai.com/api-keys",
       "freeform": false,
-      "defaultModel": "gpt-5.4",
+      "defaultModel": "gpt-5.6-sol",
       "models": [
+        { "id": "gpt-5.6-sol",   "displayName": "GPT-5.6 Sol",   "reasoningSupport": "yes" },
+        { "id": "gpt-5.6-terra", "displayName": "GPT-5.6 Terra", "reasoningSupport": "yes" },
+        { "id": "gpt-5.6-luna",  "displayName": "GPT-5.6 Luna",  "reasoningSupport": "yes" },
         { "id": "gpt-5.5",       "displayName": "GPT-5.5",       "reasoningSupport": "yes" },
-        { "id": "gpt-5.4",       "displayName": "GPT-5.4",       "reasoningSupport": "yes" },
-        { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex", "reasoningSupport": "yes" }
+        { "id": "gpt-5.4",       "displayName": "GPT-5.4",       "reasoningSupport": "yes" }
       ],
       "modelsByAuth": {
         "oauth": [
+          { "id": "gpt-5.6-sol",   "displayName": "GPT-5.6 Sol",   "reasoningSupport": "yes" },
+          { "id": "gpt-5.6-terra", "displayName": "GPT-5.6 Terra", "reasoningSupport": "yes" },
           { "id": "gpt-5.5",       "displayName": "GPT-5.5",       "reasoningSupport": "yes" },
           { "id": "gpt-5.4",       "displayName": "GPT-5.4",       "reasoningSupport": "yes" },
-          { "id": "gpt-5.4-mini",  "displayName": "GPT-5.4 Mini",  "reasoningSupport": "yes" },
-          { "id": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex", "reasoningSupport": "yes" }
+          { "id": "gpt-5.4-mini",  "displayName": "GPT-5.4 Mini",  "reasoningSupport": "yes" }
         ]
       }
     },

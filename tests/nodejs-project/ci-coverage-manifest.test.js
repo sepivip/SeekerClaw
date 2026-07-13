@@ -77,7 +77,11 @@ const SKIP_REASONS = {
     'jupiter-trigger-v2.test.js': 'fixture-only — live Jupiter Trigger V2 API roundtrip',
     'main-wallet-balance.test.js': 'fixture-only — live MWA + RPC roundtrip',
     'mcp-servers.test.js': 'fixture-only — needs workDir scaffold',
-    'model-catalog.test.js': 'fixture-only — depends on runtime model state',
+    // model-catalog.test.js + reasoning-request-enablement.test.js promoted to
+    // the CI allowlist in BAT-1151 — both are pure/deterministic (stub config
+    // via require.cache; read only the repo-shipped model-registry.json) and
+    // both now carry BAT-1151 assertions that MUST run in CI. Their old
+    // "fixture-only" skip reasons were inaccurate and let staleness hide.
     'openai-reasoning-roundtrip.test.js': 'fixture-only — live OpenAI API roundtrip',
     'openrouter-reasoning-roundtrip.test.js': 'fixture-only — live OpenRouter API roundtrip',
     'reasoning-gating.test.js': 'fixture-only — depends on runtime provider state',
@@ -85,7 +89,6 @@ const SKIP_REASONS = {
     'reasoning-r5-regressions.test.js': 'fixture-only — depends on captured fixture state',
     'reasoning-recovery.test.js': 'fixture-only — needs workDir scaffold',
     'reasoning-redact.test.js': 'fixture-only — depends on captured payload fixtures',
-    'reasoning-request-enablement.test.js': 'fixture-only — depends on runtime provider state',
     'retry-log-provider-label.test.js': 'fixture-only — depends on runtime log state',
     'runtime-state-reasoning.test.js': 'fixture-only — needs workDir scaffold',
     'shutdown-flush.test.js': 'fixture-only — needs workDir + timer scaffold',

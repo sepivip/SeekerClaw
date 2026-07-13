@@ -353,9 +353,9 @@ function formatRequest(model, maxTokens, instructions, input, tools, requestOpti
 
     // Decide whether to enable reasoning. The Codex endpoint serves
     // reasoning models exclusively — every model on
-    // chatgpt.com/backend-api/codex (gpt-5.4, gpt-5.4-mini,
-    // gpt-5.3-codex, etc.) REQUIRES the `reasoning` parameter or it
-    // returns `output: []`. The 3c user-toggle branch adds a second
+    // chatgpt.com/backend-api/codex (gpt-5.6-sol, gpt-5.6-terra,
+    // gpt-5.4, gpt-5.4-mini, etc.) REQUIRES the `reasoning` parameter or
+    // it returns `output: []`. The 3c user-toggle branch adds a second
     // path: api_key calls to non-codex reasoning models (e.g., raw
     // gpt-5.4) when the user has explicitly toggled reasoning on AND
     // the registry confirms support.

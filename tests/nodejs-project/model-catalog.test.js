@@ -17,10 +17,11 @@
 // disagree about which models are valid. These tests lock in the contract.
 //
 // Invariants these tests protect:
-//   - openai api_key allowlist includes gpt-5.5 (added 2026-04-23) but NOT
-//     gpt-5.4-mini (OAuth-only).
-//   - defaultModelForProvider never returns a tier-gated model (gpt-5.5
-//     is in the list but gpt-5.4 is the default).
+//   - openai api_key allowlist includes gpt-5.6-luna (api_key-ONLY — the first
+//     model NOT in the oauth list) but NOT gpt-5.4-mini (oauth-only). Neither
+//     the api_key nor the oauth list is a subset of the other (BAT-1151).
+//   - defaultModelForProvider('openai') returns gpt-5.6-sol, present in BOTH
+//     auth lists (a legitimate shared default; not tier-gated).
 //   - Defaults are EXPLICIT constants, not list-order-derived — a new
 //     model added at the top of a display list must not change defaults.
 //   - Freeform providers (openrouter, custom) accept any non-blank model
@@ -48,9 +49,12 @@ function check(label, actual, expected) {
 }
 
 console.log('── modelsForProvider ────────────────────────────');
-check('openai api_key list starts with gpt-5.5', mc.modelsForProvider('openai', 'api_key')[0].id, 'gpt-5.5');
+check('openai api_key list starts with gpt-5.6-sol', mc.modelsForProvider('openai', 'api_key')[0].id, 'gpt-5.6-sol');
 check('openai oauth list includes gpt-5.4-mini', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-5.4-mini'), true);
 check('openai api_key list EXCLUDES gpt-5.4-mini', mc.modelsForProvider('openai', 'api_key').some((m) => m.id === 'gpt-5.4-mini'), false);
+// BAT-1151: gpt-5.6-luna is api_key-ONLY — the REVERSE asymmetry (first model NOT in the oauth list).
+check('openai api_key list includes gpt-5.6-luna', mc.modelsForProvider('openai', 'api_key').some((m) => m.id === 'gpt-5.6-luna'), true);
+check('openai oauth list EXCLUDES gpt-5.6-luna', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-5.6-luna'), false);
 check('claude list non-empty', mc.modelsForProvider('claude', 'api_key').length > 0, true);
 check('openrouter is freeform (empty list)', mc.modelsForProvider('openrouter', 'api_key'), []);
 check('custom is freeform (empty list)', mc.modelsForProvider('custom', null), []);
@@ -72,13 +76,13 @@ check('null → Unknown', mc.displayNameForProvider(null), 'Unknown');
 console.log();
 console.log('── defaultModelForProvider (decoupled from list order) ──');
 check('claude default explicit (NOT list[0])', mc.defaultModelForProvider('claude', 'api_key'), mc.CLAUDE_DEFAULT_MODEL);
-check('openai api_key default is gpt-5.4', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-5.4');
-check('openai oauth default is gpt-5.4 (NOT 5.5 — tier-gated)', mc.defaultModelForProvider('openai', 'oauth'), 'gpt-5.4');
+check('openai api_key default is gpt-5.6-sol', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-5.6-sol');
+check('openai oauth default is gpt-5.6-sol (shared — present in both auth lists)', mc.defaultModelForProvider('openai', 'oauth'), 'gpt-5.6-sol');
 check('openrouter default is anthropic/claude-sonnet-4-6', mc.defaultModelForProvider('openrouter', 'api_key'), 'anthropic/claude-sonnet-4-6');
 check('custom default is blank (user must type model)', mc.defaultModelForProvider('custom', 'api_key'), '');
 check('unknown provider default is blank', mc.defaultModelForProvider('bogus', null), '');
 check('exports CLAUDE_DEFAULT_MODEL const', typeof mc.CLAUDE_DEFAULT_MODEL === 'string' && mc.CLAUDE_DEFAULT_MODEL.length > 0, true);
-check('exports OPENAI_DEFAULT_MODEL const', mc.OPENAI_DEFAULT_MODEL, 'gpt-5.4');
+check('exports OPENAI_DEFAULT_MODEL const', mc.OPENAI_DEFAULT_MODEL, 'gpt-5.6-sol');
 
 console.log();
 console.log('── authTypesForProvider ─────────────────────────');
@@ -377,14 +381,20 @@ check('openai/gpt-5.5 (api_key) → yes',
     mc.reasoningSupportFor('openai', 'gpt-5.5', 'api_key'), 'yes');
 check('openai/gpt-5.4 (api_key) → yes',
     mc.reasoningSupportFor('openai', 'gpt-5.4', 'api_key'), 'yes');
-check('openai/gpt-5.3-codex (api_key) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.3-codex', 'api_key'), 'yes');
+check('openai/gpt-5.6-sol (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.6-sol', 'api_key'), 'yes');
 
 // gpt-5.4-mini is OAuth-only — yes via oauth path, unknown via api_key
 check('openai/gpt-5.4-mini (oauth) → yes',
     mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'oauth'), 'yes');
 check('openai/gpt-5.4-mini (api_key) → unknown (not in api_key list)',
     mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'api_key'), 'unknown');
+
+// BAT-1151: gpt-5.6-luna is api_key-ONLY — reverse of 5.4-mini: yes via api_key, unknown via oauth
+check('openai/gpt-5.6-luna (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.6-luna', 'api_key'), 'yes');
+check('openai/gpt-5.6-luna (oauth) → unknown (not in oauth list)',
+    mc.reasoningSupportFor('openai', 'gpt-5.6-luna', 'oauth'), 'unknown');
 
 // Freeform providers → always unknown (we don't list specific models)
 check('openrouter/<any> → unknown',

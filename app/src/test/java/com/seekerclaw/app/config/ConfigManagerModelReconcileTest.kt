@@ -37,18 +37,21 @@ class ConfigManagerModelReconcileTest {
             consoleUrl = "https://platform.openai.com",
             keysUrl = "https://platform.openai.com/api-keys",
             freeform = false,
-            defaultModel = "gpt-5.4",
+            defaultModel = "gpt-5.6-sol",
             models = listOf(
+                ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
+                ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
+                ModelInfo("gpt-5.6-luna", "GPT-5.6 Luna", "yes"), // api_key-ONLY (BAT-1151)
                 ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                 ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
             ),
             modelsByAuth = mapOf(
                 "oauth" to listOf(
+                    ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
+                    ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
                     ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                     ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"),
-                    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
+                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"), // oauth-ONLY
                 ),
             ),
         ),
@@ -216,9 +219,9 @@ class ConfigManagerModelReconcileTest {
     @Test
     fun `provider switch revalidates prefs model against new provider`() {
         // /provider openai while prefs.model is a claude ID → clamp to the
-        // new provider's default.
+        // new provider's default (BAT-1151: openai default is gpt-5.6-sol).
         assertEquals(
-            "gpt-5.4",
+            "gpt-5.6-sol",
             ConfigManager.resolveModelForReconcile(
                 providerChanged = true,
                 authChanged = false,
@@ -232,9 +235,9 @@ class ConfigManagerModelReconcileTest {
 
     @Test
     fun `auth switch clamps oauth-only model`() {
-        // openai oauth→api_key with gpt-5.4-mini (oauth-only) → must clamp.
+        // openai oauth→api_key with gpt-5.4-mini (oauth-only) → must clamp to default.
         assertEquals(
-            "gpt-5.4",
+            "gpt-5.6-sol",
             ConfigManager.resolveModelForReconcile(
                 providerChanged = false,
                 authChanged = true,
@@ -247,11 +250,30 @@ class ConfigManagerModelReconcileTest {
     }
 
     @Test
+    fun `auth switch clamps api_key-only model`() {
+        // BAT-1151: the REVERSE asymmetry — openai api_key→oauth with gpt-5.6-luna
+        // (api_key-only, absent from the oauth list) must clamp to the default
+        // gpt-5.6-sol. Direct regression-catcher for the luna 404 trap.
+        assertEquals(
+            "gpt-5.6-sol",
+            ConfigManager.resolveModelForReconcile(
+                providerChanged = false,
+                authChanged = true,
+                newModel = null,
+                prefsModel = "gpt-5.6-luna",
+                effectiveProvider = "openai",
+                effectiveAuth = "oauth",
+            ),
+        )
+    }
+
+    @Test
     fun `equality gate does not apply when provider changed`() {
         // overlay==prefs but the provider changed in the same overlay —
-        // the custom ID belongs to the OLD provider; validation applies.
+        // the custom ID belongs to the OLD provider; validation applies and
+        // clamps to the new provider's default (BAT-1151: openai → gpt-5.6-sol).
         assertEquals(
-            "gpt-5.4",
+            "gpt-5.6-sol",
             ConfigManager.resolveModelForReconcile(
                 providerChanged = true,
                 authChanged = false,
