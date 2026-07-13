@@ -1,12 +1,11 @@
-.env
-node_modules/
-
-# ── live-models.probe.js (BAT-1144 Part 3) — secrets + generated fixtures ──
 # Secrets — never commit.
 .env.test
-# …but DO keep the documented template (the .env rule above would otherwise sweep it).
+
+# …but DO keep the documented template (the repo-root `.env.*` rule would
+# otherwise sweep it up).
 !.env.test.example
-# Generated per-mode fixture config + anything the harness writes at runtime.
+
+# Generated fixture config + any DB/log the harness writes at runtime.
 fixtures/**/config.json
 fixtures/**/*.db
 fixtures/**/node_debug.log
