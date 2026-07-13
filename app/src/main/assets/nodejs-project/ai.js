@@ -1968,11 +1968,31 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     _sessionExpired = true;
                     _sessionExpiredAt = Date.now();
                     log(`[Session] ${_consecutiveAuthFailures} consecutive auth failures — session marked expired`, 'ERROR');
-                    // Notify owner via Telegram (fire-and-forget)
+                    // Notify owner via Telegram (fire-and-forget).
+                    // BAT-1155 D-recover: reconcile the two remediation surfaces into ONE
+                    // consistent message. A revoked xAI OAuth family classifies as 'reauth'
+                    // \u2014 surface the reconnect copy (never the generic "session has expired",
+                    // and never "add an API key"), and gate the AUTONOMOUS notice on the
+                    // provider's persisted notify-once so a dead-token BOOT doesn't re-notify
+                    // every restart. Explicit user requests still get the reconnect reply via
+                    // errClass.userMessage (thrown at the error-surface below) \u2014 never silent.
                     if (!_sessionExpiryNotified) {
-                        _sessionExpiryNotified = true;
-                        channel.sendMessage(channel.getOwnerChatId(), '\u26a0\ufe0f Your session has expired. Please re-pair your device to continue.')
-                            .catch(e => log(`[Session] Failed to notify owner: ${e.message}`, 'WARN'));
+                        const isReauth = errClass.type === 'reauth';
+                        const alreadyNotified = isReauth
+                            && typeof adapter.shouldSurfaceReauthNotice === 'function'
+                            && !adapter.shouldSurfaceReauthNotice();
+                        if (!alreadyNotified) {
+                            _sessionExpiryNotified = true;
+                            const noticeText = isReauth
+                                ? errClass.userMessage
+                                : '\u26a0\ufe0f Your session has expired. Please re-pair your device to continue.';
+                            channel.sendMessage(channel.getOwnerChatId(), noticeText)
+                                .catch(e => log(`[Session] Failed to notify owner: ${e.message}`, 'WARN'));
+                            // Persist the single-notice mark for THIS dead epoch (D4).
+                            if (isReauth && typeof adapter.noteReauthNotified === 'function') {
+                                adapter.noteReauthNotified().catch(() => {});
+                            }
+                        }
                     }
                 }
             } else {
@@ -3679,9 +3699,26 @@ function _extractOriginalGoal(messages) {
 // EXPORTS
 // ============================================================================
 
+// BAT-1155 D6: drain the active provider's pending OAuth token persist on USER_STOP.
+// Provider-agnostic: only the xAI adapter implements flushPendingPersist (bounded to
+// 300ms internally); every other provider is a no-op. Wired into the control server's
+// /shutdown/flush ahead of the session-summary flush. Never throws.
+async function flushProviderPersist() {
+    try {
+        const adapter = getAdapter(PROVIDER);
+        if (adapter && typeof adapter.flushPendingPersist === 'function') {
+            await adapter.flushPendingPersist();
+        }
+    } catch (e) {
+        log(`[Shutdown] Provider token drain failed: ${e && e.message ? e.message : e}`, 'WARN');
+    }
+}
+
 module.exports = {
     // API
     chat, visionAnalyzeImage,
+    // BAT-1155: USER_STOP token drain (control server /shutdown/flush)
+    flushProviderPersist,
     // Conversations
     conversations, getConversation, addToConversation, clearConversation,
     // Sessions

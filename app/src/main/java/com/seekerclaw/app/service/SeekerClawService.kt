@@ -17,6 +17,7 @@ import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
@@ -627,10 +628,11 @@ class SeekerClawService : Service() {
         LogCollector.append("[Service] Stopping Claw Engine...")
         // BAT-525: flush Node BEFORE everything else. The bridge token
         // and Node process must both still be alive for the loopback
-        // POST /shutdown/flush to land. This call is bounded
-        // (NodeControlClient timeouts ≤ 1750ms inside an outer 2000ms
-        // withTimeoutOrNull) and intentionally precedes scope cancel,
-        // observer stop, NodeBridge.stop, and clearBridgeToken below.
+        // POST /shutdown/flush to land. BAT-1155 D6: the Node flush now
+        // drains the xAI token persist FIRST (300ms) then the summary
+        // (1200ms), and this call is bounded by NodeControlClient timeouts
+        // (≤ 2250ms) inside an outer 2500ms withTimeoutOrNull. Precedes
+        // scope cancel, observer stop, NodeBridge.stop, and clearBridgeToken.
         flushNodeBeforeProcessKill()
         // Cancel the service scope before stopping the FileObserver
         // below. This stops any in-flight forwardNewNodeDebugLines or
@@ -703,21 +705,91 @@ class SeekerClawService : Service() {
      * `/shutdown/flush` enforces — the flush would never have run
      * in production.
      */
-    private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_000L) {
+    private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_500L) {
         if (!NodeBridge.isAlive()) return
-        val flushed = runBlocking {
+        // BAT-1155 verify major-2 — tri-state so the durability gate fires ONLY on a
+        // genuinely stranded rotation (or a truly-unconfirmed flush), never on a benign
+        // summary-flush hiccup with no pending token write:
+        //   true  = Node reached, a rotated pair is STILL unpersisted → fail-closed;
+        //   false = Node reached, nothing stranded → clean, no re-pair;
+        //   null  = timed out / unreachable / unparseable → fail-closed on the unknown.
+        val pendingOrUnknown: Boolean? = runBlocking {
             withTimeoutOrNull(timeoutMs) {
                 NodeControlClient.flushShutdown()
             }
-        } == true
+        }
+        when (pendingOrUnknown) {
+            false -> LogCollector.append("[Shutdown] Node flush acknowledged (no stranded xAI token)")
+            true -> {
+                LogCollector.append(
+                    "[Shutdown] Node flush left a rotated xAI token unpersisted — engaging durability gate",
+                    LogLevel.WARN,
+                )
+                guardXaiOAuthDurabilityOnStop()
+            }
+            null -> {
+                LogCollector.append(
+                    "[Shutdown] Node flush timed out/unreachable; fail-closed durability gate",
+                    LogLevel.WARN,
+                )
+                guardXaiOAuthDurabilityOnStop()
+            }
+        }
+    }
 
-        if (flushed) {
-            LogCollector.append("[Shutdown] Node flush acknowledged")
-        } else {
-            LogCollector.append(
-                "[Shutdown] Node flush timed out or failed; continuing process kill",
-                LogLevel.WARN,
-            )
+    /**
+     * BAT-1155 §D6 — fail-closed durability gate for a stop whose Node flush
+     * did NOT acknowledge. When the flush is unconfirmed, a rotated xAI OAuth
+     * pair may be stranded in Node's memory (the server already consumed the
+     * old refresh token T0 and minted T1) while disk still holds T0. A blind
+     * `killProcess` would then replay the consumed T0 on the next boot and
+     * brick the family.
+     *
+     * The PREFERRED path (keep the service alive, retry) is not reachable from
+     * this terminal `onDestroy`, so we apply the FALLBACK: durably mark the
+     * LIVE oauth family reauth-required so the next boot boots INTO reauth
+     * (shows reconnect) instead of POSTing a possibly-consumed token. We only
+     * return once the write is POSITIVELY durable (Result.Ok); if even that
+     * fails after a retry, the unconditional `killProcess` remains the OS/
+     * final fallback.
+     *
+     * Trigger (verify major-2): the caller invokes this ONLY when the flush
+     * reported a genuinely stranded rotation (`pendingPersist:true`) OR could not
+     * be confirmed at all (timeout/unreachable) — NOT on a clean flush that merely
+     * had a summary hiccup. So a healthy family with no pending rotation is never
+     * force-re-paired by a benign stop.
+     *
+     * Scope: even when triggered, it is a no-op unless the store shows a LIVE oauth
+     * family (has a token, not already tombstone/reauth). Api-key users and
+     * already-dead families never reach the markReauth write.
+     */
+    private fun guardXaiOAuthDurabilityOnStop() {
+        if (!XaiOAuthTokenStore.isInitialized) return
+        val rec = try {
+            XaiOAuthTokenStore.read()
+        } catch (e: Exception) {
+            return
+        }
+        val live = !rec.tombstone && !rec.reauthRequired && rec.accessTokenEnc.isNotEmpty()
+        if (!live) return
+        repeat(2) { attempt ->
+            when (val r = XaiOAuthTokenStore.markReauth()) {
+                is XaiOAuthTokenStore.Result.Ok -> {
+                    LogCollector.append(
+                        "[Shutdown] xAI OAuth flush unconfirmed — durably marked reauth-required " +
+                            "(epoch=${r.record.epoch}) before kill",
+                        LogLevel.WARN,
+                    )
+                    return
+                }
+                else -> if (attempt == 1) {
+                    LogCollector.append(
+                        "[Shutdown] xAI OAuth fail-closed markReauth did NOT persist — " +
+                            "proceeding to kill (OS fallback)",
+                        LogLevel.ERROR,
+                    )
+                }
+            }
         }
     }
 

@@ -138,6 +138,11 @@ let _requestReconcile = null;
 // `require('./database')` (which would create a circular import:
 // database -> ... -> internal-control-server -> database).
 let _flushShutdown = null;
+// BAT-1155 D6: xAI OAuth token drain, run BEFORE the session-summary flush on USER_STOP
+// so a just-rotated token pair reaches disk before the unavoidable killProcess() (else
+// the next boot reloads a consumed refresh token). Wired in main.js as the active
+// provider's bounded flushPendingPersist (300ms). No-op / absent for non-xAI providers.
+let _xaiFlush = null;
 let _logFn = console.log;
 
 /**
@@ -165,6 +170,7 @@ function start(options) {
     _getDbSummary = typeof options.getDbSummary === 'function' ? options.getDbSummary : null;
     _requestReconcile = typeof options.requestReconcile === 'function' ? options.requestReconcile : null;
     _flushShutdown = typeof options.flushShutdown === 'function' ? options.flushShutdown : null;
+    _xaiFlush = typeof options.xaiFlush === 'function' ? options.xaiFlush : null;
     _logFn = typeof options.logFn === 'function' ? options.logFn : console.log;
 
     if (_server) return _server;
@@ -400,6 +406,26 @@ async function _route(req, res) {
         // failure mode this endpoint exists to handle. Now: 200 +
         // `{ok:true}` only on clean success; 500 + `{ok:false,
         // error:...}` if `flushShutdown` rejects.
+        // BAT-1155 D6: drain the xAI OAuth token persist FIRST — token durability
+        // outranks the session summary. Bounded to 300ms inside flushPendingPersist so
+        // the endpoint total stays ≤1700ms (300 drain + 1200 summary + overhead). Never
+        // throws; a failed drain must not block the summary flush that follows.
+        // BAT-1155 verify major-2: report whether a rotated pair is STILL stranded
+        // after the drain. The Kotlin controlled-stop durability gate fires ONLY on
+        // this signal, so a benign summary-flush hiccup can't force a healthy family
+        // to re-pair.
+        let xaiPending = false;
+        if (_xaiFlush) {
+            try {
+                const r = await _xaiFlush();
+                xaiPending = !!(r && r.pendingPersist);
+            } catch (err) {
+                // flushPendingPersist is designed never to throw; if it does, a rotated
+                // pair may be stranded → fail closed so the Kotlin gate fires.
+                xaiPending = true;
+                _logFn(`[ControlServer] /shutdown/flush xAI token drain failed: ${err.message}`, 'WARN');
+            }
+        }
         try {
             // R4 Copilot: summaryTimeoutMs reduced 1500 → 1200 so the
             // Kotlin-side worst-case wall time (CONNECT 250 + READ
@@ -426,7 +452,7 @@ async function _route(req, res) {
             // step errors are caught inside — but defense-in-depth).
             const result = await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1200 });
             if (result && result.ok) {
-                return _json(res, 200, { ok: true });
+                return _json(res, 200, { ok: true, pendingPersist: xaiPending });
             }
             const detail = result || {};
             // R8 Copilot: log partial flush at WARN, not ERROR. A partial
@@ -444,10 +470,11 @@ async function _route(req, res) {
                 ok: false,
                 summaryFailed: detail.summaryFailed || null,
                 dbFailed: !!detail.dbFailed,
+                pendingPersist: xaiPending,
             });
         } catch (err) {
             _logFn(`[ControlServer] /shutdown/flush threw: ${err.message}`, 'ERROR');
-            return _json(res, 500, { ok: false, error: err.message });
+            return _json(res, 500, { ok: false, error: err.message, pendingPersist: xaiPending });
         }
     }
 

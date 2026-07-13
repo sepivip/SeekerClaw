@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
 // DangerOutlineButton + cornerGlowBorder live in this same package — no extra import needed
 import com.seekerclaw.app.oauth.XaiOAuthActivity
+import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.ui.theme.Sizing
@@ -92,7 +93,7 @@ fun rememberXaiOAuthController(
     }
 
     // Poll the result file written by XaiOAuthActivity. Tokens are persisted by the
-    // activity directly via ConfigManager.persistXaiOAuthTokens — we just watch the
+    // activity directly into XaiOAuthTokenStore (BAT-1155) — we just watch the
     // status flag here to update the UI state.
     LaunchedEffect(requestId, isPolling) {
         val reqId = requestId ?: return@LaunchedEffect
@@ -155,16 +156,14 @@ fun rememberXaiOAuthController(
             error = null
         },
         signOut = {
-            // Clear all 4 OAuth prefs directly — using updateConfigField would no-op on a
-            // fresh install (loadConfig returns null until setup is complete), leaving tokens
-            // orphaned after a mid-onboarding sign-out.
-            ConfigManager.persistXaiOAuthTokens(
-                context = context,
-                accessToken = "",
-                refreshToken = "",
-                email = "",
-                expiresAt = "",
-            )
+            // BAT-1155: write an epoch-advanced sign-out TOMBSTONE into the store
+            // (dead record, no token). The advanced epoch CAS-rejects any in-flight
+            // old-family rotation so it can't resurrect the account, and the
+            // migration marker is preserved (a signed-out family must never be
+            // re-imported from stale legacy prefs). Then re-derive runtime_state's
+            // xai authType (H5) so a stale (xai, oauth) can't re-open the boot-loop.
+            XaiOAuthTokenStore.signOut()
+            ConfigManager.syncXaiRuntimeAuthType(context)
             onSignedOut()
         },
         cancel = {

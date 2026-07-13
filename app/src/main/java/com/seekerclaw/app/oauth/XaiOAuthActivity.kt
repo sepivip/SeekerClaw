@@ -9,7 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.service.OAuthKeepAliveService
+import com.seekerclaw.app.service.SeekerClawService
+import com.seekerclaw.app.state.XaiOAuthTokenStore
 import fi.iki.elonen.NanoHTTPD
 import android.content.Context
 import java.lang.ref.WeakReference
@@ -175,16 +178,42 @@ class XaiOAuthActivity : ComponentActivity() {
 
                 withContext(NonCancellable + Dispatchers.IO) {
                     val prior = ConfigManager.loadConfigOrBootstrap(appCtx)
-                    ConfigManager.persistXaiOAuthTokens(
-                        context = appCtx,
-                        accessToken = accessToken,
-                        refreshToken = refreshToken.ifBlank { prior.xaiOAuthRefresh },
-                        email = email ?: prior.xaiOAuthEmail,
-                        expiresAt = expiresAt,
-                    )
+                    val resolvedRefresh = refreshToken.ifBlank { prior.xaiOAuthRefresh }
+                    val resolvedEmail = email ?: prior.xaiOAuthEmail
+                    // BAT-1155: persist into the dedicated XaiOAuthTokenStore as a NEW
+                    // family (sign-in, epoch-advanced, no CAS) — NOT prefs/saveConfig.
+                    // Encrypt to the store's ciphertext-at-rest format; blanks stay "".
+                    val encAccess = Base64.encodeToString(KeystoreHelper.encrypt(accessToken), Base64.NO_WRAP)
+                    val encRefresh = if (resolvedRefresh.isNotBlank())
+                        Base64.encodeToString(KeystoreHelper.encrypt(resolvedRefresh), Base64.NO_WRAP) else ""
+                    val encEmail = if (resolvedEmail.isNotBlank())
+                        Base64.encodeToString(KeystoreHelper.encrypt(resolvedEmail), Base64.NO_WRAP) else ""
+                    val signInResult = XaiOAuthTokenStore.signIn(encAccess, encRefresh, encEmail, expiresAt)
+                    if (signInResult is XaiOAuthTokenStore.Result.Failed) {
+                        // Fail loud — the outer catch writes the error result file.
+                        throw IllegalStateException("token store sign-in write failed: ${signInResult.reason}")
+                    }
+                    // H5: keep runtime_state.json's xai authType in step with the fresh
+                    // sign-in so Node (which reads runtime_state FIRST) can't boot the
+                    // (xai, api_key) pair over a valid oauth token.
+                    ConfigManager.syncXaiRuntimeAuthType(appCtx)
                     writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                         put("status", "success")
                     })
+                }
+                // Locked decision 5: recovery is restart-only. Restart :node so it
+                // re-reads config.json and clears any in-memory _refreshDead /
+                // reauthRequired from a prior dead family. D2 makes this restart
+                // zero-refresh while the freshly-minted token's TTL is valid.
+                // ONLY for in-place recovery (setup already complete → the agent is
+                // the 24/7 service). During onboarding the SetupScreen's saveAndStart
+                // starts the service fresh, so a premature restart here is skipped.
+                if (ConfigManager.isSetupComplete(appCtx)) {
+                    try {
+                        SeekerClawService.restart(appCtx)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not restart :node after xAI sign-in", e)
+                    }
                 }
                 Log.i(TAG, "Browser flow completed successfully")
                 // BAT-1124 (device-test UX): xAI completes the loopback exchange in the

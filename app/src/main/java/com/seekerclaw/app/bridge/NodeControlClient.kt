@@ -48,15 +48,16 @@ object NodeControlClient {
     // SeekerClawService.onDestroy under withTimeoutOrNull(2000)).
     //
     // Loopback connect is essentially instant (<5ms in practice on
-    // the device); 250ms is generous defense-in-depth. Read budget
-    // remains 1500ms to cover the slow shutdown-flush path
-    // (Node-side summaryTimeoutMs = 1200ms with ~300ms buffer for
-    // Anthropic's response stream + JSON encode + socket write).
+    // the device); 250ms is generous defense-in-depth. BAT-1155 D6:
+    // the read budget is 2000ms to cover the shutdown-flush path now
+    // that Node drains the xAI token persist FIRST (300ms) THEN the
+    // session summary (1200ms), plus buffer for JSON encode + socket
+    // write.
     //
-    // Total worst-case wall time: 250 + 1500 = 1750ms — fits the
-    // 2000ms outer service-teardown budget with 250ms margin.
+    // Total worst-case wall time: 250 + 2000 = 2250ms — fits the
+    // 2500ms outer service-teardown budget with 250ms margin.
     private const val CONNECT_TIMEOUT_MS = 250
-    private const val READ_TIMEOUT_MS = 1500
+    private const val READ_TIMEOUT_MS = 2000
 
     /**
      * Tell the `:node` MCP manager to reconcile the active server set.
@@ -110,20 +111,68 @@ object NodeControlClient {
      *
      * - [CONNECT_TIMEOUT_MS] = 250ms (loopback is near-instant; 250
      *   is defensive padding).
-     * - [READ_TIMEOUT_MS] = 1500ms (sized 300ms above the Node-side
-     *   `summaryTimeoutMs: 1200` so a real flush response always
-     *   lands).
-     * - Worst-case wall time: 1750ms.
+     * - [READ_TIMEOUT_MS] = 2000ms (BAT-1155 D6: covers the Node-side
+     *   token-drain 300ms + `summaryTimeoutMs: 1200` + buffer so a
+     *   real flush response always lands).
+     * - Worst-case wall time: 2250ms.
      *
      * SeekerClawService still wraps the suspend call in
-     * `withTimeoutOrNull(2000)` — that timeout primarily exists so
+     * `withTimeoutOrNull(2500)` — that timeout primarily exists so
      * the Kotlin-side suspension releases promptly when the underlying
      * I/O eventually returns/throws within its bounded budget. It
      * does NOT directly interrupt the I/O; the 1750ms worst case is
      * the actual ceiling.
      */
-    suspend fun flushShutdown(): Boolean = withContext(Dispatchers.IO) {
-        post("/shutdown/flush", "{}")
+    /**
+     * BAT-1155 verify major-2: tri-state so the caller's fail-closed durability
+     * gate fires ONLY on a genuinely stranded rotation, not on a benign summary
+     * hiccup. Returns:
+     *  - `true`  = Node reached; a rotated xAI token pair is STILL unpersisted
+     *              (`pendingPersist:true`) → the caller must fail-closed;
+     *  - `false` = Node reached; nothing stranded (even if the summary flush
+     *              itself failed) → do NOT force a re-pair;
+     *  - `null`  = flush did not reach/parse Node (connect-refused, 401, timeout,
+     *              malformed body) → the caller fail-closes on the unknown.
+     */
+    suspend fun flushShutdown(): Boolean? = withContext(Dispatchers.IO) {
+        val body = postForBody("/shutdown/flush", "{}") ?: return@withContext null
+        try {
+            val json = JSONObject(body)
+            if (json.has("pendingPersist")) json.getBoolean("pendingPersist") else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Like [post] but returns the response body (from the input OR error stream,
+     * so a 500 that still carries `{pendingPersist}` is parseable) on any completed
+     * HTTP exchange, or `null` on a transport failure / missing bridge token.
+     */
+    private fun postForBody(path: String, body: String): String? {
+        val token = ServiceState.bridgeToken
+        if (token.isNullOrBlank()) return null
+        var conn: HttpURLConnection? = null
+        return try {
+            val url = URL(BASE_URL + path)
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = CONNECT_TIMEOUT_MS
+                readTimeout = READ_TIMEOUT_MS
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty(AUTH_HEADER, token)
+            }
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            stream?.use { String(it.readBytes(), Charsets.UTF_8) } ?: ""
+        } catch (e: Exception) {
+            Log.d(TAG, "POST $path failed: ${e.javaClass.simpleName}: ${e.message}")
+            null
+        } finally {
+            conn?.disconnect()
+        }
     }
 
     private fun post(path: String, body: String): Boolean {
