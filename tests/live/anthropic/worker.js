@@ -215,7 +215,7 @@ function selfCheck() {
     A('prompt has a Tooling/Architecture marker', instr.includes('## Architecture') || instr.includes('Tooling'), 'structural section present');
     A('prompt embeds seeded IDENTITY.md (TestBot)', instr.includes('IDENTITY.md') && instr.includes('TestBot'), 'IDENTITY.md + TestBot present');
     A('prompt embeds seeded USER.md (Test User)', instr.includes('USER.md') && instr.includes('Test User'), 'USER.md + Test User present');
-    A('prompt embeds seeded MEMORY.md line', instr.includes('BAT-1144 OpenAI live-model harness') || instr.includes('synthetic preference'), 'MEMORY.md content present');
+    A('prompt embeds seeded MEMORY.md line', instr.includes('BAT-1144 live-model harness') || instr.includes('synthetic preference'), 'MEMORY.md content present');
 
     // ── Mode-specific assertions ──────────────────────────────────────────────
     // The stable system prompt block always carries cache_control:{ephemeral}.

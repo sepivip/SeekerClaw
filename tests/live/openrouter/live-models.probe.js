@@ -100,7 +100,12 @@ byte-for-byte what the agent sends (minus MCP tools, which the harness omits).
 
 // ── registry helpers (single source of truth: model-registry.json) ────────────
 function loadRegistryOpenRouter() {
-    const j = JSON.parse(fs.readFileSync(REGISTRY, 'utf8'));
+    let j;
+    try {
+        j = JSON.parse(fs.readFileSync(REGISTRY, 'utf8'));
+    } catch (e) {
+        throw new Error(`failed to read/parse model-registry.json at ${REGISTRY}: ${e.message}`);
+    }
     const or = (j.providers || []).find((p) => p.id === 'openrouter') || {};
     const models = (or.models || []).map((m) => m.id);
     return { models, defaultModel: or.defaultModel || 'anthropic/claude-sonnet-4-6' };
@@ -246,4 +251,7 @@ function printLive(result, reg) {
     line(BAR);
     // Report-only: exit 0 whenever the sweep ran.
     process.exit(0);
-})();
+})().catch((e) => {
+    console.error(`\n[SETUP ERROR] ${e.message}`);
+    process.exit(1);
+});

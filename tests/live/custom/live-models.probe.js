@@ -114,7 +114,7 @@ function runWorker({ selfCheck, diagnose, live, baseUrl, models, creds }) {
         try {
             seedFixture(fixtureDir, {
                 provider: 'custom',
-                model: isLive ? (creds.model || (models && models[0]) || PLACEHOLDER_MODEL) : PLACEHOLDER_MODEL,
+                model: isLive ? ((models && models[0]) || creds.model || PLACEHOLDER_MODEL) : PLACEHOLDER_MODEL,
                 authConfig: {
                     authType: 'api_key',
                     customApiKey: isLive ? (creds.apiKey || 'sk-test-PLACEHOLDER') : 'sk-test-PLACEHOLDER',
