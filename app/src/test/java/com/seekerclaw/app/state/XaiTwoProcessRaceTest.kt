@@ -48,7 +48,11 @@ class XaiTwoProcessRaceTest {
         val argFile = File(dir, "cp-argfile-${argFileCounter++}.txt")
         argFile.writeText("-cp \"${cp.replace("\\", "\\\\")}\"\n")
         val cmd = mutableListOf(
-            javaBin(), "@${argFile.absolutePath}",
+            // -Xmx128m: the helper only inits a store + runs one op, but the JVM default heap is a
+            // fraction of host RAM (~768MB+). Spawning several concurrently can exhaust the page
+            // file on a constrained host (Windows errno 1455 "paging file too small" — seen in a
+            // reviewer rerun) and flake CI. A small bounded heap is ample and keeps it robust.
+            javaBin(), "-Xmx128m", "@${argFile.absolutePath}",
             "com.seekerclaw.app.state.XaiTwoProcessHelper", dir.absolutePath,
         )
         cmd.addAll(args)
