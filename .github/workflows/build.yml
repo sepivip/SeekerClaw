@@ -109,6 +109,8 @@ jobs:
             claude-thinking-signature \
             claude-adaptive-thinking \
             xai \
+            quiesce \
+            shutdown-flush-durability-only \
             ci-coverage-manifest
           do
             echo "── $t ──"

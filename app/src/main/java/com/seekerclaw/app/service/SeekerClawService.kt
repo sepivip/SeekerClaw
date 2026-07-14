@@ -740,11 +740,35 @@ class SeekerClawService : Service() {
                 guardXaiOAuthDurabilityOnStop()
             }
             null -> {
-                LogCollector.append(
-                    "[Shutdown] Node flush timed out/unreachable; fail-closed durability gate",
-                    LogLevel.WARN,
-                )
-                guardXaiOAuthDurabilityOnStop()
+                // BAT-1155 hotfix: a null from the FULL flush is ambiguous — it can mean "Node
+                // genuinely unreachable" (fail-close warranted) OR "the best-effort session
+                // summary was just slow and the HTTP response missed the read budget" (fail-close
+                // would brick a VALID family — the soak brick). Disambiguate with a FAST
+                // durability-only re-probe (xAI drain, no summary) before touching the family.
+                val probe: NodeControlClient.FlushResult? = runBlocking {
+                    withTimeoutOrNull(timeoutMs) { NodeControlClient.flushShutdown(durabilityOnly = true) }
+                }
+                when (probe?.diskUnsafe) {
+                    false -> LogCollector.append(
+                        "[Shutdown] Node full-flush timed out (slow summary) but durability probe confirms on-disk xAI token safe",
+                    )
+                    true -> {
+                        android.util.Log.w("XaiDurabilityGate", "onDestroy: durability probe reports diskUnsafe → markReauth")
+                        LogCollector.append(
+                            "[Shutdown] Durability probe reports a rotated xAI token unpersisted — engaging durability gate",
+                            LogLevel.WARN,
+                        )
+                        guardXaiOAuthDurabilityOnStop()
+                    }
+                    null -> {
+                        android.util.Log.w("XaiDurabilityGate", "onDestroy: Node unreachable on full flush + durability probe → fail-closed markReauth")
+                        LogCollector.append(
+                            "[Shutdown] Node unreachable on flush + durability probe; fail-closed durability gate",
+                            LogLevel.WARN,
+                        )
+                        guardXaiOAuthDurabilityOnStop()
+                    }
+                }
             }
         }
     }
@@ -789,6 +813,7 @@ class SeekerClawService : Service() {
             // concurrently, the mark conflicts and we must NOT touch the winning family.
             when (val r = XaiOAuthTokenStore.markReauth(rec.epoch)) {
                 is XaiOAuthTokenStore.Result.Ok -> {
+                    android.util.Log.w("XaiDurabilityGate", "onDestroy guard MARKED family reauth-required (epoch=${r.record.epoch}) — token will read as 'credential missing' until re-sign-in")
                     LogCollector.append(
                         "[Shutdown] xAI OAuth flush unconfirmed — durably marked reauth-required " +
                             "(epoch=${r.record.epoch}) before kill",

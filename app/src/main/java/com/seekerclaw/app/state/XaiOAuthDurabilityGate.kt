@@ -92,8 +92,16 @@ object XaiOAuthDurabilityGate {
                 // pass the budget into flushShutdown so its underlying (non-cancellable) HTTP
                 // connect/read timeouts are themselves capped, AND wrap in withTimeoutOrNull as a
                 // coroutine-level backstop. A late-starting round stays inside BUDGET_MS.
+                //
+                // BAT-1155 hotfix: durabilityOnly=true. This gate needs ONLY the diskUnsafe
+                // answer — it never needed the session summary. Asking Node to skip the
+                // best-effort (up-to-1200ms) summary keeps each round's response well inside the
+                // read budget even on a loaded device, so a slow summary can no longer time the
+                // round out to null and force a fail-closed markReauth on a VALID fresh sign-in
+                // (the soak brick). The xAI drain still runs, so Node still gets its chance to
+                // persist the rotated T1 (the PREFERRED "stays signed in" outcome).
                 val budget = remainingMs(deadlineNs).toInt().coerceAtLeast(1)
-                runBlocking { withTimeoutOrNull(budget.toLong()) { NodeControlClient.flushShutdown(budget) } }?.diskUnsafe
+                runBlocking { withTimeoutOrNull(budget.toLong()) { NodeControlClient.flushShutdown(budget, durabilityOnly = true) } }?.diskUnsafe
             } catch (e: Exception) {
                 LogCollector.append(
                     "[Shutdown] xAI durability gate: flush round threw (${e.javaClass.simpleName}: ${e.message})",
@@ -111,6 +119,10 @@ object XaiOAuthDurabilityGate {
                     LogLevel.WARN,
                 )
                 null -> {
+                    // Instrumentation (logcat-visible, unlike LogCollector's file sink): a genuine
+                    // fail-close here on a VALID family is exactly the soak-brick symptom, so make
+                    // it greppable on-device during the sign-in verification.
+                    android.util.Log.w(TAG, "durability gate: Node unreachable (durability probe null) — engaging fail-closed markReauth")
                     LogCollector.append("[Shutdown] xAI durability gate: Node unreachable — engaging fail-closed mark", LogLevel.WARN)
                     break
                 }

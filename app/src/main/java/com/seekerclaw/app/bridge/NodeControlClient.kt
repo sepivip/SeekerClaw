@@ -169,7 +169,7 @@ object NodeControlClient {
      */
     data class FlushResult(val diskUnsafe: Boolean, val notifyPending: Boolean)
 
-    suspend fun flushShutdown(maxTotalMs: Int? = null): FlushResult? = withContext(Dispatchers.IO) {
+    suspend fun flushShutdown(maxTotalMs: Int? = null, durabilityOnly: Boolean = false): FlushResult? = withContext(Dispatchers.IO) {
         // Codex re-review major-1: HttpURLConnection's blocking connect/read is NOT
         // cooperatively cancellable — a coroutine withTimeoutOrNull cannot interrupt it, so the
         // ONLY real bound is the underlying connect/read timeouts. When the caller passes a
@@ -178,13 +178,20 @@ object NodeControlClient {
         // An exhausted budget (<2ms) can't fit even a 1ms connect + 1ms read → don't issue a
         // doomed request (CodeRabbit); the caller fail-closes on the null. Otherwise reserve
         // ≥1ms for the read so connect + read never EXCEEDS maxTotalMs.
+        //
+        // BAT-1155 hotfix: [durabilityOnly] asks Node to answer the brick-critical `diskUnsafe`
+        // question FAST (xAI token drain only, ~300ms) and SKIP the best-effort session summary.
+        // The pre-stop durability gate and the onDestroy guard use this so a slow/timing-out
+        // summary can never null out their durability answer (which a fail-closed caller would
+        // misread as "Node unreachable" and force-re-pair a VALID fresh sign-in — the soak brick).
         if (maxTotalMs != null && maxTotalMs < 2) return@withContext null
+        val reqBody = if (durabilityOnly) "{\"durabilityOnly\":true}" else "{}"
         val body = if (maxTotalMs != null) {
             val connectMs = (maxTotalMs - 1).coerceIn(1, CONNECT_TIMEOUT_MS)
             val readMs = (maxTotalMs - connectMs).coerceIn(1, READ_TIMEOUT_MS)
-            postForBody("/shutdown/flush", "{}", connectMs, readMs)
+            postForBody("/shutdown/flush", reqBody, connectMs, readMs)
         } else {
-            postForBody("/shutdown/flush", "{}")
+            postForBody("/shutdown/flush", reqBody)
         } ?: return@withContext null
         try {
             val json = JSONObject(body)

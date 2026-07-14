@@ -408,8 +408,17 @@ async function _route(req, res) {
         // connection issues and unnecessary buffering on the
         // listener. The shared _readBody also handles abort/close
         // (R3) so a Kotlin-side timeout doesn't leak this handler.
+        // BAT-1155 hotfix: a `{"durabilityOnly":true}` body makes this endpoint answer the
+        // brick-critical durability question FAST (xAI drain only) and SKIP the best-effort
+        // session summary — see the durabilityOnly short-circuit after the drain. The pre-stop
+        // gate and onDestroy guard send this so a slow summary can't null out their durability
+        // answer. Absent/`{}` body preserves the full flush (summary + db) for a real shutdown.
+        let _durabilityOnly = false;
         try {
-            await _readBody(req, 256);
+            const _rawBody = await _readBody(req, 256);
+            if (_rawBody) {
+                try { _durabilityOnly = !!JSON.parse(_rawBody).durabilityOnly; } catch (_) { /* {} → full flush */ }
+            }
         } catch (err) {
             // Body-too-large is unlikely (Kotlin sends `{}`) but
             // surface as 413 for symmetry with the other endpoints.
@@ -459,6 +468,17 @@ async function _route(req, res) {
                 xaiDiskUnsafe = true;
                 _logFn(`[ControlServer] /shutdown/flush xAI token drain failed: ${err.message}`, 'WARN');
             }
+        }
+        // BAT-1155 hotfix: the pre-stop durability gate and the onDestroy guard need ONLY the
+        // diskUnsafe signal, which the xAI drain above has already computed (≤300ms). Respond
+        // NOW — WITHOUT waiting on the best-effort, up-to-1200ms, sometimes-timing-out session
+        // summary. Blocking the durability answer behind the summary is what let a slow summary
+        // exceed the Kotlin gate's per-round read budget → return null → misread as "Node
+        // unreachable" → fail-closed markReauth on a VALID fresh sign-in (the soak brick). The
+        // terminal onDestroy path still flushes the summary via a separate (non-durabilityOnly)
+        // call, so no session-summary durability is lost.
+        if (_durabilityOnly) {
+            return _json(res, 200, { ok: true, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe, notifyPending: xaiNotifyPending });
         }
         try {
             // R4 Copilot: summaryTimeoutMs reduced 1500 → 1200 so the
