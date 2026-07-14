@@ -780,6 +780,42 @@ async function testDurabilitySignalsAndNotifyRetry() {
     await xai._maybeRetryNotifyMark();
     const st = xai._getStateForTests();
     ok('notify: conflict drops the stale pending mark AND the in-memory latch', st.noteNotifiedPending === false && st.reauthNotifiedEpoch === -1);
+
+    // (7) MAJOR 2 — a controlled Stop DRAINS the pending notify mark (failed-notify → immediate
+    //     Stop must not re-notify on restart). flushPendingPersist reports notifyPending metadata.
+    xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
+    _bridgeResult = { error: 'lock busy' };
+    await xai.noteReauthNotified(); // mark fails → pending
+    _bridgeResult = { success: true, epoch: 5 }; // bridge recovers before/at Stop
+    let fr = await xai.flushPendingPersist();
+    ok('shutdown: flushPendingPersist DRAINS the pending notify mark', xai._getStateForTests().noteNotifiedPending === false);
+    ok('shutdown: notifyPending reported false after a successful drain', fr.notifyPending === false);
+    // If the mark still cannot land, report notifyPending:true (metadata, NOT diskUnsafe — a
+    // re-notify is a UX annoyance, not a brick).
+    xai._setStateForTests({ refreshDead: true, currentEpoch: 6, reauthNotifiedEpoch: -1 });
+    _bridgeResult = { error: 'still down' };
+    await xai.noteReauthNotified();
+    fr = await xai.flushPendingPersist();
+    ok('shutdown: notifyPending true when the mark still cannot land', fr.notifyPending === true && fr.diskUnsafe === false);
+
+    // (8) BLOCKER (quiesce) — while quiesced for a controlled Stop, a token ROTATION is refused
+    //     (no consumed-T0/mint-T1 pair can form between the durability ack and the kill); it
+    //     resumes after unquiesce.
+    const quiesce = require(path.join(BUNDLE, 'quiesce.js'));
+    xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    installHttpsMock({ statusCode: 200, body: { access_token: 'a.b.c', refresh_token: 'r1', expires_in: 21600 } });
+    quiesce.quiesce();
+    _httpsCallCount = 0;
+    await xai.refreshOAuthToken();
+    ok('quiesce: refreshOAuthToken does NOT rotate while quiesced (no https POST)', _httpsCallCount === 0);
+    quiesce.unquiesce();
+    await xai.refreshOAuthToken();
+    ok('unquiesce: rotation resumes (one https POST)', _httpsCallCount === 1);
+    restoreHttps();
+    quiesce.unquiesce(); // leave clean for any later test
 }
 
 // ── Runner ───────────────────────────────────────────────────────────────────

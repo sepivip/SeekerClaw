@@ -1009,6 +1009,11 @@ async function handleProviderCommand(chatId, args, messageId = null) {
 
 async function handleMessage(normalized) {
     assertInit();
+    // BAT-1155 Codex re-review blocker: refuse NEW turns while the process is quiesced for a
+    // controlled Stop, so no fresh work (and no turn-triggered token rotation) starts between
+    // the durability acknowledgement and the process kill. A controlled Stop resolves in well
+    // under a second, so this drops at most a message that arrives inside that teardown window.
+    if (require('./quiesce').isQuiesced()) return;
     const { chatId, senderId, text: rawText, caption, messageId, media, replyTo, quoteText } = normalized;
     const combinedText = (rawText || caption || '').trim();
     if (!combinedText && !media) return;

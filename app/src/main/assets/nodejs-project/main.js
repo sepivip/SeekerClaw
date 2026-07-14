@@ -1097,6 +1097,10 @@ let isHeartbeatInFlight = false;
 let lastHeartbeatAt = Date.now();
 
 async function runHeartbeat() {
+    // BAT-1155 Codex re-review blocker: skip heartbeat-triggered turns while quiesced for a
+    // controlled Stop — a heartbeat turn could otherwise start work (and a token rotation)
+    // after the durability acknowledgement and before the process kill.
+    if (require('./quiesce').isQuiesced()) return;
     const rawOwnerChatId = channel.getOwnerChatId();
     if (!rawOwnerChatId) return; // agent not set up yet (or DM channel not opened for Discord)
 

@@ -82,6 +82,18 @@ object NodeControlClient {
     }
 
     /**
+     * BAT-1155 Codex re-review blocker: leave the quiesced state. `/shutdown/flush` quiesces
+     * Node (no new turns/heartbeats/rotations) so nothing can strand a fresh token between the
+     * durability ack and the kill. When a controlled Stop is ABANDONED (durability could not be
+     * established and the service is kept alive instead of killed), the caller must unquiesce so
+     * the agent resumes normal operation. Best-effort — a missed unquiesce self-heals on the
+     * next boot (a fresh process starts un-quiesced). Idempotent.
+     */
+    suspend fun unquiesce(): Boolean = withContext(Dispatchers.IO) {
+        post("/unquiesce", "{}")
+    }
+
+    /**
      * Drive Node's graceful-shutdown flush before
      * [com.seekerclaw.app.service.SeekerClawService] kills the
      * `:node` process (BAT-525). Persists pending session summaries
@@ -134,8 +146,19 @@ object NodeControlClient {
      *  - `null`  = flush did not reach/parse Node (connect-refused, 401, timeout,
      *              malformed body) → the caller fail-closes on the unknown.
      */
-    suspend fun flushShutdown(): Boolean? = withContext(Dispatchers.IO) {
-        val body = postForBody("/shutdown/flush", "{}") ?: return@withContext null
+    suspend fun flushShutdown(maxTotalMs: Int? = null): Boolean? = withContext(Dispatchers.IO) {
+        // Codex re-review major-1: HttpURLConnection's blocking connect/read is NOT
+        // cooperatively cancellable — a coroutine withTimeoutOrNull cannot interrupt it, so the
+        // ONLY real bound is the underlying connect/read timeouts. When the caller passes a
+        // remaining end-to-end budget, cap those timeouts to it so a round started near the
+        // deadline can't block the full 250+2000ms past it. Split the budget connect-first.
+        val body = if (maxTotalMs != null) {
+            val connectMs = maxTotalMs.coerceIn(1, CONNECT_TIMEOUT_MS)
+            val readMs = (maxTotalMs - connectMs).coerceIn(1, READ_TIMEOUT_MS)
+            postForBody("/shutdown/flush", "{}", connectMs, readMs)
+        } else {
+            postForBody("/shutdown/flush", "{}")
+        } ?: return@withContext null
         try {
             val json = JSONObject(body)
             // Codex re-review blocker-2: prefer the AUTHORITATIVE `diskUnsafe` signal — it
@@ -160,7 +183,12 @@ object NodeControlClient {
      * so a 500 that still carries `{pendingPersist}` is parseable) on any completed
      * HTTP exchange, or `null` on a transport failure / missing bridge token.
      */
-    private fun postForBody(path: String, body: String): String? {
+    private fun postForBody(
+        path: String,
+        body: String,
+        connectMs: Int = CONNECT_TIMEOUT_MS,
+        readMs: Int = READ_TIMEOUT_MS,
+    ): String? {
         val token = ServiceState.bridgeToken
         if (token.isNullOrBlank()) return null
         var conn: HttpURLConnection? = null
@@ -168,8 +196,8 @@ object NodeControlClient {
             val url = URL(BASE_URL + path)
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = CONNECT_TIMEOUT_MS
-                readTimeout = READ_TIMEOUT_MS
+                connectTimeout = connectMs
+                readTimeout = readMs
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty(AUTH_HEADER, token)

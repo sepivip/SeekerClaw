@@ -103,6 +103,9 @@ object ServiceState {
     var bridgeToken: String? = null
         private set
 
+    /** Test seam (BAT-1155): set the bridge token without a running service, for JVM tests. */
+    internal fun setBridgeTokenForTest(token: String?) { bridgeToken = token }
+
     private var stateFile: File? = null
 
     /** App files directory — exposed for cross-process file reads (e.g. stats). */

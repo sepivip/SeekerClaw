@@ -472,6 +472,15 @@ function classifyNetworkError(err) {
 let _refreshInFlight = null;
 
 function refreshOAuthToken() {
+    // BAT-1155 Codex re-review blocker: refuse to ROTATE while the process is quiesced for a
+    // controlled Stop. A rotation here would consume the on-disk T0 and mint a T1 that the
+    // imminent kill strands → the next boot replays the consumed T0 (the brick). Any in-flight
+    // rotation is still awaited/drained by flushPendingPersist; this only blocks NEW ones.
+    if (require('../quiesce').isQuiesced()) {
+        // Return the in-flight rotation if one is already draining; otherwise a resolved no-op
+        // (the caller proceeds on the current in-memory token — the turn is being torn down anyway).
+        return _refreshInFlight || Promise.resolve(null);
+    }
     _refreshInFlight ??= _performRefresh()
         .catch(async (e) => {
             // BAT-1143: record the failure mode CENTRALLY so BOTH the proactive
@@ -749,7 +758,7 @@ async function _doAttemptPersist(timeoutMs, urgent) {
 // first (never double-POST), then AT MOST ONE forced retry if still pending, with an
 // explicit 300ms bound passed to androidBridgeCall. Never throws.
 async function flushPendingPersist() {
-    if (!isOAuth) return { pendingPersist: false, diskUnsafe: false };
+    if (!isOAuth) return { pendingPersist: false, diskUnsafe: false, notifyPending: false };
     // ONE 300ms end-to-end deadline across BOTH phases (CodeRabbit): the in-flight
     // await and the single forced retry share the budget, so a stalled 10s-default
     // bridge POST can never make the shutdown drain exceed 300ms total (the pinned D6
@@ -774,6 +783,14 @@ async function flushPendingPersist() {
     if (_persistPending && _pendingPersistPayload && remaining() > 0) {
         await raceRemaining(_attemptPersist(remaining(), /* urgent */ true));
     }
+    // Phase 3 (Codex re-review major-2): drain a pending notify-once mark too. Without this,
+    // a notify mark that transiently failed, followed by an IMMEDIATE Stop (before another
+    // dead-path turn could retry it), is lost on restart → the same dead epoch is re-notified.
+    // Reported as SEPARATE `notifyPending` metadata (a re-notify is a UX annoyance, not a
+    // brick, so it does NOT gate the kill / feed diskUnsafe).
+    if (_noteNotifiedPending && remaining() > 0) {
+        await raceRemaining(_maybeRetryNotifyMark());
+    }
     // Report BOTH the narrow pending-pair signal AND the authoritative disk-unsafe signal
     // (Codex re-review blocker-2). pendingPersist alone is insufficient: `_persistDurableError`
     // (convergence exhausted → T1 discarded, consumed T0 still on disk) and `_markReauthPending`
@@ -781,7 +798,11 @@ async function flushPendingPersist() {
     // clear/never-set `_persistPending` yet leave the disk in a brick-on-boot state. The
     // controlled-stop gate keys on `diskUnsafe` so a Stop in either state fails closed
     // (CAS-marks reauth) instead of trusting a false-clean and reloading a consumed token.
-    return { pendingPersist: !!(_persistPending && _pendingPersistPayload), diskUnsafe: isDiskUnsafe() };
+    return {
+        pendingPersist: !!(_persistPending && _pendingPersistPayload),
+        diskUnsafe: isDiskUnsafe(),
+        notifyPending: _noteNotifiedPending, // major-2 metadata: notify-once mark still unpersisted
+    };
 }
 
 // BAT-1155 Codex re-review blocker-2 — the single authoritative "the on-disk xAI OAuth

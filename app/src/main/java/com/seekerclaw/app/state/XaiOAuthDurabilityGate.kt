@@ -88,11 +88,13 @@ object XaiOAuthDurabilityGate {
             // false = the on-disk record is safe to boot from; true = unsafe (pending pair OR
             // convergence-exhausted OR failed dead-mark); null = unreachable/unparseable.
             val unsafe: Boolean? = try {
-                // Cap the round to the REMAINING budget (CodeRabbit): flushShutdown's HTTP
-                // timeout is fixed (~2250ms), so a late-starting round could overrun BUDGET_MS.
-                // withTimeoutOrNull returns null when the budget elapses → treated as
-                // unreachable → fail-closed, keeping the whole gate inside BUDGET_MS.
-                runBlocking { withTimeoutOrNull(remainingMs(deadlineNs)) { NodeControlClient.flushShutdown() } }
+                // Codex re-review major-1: cap the round to the REMAINING budget at BOTH levels —
+                // pass the budget into flushShutdown so its underlying (non-cancellable) HTTP
+                // connect/read timeouts are themselves capped, AND wrap in withTimeoutOrNull as a
+                // coroutine-level backstop. Either way a late-starting round stays inside BUDGET_MS
+                // (null on timeout → treated as unreachable → fail-closed).
+                val budget = remainingMs(deadlineNs)
+                runBlocking { withTimeoutOrNull(budget) { NodeControlClient.flushShutdown(budget.toInt().coerceAtLeast(1)) } }
             } catch (e: Exception) {
                 LogCollector.append(
                     "[Shutdown] xAI durability gate: flush round threw (${e.javaClass.simpleName}: ${e.message})",

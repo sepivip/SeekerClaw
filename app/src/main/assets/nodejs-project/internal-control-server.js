@@ -367,6 +367,14 @@ async function _route(req, res) {
         return _json(res, 200, { ok: true });
     }
 
+    if (url === '/unquiesce') {
+        // BAT-1155 Codex re-review blocker: Kotlin calls this when a controlled Stop is
+        // ABANDONED (durability could not be established and the service is kept alive instead
+        // of killed) so the agent resumes accepting turns/heartbeats/rotations. Idempotent.
+        require('./quiesce').unquiesce();
+        return _json(res, 200, { ok: true });
+    }
+
     if (url === '/shutdown/flush') {
         // BAT-525: Android user-Stop kills :node via `killProcess()`,
         // which bypasses Node's SIGTERM/SIGINT handlers (nodejs-mobile
@@ -379,6 +387,12 @@ async function _route(req, res) {
         if (!_flushShutdown) {
             return _json(res, 503, { error: 'flush unavailable' });
         }
+        // BAT-1155 Codex re-review blocker: QUIESCE first — atomically stop accepting new
+        // turns/heartbeats/token rotations BEFORE draining, so nothing can consume the on-disk
+        // T0 and mint a fresh unsafe pair between this "disk safe" acknowledgement and the kill.
+        // The process stays quiesced until teardown; if the Stop is abandoned (kept alive),
+        // Kotlin calls /unquiesce to resume normal operation.
+        require('./quiesce').quiesce();
         // R1 Copilot: drain the request body before awaiting the
         // flush. Body is currently expected to be `{}` (≤256 bytes
         // is generous). Leaving it unread can cause keep-alive
@@ -420,11 +434,15 @@ async function _route(req, res) {
         // (T1 discarded, consumed T0 on disk) and a failed dead-family mark (disk still
         // says the revoked family is live). The Kotlin gate keys on THIS, not pendingPersist.
         let xaiDiskUnsafe = false;
+        // Codex re-review major-2: separate metadata — the notify-once mark is still unpersisted.
+        // Not a brick (won't gate the kill); surfaced for observability + the shutdown drain attempt.
+        let xaiNotifyPending = false;
         if (_xaiFlush) {
             try {
                 const r = await _xaiFlush();
                 xaiPending = !!(r && r.pendingPersist);
                 xaiDiskUnsafe = !!(r && r.diskUnsafe);
+                xaiNotifyPending = !!(r && r.notifyPending);
             } catch (err) {
                 // flushPendingPersist is designed never to throw; if it does, a rotated
                 // pair may be stranded → fail closed so the Kotlin gate fires.
@@ -459,7 +477,7 @@ async function _route(req, res) {
             // step errors are caught inside — but defense-in-depth).
             const result = await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1200 });
             if (result && result.ok) {
-                return _json(res, 200, { ok: true, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe });
+                return _json(res, 200, { ok: true, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe, notifyPending: xaiNotifyPending });
             }
             const detail = result || {};
             // R8 Copilot: log partial flush at WARN, not ERROR. A partial
@@ -479,10 +497,11 @@ async function _route(req, res) {
                 dbFailed: !!detail.dbFailed,
                 pendingPersist: xaiPending,
                 diskUnsafe: xaiDiskUnsafe,
+                notifyPending: xaiNotifyPending,
             });
         } catch (err) {
             _logFn(`[ControlServer] /shutdown/flush threw: ${err.message}`, 'ERROR');
-            return _json(res, 500, { ok: false, error: err.message, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe });
+            return _json(res, 500, { ok: false, error: err.message, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe, notifyPending: xaiNotifyPending });
         }
     }
 

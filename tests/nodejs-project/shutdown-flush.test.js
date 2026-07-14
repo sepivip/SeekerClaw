@@ -196,6 +196,31 @@ test('R3 Copilot: _readBody handles aborted/close events', () => {
         '_readBody must listen for close to handle abrupt disconnects');
 });
 
+test('BAT-1155 blocker (quiesce): /shutdown/flush quiesces first; /unquiesce resumes', () => {
+    // Codex re-review blocker: a controlled Stop must QUIESCE (refuse new turns/heartbeats/
+    // rotations) BEFORE draining, so nothing strands a fresh token between the durability ack
+    // and the kill; an abandoned Stop must be able to /unquiesce.
+    const ctrl = fs.readFileSync(CONTROL_JS, 'utf8');
+    // quiesce() must be called inside the /shutdown/flush handler, BEFORE the drain (which
+    // starts at the _xaiFlush call). Pin the ordering, not just presence.
+    const flushIdx = ctrl.indexOf("url === '/shutdown/flush'");
+    const quiesceIdx = ctrl.indexOf('quiesce()', flushIdx);
+    const drainIdx = ctrl.indexOf('_xaiFlush()', flushIdx);
+    assert.ok(quiesceIdx > flushIdx && drainIdx > flushIdx && quiesceIdx < drainIdx,
+        '/shutdown/flush must call quiesce() before draining the xAI token state');
+    assert.ok(/url === '\/unquiesce'/.test(ctrl) && /require\(['"]\.\/quiesce['"]\)\.unquiesce\(\)/.test(ctrl),
+        'an /unquiesce endpoint must exist and call unquiesce()');
+    assert.ok(/_json\(res,\s*200,\s*\{[^}]*notifyPending/.test(ctrl),
+        '/shutdown/flush 200 body must include notifyPending (major-2 metadata)');
+    // The rotation-refusal gate lives at the rotation root.
+    const xai = fs.readFileSync(path.join(ROOT, 'app', 'src', 'main', 'assets', 'nodejs-project', 'providers', 'xai.js'), 'utf8');
+    assert.ok(/function refreshOAuthToken\(\)\s*\{[\s\S]{0,900}?isQuiesced\(\)/.test(xai),
+        'refreshOAuthToken must refuse to rotate while quiesced');
+    const nccKt = fs.readFileSync(path.join(ROOT, 'app', 'src', 'main', 'java', 'com', 'seekerclaw', 'app', 'bridge', 'NodeControlClient.kt'), 'utf8');
+    assert.ok(/suspend\s+fun\s+unquiesce\s*\(/.test(nccKt),
+        'NodeControlClient must expose suspend fun unquiesce() for the abandon path');
+});
+
 test('BAT-1155 blocker-1: controlled Stop calls finishStop ONLY on positive durability', () => {
     // Codex re-review blocker-1: a controlled Stop must NEVER call stopService()/finishStop()
     // without positive durability. Pin that stopWithDurability invokes finishStop exactly once
@@ -314,8 +339,8 @@ test('NodeControlClient exposes flushShutdown that hits POST /shutdown/flush wit
     const NCC_KT = path.join(ROOT, 'app', 'src', 'main', 'java', 'com',
         'seekerclaw', 'app', 'bridge', 'NodeControlClient.kt');
     const src = fs.readFileSync(NCC_KT, 'utf8');
-    assert.ok(/suspend\s+fun\s+flushShutdown\s*\(\s*\)/.test(src),
-        'NodeControlClient must expose suspend fun flushShutdown()');
+    assert.ok(/suspend\s+fun\s+flushShutdown\s*\(/.test(src),
+        'NodeControlClient must expose suspend fun flushShutdown(...)');
     // BAT-1155 D6: flushShutdown reads the response body (for `pendingPersist`) so it
     // routes through the body-returning postForBody() helper — which sets the same
     // X-Bridge-Token header — instead of the boolean-only post().

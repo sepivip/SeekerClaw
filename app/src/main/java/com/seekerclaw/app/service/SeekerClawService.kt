@@ -946,6 +946,10 @@ class SeekerClawService : Service() {
                                 "(the session token could not be safely saved; force-stop from system settings to override)",
                             LogLevel.ERROR,
                         )
+                        // Codex re-review blocker: the Stop is abandoned (we are NOT killing) —
+                        // unquiesce so Node resumes normal turns/heartbeats/rotations instead of
+                        // staying frozen. Best-effort; a fresh boot is un-quiesced regardless.
+                        runCatching { runBlocking { NodeControlClient.unquiesce() } }
                         restartHandler.post { postDurabilityStuckNotice(appCtx) }
                     }
                 }
