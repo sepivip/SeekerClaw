@@ -135,8 +135,9 @@ class XaiOAuthDurabilityGateTest {
         assertFalse("a Failed mark must not have flipped reauth", XaiOAuthTokenStore.read().reauthRequired)
     }
 
-    // ---- Codex re-review major-1: the gate DRAINS a pending notify mark over the real
-    //      Stop round-trip (not just the direct flushPendingPersist helper) ----
+    // NOTE: the MAIN-vs-`:node` two-process Stop round-trip (draining a pending notify mark over a
+    // real cross-process sidecar-lock race) is covered by XaiTwoProcessRaceTest.kt + the device soak,
+    // not here — this suite pins the single-process decision logic + bounds.
 
     // ---- BAT-1155 M1: an ABANDONED stop must clear the armed fence before :node resumes ----
 
