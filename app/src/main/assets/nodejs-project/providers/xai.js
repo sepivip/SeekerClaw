@@ -975,8 +975,15 @@ function shouldSurfaceReauthNotice() {
 //             dead family was superseded (no notice is due). Either way ai.js does NOT send.
 // The suppressor is set ONLY on a durable reserve, so a failed reserve can never silently
 // suppress a notice that never went out. Explicit user requests are answered regardless.
+// Single-flight (CodeRabbit): two concurrent ai.js turns could otherwise both reserve the same
+// epoch and both send the notice. Only the caller that INITIATES the reserve gets the real result
+// (true → send); a concurrent caller awaits the in-flight reserve and returns false (do NOT send),
+// so at most one autonomous notice goes out per epoch even under concurrency.
+let _noteInFlight = null;
 async function noteReauthNotified() {
-    return _persistNotifiedMark(_currentEpoch);
+    if (_noteInFlight) { await _noteInFlight.catch(() => {}); return false; }
+    _noteInFlight = _persistNotifiedMark(_currentEpoch).finally(() => { _noteInFlight = null; });
+    return _noteInFlight;
 }
 
 async function _persistNotifiedMark(notifiedFor) {

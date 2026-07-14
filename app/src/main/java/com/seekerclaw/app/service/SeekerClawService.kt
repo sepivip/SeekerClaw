@@ -880,12 +880,17 @@ class SeekerClawService : Service() {
         // BAT-1155 Codex re-review blocker: renew the Node quiesce lease from an INDEPENDENT thread
         // (not the main looper) from the moment durability is proven until kill, so a delayed
         // main-looper handoff can't let the lease expire and admit a rotation before teardown.
-        // RENEW well under quiesce.js LEASE_MS (15s). Stop after a couple of consecutive failures
-        // (:node is gone/killed) or the iteration cap, so a renewer never loops forever.
+        // RENEW well under quiesce.js LEASE_MS (15s).
         private const val LEASE_RENEW_MS = 5_000L
-        private const val MAX_RENEW_ITERS = 24
-        @Volatile private var leaseRenewActive = false
-        @Volatile private var leaseRenewer: Thread? = null
+        @Volatile private var leaseRenewMs = LEASE_RENEW_MS // shortened in tests to observe the cadence
+        internal fun setLeaseRenewMsForTest(ms: Long) { leaseRenewMs = ms }
+        // Renewal is LIFECYCLE-bound, not failure/time-bound: it runs until an EXPLICIT
+        // stopLeaseRenewal() (or a newer start) supersedes it, or the process dies (the thread is
+        // daemon). A failed renew POST is NOT evidence :node is dead — keep retrying so a transient
+        // outage can't let the lease lapse while teardown is still pending. A GENERATION token
+        // (not a reusable boolean) ensures a stale in-flight renewer can never observe a later
+        // "active" and rejoin a newer lifecycle.
+        private val leaseRenewGen = java.util.concurrent.atomic.AtomicInteger(0)
 
         fun start(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
@@ -1047,31 +1052,23 @@ class SeekerClawService : Service() {
          * admit a rotation in that window. Self-terminates once :node stops answering (killed) or
          * the iteration cap elapses; also cancelled by the next lifecycle op ([stopLeaseRenewal]).
          */
-        private fun startLeaseRenewal() {
-            stopLeaseRenewal()
-            leaseRenewActive = true
-            leaseRenewer = Thread {
-                var consecutiveFails = 0
-                var iters = 0
-                while (leaseRenewActive && iters < MAX_RENEW_ITERS) {
-                    try { Thread.sleep(LEASE_RENEW_MS) } catch (e: InterruptedException) { break }
-                    if (!leaseRenewActive) break
-                    val ok = runCatching { runBlocking { NodeControlClient.quiesce() } }.getOrDefault(false)
-                    if (ok) {
-                        consecutiveFails = 0
-                    } else if (++consecutiveFails >= 2) {
-                        // Two misses in a row → :node is gone (killed) or unreachable; stop renewing.
-                        break
-                    }
-                    iters++
+        internal fun startLeaseRenewal() {
+            val myGen = leaseRenewGen.incrementAndGet() // claim a generation; supersedes any prior renewer
+            Thread {
+                // Renew until THIS generation is superseded (explicit stop or a newer lifecycle) or
+                // the process dies. A failed POST is ignored — quiescence must not lapse on a
+                // transient outage while a controlled Stop is still pending.
+                while (leaseRenewGen.get() == myGen) {
+                    try { Thread.sleep(leaseRenewMs) } catch (e: InterruptedException) { break }
+                    if (leaseRenewGen.get() != myGen) break
+                    runCatching { runBlocking { NodeControlClient.quiesce() } }
                 }
             }.apply { isDaemon = true; name = "xai-lease-renewer"; start() }
         }
 
-        private fun stopLeaseRenewal() {
-            leaseRenewActive = false
-            leaseRenewer?.interrupt()
-            leaseRenewer = null
+        /** Supersede any active renewer generation so it exits on its next check. */
+        internal fun stopLeaseRenewal() {
+            leaseRenewGen.incrementAndGet()
         }
 
         private fun unquiesceUntilConfirmed(appCtx: Context, attempt: Int) {

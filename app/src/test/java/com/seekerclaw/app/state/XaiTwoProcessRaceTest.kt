@@ -88,8 +88,9 @@ class XaiTwoProcessRaceTest {
         val readyA = File(dir, "readyA"); val readyB = File(dir, "readyB"); val go = File(dir, "go")
         val pa = spawn(*(aArgs + listOf("--ready", readyA.absolutePath, "--go", go.absolutePath)).toTypedArray())
         val pb = spawn(*(bArgs + listOf("--ready", readyB.absolutePath, "--go", go.absolutePath)).toTypedArray())
-        val deadline = System.currentTimeMillis() + 30_000
-        while ((!readyA.exists() || !readyB.exists()) && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        // Monotonic deadline (CodeRabbit) — wall-clock can jump on an NTP correction and break the bound.
+        val deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while ((!readyA.exists() || !readyB.exists()) && System.nanoTime() < deadlineNs) Thread.sleep(10)
         assertTrue("both children must reach the barrier", readyA.exists() && readyB.exists())
         go.writeText("go") // release both at once
         return collect(pa, "A:${aArgs.firstOrNull()}") to collect(pb, "B:${bArgs.firstOrNull()}")
@@ -206,8 +207,8 @@ class XaiTwoProcessRaceTest {
         val p1 = spawn("holdlock", "20000", release.absolutePath, locked.absolutePath)
         // Drain P1's stdout on a background thread so it never blocks; poll the readiness file.
         Thread { runCatching { p1.inputStream.bufferedReader().forEachLine { } } }.apply { isDaemon = true; start() }
-        val deadline = System.currentTimeMillis() + 20_000
-        while (!locked.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        val deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(20) // monotonic (CodeRabbit)
+        while (!locked.exists() && System.nanoTime() < deadlineNs) Thread.sleep(10)
         if (!locked.exists()) { p1.destroyForcibly(); fail("lock-holder P1 never acquired the sidecar lock (>20s) — force-killed") }
         // P2 (separate process) cannot acquire the lock → bounded FAILED, never a hang or clobber.
         val r2 = run("markreauth", "0").first()

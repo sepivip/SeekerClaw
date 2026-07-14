@@ -229,9 +229,15 @@ test('BAT-1155 blocker (quiesce): /shutdown/flush quiesces first; /unquiesce res
     assert.ok(/unquiesceUntilConfirmed/.test(svc),
         'an abandoned Stop must retry unquiesce (bounded), not a single ignored call');
     // Codex re-review blocker: a SUCCESSFUL Stop must RENEW the lease from an independent thread
-    // until kill (so the lease can't expire during the main-looper handoff), via a /quiesce endpoint.
-    assert.ok(/startLeaseRenewal/.test(svc) && /stopLeaseRenewal/.test(svc),
-        'a durable Stop must renew the quiesce lease until teardown (startLeaseRenewal/stopLeaseRenewal)');
+    // until kill (via /quiesce). CodeRabbit: scope the check to the DURABLE arm of stopWithDurability
+    // (not a whole-file grep). The lifecycle-bound renewal BEHAVIOR itself is covered by the runtime
+    // regression LeaseRenewalTest (survives failures, runs past the old cap, stops only on cancel).
+    const stopWithDur = svc.slice(svc.indexOf('private fun stopWithDurability'), svc.indexOf('private fun finishStop'));
+    const durableArm = stopWithDur.slice(stopWithDur.indexOf('durable ->'), stopWithDur.indexOf('attempt < MAX_KEEPALIVE_STOP_ATTEMPTS'));
+    assert.ok(/startLeaseRenewal\s*\(\s*\)/.test(durableArm),
+        'the DURABLE arm of stopWithDurability must start lease renewal');
+    assert.ok(/stopLeaseRenewal/.test(svc),
+        'stopLeaseRenewal must exist (abandon path + lifecycle entries)');
     assert.ok(/url === '\/quiesce'/.test(ctrl) && /require\(['"]\.\/quiesce['"]\)\.quiesce\(\)/.test(ctrl),
         'a /quiesce endpoint must exist to re-arm the lease');
     assert.ok(/suspend\s+fun\s+quiesce\s*\(/.test(nccKt),
