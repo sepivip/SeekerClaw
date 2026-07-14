@@ -504,6 +504,49 @@ function refreshOAuthToken() {
     return _refreshInFlight;
 }
 
+// BAT-1155 stop-fence protocol — the single atomic pre-POST gate. Arms the durable rotation marker
+// under the store sidecar lock (via the AndroidBridge) and reports whether the external refresh POST
+// may proceed. Returns:
+//   'ok'   → the marker is armed on disk; the POST may proceed.
+//   'dead' → the family is tombstone/reauth OR a rotation marker is ALREADY armed (a prior POST may
+//            have consumed the on-disk refresh token) → the caller surfaces reconnect, never POSTs.
+//   'skip' → a stop is fencing this epoch, the epoch was superseded (a fresh sign-in/out), or the
+//            marker could not be armed (bridge/disk) → keep the in-memory token, do NOT POST.
+async function _prepareRefreshGate() {
+    let r;
+    try {
+        r = await androidBridgeCall('/xai/oauth/prepare-refresh', { expectedEpoch: _currentEpoch });
+    } catch (_) {
+        return 'skip'; // bridge unreachable → cannot arm the durable marker → fail-closed, no POST
+    }
+    if (!r) return 'skip';
+    if (r.success === true) {
+        if (typeof r.epoch === 'number') _currentEpoch = r.epoch;
+        return 'ok';
+    }
+    // A superseding sign-in/out advanced the epoch. DO NOT adopt r.currentEpoch (Codex break-fix) —
+    // the sign-in-triggered :node restart reloads the fresh family; abort this refresh.
+    if (r.code === 'XAI_OAUTH_EPOCH_CONFLICT') return 'skip';
+    if (r.dead === true || r.unsafe === true) return 'dead';
+    if (r.fenced === true) return 'skip';
+    return 'skip'; // prepare failed (500) → fail-closed, no POST
+}
+
+// Provably-not-sent classification (Codex decision 1): only a pre-connection DNS / connection-refused
+// error proves the refresh-token bytes never reached the endpoint. A timeout or ANY received HTTP
+// response (including 5xx / TLS-after-connect) is NOT provable → the marker must be retained.
+function _isProvablyNotSent(e) {
+    return !!(e && (e.code === 'ECONNREFUSED' || e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN'));
+}
+
+// Clear the durable rotation marker after a provably-not-sent refresh (avoids a nuisance reconnect).
+// Best-effort: a retained marker only costs one conservative reconnect, never a brick.
+async function _clearRotationInFlightMarker() {
+    try {
+        await androidBridgeCall('/xai/oauth/clear-rotation-in-flight', { expectedEpoch: _currentEpoch });
+    } catch (_) { /* best-effort */ }
+}
+
 // A dead-family mark that did NOT durably persist. Codex blocker-2: a failed
 // mark must stay retryable (not swallowed) — else a restart re-seeds
 // _refreshDead=false and re-POSTs the revoked token. Retried on each subsequent
@@ -551,7 +594,26 @@ function _maybeRetryReauthMark() {
 }
 
 async function _performRefresh() {
-    const parsed = await _requestRotatedTokens();
+    // BAT-1155 stop-fence: durably ARM the rotation marker (atomically checking dead / stop-fence /
+    // already-armed) BEFORE presenting the on-disk refresh token to xAI. Every non-'ok' outcome = NO POST.
+    const gate = await _prepareRefreshGate();
+    if (gate === 'skip') return null; // fenced / superseded / prepare-deferred → keep the in-mem token, no POST
+    if (gate === 'dead') {            // dead family OR a rotation POST is already in flight (potentially consumed)
+        const e = new Error('xAI OAuth refresh blocked — reconnect required');
+        e.reLogin = true;             // → refreshOAuthToken.catch latches _refreshDead + persists reauth
+        throw e;
+    }
+    // gate === 'ok': the rotation marker is durably armed on disk BEFORE the POST below.
+    let parsed;
+    try {
+        parsed = await _requestRotatedTokens();
+    } catch (e) {
+        // Marker discipline (Codex decision 1 — conservative): clear the marker ONLY when the transport
+        // proves no request bytes reached xAI (DNS / connection-refused before the body was written).
+        // Timeout / any received response / 5xx retain the marker (the on-disk token may be consumed).
+        if (_isProvablyNotSent(e)) await _clearRotationInFlightMarker();
+        throw e;
+    }
     // H1: register the rotated pair with the redactor BEFORE any log/persist
     // so an eyJ… JWT can never surface in node_debug.log.
     if (parsed.access_token) registerRedactedSecret(parsed.access_token);

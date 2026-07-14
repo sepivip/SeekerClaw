@@ -98,6 +98,11 @@ class AndroidBridge(
         // off the save-tokens bucket so marking-dead is never throttled by
         // rotation traffic (and vice-versa).
         "/xai/oauth/mark-reauth" to Pair(30, 60_000L),
+        // BAT-1155 stop-fence protocol: the pre-POST rotation gate (prepare-refresh) fires once
+        // per refresh (proactive ~hourly + reactive 401); the proven-not-sent marker clear is
+        // rarer. 30/60s keeps them off the rotation bucket while bounding a pathological storm.
+        "/xai/oauth/prepare-refresh" to Pair(30, 60_000L),
+        "/xai/oauth/clear-rotation-in-flight" to Pair(30, 60_000L),
         // /config/credentials loads AppConfig (Keystore decrypt +
         // agent_settings reconciliation) on every call — rate-limit so
         // a misbehaving Node caller can't spin it. 10/min is ample for
@@ -229,6 +234,10 @@ class AndroidBridge(
                 // VALID token at Stop and force an avoidable re-pair.
                 "/xai/oauth/save-tokens-urgent" -> handleXaiOAuthSaveTokens(params)
                 "/xai/oauth/mark-reauth" -> handleXaiOAuthMarkReauth(params)
+                // BAT-1155 stop-fence protocol: the single atomic pre-POST rotation gate, and the
+                // proven-not-sent marker clear.
+                "/xai/oauth/prepare-refresh" -> handleXaiOAuthPrepareRefresh(params)
+                "/xai/oauth/clear-rotation-in-flight" -> handleXaiOAuthClearRotationInFlight(params)
                 "/config/credentials" -> handleConfigCredentials()
                 "/config/mcp-token" -> handleConfigMcpToken(params)
                 "/service/restart" -> handleServiceRestart()
@@ -1032,6 +1041,12 @@ class AndroidBridge(
                         "code" to "XAI_OAUTH_SAVE_FAILED",
                     ))
                 }
+                // rotate() only yields Ok/Conflict/Failed; the stop-fence Result variants never
+                // reach here. Defensive 500 so the sealed `when` stays exhaustive.
+                else -> jsonResponse(500, mapOf(
+                    "error" to "unexpected rotate result",
+                    "code" to "XAI_OAUTH_SAVE_FAILED",
+                ))
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to save xAI OAuth tokens", e)
@@ -1091,6 +1106,11 @@ class AndroidBridge(
                         "code" to "XAI_OAUTH_MARK_REAUTH_FAILED",
                     ))
                 }
+                // markReauth/markReauthNotified only yield Ok/Conflict/Failed. Defensive 500.
+                else -> jsonResponse(500, mapOf(
+                    "error" to "unexpected mark-reauth result",
+                    "code" to "XAI_OAUTH_MARK_REAUTH_FAILED",
+                ))
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to mark xAI OAuth reauth", e)
@@ -1098,6 +1118,88 @@ class AndroidBridge(
                 "error" to "Failed to mark xAI OAuth reauth",
                 "code" to "XAI_OAUTH_MARK_REAUTH_FAILED",
             ))
+        }
+    }
+
+    /**
+     * BAT-1155 stop-fence protocol — the single atomic pre-POST rotation gate. `:node` MUST call
+     * this and get `success:true` BEFORE presenting the on-disk refresh token to xAI. Under the
+     * store sidecar lock ([XaiOAuthTokenStore.prepareRefresh]), in priority order:
+     *  - superseded epoch → `409 XAI_OAUTH_EPOCH_CONFLICT` (Node discards, does NOT adopt the epoch);
+     *  - `dead:true` — tombstone/reauth family → terminal, no POST;
+     *  - `fenced:true` — a stop is in progress → abort the refresh, keep the in-memory token;
+     *  - `unsafe:true` — a rotation marker is ALREADY armed (a prior POST may have consumed the
+     *    token) → terminal until rotate/clear/reauth; Node latches this and never POSTs;
+     *  - `success:true` — the marker is now durably armed on disk → Node may POST.
+     * Every non-`success` outcome means NO external token POST. Body `{ expectedEpoch }`.
+     */
+    private fun handleXaiOAuthPrepareRefresh(params: JSONObject): Response {
+        if (!params.has("expectedEpoch")) {
+            return jsonResponse(400, mapOf("error" to "expectedEpoch required", "code" to "XAI_OAUTH_PREPARE_FAILED"))
+        }
+        val expectedEpoch = params.optLong("expectedEpoch", -1L)
+        return try {
+            when (val r = XaiOAuthTokenStore.prepareRefresh(expectedEpoch)) {
+                is XaiOAuthTokenStore.Result.Ok ->
+                    jsonResponse(200, mapOf("success" to true, "epoch" to r.record.epoch))
+                is XaiOAuthTokenStore.Result.Fenced ->
+                    jsonResponse(200, mapOf("success" to false, "fenced" to true, "code" to "XAI_OAUTH_STOP_FENCED"))
+                is XaiOAuthTokenStore.Result.Dead ->
+                    jsonResponse(200, mapOf("success" to false, "dead" to true, "code" to "XAI_OAUTH_FAMILY_DEAD"))
+                is XaiOAuthTokenStore.Result.Unsafe ->
+                    jsonResponse(200, mapOf("success" to false, "unsafe" to true, "code" to "XAI_OAUTH_ROTATION_IN_FLIGHT"))
+                is XaiOAuthTokenStore.Result.Conflict -> {
+                    Log.w(TAG, "xAI OAuth prepare-refresh CAS conflict (expected=$expectedEpoch current=${r.currentEpoch})")
+                    jsonResponse(409, mapOf(
+                        "error" to "epoch_conflict",
+                        "code" to "XAI_OAUTH_EPOCH_CONFLICT",
+                        "currentEpoch" to r.currentEpoch,
+                    ))
+                }
+                is XaiOAuthTokenStore.Result.Failed -> {
+                    Log.w(TAG, "xAI OAuth prepare-refresh failed: ${r.reason}")
+                    jsonResponse(500, mapOf("error" to "prepare failed", "code" to "XAI_OAUTH_PREPARE_FAILED"))
+                }
+                // Result.Safe is only produced by markReauthIfRotationInFlight, never here.
+                else -> jsonResponse(500, mapOf("error" to "unexpected prepare result", "code" to "XAI_OAUTH_PREPARE_FAILED"))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to prepare xAI OAuth refresh", e)
+            jsonResponse(500, mapOf("error" to "prepare failed", "code" to "XAI_OAUTH_PREPARE_FAILED"))
+        }
+    }
+
+    /**
+     * BAT-1155 stop-fence protocol — clear the rotation marker (epoch-STABLE CAS). `:node` calls this
+     * ONLY when the refresh transport proves the request bytes could NOT have reached the token
+     * endpoint (DNS / connection-refused before the body was written), to avoid a nuisance reconnect
+     * on a transient blip. NEVER on timeout / 5xx / any received response (those retain the marker,
+     * since the token may be consumed). Body `{ expectedEpoch }`.
+     */
+    private fun handleXaiOAuthClearRotationInFlight(params: JSONObject): Response {
+        if (!params.has("expectedEpoch")) {
+            return jsonResponse(400, mapOf("error" to "expectedEpoch required", "code" to "XAI_OAUTH_CLEAR_FAILED"))
+        }
+        val expectedEpoch = params.optLong("expectedEpoch", -1L)
+        return try {
+            when (val r = XaiOAuthTokenStore.clearRotationInFlight(expectedEpoch)) {
+                is XaiOAuthTokenStore.Result.Ok ->
+                    jsonResponse(200, mapOf("success" to true, "epoch" to r.record.epoch))
+                is XaiOAuthTokenStore.Result.Conflict ->
+                    jsonResponse(409, mapOf(
+                        "error" to "epoch_conflict",
+                        "code" to "XAI_OAUTH_EPOCH_CONFLICT",
+                        "currentEpoch" to r.currentEpoch,
+                    ))
+                is XaiOAuthTokenStore.Result.Failed -> {
+                    Log.w(TAG, "xAI OAuth clear-rotation-in-flight failed: ${r.reason}")
+                    jsonResponse(500, mapOf("error" to "clear failed", "code" to "XAI_OAUTH_CLEAR_FAILED"))
+                }
+                else -> jsonResponse(500, mapOf("error" to "unexpected clear result", "code" to "XAI_OAUTH_CLEAR_FAILED"))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear xAI OAuth rotation marker", e)
+            jsonResponse(500, mapOf("error" to "clear failed", "code" to "XAI_OAUTH_CLEAR_FAILED"))
         }
     }
 

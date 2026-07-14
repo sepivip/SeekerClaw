@@ -58,114 +58,104 @@ object XaiOAuthDurabilityGate {
     private const val MARK_RETRY_BACKOFF_MS = 20L
 
     /**
-     * Ensure the xAI OAuth family is in a durable state for a controlled stop.
-     * Returns `true` when durable (persisted OR fail-closed marked OR nothing to
-     * protect), `false` only when the budget was exhausted without reaching a
-     * durable state (catastrophic disk failure — the caller decides whether to
-     * keep the service alive and retry, or OS-fallback kill). Never throws.
+     * Ensure the xAI OAuth family is in a durable state for a controlled stop (BAT-1155 stop-fence
+     * protocol). Returns `true` when durable, `false` only when the store I/O is broken and no
+     * durable state could be reached (the caller keeps the service alive and retries). Never throws.
+     *
+     * The decision is made ENTIRELY on durable store state, so it is correct even when `:node`'s
+     * control endpoint is unreachable (the original soak brick was fail-closing a fresh family on a
+     * null control probe):
+     *   1. Not a live oauth family → nothing to protect → durable.
+     *   2. **Arm the stop fence** for the current live epoch and **atomically probe** the rotation
+     *      marker (`armStopFenceAndProbeRotation`, a pure sidecar-locked store op). The fence blocks
+     *      any NEW refresh from beginning.
+     *   3. Fence armed AND no rotation marker → nothing consumed, nothing can start → **positively
+     *      safe**, even on a null control path. (Subsumes the sign-in restart; also fixes a healthy
+     *      rotated family false-bricking on an unreachable stop.)
+     *   4. A rotation marker IS armed → a refresh POST may be mid-flight → give `:node` bounded
+     *      chances to DRAIN it (persist the successor pair via `rotate`, which clears the marker and
+     *      rebases the fence). The durable STORE marker — not the in-memory flush signal — is the
+     *      authority.
+     *   5. Still in-flight after the budget (or `:node` unreachable) → **conditional** fail-close
+     *      ([markReauthIfRotationInFlight]) — marks reauth ONLY if the marker is STILL armed, so a
+     *      concurrent proven-not-sent clear can never brick a now-safe family.
      */
     fun ensureDurableBeforeStop(): Boolean {
         if (!XaiOAuthTokenStore.isInitialized) return true
-        val rec = try {
-            XaiOAuthTokenStore.read()
-        } catch (e: Exception) {
-            LogCollector.append("[Shutdown] xAI durability gate: read failed (${e.javaClass.simpleName})", LogLevel.WARN)
-            // Can't read the record → can't prove there's nothing stranded → fail-closed attempt.
-            return markReauthWithinDeadline(expectedEpoch = 0L, deadlineNs = deadline())
-        }
-        // Only a LIVE oauth family can strand a consumed→rotated pair (the brick). api-key users,
-        // sign-outs, and already-dead families have nothing to protect here. The
-        // one-autonomous-notice-per-dead-epoch guarantee is enforced NODE-side by reserve-before-
-        // send (noteReauthNotified), NOT by this gate — so a Stop never blocks on notify metadata.
+        val rec = XaiOAuthTokenStore.read() // never throws — missing/corrupt → FAIL_CLOSED (not live)
         val live = !rec.tombstone && !rec.reauthRequired && rec.accessTokenEnc.isNotEmpty()
         if (!live) return true
 
         val deadlineNs = deadline()
 
-        // Phase 1 — give Node repeated chances to persist the VALID rotated T1. `diskUnsafe` is the
-        // authoritative brick signal (pending pair OR convergence-exhausted OR failed dead-mark).
+        // Arm the fence for the live epoch + atomically probe the rotation marker. Pure durable-store
+        // op → works even when :node is unreachable. Retries internally to fence the WINNING live
+        // epoch if a concurrent rotate/sign-in advances it (Codex amendment 1).
+        val armed = XaiOAuthTokenStore.armStopFenceAndProbeRotation(rec.epoch, maxLockMs = remainingMs(deadlineNs))
+        val rec2 = when (armed) {
+            is XaiOAuthTokenStore.Result.Ok -> armed.record
+            else -> {
+                LogCollector.append("[Shutdown] xAI durability gate: could not arm stop fence ($armed) — conditional fail-closed attempt", LogLevel.WARN)
+                return markReauthIfInFlightWithinDeadline(rec.epoch, deadlineNs)
+            }
+        }
+        // Went dead/reauth concurrently → already durable.
+        if (rec2.tombstone || rec2.reauthRequired) return true
+        // Fenced + nothing in flight → POSITIVELY SAFE (even on a null control path).
+        if (rec2.rotationInFlightEpoch != rec2.epoch) return true
+
+        // A refresh POST for this epoch may be in flight. DRAIN it (durabilityOnly flush triggers
+        // :node's pending-persist → rotate() clears the marker + rebases the fence). Re-read the
+        // DURABLE marker after each round — the store is authoritative, not the flush's diskUnsafe.
         var round = 0
         while (round < MAX_FLUSH_ROUNDS && remainingMs(deadlineNs) > 0L) {
             round++
-            val unsafe: Boolean? = try {
-                // Codex re-review major-1: cap the round to the REMAINING budget at BOTH levels —
-                // pass the budget into flushShutdown so its underlying (non-cancellable) HTTP
-                // connect/read timeouts are themselves capped, AND wrap in withTimeoutOrNull as a
-                // coroutine-level backstop. A late-starting round stays inside BUDGET_MS.
-                //
-                // BAT-1155 hotfix: durabilityOnly=true. This gate needs ONLY the diskUnsafe
-                // answer — it never needed the session summary. Asking Node to skip the
-                // best-effort (up-to-1200ms) summary keeps each round's response well inside the
-                // read budget even on a loaded device, so a slow summary can no longer time the
-                // round out to null and force a fail-closed markReauth on a VALID fresh sign-in
-                // (the soak brick). The xAI drain still runs, so Node still gets its chance to
-                // persist the rotated T1 (the PREFERRED "stays signed in" outcome).
+            try {
                 val budget = remainingMs(deadlineNs).toInt().coerceAtLeast(1)
-                runBlocking { withTimeoutOrNull(budget.toLong()) { NodeControlClient.flushShutdown(budget, durabilityOnly = true) } }?.diskUnsafe
+                runBlocking { withTimeoutOrNull(budget.toLong()) { NodeControlClient.flushShutdown(budget, durabilityOnly = true) } }
             } catch (e: Exception) {
-                LogCollector.append(
-                    "[Shutdown] xAI durability gate: flush round threw (${e.javaClass.simpleName}: ${e.message})",
-                    LogLevel.WARN,
-                )
-                null
+                LogCollector.append("[Shutdown] xAI durability gate: drain round $round threw (${e.message})", LogLevel.WARN)
             }
-            when (unsafe) {
-                false -> {
-                    if (round > 1) LogCollector.append("[Shutdown] xAI durability gate: disk confirmed safe on round $round", LogLevel.INFO)
-                    return true
-                }
-                true -> LogCollector.append(
-                    "[Shutdown] xAI durability gate: on-disk token unsafe to boot from (round $round/$MAX_FLUSH_ROUNDS)",
-                    LogLevel.WARN,
-                )
-                null -> {
-                    // Instrumentation (logcat-visible, unlike LogCollector's file sink): a genuine
-                    // fail-close here on a VALID family is exactly the soak-brick symptom, so make
-                    // it greppable on-device during the sign-in verification.
-                    android.util.Log.w(TAG, "durability gate: Node unreachable (durability probe null) — engaging fail-closed markReauth")
-                    LogCollector.append("[Shutdown] xAI durability gate: Node unreachable — engaging fail-closed mark", LogLevel.WARN)
-                    break
-                }
+            val rec3 = XaiOAuthTokenStore.read()
+            if (rec3.tombstone || rec3.reauthRequired) return true
+            if (rec3.rotationInFlightEpoch != rec3.epoch) {
+                if (round > 1) LogCollector.append("[Shutdown] xAI durability gate: in-flight rotation drained/persisted on round $round", LogLevel.INFO)
+                return true
             }
         }
 
-        // Phase 2. Fail closed: durably mark the family reauth-required so the next boot reconnects instead
-        // of replaying a possibly-consumed refresh token (idempotent for an already-dead family).
-        return markReauthWithinDeadline(expectedEpoch = rec.epoch, deadlineNs = deadlineNs)
+        // Still in flight after the budget (or :node unreachable). Conditional fail-close.
+        android.util.Log.w(TAG, "durability gate: rotation still in-flight after drain — conditional fail-closed markReauth")
+        LogCollector.append("[Shutdown] xAI durability gate: rotation still in-flight after drain — conditional fail-close", LogLevel.WARN)
+        return markReauthIfInFlightWithinDeadline(rec2.epoch, deadlineNs)
     }
 
     /**
-     * Retry [XaiOAuthTokenStore.markReauth] until it is positively durable or the
-     * monotonic [deadlineNs] passes. `Ok` ⇒ marked; `Conflict` ⇒ a fresh sign-in/out
-     * already advanced the epoch (the winning family is intact, so we ARE durable);
-     * `Failed` ⇒ retry within budget. Returns `false` only if the budget expires with
-     * every attempt Failed (disk broken — nothing could have saved the family anyway).
+     * Retry [XaiOAuthTokenStore.markReauthIfRotationInFlight] until durable or [deadlineNs] passes.
+     * `Ok` ⇒ marked reauth (the marker was still armed → fail-closed). `Safe` ⇒ the marker was
+     * cleared by a proven-not-sent refresh between the probe and now → the family is live and MUST
+     * NOT be bricked (Codex major). `Conflict` ⇒ a fresh sign-in/out advanced the epoch → the
+     * winning family is intact. All three are durable. `Failed` ⇒ retry within budget; `false` only
+     * if the store I/O never succeeds (disk broken — nothing could have saved the family anyway).
      */
-    private fun markReauthWithinDeadline(expectedEpoch: Long, deadlineNs: Long): Boolean {
+    private fun markReauthIfInFlightWithinDeadline(expectedEpoch: Long, deadlineNs: Long): Boolean {
         while (remainingMs(deadlineNs) > 0L) {
-            // The store's markReauth is documented never-throws, but keep the gate itself
-            // fail-closed (CodeRabbit): any unexpected throw becomes a retryable Failed rather
-            // than propagating out of ensureDurableBeforeStop (whose caller must NOT fail open).
             val r = try {
-                // Codex re-review major-1: cap the store lock to the gate's REMAINING budget so a
-                // mark started near expiry can't add its own full lock allowance on top of BUDGET_MS.
-                XaiOAuthTokenStore.markReauth(expectedEpoch, maxLockMs = remainingMs(deadlineNs))
+                XaiOAuthTokenStore.markReauthIfRotationInFlight(expectedEpoch, maxLockMs = remainingMs(deadlineNs))
             } catch (e: Exception) {
                 XaiOAuthTokenStore.Result.Failed(e.message ?: e.javaClass.simpleName)
             }
             when (r) {
                 is XaiOAuthTokenStore.Result.Ok -> {
-                    LogCollector.append(
-                        "[Shutdown] xAI durability gate: fail-closed reauth mark persisted (epoch=${r.record.epoch})",
-                        LogLevel.WARN,
-                    )
+                    LogCollector.append("[Shutdown] xAI durability gate: fail-closed reauth mark persisted (epoch=${r.record.epoch})", LogLevel.WARN)
+                    return true
+                }
+                is XaiOAuthTokenStore.Result.Safe -> {
+                    LogCollector.append("[Shutdown] xAI durability gate: rotation marker already cleared (proven-not-sent) — family live, no brick", LogLevel.INFO)
                     return true
                 }
                 is XaiOAuthTokenStore.Result.Conflict -> {
-                    LogCollector.append(
-                        "[Shutdown] xAI durability gate: epoch advanced ($expectedEpoch→${r.currentEpoch}) — winning family durable",
-                        LogLevel.WARN,
-                    )
+                    LogCollector.append("[Shutdown] xAI durability gate: epoch advanced ($expectedEpoch→${r.currentEpoch}) — winning family durable", LogLevel.WARN)
                     return true
                 }
                 is XaiOAuthTokenStore.Result.Failed -> {
@@ -177,12 +167,10 @@ object XaiOAuthDurabilityGate {
                         break
                     }
                 }
+                else -> return true // Fenced/Dead/Unsafe are not produced here; treat as durable defensively
             }
         }
-        LogCollector.append(
-            "[Shutdown] xAI durability gate: could NOT confirm durability within ${BUDGET_MS}ms budget",
-            LogLevel.ERROR,
-        )
+        LogCollector.append("[Shutdown] xAI durability gate: could NOT confirm durability within ${BUDGET_MS}ms budget", LogLevel.ERROR)
         return false
     }
 

@@ -1228,7 +1228,13 @@ object ConfigManager {
         // as usable. A missing/corrupt store fails closed to a reauth
         // tombstone inside read(). Never logs decrypted values.
         val xaiRec = XaiOAuthTokenStore.read()
-        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired
+        // BAT-1155 amendment 3 (fail-safe emission): an armed rotation marker means a refresh POST
+        // for this epoch was in flight when the prior process died → the on-disk refresh token is
+        // POTENTIALLY CONSUMED. Never hand it to the provider — treat the family as dead (blank +
+        // reauthRequired) so :node boots INTO reconnect. SeekerClawService.reconcileXaiOAuthOnBoot
+        // durably converts this to reauth; this belt covers a conversion that could not persist.
+        val rotationUnsafe = !xaiRec.tombstone && xaiRec.rotationInFlightEpoch == xaiRec.epoch
+        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired || rotationUnsafe
         // Decrypt the required token fields; null = a NON-blank ciphertext failed to
         // decrypt (Codex major-1). A decrypt failure makes the family effectively dead —
         // fail closed to reauth (blank tokens + reauthRequired) so it boots INTO reconnect,
@@ -1236,7 +1242,7 @@ object ConfigManager {
         val accessDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
         val refreshDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
         val xaiDecryptFailed = accessDec == null || refreshDec == null
-        val xaiEffectiveReauth = xaiRec.reauthRequired || xaiDecryptFailed
+        val xaiEffectiveReauth = xaiRec.reauthRequired || rotationUnsafe || xaiDecryptFailed
         val xaiDead = deadByFlag || xaiDecryptFailed
         val xaiOAuthToken = if (xaiDead) "" else (accessDec ?: "")
         val xaiOAuthRefresh = if (xaiDead) "" else (refreshDec ?: "")

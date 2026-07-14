@@ -133,6 +133,23 @@ object XaiOAuthTokenStore {
         data class Conflict(val currentEpoch: Long) : Result()
         /** FS/lock failure; nothing was persisted. */
         data class Failed(val reason: String) : Result()
+
+        // ---- BAT-1155 stop-fence protocol results (prepareRefresh / conditional mark) ----
+        /** [prepareRefresh]: a controlled stop is fencing this epoch — the refresh must NOT POST. */
+        object Fenced : Result()
+        /** [prepareRefresh]: the family is tombstoned or reauth-required — terminal, no POST ever. */
+        object Dead : Result()
+        /**
+         * [prepareRefresh]: a rotation marker is ALREADY armed for this epoch — a prior POST may
+         * have consumed the on-disk refresh token, so a second POST is forbidden. Terminal until a
+         * rotate/proven-not-sent-clear/supersede/durable-reauth resolves it. Node must latch this.
+         */
+        object Unsafe : Result()
+        /**
+         * [markReauthIfRotationInFlight]: the rotation marker was already cleared (a proven-not-sent
+         * refresh) — the family is live and safe; nothing was marked. The stop treats this as durable.
+         */
+        object Safe : Result()
     }
 
     /**
@@ -252,6 +269,8 @@ object XaiOAuthTokenStore {
      */
     fun rotate(expectedEpoch: Long, accessTokenEnc: String, refreshTokenEnc: String, expiresAt: String): Result =
         mutate(expectedEpoch, rejectIfTombstone = true) { cur ->
+            // mutate advances the epoch to cur.epoch + 1 AFTER this transform, so the successor
+            // epoch is knowable here as cur.epoch + 1 (the CAS matched cur.epoch == expectedEpoch).
             cur.copy(
                 accessTokenEnc = accessTokenEnc,
                 refreshTokenEnc = refreshTokenEnc,
@@ -259,6 +278,13 @@ object XaiOAuthTokenStore {
                 tombstone = false,
                 reauthRequired = false,
                 reauthNotifiedEpoch = -1L,
+                // The in-flight rotation just completed — the successor pair (T1) is now on disk.
+                rotationInFlightEpoch = -1L,
+                // BAT-1155 amendment 1: if a stop armed the fence on the from-epoch WHILE this
+                // (already-authorized) refresh was in flight, REBASE the fence forward to the new
+                // epoch so the completed-safe rotation doesn't drop the fence and let a new refresh
+                // start before teardown. Otherwise leave it clear.
+                stopFenceEpoch = if (cur.stopFenceEpoch == cur.epoch) cur.epoch + 1L else -1L,
             )
         }
 
@@ -278,6 +304,10 @@ object XaiOAuthTokenStore {
                 tombstone = false,
                 reauthRequired = false,
                 reauthNotifiedEpoch = -1L,
+                // BAT-1155: a fresh family SUPERSEDES the prior family entirely — clear its
+                // rotation marker and stop fence so no prior-family state leaks onto the new epoch.
+                rotationInFlightEpoch = -1L,
+                stopFenceEpoch = -1L,
             )
         }
 
@@ -300,7 +330,12 @@ object XaiOAuthTokenStore {
      * caller can chain markReauthNotified with the same epoch. Idempotent.
      */
     fun markReauth(expectedEpoch: Long, maxLockMs: Long = LOCK_TIMEOUT_MS): Result =
-        mutate(expectedEpoch, advanceEpoch = false, lockBudgetMs = maxLockMs) { it.copy(reauthRequired = true) }
+        // BAT-1155 amendment 3: a durable reauth SUPERSEDES the rotation marker (a reconnect will
+        // mint a brand-new family, so a possibly-consumed T0 can never be replayed) → clear it.
+        // The stop fence is left inert on a now-dead family.
+        mutate(expectedEpoch, advanceEpoch = false, lockBudgetMs = maxLockMs) {
+            it.copy(reauthRequired = true, rotationInFlightEpoch = -1L)
+        }
 
     /**
      * Record that the single autonomous "reconnect" notice has fired for the dead
@@ -310,7 +345,99 @@ object XaiOAuthTokenStore {
      * requests are answered regardless (that logic lives in Node, keyed on this).
      */
     fun markReauthNotified(expectedEpoch: Long): Result =
+        // BAT-1155 amendment 3: touches ONLY reauthNotifiedEpoch — it must NEVER reset
+        // rotationInFlightEpoch (the notify path clearing the safety marker before a durable
+        // reauth lands would let a crash-then-boot replay a consumed T0). `.copy` preserves it.
         mutate(expectedEpoch, advanceEpoch = false) { it.copy(reauthNotifiedEpoch = expectedEpoch) }
+
+    // ---- BAT-1155 stop-fence protocol (the durable consumed-token state machine) ---------
+
+    /**
+     * The single atomic pre-POST transaction the `:node` refresh path runs BEFORE presenting the
+     * on-disk refresh token to xAI (Codex-locked order). Under the sidecar lock, in priority order:
+     *  1. `expectedEpoch != on-disk epoch` → [Result.Conflict] (superseded; Node discards, no POST);
+     *  2. tombstone / reauthRequired → [Result.Dead] (terminal, no POST — amendment 3);
+     *  3. a stop is fencing this epoch (`stopFenceEpoch == epoch`) → [Result.Fenced] (no POST);
+     *  4. a rotation marker is ALREADY armed (`rotationInFlightEpoch == epoch`) → [Result.Unsafe]
+     *     (a prior POST may have consumed the token — a second POST is forbidden; Codex blocker);
+     *  5. otherwise arm `rotationInFlightEpoch = epoch` (epoch-STABLE) → [Result.Ok] and the caller
+     *     may POST — the "potentially-consumed" marker is now durably on disk BEFORE any request.
+     * At most one concurrent/cross-process `prepareRefresh(E)` can return Ok. Never throws.
+     */
+    fun prepareRefresh(expectedEpoch: Long): Result = withStoreLock { cps, current ->
+        if (current.epoch != expectedEpoch) return@withStoreLock Result.Conflict(current.epoch)
+        if (current.tombstone || current.reauthRequired) return@withStoreLock Result.Dead
+        if (current.stopFenceEpoch == current.epoch) return@withStoreLock Result.Fenced
+        if (current.rotationInFlightEpoch == current.epoch) return@withStoreLock Result.Unsafe
+        val next = current.copy(rotationInFlightEpoch = current.epoch)
+        if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
+    }
+
+    /**
+     * Clear the rotation marker (epoch-STABLE CAS). Called ONLY when the refresh transport proves
+     * the request bytes could NOT have reached the token endpoint (DNS/connection-refused before
+     * the body was written) — see the `:node` marker discipline. Never on timeout/5xx/any received
+     * response (those retain the marker, since the token may be consumed).
+     */
+    fun clearRotationInFlight(expectedEpoch: Long): Result =
+        mutate(expectedEpoch, advanceEpoch = false) { it.copy(rotationInFlightEpoch = -1L) }
+
+    /**
+     * Stop-side transaction (MAIN gate / `:node` onDestroy): durably arm the stop fence for the
+     * CURRENT live epoch and return the resulting record so the caller can read `rotationInFlightEpoch`
+     * in the SAME locked snapshot (the fence ⇄ prepareRefresh serialization point). On a CAS conflict
+     * — a concurrent rotate/sign-in advanced the epoch — re-read and re-arm the WINNING live epoch,
+     * retrying within [maxLockMs] until the live family is fenced OR is tombstone/reauth (Codex
+     * amendment 1: never leave the winning live epoch unfenced). Returns [Result.Ok] with the fenced
+     * (or already-dead) record, or [Result.Failed] on deadline/FS failure. Never throws.
+     */
+    fun armStopFenceAndProbeRotation(expectedEpoch: Long, maxLockMs: Long = LOCK_TIMEOUT_MS): Result {
+        val deadlineNs = System.nanoTime() + maxLockMs.coerceAtLeast(0L) * 1_000_000L
+        var target = expectedEpoch
+        while (true) {
+            val remainingMs = (deadlineNs - System.nanoTime()) / 1_000_000L
+            if (remainingMs <= 0L) return Result.Failed("arm fence deadline")
+            val r = mutate(target, advanceEpoch = false, lockBudgetMs = remainingMs) { cur ->
+                cur.copy(stopFenceEpoch = cur.epoch)
+            }
+            when (r) {
+                is Result.Ok -> return r
+                is Result.Conflict -> {
+                    val cur = read()
+                    // A dead/reauth winner has nothing to fence (a refresh can never start on it) —
+                    // hand it back so the caller treats it as durable/safe.
+                    if (cur.tombstone || cur.reauthRequired) return Result.Ok(cur)
+                    target = cur.epoch // re-fence the winning live epoch
+                }
+                else -> return r // Failed
+            }
+        }
+    }
+
+    /**
+     * Clear the stop fence (epoch-STABLE, unconditional on the current record). Called at `:node`
+     * boot (drop a stale fence from the prior generation) and on an ABANDONED stop — where the
+     * caller MUST confirm this returns [Result.Ok] BEFORE unquiescing/resuming; if it fails, stay
+     * stopped and retry (Codex amendment 2 / decision 3 — no TTL). Never throws.
+     */
+    fun clearStopFence(): Result =
+        mutate(null, advanceEpoch = false) { it.copy(stopFenceEpoch = -1L) }
+
+    /**
+     * CONDITIONAL fail-close (Codex major): durably mark the family reauth-required ONLY IF the
+     * rotation marker is STILL armed for [expectedEpoch]. If the marker was cleared between the
+     * stop's probe and now (a proven-not-sent refresh), returns [Result.Safe] — the family is live
+     * and must NOT be bricked. Epoch-STABLE, so a chained markReauthNotified keeps the same epoch.
+     * [Result.Conflict] if a fresh sign-in/out advanced the epoch (the winning family is intact →
+     * the caller treats it as durable). Never throws.
+     */
+    fun markReauthIfRotationInFlight(expectedEpoch: Long, maxLockMs: Long = LOCK_TIMEOUT_MS): Result =
+        withStoreLock(maxLockMs) { cps, current ->
+            if (current.epoch != expectedEpoch) return@withStoreLock Result.Conflict(current.epoch)
+            if (current.rotationInFlightEpoch != current.epoch) return@withStoreLock Result.Safe
+            val next = current.copy(reauthRequired = true, rotationInFlightEpoch = -1L)
+            if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
+        }
 
     /**
      * One-time upgrade fill from the legacy `seekerclaw_prefs` xAI OAuth keys
@@ -412,4 +539,19 @@ data class XaiOAuthTokens(
     val epoch: Long = 0L,
     /** Dead record (sign-out or fail-closed default) — no usable token. */
     val tombstone: Boolean = false,
+    /**
+     * BAT-1155 stop-fence protocol. A refresh POST for THIS epoch's on-disk refresh token
+     * has been initiated (armed ≡ `== epoch`) → the token is potentially-consumed → feeds
+     * `isDiskUnsafe`. Terminal once armed until exactly one of: a proven-not-sent clear, a
+     * successful rotate to the successor pair, a superseding signIn/signOut, or a durable
+     * reauth. Absent in pre-upgrade records → decodes to -1 (never spuriously armed).
+     */
+    val rotationInFlightEpoch: Long = -1L,
+    /**
+     * BAT-1155 stop-fence protocol. A controlled stop is in progress for THIS epoch (armed ≡
+     * `== epoch`) → a refresh must NOT begin a new rotation POST. Rebased forward by a rotate
+     * that started before the fence; cleared at :node boot and on an abandoned stop (which
+     * must persist the clear BEFORE resuming — no TTL).
+     */
+    val stopFenceEpoch: Long = -1L,
 )

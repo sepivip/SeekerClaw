@@ -358,6 +358,11 @@ class SeekerClawService : Service() {
         val staleConfig = File(File(filesDir, "workspace"), "config.json")
         if (staleConfig.exists()) staleConfig.delete()
 
+        // BAT-1155 boot reconcile (amendment 3): convert an armed rotation marker to durable reauth
+        // and clear a stale stop fence — MUST run BEFORE writeConfigJson so the emitted token reflects
+        // the conversion (a potentially-consumed refresh token is never handed to the provider).
+        reconcileXaiOAuthOnBoot()
+
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
         // but writeConfigJson reads the XML file fresh on first access per process.
@@ -708,139 +713,52 @@ class SeekerClawService : Service() {
      * in production.
      */
     private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_500L) {
-        if (!NodeBridge.isAlive()) {
-            // Codex blocker-1: Node already gone means we cannot flush to confirm a
-            // rotation wasn't stranded on disk (server consumed T0, minted T1, then the
-            // process died before persisting). Fail closed on the unknown rather than
-            // silently skip. No-op unless the store still shows a LIVE oauth family, and
-            // a no-op if the pre-stop gate already marked it (reauthRequired ⇒ not live).
-            guardXaiOAuthDurabilityOnStop()
-            return
+        // (1) xAI OAuth durability (BAT-1155 stop-fence protocol). The gate decides on DURABLE STORE
+        //     state — arm the stop fence, probe the rotation marker, drain an in-flight rotation, and
+        //     conditionally fail-close — so it is correct even when :node is unreachable during
+        //     teardown (the original soak brick was fail-closing on a null control probe). This is the
+        //     TERMINAL path (we can't keep the service alive), so the boolean is ignored: the durable
+        //     fence / reauth mark it leaves is what the next boot honours. Idempotent with the pre-stop
+        //     gate — if stopWithDurability already resolved durability, this returns fast.
+        try {
+            XaiOAuthDurabilityGate.ensureDurableBeforeStop()
+        } catch (e: Exception) {
+            LogCollector.append("[Shutdown] xAI durability guard threw: ${e.message}", LogLevel.WARN)
         }
-        // BAT-1155 verify major-2 — tri-state so the durability gate fires ONLY on a
-        // genuinely stranded rotation (or a truly-unconfirmed flush), never on a benign
-        // summary-flush hiccup with no pending token write:
-        //   true  = Node reached, a rotated pair is STILL unpersisted → fail-closed;
-        //   false = Node reached, nothing stranded → clean, no re-pair;
-        //   null  = timed out / unreachable / unparseable → fail-closed on the unknown.
-        val flush: NodeControlClient.FlushResult? = runBlocking {
-            withTimeoutOrNull(timeoutMs) {
-                NodeControlClient.flushShutdown()
-            }
-        }
-        // onDestroy is terminal (can't keep the service alive), so only the brick-critical
-        // `diskUnsafe` matters here; `notifyPending` is drained by the pre-stop gate.
-        when (flush?.diskUnsafe) {
-            false -> LogCollector.append("[Shutdown] Node flush acknowledged (on-disk xAI token safe)")
-            true -> {
-                LogCollector.append(
-                    "[Shutdown] Node flush left a rotated xAI token unpersisted — engaging durability gate",
-                    LogLevel.WARN,
-                )
-                guardXaiOAuthDurabilityOnStop()
-            }
-            null -> {
-                // BAT-1155 hotfix: a null from the FULL flush is ambiguous — it can mean "Node
-                // genuinely unreachable" (fail-close warranted) OR "the best-effort session
-                // summary was just slow and the HTTP response missed the read budget" (fail-close
-                // would brick a VALID family — the soak brick). Disambiguate with a FAST
-                // durability-only re-probe (xAI drain, no summary) before touching the family.
-                val probe: NodeControlClient.FlushResult? = runBlocking {
-                    withTimeoutOrNull(timeoutMs) { NodeControlClient.flushShutdown(durabilityOnly = true) }
-                }
-                when (probe?.diskUnsafe) {
-                    false -> LogCollector.append(
-                        "[Shutdown] Node full-flush timed out (slow summary) but durability probe confirms on-disk xAI token safe",
-                    )
-                    true -> {
-                        android.util.Log.w("XaiDurabilityGate", "onDestroy: durability probe reports diskUnsafe → markReauth")
-                        LogCollector.append(
-                            "[Shutdown] Durability probe reports a rotated xAI token unpersisted — engaging durability gate",
-                            LogLevel.WARN,
-                        )
-                        guardXaiOAuthDurabilityOnStop()
-                    }
-                    null -> {
-                        android.util.Log.w("XaiDurabilityGate", "onDestroy: Node unreachable on full flush + durability probe → fail-closed markReauth")
-                        LogCollector.append(
-                            "[Shutdown] Node unreachable on flush + durability probe; fail-closed durability gate",
-                            LogLevel.WARN,
-                        )
-                        guardXaiOAuthDurabilityOnStop()
-                    }
-                }
-            }
+        // (2) Best-effort session summary + SQL.js flush (BAT-525). NOT durability-critical — a slow or
+        //     failed summary is acceptable (the durable state above is independent of it). Skipped when
+        //     Node is already gone.
+        if (NodeBridge.isAlive()) {
+            runBlocking { withTimeoutOrNull(timeoutMs) { NodeControlClient.flushShutdown() } }
         }
     }
 
     /**
-     * BAT-1155 §D6 — fail-closed durability gate for a stop whose Node flush
-     * did NOT acknowledge. When the flush is unconfirmed, a rotated xAI OAuth
-     * pair may be stranded in Node's memory (the server already consumed the
-     * old refresh token T0 and minted T1) while disk still holds T0. A blind
-     * `killProcess` would then replay the consumed T0 on the next boot and
-     * brick the family.
-     *
-     * The PREFERRED path (keep the service alive, retry) is not reachable from
-     * this terminal `onDestroy`, so we apply the FALLBACK: durably mark the
-     * LIVE oauth family reauth-required so the next boot boots INTO reauth
-     * (shows reconnect) instead of POSTing a possibly-consumed token. We only
-     * return once the write is POSITIVELY durable (Result.Ok); if even that
-     * fails after a retry, the unconditional `killProcess` remains the OS/
-     * final fallback.
-     *
-     * Trigger (verify major-2): the caller invokes this ONLY when the flush
-     * reported a genuinely stranded rotation (`pendingPersist:true`) OR could not
-     * be confirmed at all (timeout/unreachable) — NOT on a clean flush that merely
-     * had a summary hiccup. So a healthy family with no pending rotation is never
-     * force-re-paired by a benign stop.
-     *
-     * Scope: even when triggered, it is a no-op unless the store shows a LIVE oauth
-     * family (has a token, not already tombstone/reauth). Api-key users and
-     * already-dead families never reach the markReauth write.
+     * BAT-1155 boot reconcile (Codex amendment 3), run in the `:node` process BEFORE the config is
+     * emitted / the provider is activated:
+     *  1. If a rotation marker is armed for the current live epoch, a refresh POST was in flight when
+     *     the prior process died → the on-disk refresh token is POTENTIALLY CONSUMED → durably convert
+     *     it to `reauthRequired` (which also clears the marker) so the provider can never POST it.
+     *     (Belt: `ConfigManager.loadConfig` also blanks the token when the marker is armed, so even a
+     *     failed conversion emits no usable token this boot; the next boot re-tries.)
+     *  2. Clear a stale stop fence left by the prior stop generation so the reborn process is never
+     *     wedged (fences never carry across a process boundary).
      */
-    private fun guardXaiOAuthDurabilityOnStop() {
+    private fun reconcileXaiOAuthOnBoot() {
         if (!XaiOAuthTokenStore.isInitialized) return
-        val rec = try {
-            XaiOAuthTokenStore.read()
-        } catch (e: Exception) {
-            return
-        }
+        val rec = XaiOAuthTokenStore.read()
         val live = !rec.tombstone && !rec.reauthRequired && rec.accessTokenEnc.isNotEmpty()
-        if (!live) return
-        repeat(3) { attempt ->
-            // CAS on the epoch we just read (Codex blocker-2): if a fresh sign-in landed
-            // concurrently, the mark conflicts and we must NOT touch the winning family.
+        if (live && rec.rotationInFlightEpoch == rec.epoch) {
             when (val r = XaiOAuthTokenStore.markReauth(rec.epoch)) {
-                is XaiOAuthTokenStore.Result.Ok -> {
-                    android.util.Log.w("XaiDurabilityGate", "onDestroy guard MARKED family reauth-required (epoch=${r.record.epoch}) — token will read as 'credential missing' until re-sign-in")
-                    LogCollector.append(
-                        "[Shutdown] xAI OAuth flush unconfirmed — durably marked reauth-required " +
-                            "(epoch=${r.record.epoch}) before kill",
-                        LogLevel.WARN,
-                    )
-                    return
-                }
-                is XaiOAuthTokenStore.Result.Conflict -> {
-                    // A fresh sign-in/out won the epoch — the live family we saw is gone,
-                    // so there is nothing to fail closed. Treat as durable and stop.
-                    LogCollector.append(
-                        "[Shutdown] xAI OAuth durability gate: epoch advanced (${rec.epoch}→${r.currentEpoch}) — winning family intact",
-                        LogLevel.WARN,
-                    )
-                    return
-                }
-                is XaiOAuthTokenStore.Result.Failed -> if (attempt == 2) {
-                    // OS/final fallback only (Codex: the onDestroy path cannot keep the
-                    // service alive; the PRE-STOP gate in stop() is the keep-alive path).
-                    LogCollector.append(
-                        "[Shutdown] xAI OAuth fail-closed markReauth did NOT persist after 3 tries " +
-                            "(${r.reason}) — OS fallback kill",
-                        LogLevel.ERROR,
-                    )
-                }
+                is XaiOAuthTokenStore.Result.Ok ->
+                    LogCollector.append("[Boot] xAI rotation marker armed at boot → durably converted to reauth (epoch=${r.record.epoch})", LogLevel.WARN)
+                is XaiOAuthTokenStore.Result.Conflict ->
+                    LogCollector.append("[Boot] xAI rotation marker: epoch advanced (${rec.epoch}→${r.currentEpoch}) — winning family intact", LogLevel.INFO)
+                else ->
+                    LogCollector.append("[Boot] xAI rotation marker conversion could not persist ($r) — loadConfig will still blank the token this boot", LogLevel.WARN)
             }
         }
+        XaiOAuthTokenStore.clearStopFence()
     }
 
     private fun createNotification(text: String): Notification {
