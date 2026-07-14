@@ -723,13 +723,15 @@ class SeekerClawService : Service() {
         //   true  = Node reached, a rotated pair is STILL unpersisted → fail-closed;
         //   false = Node reached, nothing stranded → clean, no re-pair;
         //   null  = timed out / unreachable / unparseable → fail-closed on the unknown.
-        val pendingOrUnknown: Boolean? = runBlocking {
+        val flush: NodeControlClient.FlushResult? = runBlocking {
             withTimeoutOrNull(timeoutMs) {
                 NodeControlClient.flushShutdown()
             }
         }
-        when (pendingOrUnknown) {
-            false -> LogCollector.append("[Shutdown] Node flush acknowledged (no stranded xAI token)")
+        // onDestroy is terminal (can't keep the service alive), so only the brick-critical
+        // `diskUnsafe` matters here; `notifyPending` is drained by the pre-stop gate.
+        when (flush?.diskUnsafe) {
+            false -> LogCollector.append("[Shutdown] Node flush acknowledged (on-disk xAI token safe)")
             true -> {
                 LogCollector.append(
                     "[Shutdown] Node flush left a rotated xAI token unpersisted — engaging durability gate",
@@ -871,6 +873,10 @@ class SeekerClawService : Service() {
         private const val MAX_KEEPALIVE_STOP_ATTEMPTS = 2
         private const val KEEPALIVE_RETRY_MS = 1_500L
 
+        /** Bounded best-effort /unquiesce retries for an abandoned Stop; the Node lease backstops the rest. */
+        private const val MAX_UNQUIESCE_ATTEMPTS = 5
+        private const val UNQUIESCE_RETRY_MS = 1_500L
+
         fun start(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
             val intent = Intent(context, SeekerClawService::class.java)
@@ -946,10 +952,11 @@ class SeekerClawService : Service() {
                                 "(the session token could not be safely saved; force-stop from system settings to override)",
                             LogLevel.ERROR,
                         )
-                        // Codex re-review blocker: the Stop is abandoned (we are NOT killing) —
-                        // unquiesce so Node resumes normal turns/heartbeats/rotations instead of
-                        // staying frozen. Best-effort; a fresh boot is un-quiesced regardless.
-                        runCatching { runBlocking { NodeControlClient.unquiesce() } }
+                        // Codex re-review major-2: the Stop is abandoned (we are NOT killing) —
+                        // unquiesce so Node resumes turns/heartbeats/rotations. Retry with bounded
+                        // backoff (a single ignored call could leave a kept-alive agent frozen);
+                        // the Node quiesce LEASE is the ultimate backstop if every retry fails.
+                        unquiesceUntilConfirmed(appCtx, 0)
                         restartHandler.post { postDurabilityStuckNotice(appCtx) }
                     }
                 }
@@ -1004,6 +1011,28 @@ class SeekerClawService : Service() {
 
         private fun clearDurabilityStuckNotice(appCtx: Context) {
             runCatching { NotificationManagerCompat.from(appCtx).cancel(DURABILITY_NOTICE_ID) }
+        }
+
+        /**
+         * Codex re-review major-2: keep trying to unquiesce an abandoned (kept-alive) Stop with
+         * bounded backoff until a POST is confirmed, so a single transient failure can't leave the
+         * agent frozen. If all attempts fail, the Node quiesce lease still auto-resumes — this only
+         * shortens that window. Runs on [stopExecutor]; scheduling on [restartHandler] is cancelled
+         * by the next start()/stop() (removeCallbacksAndMessages).
+         */
+        private fun unquiesceUntilConfirmed(appCtx: Context, attempt: Int) {
+            stopExecutor.execute {
+                val ok = runCatching { runBlocking { NodeControlClient.unquiesce() } }.getOrDefault(false)
+                if (ok) return@execute
+                if (attempt < MAX_UNQUIESCE_ATTEMPTS) {
+                    restartHandler.postDelayed({ unquiesceUntilConfirmed(appCtx, attempt + 1) }, UNQUIESCE_RETRY_MS)
+                } else {
+                    LogCollector.append(
+                        "[Shutdown] unquiesce not confirmed after ${attempt + 1} tries — Node quiesce lease will auto-resume",
+                        LogLevel.WARN,
+                    )
+                }
+            }
         }
     }
 }

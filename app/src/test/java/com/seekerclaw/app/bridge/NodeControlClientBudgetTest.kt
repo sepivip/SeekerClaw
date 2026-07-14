@@ -3,6 +3,7 @@ package com.seekerclaw.app.bridge
 import com.seekerclaw.app.util.ServiceState
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -67,5 +68,14 @@ class NodeControlClientBudgetTest {
         // the class's own READ_TIMEOUT_MS rather than a caller budget.
         val r = runBlocking { NodeControlClient.flushShutdown() }
         assertNull(r)
+    }
+
+    @Test
+    fun `unquiesce returns false (not a throw) against a non-responsive endpoint`() {
+        // Codex re-review major-2: the abandon path retries unquiesce until confirmed, so a failed
+        // attempt must return a clean `false` (never throw) for the retry loop to act on — the Node
+        // quiesce lease then backstops the rest.
+        val r = runBlocking { NodeControlClient.unquiesce() }
+        assertFalse("a non-responsive endpoint yields false so the abandon path keeps retrying", r)
     }
 }

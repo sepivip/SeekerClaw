@@ -17,21 +17,40 @@
 // Single tiny module so every gate site (ai.js turns, main.js heartbeat, xai.js rotation,
 // internal-control-server.js) shares ONE authoritative flag with no circular-require risk.
 
-let _quiesced = false;
+// Codex re-review major-2: a LEASE, not a sticky flag. An abandoned Stop that is KEPT ALIVE
+// tries to /unquiesce, but that call can transiently fail (timeout/401) — and there may be no
+// "next boot" to self-heal, so a sticky flag would freeze turns/heartbeats/rotations forever.
+// Instead each quiesce() arms a short lease; if Kotlin stops refreshing it (Stop abandoned or
+// crashed mid-drain), isQuiesced() auto-expires and the agent resumes on its own. A legitimate
+// controlled Stop completes (kill or explicit /unquiesce) in well under the lease.
+const LEASE_MS = 15_000;
 
-/** True while a controlled Stop/restart is draining — new turns/heartbeats/rotations must be refused. */
-function isQuiesced() {
-    return _quiesced;
+// Monotonic clock — immune to wall-clock/NTP jumps (parity with the Kotlin gate's System.nanoTime).
+function _nowMs() {
+    return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
-/** Enter the quiesced state (idempotent). Called at the start of /shutdown/flush. */
+let _quiescedUntilMs = 0;
+let _leaseMs = LEASE_MS; // overridable in tests to exercise expiry without a real 15s wait
+
+/** True while a controlled Stop/restart is draining — new turns/heartbeats/rotations are refused. */
+function isQuiesced() {
+    if (_quiescedUntilMs === 0) return false;
+    if (_nowMs() >= _quiescedUntilMs) { _quiescedUntilMs = 0; return false; } // lease expired → auto-resume
+    return true;
+}
+
+/** (Re)arm the quiesce lease (idempotent). Called at the start of every /shutdown/flush. */
 function quiesce() {
-    _quiesced = true;
+    _quiescedUntilMs = _nowMs() + _leaseMs;
 }
 
 /** Leave the quiesced state (idempotent). Called when a controlled Stop is ABANDONED (kept alive). */
 function unquiesce() {
-    _quiesced = false;
+    _quiescedUntilMs = 0;
 }
 
-module.exports = { isQuiesced, quiesce, unquiesce };
+// Test seam only (not used by production): shrink the lease so the expiry path is testable.
+function _setLeaseMsForTest(ms) { _leaseMs = ms; }
+
+module.exports = { isQuiesced, quiesce, unquiesce, LEASE_MS, _setLeaseMsForTest };

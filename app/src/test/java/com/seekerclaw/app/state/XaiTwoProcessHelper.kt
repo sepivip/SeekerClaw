@@ -26,14 +26,19 @@ object XaiTwoProcessHelper {
         val op = args[1]
         XaiOAuthTokenStore.initForTest(dir)
 
-        // Optional barrier: wait for a "go" file so multiple processes fire near-simultaneously.
+        // Ready+go barrier: announce READY (so the parent knows both children are initialized and
+        // parked at the barrier), then spin-wait for the "go" file — so the competing operations
+        // fire genuinely SIMULTANEOUSLY, not sequentially. Spin (not sleep) after go to minimize
+        // the release-to-op latency, maximizing the real interleaving on the sidecar lock.
+        val readyIdx = args.indexOf("--ready")
+        if (readyIdx >= 0 && readyIdx + 1 < args.size) {
+            File(args[readyIdx + 1]).writeText("ready")
+        }
         val goIdx = args.indexOf("--go")
         if (goIdx >= 0 && goIdx + 1 < args.size) {
             val go = File(args[goIdx + 1])
-            val deadline = System.nanoTime() + 10_000_000_000L
-            while (!go.exists() && System.nanoTime() < deadline) {
-                try { Thread.sleep(2) } catch (_: InterruptedException) { break }
-            }
+            val deadline = System.nanoTime() + 15_000_000_000L
+            while (!go.exists() && System.nanoTime() < deadline) { /* spin */ }
         }
 
         val line = when (op) {
@@ -45,7 +50,8 @@ object XaiTwoProcessHelper {
             "migrate" -> render("migrate", XaiOAuthTokenStore.migrateIfEmpty(args[2], args[3], args[4], args[5]))
             "read" -> {
                 val r = XaiOAuthTokenStore.read()
-                "RESULT op=read outcome=OK epoch=${r.epoch} tomb=${r.tombstone} reauth=${r.reauthRequired} acc=${r.accessTokenEnc}"
+                "RESULT op=read outcome=OK epoch=${r.epoch} tomb=${r.tombstone} reauth=${r.reauthRequired} " +
+                    "notified=${r.reauthNotifiedEpoch} acc=${r.accessTokenEnc}"
             }
             // Acquire the sidecar OS lock, announce it, then hold until a release-signal file
             // appears (or a hard cap elapses) — lets the sibling process deterministically

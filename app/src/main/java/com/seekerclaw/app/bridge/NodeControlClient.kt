@@ -82,12 +82,16 @@ object NodeControlClient {
     }
 
     /**
-     * BAT-1155 Codex re-review blocker: leave the quiesced state. `/shutdown/flush` quiesces
-     * Node (no new turns/heartbeats/rotations) so nothing can strand a fresh token between the
+     * BAT-1155 Codex re-review: leave the quiesced state. `/shutdown/flush` arms a quiesce LEASE
+     * (no new turns/heartbeats/rotations) so nothing can strand a fresh token between the
      * durability ack and the kill. When a controlled Stop is ABANDONED (durability could not be
-     * established and the service is kept alive instead of killed), the caller must unquiesce so
-     * the agent resumes normal operation. Best-effort — a missed unquiesce self-heals on the
-     * next boot (a fresh process starts un-quiesced). Idempotent.
+     * established and the service is kept alive), the caller unquiesces so the agent resumes.
+     *
+     * This is the FAST-PATH resume. It is NOT the only guarantee (Codex major-2): the Node lease
+     * auto-expires ([quiesce.js] `LEASE_MS`) if it stops being refreshed, so even if every
+     * unquiesce POST here fails, the kept-alive agent self-resumes when the lease lapses —
+     * there is no dependence on a "next boot" that may never come. Idempotent; returns `true` on a
+     * confirmed 2xx.
      */
     suspend fun unquiesce(): Boolean = withContext(Dispatchers.IO) {
         post("/unquiesce", "{}")
@@ -146,7 +150,15 @@ object NodeControlClient {
      *  - `null`  = flush did not reach/parse Node (connect-refused, 401, timeout,
      *              malformed body) → the caller fail-closes on the unknown.
      */
-    suspend fun flushShutdown(maxTotalMs: Int? = null): Boolean? = withContext(Dispatchers.IO) {
+    /**
+     * Structured `/shutdown/flush` result (Codex re-review major-1). `diskUnsafe` is the
+     * brick-critical signal (a consumed/rotated token still on disk); `notifyPending` is the
+     * separate "one-autonomous-notice-per-dead-epoch" mark that hasn't durably landed. A `null`
+     * [flushShutdown] return means the flush did not reach/parse Node (fail-closed on the unknown).
+     */
+    data class FlushResult(val diskUnsafe: Boolean, val notifyPending: Boolean)
+
+    suspend fun flushShutdown(maxTotalMs: Int? = null): FlushResult? = withContext(Dispatchers.IO) {
         // Codex re-review major-1: HttpURLConnection's blocking connect/read is NOT
         // cooperatively cancellable — a coroutine withTimeoutOrNull cannot interrupt it, so the
         // ONLY real bound is the underlying connect/read timeouts. When the caller passes a
@@ -169,11 +181,12 @@ object NodeControlClient {
             // covers convergence-exhausted (T1 discarded, consumed T0 on disk) and a failed
             // dead-family mark, not just a still-pending pair. Fall back to `pendingPersist`
             // for a pre-blocker-2 Node, and null (→ fail-closed) if neither field is present.
-            when {
+            val diskUnsafe = when {
                 json.has("diskUnsafe") -> json.getBoolean("diskUnsafe")
                 json.has("pendingPersist") -> json.getBoolean("pendingPersist")
-                else -> null
+                else -> return@withContext null
             }
+            FlushResult(diskUnsafe, json.optBoolean("notifyPending", false))
         } catch (e: Exception) {
             // CodeRabbit: don't swallow silently — a malformed /shutdown/flush body must be
             // distinguishable from a transport failure when debugging (both map to null).

@@ -219,6 +219,15 @@ test('BAT-1155 blocker (quiesce): /shutdown/flush quiesces first; /unquiesce res
     const nccKt = fs.readFileSync(path.join(ROOT, 'app', 'src', 'main', 'java', 'com', 'seekerclaw', 'app', 'bridge', 'NodeControlClient.kt'), 'utf8');
     assert.ok(/suspend\s+fun\s+unquiesce\s*\(/.test(nccKt),
         'NodeControlClient must expose suspend fun unquiesce() for the abandon path');
+    // Codex re-review major-2: quiesce must be a time-based LEASE (auto-expire), not a sticky
+    // flag, so an abandoned kept-alive agent self-resumes even if every unquiesce is lost.
+    const q = fs.readFileSync(path.join(ROOT, 'app', 'src', 'main', 'assets', 'nodejs-project', 'quiesce.js'), 'utf8');
+    assert.ok(/LEASE_MS/.test(q) && /hrtime/.test(q) && /_quiescedUntilMs/.test(q),
+        'quiesce.js must be a monotonic-clock lease that auto-expires, not a sticky boolean');
+    // And the abandoned Stop must RETRY unquiesce, not fire one ignored call.
+    const svc = fs.readFileSync(SERVICE_KT, 'utf8');
+    assert.ok(/unquiesceUntilConfirmed/.test(svc),
+        'an abandoned Stop must retry unquiesce (bounded), not a single ignored call');
 });
 
 test('BAT-1155 blocker-1: controlled Stop calls finishStop ONLY on positive durability', () => {
