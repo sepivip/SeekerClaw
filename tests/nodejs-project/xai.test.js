@@ -893,9 +893,12 @@ async function testPrepareRefreshGate() {
 async function testMarkerClearDiscipline() {
     console.log('\n── BAT-1155 M3: rotation-marker clear discipline (provably-not-sent) ──');
     // Run one refresh whose POST fails per `mockOpts`; report whether a clear-rotation-in-flight
-    // bridge call fired (the marker was cleared).
-    const clearedAfterFailedPost = async (mockOpts) => {
+    // bridge call fired (the marker was cleared) AND how many token POSTs were issued. The POST count
+    // proves the failure happened AFTER the request was sent (CodeRabbit round-2) — a retained-marker
+    // case that never POSTed (e.g. a gate skip) would be a false pass.
+    const failedPost = async (mockOpts) => {
         _bridgeCalls.length = 0;
+        _httpsCallCount = 0;
         _bridgeResult = { success: true };
         _prepareRefreshResult = { success: true }; // gate arms the marker → the POST proceeds
         installHttpsMock(mockOpts);
@@ -903,19 +906,28 @@ async function testMarkerClearDiscipline() {
         xai._resetErrorStateForTests();
         try { await xai.refreshOAuthToken(); } catch (_) { /* the POST failure rejects — expected */ }
         restoreHttps();
-        return _bridgeCalls.some((c) => c.endpoint === '/xai/oauth/clear-rotation-in-flight');
+        return {
+            cleared: _bridgeCalls.some((c) => c.endpoint === '/xai/oauth/clear-rotation-in-flight'),
+            posts: _httpsCallCount,
+        };
+    };
+    // Assert the marker outcome AND that exactly one token POST was issued (the failure is post-send).
+    const expectMarker = async (label, mockOpts, wantCleared) => {
+        const r = await failedPost(mockOpts);
+        ok(`${label} (token POST was issued)`, r.posts === 1, `posts=${r.posts}`);
+        ok(label, r.cleared === wantCleared);
     };
 
     // Provably-not-sent (pre-connection) → marker CLEARED (avoids a needless reconnect).
-    ok('ECONNREFUSED → marker CLEARED (provably not sent)', (await clearedAfterFailedPost({ reqError: { code: 'ECONNREFUSED' } })) === true);
-    ok('ENOTFOUND → marker CLEARED (DNS, provably not sent)', (await clearedAfterFailedPost({ reqError: { code: 'ENOTFOUND' } })) === true);
-    ok('EAI_AGAIN → marker CLEARED (DNS temp, provably not sent)', (await clearedAfterFailedPost({ reqError: { code: 'EAI_AGAIN' } })) === true);
+    await expectMarker('ECONNREFUSED → marker CLEARED (provably not sent)', { reqError: { code: 'ECONNREFUSED' } }, true);
+    await expectMarker('ENOTFOUND → marker CLEARED (DNS, provably not sent)', { reqError: { code: 'ENOTFOUND' } }, true);
+    await expectMarker('EAI_AGAIN → marker CLEARED (DNS temp, provably not sent)', { reqError: { code: 'EAI_AGAIN' } }, true);
 
     // NOT provable (the token MAY be consumed) → marker RETAINED (no clear call).
-    ok('timeout → marker RETAINED (token may be consumed)', (await clearedAfterFailedPost({ reqTimeout: true })) === false);
-    ok('ECONNRESET (mid-flight reset) → marker RETAINED', (await clearedAfterFailedPost({ reqError: { code: 'ECONNRESET' } })) === false);
-    ok('HTTP 500 (a response WAS received) → marker RETAINED', (await clearedAfterFailedPost({ statusCode: 500, body: {} })) === false);
-    ok('HTTP 400 invalid_grant (a response WAS received) → marker RETAINED', (await clearedAfterFailedPost({ statusCode: 400, body: { error: 'invalid_grant' } })) === false);
+    await expectMarker('timeout → marker RETAINED (token may be consumed)', { reqTimeout: true }, false);
+    await expectMarker('ECONNRESET (mid-flight reset) → marker RETAINED', { reqError: { code: 'ECONNRESET' } }, false);
+    await expectMarker('HTTP 500 (a response WAS received) → marker RETAINED', { statusCode: 500, body: {} }, false);
+    await expectMarker('HTTP 400 invalid_grant (a response WAS received) → marker RETAINED', { statusCode: 400, body: { error: 'invalid_grant' } }, false);
 
     _prepareRefreshResult = { success: true };
     _bridgeResult = { success: true };

@@ -826,6 +826,16 @@ class SeekerClawService : Service() {
         private const val MAX_KEEPALIVE_STOP_ATTEMPTS = 2
         private const val KEEPALIVE_RETRY_MS = 1_500L
 
+        /**
+         * Absolute ceiling on total [stopWithDurability] attempts, including the abandoned-stop
+         * fence-clear retries beyond [MAX_KEEPALIVE_STOP_ATTEMPTS] (BAT-1155 CodeRabbit round-2). A
+         * fence that cannot be cleared must NOT resume `:node` (a completing rotation would leave a
+         * live-but-fenced family); we retry instead — a marked reauth makes the retry resolve as a
+         * durable clean kill. Bounded so a broken disk can't retry forever; the ~15s quiesce-lease
+         * lapse is the ultimate backstop past this. Stays well under that lease at KEEPALIVE_RETRY_MS.
+         */
+        private const val MAX_STOP_ATTEMPTS = 6
+
         /** Bounded best-effort /unquiesce retries for an abandoned Stop; the Node lease backstops the rest. */
         private const val MAX_UNQUIESCE_ATTEMPTS = 5
         private const val UNQUIESCE_RETRY_MS = 1_500L
@@ -929,19 +939,14 @@ class SeekerClawService : Service() {
                                 "(the session token could not be safely saved; force-stop from system settings to override)",
                             LogLevel.ERROR,
                         )
-                        // BAT-1155 M1: the durability gate armed a durable stop fence as its FIRST
-                        // action. Abandoning the stop (keeping :node alive) WITHOUT resolving it would
-                        // leave the resumed process's next refresh silently Fenced→skip (no POST, no
-                        // reconnect) until a full restart. Durably clear the fence AND convert any
-                        // still-armed rotation marker to an explicit reauth (prepareRefresh returns
-                        // Dead→reLogin before it can return Fenced, so this is recoverable even if the
-                        // clear races) BEFORE resuming — Codex decision 3 (explicit durable clear on
-                        // abort, no TTL). resolveAbandonedStop() is best-effort; on total store-I/O
-                        // failure the still-armed state is boot-safe (reconcileXaiOAuthOnBoot converts
-                        // it on the next start), so we resume regardless rather than freeze the agent —
-                        // leaving :node quiesced does not help (the quiesce LEASE lapses and it resumes
-                        // fenced anyway).
-                        val resolved = try {
+                        // BAT-1155 M1 (+ CodeRabbit round-2): the durability gate armed a durable stop
+                        // fence as its FIRST action. Abandoning the stop (keeping :node alive) WITHOUT
+                        // clearing that fence would leave the resumed process's next refresh silently
+                        // Fenced→skip (no POST, no reconnect) until a full restart. resolveAbandonedStop
+                        // returns true ONLY when the fence is durably cleared — a reauth mark alone is
+                        // insufficient (a completing in-flight rotation clears reauth AND rebases the
+                        // still-armed fence forward). Resume ONLY behind a cleared fence.
+                        val fenceCleared = try {
                             XaiOAuthDurabilityGate.resolveAbandonedStop()
                         } catch (e: Exception) {
                             LogCollector.append(
@@ -950,19 +955,49 @@ class SeekerClawService : Service() {
                             )
                             false
                         }
-                        if (!resolved) {
-                            LogCollector.append(
-                                "[Shutdown] xAI stop fence could not be durably cleared on the abandoned stop — " +
-                                    "resuming with boot reconcile as the backstop",
-                                LogLevel.ERROR,
-                            )
+                        when {
+                            // Fence durably cleared → safe to resume: CANCEL lease renewal (let the
+                            // lease lapse) and unquiesce so :node resumes. A completing rotation can no
+                            // longer rebase an already-cleared fence, so no live-but-fenced family.
+                            fenceCleared -> {
+                                stopLeaseRenewal()
+                                unquiesceUntilConfirmed(appCtx, 0)
+                            }
+                            // Fence NOT cleared → do NOT resume into it. Retry the stop (bounded): if
+                            // resolveAbandonedStop marked reauth, the retry's gate sees a not-live
+                            // family → durable → a CLEAN kill (boot blanks the token + clears the
+                            // fence) — this resolves within one retry, well inside the quiesce lease.
+                            // If reauth could NOT be marked either (store I/O broken for the mark too),
+                            // the disk gets more chances; and if the ~15s quiesce lease lapses before we
+                            // finish (each gate attempt can take up to BUDGET_MS), :node self-resumes
+                            // FENCED on its own. That is FAIL-CLOSED (a Fenced refresh returns 'skip'
+                            // and cannot present the token to xAI → no consumption, no revocation) and
+                            // boot-recoverable — the same terminal state as the last-resort branch
+                            // below. We do NOT re-arm the lease here (startLeaseRenewal is the
+                            // durability-PROVEN-kill mechanism); actively re-quiescing each retry is a
+                            // flagged hardening follow-up (Codex), not a safety gate.
+                            attempt < MAX_STOP_ATTEMPTS -> {
+                                LogCollector.append(
+                                    "[Shutdown] xAI stop fence not yet cleared — staying stopped, retry ${attempt + 1}/$MAX_STOP_ATTEMPTS",
+                                    LogLevel.WARN,
+                                )
+                                restartHandler.postDelayed({ stopWithDurability(appCtx, attempt + 1, onStopped) }, KEEPALIVE_RETRY_MS)
+                            }
+                            // Store I/O broken past the retry ceiling (couldn't clear the fence OR mark
+                            // reauth). Least-bad: resume — the quiesce lease would lapse and resume
+                            // fenced anyway, and the still-armed fence is boot-recoverable once the disk
+                            // recovers (reconcileXaiOAuthOnBoot clears it; loadConfig blanks a token
+                            // whose family is marker/reauth-flagged).
+                            else -> {
+                                LogCollector.append(
+                                    "[Shutdown] xAI stop fence UNCLEARABLE after $MAX_STOP_ATTEMPTS attempts (store I/O broken) — " +
+                                        "resuming; boot reconcile is the backstop",
+                                    LogLevel.ERROR,
+                                )
+                                stopLeaseRenewal()
+                                unquiesceUntilConfirmed(appCtx, 0)
+                            }
                         }
-                        // Codex re-review: the Stop is abandoned (we are NOT killing) — CANCEL lease
-                        // renewal (so the lease can lapse) and unquiesce so Node resumes. Retry with
-                        // bounded backoff (a single ignored call could leave a kept-alive agent
-                        // frozen); the lapsing Node quiesce LEASE is the ultimate backstop.
-                        stopLeaseRenewal()
-                        unquiesceUntilConfirmed(appCtx, 0)
                         restartHandler.post { postDurabilityStuckNotice(appCtx) }
                     }
                 }

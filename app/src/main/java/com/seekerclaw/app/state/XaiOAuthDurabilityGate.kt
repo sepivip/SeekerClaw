@@ -149,17 +149,23 @@ object XaiOAuthDurabilityGate {
      *      legitimately-completing in-flight rotation still clears the reauth via `rotate()`.
      *   2. Clear the stop fence so a resumed refresh isn't skipped once the marker is resolved.
      *
-     * Returns `true` when the family is in a safe-to-resume state — the fence was durably cleared OR
-     * the marker was converted to reauth (which short-circuits the fence in `prepareRefresh`). `false`
-     * only when neither write could be persisted (store I/O broken): the caller should prefer to stay
-     * stopped and retry, but a still-armed marker/fence is boot-safe regardless
-     * ([SeekerClawService.reconcileXaiOAuthOnBoot] converts it on the next start). Never throws.
+     * Returns `true` **only when the stop fence is durably cleared** — the sole state in which the
+     * caller may resume `:node`. A reauth mark alone is NOT sufficient (CodeRabbit round-2): a
+     * still-in-flight rotation can complete via `rotate()`, which clears `reauthRequired` **and**
+     * REBASES the still-armed fence forward (`stopFenceEpoch = epoch+1`), leaving a LIVE family behind
+     * an armed fence whose next refresh is `Fenced→skip` again. Returning `false` means the caller
+     * must NOT resume: it retries/stays stopped. The best-effort reauth mark is still valuable on that
+     * path — it makes a subsequent stop resolve as durable (a reauth family is not-live → the gate
+     * returns durable → a CLEAN kill), and boot then blanks the token + clears the fence
+     * ([SeekerClawService.reconcileXaiOAuthOnBoot] / `ConfigManager.loadConfig`), so a `false` is
+     * boot-recoverable regardless of the fence. Never throws.
      */
     fun resolveAbandonedStop(): Boolean {
         if (!XaiOAuthTokenStore.isInitialized) return true
         val rec = XaiOAuthTokenStore.read()
-        // (1) Convert a still-armed rotation marker on the LIVE epoch to a durable reauth. Ok ⇒ the
-        // resumed refresh will hit Dead→reLogin (recoverable) before it can hit Fenced→skip.
+        // (1) Best-effort: convert a still-armed rotation marker on the LIVE epoch to a durable
+        // reauth. This does NOT by itself make resume safe (a completing rotation can undo it — see
+        // KDoc), but a persisted reauth lets a subsequent stop resolve as durable → clean kill.
         var reauthMarked = false
         if (!rec.tombstone && !rec.reauthRequired && rec.rotationInFlightEpoch == rec.epoch) {
             reauthMarked = try {
@@ -169,16 +175,21 @@ object XaiOAuthDurabilityGate {
                 false
             }
         }
-        // (2) Clear the fence the gate armed (unconditional, epoch-stable).
+        // (2) Clear the fence the gate armed (unconditional, epoch-stable). ONLY a cleared fence is
+        // safe to resume behind — a completing rotation cannot rebase a fence that is already -1.
         val fenceCleared = try {
             XaiOAuthTokenStore.clearStopFence() is XaiOAuthTokenStore.Result.Ok
         } catch (e: Exception) {
             LogCollector.append("[Shutdown] xAI durability gate: abandoned-stop clearStopFence threw (${e.message})", LogLevel.ERROR)
             false
         }
-        if (fenceCleared || reauthMarked) return true
+        if (fenceCleared) return true
         LogCollector.append(
-            "[Shutdown] xAI durability gate: could NOT clear the stop fence or mark reauth on an abandoned stop — boot reconcile is the backstop",
+            if (reauthMarked) {
+                "[Shutdown] xAI durability gate: reauth persisted but the stop fence is STILL armed — caller must NOT resume (retry → the reauth family resolves as a durable clean kill)"
+            } else {
+                "[Shutdown] xAI durability gate: could not clear the stop fence or mark reauth on an abandoned stop — caller must retry/stay stopped"
+            },
             LogLevel.ERROR,
         )
         return false

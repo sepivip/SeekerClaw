@@ -192,4 +192,29 @@ class XaiOAuthDurabilityGateTest {
         assertTrue("uninitialized-safe / no-op on the fail-closed default", XaiOAuthDurabilityGate.resolveAbandonedStop())
         assertTrue(XaiOAuthTokenStore.read().tombstone)
     }
+
+    @Test
+    fun `resolveAbandonedStop returns FALSE when the stop fence cannot be cleared (CodeRabbit round-2)`() {
+        // CodeRabbit round-2: a reauth mark alone is NOT enough to resume — a completing rotation can
+        // clear reauth AND rebase the still-armed fence forward, re-bricking a live family. So
+        // resolveAbandonedStop must return true ONLY when the fence is durably cleared; if the store
+        // write can't land, it MUST return false so the caller stays stopped/retries.
+        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch
+        ok(XaiOAuthTokenStore.prepareRefresh(e1)) // rotationInFlightEpoch = 1
+        ok(XaiOAuthTokenStore.armStopFenceAndProbeRotation(e1)) // stopFenceEpoch = 1
+
+        // Hold the sidecar OS lock so BOTH markReauth and clearStopFence time out (Result.Failed).
+        val lockFile = File(workDir, XaiOAuthTokenStore.LOCK_NAME)
+        val raf = RandomAccessFile(lockFile, "rw")
+        val held = raf.channel.lock()
+        val resolved = try {
+            XaiOAuthDurabilityGate.resolveAbandonedStop()
+        } finally {
+            held.release()
+            raf.close()
+        }
+        assertFalse("an uncleared fence must NOT report safe-to-resume", resolved)
+        // The fence must remain armed (nothing was cleared) — the caller keeps :node stopped.
+        assertEquals("fence still armed after a failed clear", e1, XaiOAuthTokenStore.read().stopFenceEpoch)
+    }
 }
