@@ -198,24 +198,21 @@ class XaiTwoProcessRaceTest {
 
     @Test
     fun `a process holding the OS lock forces the sibling to a bounded failure`() {
-        // P1 holds the sidecar lock until we touch the release file (cap 20s) — so it is
-        // GUARANTEED still held while P2 attempts, regardless of P2's JVM-startup time.
+        // P1 holds the sidecar lock until we touch the release file (cap 20s), and signals
+        // readiness via a FILE — so the parent polls with its OWN timeout (Codex re-review
+        // major-2) rather than a blocking readLine() that could hang if P1 never prints.
         val release = File(dir, "release.marker")
-        val p1 = spawn("holdlock", "20000", release.absolutePath)
-        val reader = p1.inputStream.bufferedReader()
-        var locked = false
+        val locked = File(dir, "locked.marker")
+        val p1 = spawn("holdlock", "20000", release.absolutePath, locked.absolutePath)
+        // Drain P1's stdout on a background thread so it never blocks; poll the readiness file.
+        Thread { runCatching { p1.inputStream.bufferedReader().forEachLine { } } }.apply { isDaemon = true; start() }
         val deadline = System.currentTimeMillis() + 20_000
-        while (System.currentTimeMillis() < deadline) {
-            val line = reader.readLine() ?: break
-            if (line.contains("outcome=LOCKED")) { locked = true; break }
-        }
-        assertTrue("P1 must acquire the sidecar OS lock", locked)
+        while (!locked.exists() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        if (!locked.exists()) { p1.destroyForcibly(); fail("lock-holder P1 never acquired the sidecar lock (>20s) — force-killed") }
         // P2 (separate process) cannot acquire the lock → bounded FAILED, never a hang or clobber.
         val r2 = run("markreauth", "0").first()
         assertEquals("sibling mutation fails under a real cross-process lock", "FAILED", field(r2, "outcome"))
         release.writeText("go") // let P1 release + exit
-        // Hang-safe drain of P1: a background reader + bounded wait (a hung P1 fails, not hangs).
-        Thread { runCatching { reader.readText() } }.apply { isDaemon = true; start() }
         if (!p1.waitFor(30, TimeUnit.SECONDS)) { p1.destroyForcibly(); fail("lock-holder P1 hung (>30s)") }
     }
 }

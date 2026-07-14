@@ -1,6 +1,5 @@
 package com.seekerclaw.app.state
 
-import com.seekerclaw.app.bridge.NodeControlClient
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,7 +8,6 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.io.RandomAccessFile
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * BAT-1155 Codex re-review — behavioral coverage for the controlled-stop durability gate
@@ -37,7 +35,6 @@ class XaiOAuthDurabilityGateTest {
 
     @After
     fun tearDown() {
-        XaiOAuthDurabilityGate.flushForTest = null
         XaiOAuthTokenStore.resetForTest()
         workDir.deleteRecursively()
     }
@@ -126,52 +123,4 @@ class XaiOAuthDurabilityGateTest {
     // ---- Codex re-review major-1: the gate DRAINS a pending notify mark over the real
     //      Stop round-trip (not just the direct flushPendingPersist helper) ----
 
-    // ---- Codex re-review major-1: the gate DRAINS a pending notify mark across the flush
-    //      round-trip (via the injectable seam — org.json parsing is stubbed in JVM tests) ----
-
-    @Test
-    fun `gate re-flushes to drain a pending notify mark, then stops clean (no fail-closed mark)`() {
-        // Flush ALWAYS reports the notify mark still pending (disk safe). The gate must RE-flush
-        // every round trying to land it, and finally stop clean treating the undrained notify as a
-        // residual — NOT fall back to a brick-only fail-closed reauth mark.
-        val calls = AtomicInteger(0)
-        XaiOAuthDurabilityGate.flushForTest = {
-            calls.incrementAndGet()
-            NodeControlClient.FlushResult(diskUnsafe = false, notifyPending = true)
-        }
-        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // live family → gate drains
-        val durable = XaiOAuthDurabilityGate.ensureDurableBeforeStop()
-        assertTrue("disk safe + only-notify-residual → clean durable stop", durable)
-        assertTrue("gate must RE-flush trying to drain the notify mark (was ${calls.get()} calls)", calls.get() >= 2)
-        assertFalse("no fail-closed reauth mark when only notify was pending", XaiOAuthTokenStore.read().reauthRequired)
-    }
-
-    @Test
-    fun `gate drains a notify mark that lands on a later round, then stops clean`() {
-        // Failed-notify → immediate Stop → the gate re-flushes; the mark lands on round 2 → clean.
-        val calls = AtomicInteger(0)
-        XaiOAuthDurabilityGate.flushForTest = {
-            val n = calls.incrementAndGet()
-            NodeControlClient.FlushResult(diskUnsafe = false, notifyPending = n < 2)
-        }
-        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp"))
-        assertTrue(XaiOAuthDurabilityGate.ensureDurableBeforeStop())
-        assertEquals("gate stops as soon as the notify mark lands (round 2)", 2, calls.get())
-        assertFalse(XaiOAuthTokenStore.read().reauthRequired)
-    }
-
-    @Test
-    fun `gate contacts the drain even for an already-dead family (that can hold a pending notice)`() {
-        // The dead (reauth-required) family is exactly the one that can hold a failed notice mark;
-        // the gate must still flush it rather than returning durable without contacting Node.
-        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch
-        ok(XaiOAuthTokenStore.markReauth(e1)) // dead family
-        val calls = AtomicInteger(0)
-        XaiOAuthDurabilityGate.flushForTest = {
-            calls.incrementAndGet()
-            NodeControlClient.FlushResult(diskUnsafe = false, notifyPending = false)
-        }
-        assertTrue(XaiOAuthDurabilityGate.ensureDurableBeforeStop())
-        assertTrue("a dead family must still be drained (was ${calls.get()} calls)", calls.get() >= 1)
-    }
 }

@@ -325,7 +325,6 @@ function classifyError(status, data) {
         // classify as reauth so the reconnect copy surfaces (not the stale api-key hint).
         if (isOAuth && _refreshDead) {
             _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
-            _maybeRetryNotifyMark(); // Codex re-review major-2: retry a failed notify-once latch
             return {
                 type: 'reauth', retryable: false,
                 userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
@@ -387,7 +386,6 @@ function classifyError(status, data) {
         // tier-gate copy ONLY for a genuine fresh-token tier-gate (_refreshDead === false).
         if (isOAuth && _refreshDead) {
             _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
-            _maybeRetryNotifyMark(); // Codex re-review major-2: retry a failed notify-once latch
             return {
                 type: 'reauth', retryable: false,
                 userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
@@ -783,14 +781,11 @@ async function flushPendingPersist() {
     if (_persistPending && _pendingPersistPayload && remaining() > 0) {
         await raceRemaining(_attemptPersist(remaining(), /* urgent */ true));
     }
-    // Phase 3 (Codex re-review major-2): drain a pending notify-once mark too. Without this,
-    // a notify mark that transiently failed, followed by an IMMEDIATE Stop (before another
-    // dead-path turn could retry it), is lost on restart → the same dead epoch is re-notified.
-    // Reported as SEPARATE `notifyPending` metadata (a re-notify is a UX annoyance, not a
-    // brick, so it does NOT gate the kill / feed diskUnsafe).
-    if (_noteNotifiedPending && remaining() > 0) {
-        await raceRemaining(_maybeRetryNotifyMark());
-    }
+    // NOTE (Codex re-review): the notify-once mark is NOT drained here. Under reserve-before-send
+    // (see noteReauthNotified), a still-pending notify simply means the autonomous notice was NOT
+    // sent — the reserve+send is retried on a later dead turn / next boot, so a Stop never needs
+    // to block on this low-value metadata, and there is no duplicate to prevent. `notifyPending`
+    // is reported only for observability.
     // Report BOTH the narrow pending-pair signal AND the authoritative disk-unsafe signal
     // (Codex re-review blocker-2). pendingPersist alone is insufficient: `_persistDurableError`
     // (convergence exhausted → T1 discarded, consumed T0 still on disk) and `_markReauthPending`
@@ -970,57 +965,45 @@ function shouldSurfaceReauthNotice() {
     return isOAuth && _refreshDead && _reauthNotifiedEpoch !== _currentEpoch;
 }
 
-// BAT-1155 D4: record that the single autonomous reconnect notice fired for this dead
-// family. Persists it (token-less POST /xai/oauth/mark-reauth { notifiedEpoch }) so a
-// restart's boot seed suppresses a re-notify; updates the in-memory suppressor too.
-// Best-effort persist — the in-memory latch still holds for this session on failure.
+// BAT-1155 D4 — RESERVE the single autonomous reconnect notice for this dead epoch. Codex
+// re-review: to guarantee "at most one autonomous notice per dead epoch", ai.js RESERVES the
+// mark BEFORE sending and sends ONLY if this returns true. Returns:
+//   - true  → the epoch is now durably reserved (CAS'd) → ai.js may send the ONE notice; the
+//             in-memory suppressor is set so no further autonomous notice fires for this epoch;
+//   - false → NOT reserved: either the write failed (retry the reserve+send on a later dead
+//             turn / next boot — nothing was sent, so no duplicate) OR a CAS conflict means the
+//             dead family was superseded (no notice is due). Either way ai.js does NOT send.
+// The suppressor is set ONLY on a durable reserve, so a failed reserve can never silently
+// suppress a notice that never went out. Explicit user requests are answered regardless.
 async function noteReauthNotified() {
-    const notifiedFor = _currentEpoch;
-    _reauthNotifiedEpoch = notifiedFor; // in-memory suppressor (survives this session)
-    await _persistNotifiedMark(notifiedFor);
+    return _persistNotifiedMark(_currentEpoch);
 }
 
-// Persist the notify-once latch, CAS'd to the epoch it was recorded for. On a durable
-// failure (bridge/lock error or a non-success ack) retain a pending retry (Codex re-review
-// major-2) so a restart before it lands doesn't lose the latch and re-notify. A CAS
-// conflict means the dead family is gone → drop both the latch and the pending retry.
 async function _persistNotifiedMark(notifiedFor) {
     try {
         const result = await androidBridgeCall('/xai/oauth/mark-reauth', {
             expectedEpoch: notifiedFor, notified: true,
         });
         if (result && result.code === 'XAI_OAUTH_EPOCH_CONFLICT') {
-            // A fresh sign-in/out advanced the epoch — this notice was for a family that no
-            // longer exists. Adopt the new revision and DROP the stale in-memory latch so a
-            // legitimate future notice isn't suppressed (Codex blocker-2).
+            // A fresh sign-in/out advanced the epoch — the dead family this notice was for no
+            // longer exists. Adopt the new revision, drop any latch; no notice is due → false.
             if (typeof result.currentEpoch === 'number') _currentEpoch = result.currentEpoch;
             _reauthNotifiedEpoch = -1;
             _noteNotifiedPending = false;
-            return;
+            return false;
         }
         if (result && result.success === true) {
             if (typeof result.epoch === 'number') _currentEpoch = result.epoch;
-            _noteNotifiedPending = false; // durably recorded
-            return;
+            _reauthNotifiedEpoch = notifiedFor; // reserved → suppress future autonomous notices
+            _noteNotifiedPending = false;
+            return true; // reserved → ai.js may send the single notice
         }
-        _noteNotifiedPending = true; _noteNotifiedPendingEpoch = notifiedFor; // failed → retry
+        _noteNotifiedPending = true; _noteNotifiedPendingEpoch = notifiedFor; // not reserved
+        return false;
     } catch (_) {
         _noteNotifiedPending = true; _noteNotifiedPendingEpoch = notifiedFor;
+        return false;
     }
-}
-
-// Fire-and-forget retry of a notify-once mark that didn't persist (Codex re-review major-2).
-// Called on subsequent dead-path turns so a transient bridge/lock failure self-heals within
-// the process instead of re-notifying after a restart.
-function _maybeRetryNotifyMark() {
-    if (_noteNotifiedPending && _noteNotifiedPendingEpoch === _currentEpoch) {
-        // Returns the promise so tests can await; production callers fire-and-forget.
-        return _persistNotifiedMark(_noteNotifiedPendingEpoch).catch(() => {});
-    } else if (_noteNotifiedPending && _noteNotifiedPendingEpoch !== _currentEpoch) {
-        // Epoch moved on under us (sign-in) — the stale pending mark is moot.
-        _noteNotifiedPending = false;
-    }
-    return Promise.resolve();
 }
 
 // ── Connection test ─────────────────────────────────────────────────────────
@@ -1081,8 +1064,7 @@ module.exports = {
     flushPendingPersist,
     shouldSurfaceReauthNotice,
     noteReauthNotified,
-    // Codex re-review test seams (major-2/3): drive the notify-mark retry deterministically.
-    _maybeRetryNotifyMark,
+    // Codex re-review test seam: drive the dead-mark retry deterministically.
     _maybeRetryReauthMark,
 
     // Capabilities

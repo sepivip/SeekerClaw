@@ -98,6 +98,17 @@ object NodeControlClient {
     }
 
     /**
+     * BAT-1155 Codex re-review blocker: (re)ARM the Node quiesce lease. The lease auto-expires
+     * (major-2) so an abandoned Stop self-resumes — but on a SUCCESSFUL Stop the lease must NOT
+     * expire during the (main-looper) handoff from the durability proof to the kill. A renewer
+     * POSTs this from an independent thread on a cadence well under the lease, keeping quiescence
+     * airtight until teardown begins. Returns `true` on a confirmed 2xx.
+     */
+    suspend fun quiesce(): Boolean = withContext(Dispatchers.IO) {
+        post("/quiesce", "{}")
+    }
+
+    /**
      * Drive Node's graceful-shutdown flush before
      * [com.seekerclaw.app.service.SeekerClawService] kills the
      * `:node` process (BAT-525). Persists pending session summaries

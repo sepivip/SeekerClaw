@@ -58,14 +58,6 @@ object XaiOAuthDurabilityGate {
     private const val MARK_RETRY_BACKOFF_MS = 20L
 
     /**
-     * Test seam: overrides the per-round flush call so a JVM test can drive the drain logic with
-     * deterministic [NodeControlClient.FlushResult]s (the production path's `org.json` parsing is
-     * stubbed in unit tests). `null` in production → the real budgeted `flushShutdown`. Takes the
-     * remaining budget (ms) so a test can assert on it if it wishes.
-     */
-    internal var flushForTest: ((Int) -> NodeControlClient.FlushResult?)? = null
-
-    /**
      * Ensure the xAI OAuth family is in a durable state for a controlled stop.
      * Returns `true` when durable (persisted OR fail-closed marked OR nothing to
      * protect), `false` only when the budget was exhausted without reaching a
@@ -81,31 +73,27 @@ object XaiOAuthDurabilityGate {
             // Can't read the record → can't prove there's nothing stranded → fail-closed attempt.
             return markReauthWithinDeadline(expectedEpoch = 0L, deadlineNs = deadline())
         }
-        // A family that must be drained on Stop = a non-tombstone family holding a token. That is
-        // BOTH a LIVE family (which can strand a consumed→rotated pair — the brick) AND an
-        // already-reauth-marked family (which can hold a failed one-per-epoch notice mark, Codex
-        // re-review major-1). api-key users, sign-outs, and the fail-closed default have neither.
-        val hasProtectableFamily = !rec.tombstone && rec.accessTokenEnc.isNotEmpty()
-        if (!hasProtectableFamily) return true
+        // Only a LIVE oauth family can strand a consumed→rotated pair (the brick). api-key users,
+        // sign-outs, and already-dead families have nothing to protect here. The
+        // one-autonomous-notice-per-dead-epoch guarantee is enforced NODE-side by reserve-before-
+        // send (noteReauthNotified), NOT by this gate — so a Stop never blocks on notify metadata.
+        val live = !rec.tombstone && !rec.reauthRequired && rec.accessTokenEnc.isNotEmpty()
+        if (!live) return true
 
         val deadlineNs = deadline()
 
-        // Phase 1 — drain: give Node repeated chances to (a) persist a VALID rotated T1 and (b)
-        // land the pending notify-once mark. Both `diskUnsafe` (brick-critical) and `notifyPending`
-        // (one-notice-per-dead-epoch) must clear for a fully-clean stop.
-        var last: NodeControlClient.FlushResult? = null
+        // Phase 1 — give Node repeated chances to persist the VALID rotated T1. `diskUnsafe` is the
+        // authoritative brick signal (pending pair OR convergence-exhausted OR failed dead-mark).
         var round = 0
         while (round < MAX_FLUSH_ROUNDS && remainingMs(deadlineNs) > 0L) {
             round++
-            last = try {
+            val unsafe: Boolean? = try {
                 // Codex re-review major-1: cap the round to the REMAINING budget at BOTH levels —
                 // pass the budget into flushShutdown so its underlying (non-cancellable) HTTP
                 // connect/read timeouts are themselves capped, AND wrap in withTimeoutOrNull as a
                 // coroutine-level backstop. A late-starting round stays inside BUDGET_MS.
                 val budget = remainingMs(deadlineNs).toInt().coerceAtLeast(1)
-                val seam = flushForTest
-                if (seam != null) seam(budget)
-                else runBlocking { withTimeoutOrNull(budget.toLong()) { NodeControlClient.flushShutdown(budget) } }
+                runBlocking { withTimeoutOrNull(budget.toLong()) { NodeControlClient.flushShutdown(budget) } }?.diskUnsafe
             } catch (e: Exception) {
                 LogCollector.append(
                     "[Shutdown] xAI durability gate: flush round threw (${e.javaClass.simpleName}: ${e.message})",
@@ -113,36 +101,23 @@ object XaiOAuthDurabilityGate {
                 )
                 null
             }
-            val r = last
-            if (r == null) {
-                // Unreachable/unparseable — no point re-flushing; go straight to fail-closed.
-                LogCollector.append("[Shutdown] xAI durability gate: Node unreachable — engaging fail-closed mark", LogLevel.WARN)
-                break
+            when (unsafe) {
+                false -> {
+                    if (round > 1) LogCollector.append("[Shutdown] xAI durability gate: disk confirmed safe on round $round", LogLevel.INFO)
+                    return true
+                }
+                true -> LogCollector.append(
+                    "[Shutdown] xAI durability gate: on-disk token unsafe to boot from (round $round/$MAX_FLUSH_ROUNDS)",
+                    LogLevel.WARN,
+                )
+                null -> {
+                    LogCollector.append("[Shutdown] xAI durability gate: Node unreachable — engaging fail-closed mark", LogLevel.WARN)
+                    break
+                }
             }
-            if (!r.diskUnsafe && !r.notifyPending) {
-                if (round > 1) LogCollector.append("[Shutdown] xAI durability gate: disk safe + notify drained on round $round", LogLevel.INFO)
-                return true // fully clean
-            }
-            // diskUnsafe → another round lets Node re-persist; notifyPending → re-attempt the mark.
-            LogCollector.append(
-                "[Shutdown] xAI durability gate: round $round/$MAX_FLUSH_ROUNDS diskUnsafe=${r.diskUnsafe} notifyPending=${r.notifyPending}",
-                LogLevel.WARN,
-            )
         }
 
-        // Phase 2. If the DISK (brick) is safe and only the notify-once mark couldn't be drained
-        // within budget, that is NOT a brick — proceed (at most one duplicate reconnect notice on
-        // the next boot). Only a still-unsafe disk OR an unreachable Node fails closed to markReauth.
-        val r = last
-        if (r != null && !r.diskUnsafe) {
-            LogCollector.append(
-                "[Shutdown] xAI durability gate: disk safe; notify-once mark still pending after drain — " +
-                    "at most one duplicate reconnect notice possible",
-                LogLevel.WARN,
-            )
-            return true
-        }
-        // Fail closed: durably mark the family reauth-required so the next boot reconnects instead
+        // Phase 2. Fail closed: durably mark the family reauth-required so the next boot reconnects instead
         // of replaying a possibly-consumed refresh token (idempotent for an already-dead family).
         return markReauthWithinDeadline(expectedEpoch = rec.epoch, deadlineNs = deadlineNs)
     }

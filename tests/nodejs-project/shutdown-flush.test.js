@@ -228,6 +228,14 @@ test('BAT-1155 blocker (quiesce): /shutdown/flush quiesces first; /unquiesce res
     const svc = fs.readFileSync(SERVICE_KT, 'utf8');
     assert.ok(/unquiesceUntilConfirmed/.test(svc),
         'an abandoned Stop must retry unquiesce (bounded), not a single ignored call');
+    // Codex re-review blocker: a SUCCESSFUL Stop must RENEW the lease from an independent thread
+    // until kill (so the lease can't expire during the main-looper handoff), via a /quiesce endpoint.
+    assert.ok(/startLeaseRenewal/.test(svc) && /stopLeaseRenewal/.test(svc),
+        'a durable Stop must renew the quiesce lease until teardown (startLeaseRenewal/stopLeaseRenewal)');
+    assert.ok(/url === '\/quiesce'/.test(ctrl) && /require\(['"]\.\/quiesce['"]\)\.quiesce\(\)/.test(ctrl),
+        'a /quiesce endpoint must exist to re-arm the lease');
+    assert.ok(/suspend\s+fun\s+quiesce\s*\(/.test(nccKt),
+        'NodeControlClient must expose suspend fun quiesce() for the lease renewer');
 });
 
 test('BAT-1155 blocker-1: controlled Stop calls finishStop ONLY on positive durability', () => {

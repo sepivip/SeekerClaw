@@ -53,13 +53,14 @@ object XaiTwoProcessHelper {
                 "RESULT op=read outcome=OK epoch=${r.epoch} tomb=${r.tombstone} reauth=${r.reauthRequired} " +
                     "notified=${r.reauthNotifiedEpoch} acc=${r.accessTokenEnc}"
             }
-            // Acquire the sidecar OS lock, announce it, then hold until a release-signal file
-            // appears (or a hard cap elapses) — lets the sibling process deterministically
-            // observe a bounded cross-process lock failure regardless of JVM-startup timing.
-            // args: holdlock <maxHoldMs> <releaseSignalFile>
+            // Acquire the sidecar OS lock, announce readiness via a FILE (so the parent can poll
+            // with its own timeout instead of a blocking read that could hang — Codex re-review
+            // major-2), then hold until a release-signal file appears (or a hard cap elapses).
+            // args: holdlock <maxHoldMs> <releaseSignalFile> <lockedSignalFile>
             "holdlock" -> {
                 val raf = RandomAccessFile(File(dir, XaiOAuthTokenStore.LOCK_NAME), "rw")
                 val lock = raf.channel.lock()
+                if (args.size > 4) File(args[4]).writeText("locked") // readiness signal (file, not stdout)
                 println("RESULT op=holdlock outcome=LOCKED")
                 System.out.flush()
                 val maxHold = args[2].toLong()

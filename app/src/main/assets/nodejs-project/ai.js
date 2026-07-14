@@ -1982,15 +1982,27 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                             && typeof adapter.shouldSurfaceReauthNotice === 'function'
                             && !adapter.shouldSurfaceReauthNotice();
                         if (!alreadyNotified) {
-                            _sessionExpiryNotified = true;
                             const noticeText = isReauth
                                 ? errClass.userMessage
                                 : '\u26a0\ufe0f Your session has expired. Please re-pair your device to continue.';
-                            channel.sendMessage(channel.getOwnerChatId(), noticeText)
-                                .catch(e => log(`[Session] Failed to notify owner: ${e.message}`, 'WARN'));
-                            // Persist the single-notice mark for THIS dead epoch (D4).
+                            const notify = () => {
+                                _sessionExpiryNotified = true;
+                                channel.sendMessage(channel.getOwnerChatId(), noticeText)
+                                    .catch(e => log(`[Session] Failed to notify owner: ${e.message}`, 'WARN'));
+                            };
                             if (isReauth && typeof adapter.noteReauthNotified === 'function') {
-                                adapter.noteReauthNotified().catch(() => {});
+                                // BAT-1155 Codex re-review: RESERVE the dead epoch BEFORE sending so
+                                // there is at most ONE autonomous notice per dead epoch. Send ONLY if
+                                // the reserve durably lands (true). A failed reserve leaves
+                                // shouldSurfaceReauthNotice() true \u2192 a later dead turn / next boot
+                                // retries the reserve+send (nothing was sent, so no duplicate); a CAS
+                                // conflict (family superseded) \u2192 no notice is due. Explicit user
+                                // requests still get the reconnect reply below regardless.
+                                const reserved = await adapter.noteReauthNotified().then(r => r === true).catch(() => false);
+                                if (reserved) notify();
+                            } else {
+                                // Non-reauth generic session-expiry: no per-epoch reserve \u2014 send once.
+                                notify();
                             }
                         }
                     }

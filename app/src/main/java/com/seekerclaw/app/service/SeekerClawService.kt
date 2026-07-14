@@ -877,8 +877,21 @@ class SeekerClawService : Service() {
         private const val MAX_UNQUIESCE_ATTEMPTS = 5
         private const val UNQUIESCE_RETRY_MS = 1_500L
 
+        // BAT-1155 Codex re-review blocker: renew the Node quiesce lease from an INDEPENDENT thread
+        // (not the main looper) from the moment durability is proven until kill, so a delayed
+        // main-looper handoff can't let the lease expire and admit a rotation before teardown.
+        // RENEW well under quiesce.js LEASE_MS (15s). Stop after a couple of consecutive failures
+        // (:node is gone/killed) or the iteration cap, so a renewer never loops forever.
+        private const val LEASE_RENEW_MS = 5_000L
+        private const val MAX_RENEW_ITERS = 24
+        @Volatile private var leaseRenewActive = false
+        @Volatile private var leaseRenewer: Thread? = null
+
         fun start(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
+            // Cancel any lingering lease renewer (esp. from a restart's stop phase) BEFORE booting
+            // a new :node, so an old renewer can never re-quiesce the freshly-started process.
+            stopLeaseRenewal()
             val intent = Intent(context, SeekerClawService::class.java)
             context.startForegroundService(intent)
         }
@@ -890,11 +903,13 @@ class SeekerClawService : Service() {
          */
         fun stop(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
+            stopLeaseRenewal() // cancel any renewer from a prior stop before starting a new gate
             stopWithDurability(context.applicationContext, attempt = 0, onStopped = null)
         }
 
         fun restart(context: Context, delayMs: Long = 1200L) {
             restartHandler.removeCallbacksAndMessages(null)
+            stopLeaseRenewal()
             val appCtx = context.applicationContext
             // Gate durability BEFORE the stop, then schedule start on the main looper.
             // A restart of a live oauth family is just as capable of stranding a rotation
@@ -925,11 +940,15 @@ class SeekerClawService : Service() {
                     false
                 }
                 when {
-                    // Durable → tear down for real.
-                    durable -> restartHandler.post {
-                        clearDurabilityStuckNotice(appCtx)
-                        finishStop(appCtx)
-                        onStopped?.invoke()
+                    // Durable → tear down for real. Start the lease renewer FIRST (Codex re-review
+                    // blocker) so quiescence stays armed across the main-looper handoff to the kill.
+                    durable -> {
+                        startLeaseRenewal()
+                        restartHandler.post {
+                            clearDurabilityStuckNotice(appCtx)
+                            finishStop(appCtx)
+                            onStopped?.invoke()
+                        }
                     }
                     // Not durable, budget remaining → keep alive, surface the state, retry.
                     attempt < MAX_KEEPALIVE_STOP_ATTEMPTS -> {
@@ -952,10 +971,11 @@ class SeekerClawService : Service() {
                                 "(the session token could not be safely saved; force-stop from system settings to override)",
                             LogLevel.ERROR,
                         )
-                        // Codex re-review major-2: the Stop is abandoned (we are NOT killing) —
-                        // unquiesce so Node resumes turns/heartbeats/rotations. Retry with bounded
-                        // backoff (a single ignored call could leave a kept-alive agent frozen);
-                        // the Node quiesce LEASE is the ultimate backstop if every retry fails.
+                        // Codex re-review: the Stop is abandoned (we are NOT killing) — CANCEL lease
+                        // renewal (so the lease can lapse) and unquiesce so Node resumes. Retry with
+                        // bounded backoff (a single ignored call could leave a kept-alive agent
+                        // frozen); the lapsing Node quiesce LEASE is the ultimate backstop.
+                        stopLeaseRenewal()
                         unquiesceUntilConfirmed(appCtx, 0)
                         restartHandler.post { postDurabilityStuckNotice(appCtx) }
                     }
@@ -1020,6 +1040,40 @@ class SeekerClawService : Service() {
          * shortens that window. Runs on [stopExecutor]; scheduling on [restartHandler] is cancelled
          * by the next start()/stop() (removeCallbacksAndMessages).
          */
+        /**
+         * Codex re-review blocker: start renewing the Node quiesce lease from an independent daemon
+         * thread. Called the instant durability is proven (before finishStop), it keeps the lease
+         * armed across the main-looper handoff to onDestroy/kill — so quiescence can't lapse and
+         * admit a rotation in that window. Self-terminates once :node stops answering (killed) or
+         * the iteration cap elapses; also cancelled by the next lifecycle op ([stopLeaseRenewal]).
+         */
+        private fun startLeaseRenewal() {
+            stopLeaseRenewal()
+            leaseRenewActive = true
+            leaseRenewer = Thread {
+                var consecutiveFails = 0
+                var iters = 0
+                while (leaseRenewActive && iters < MAX_RENEW_ITERS) {
+                    try { Thread.sleep(LEASE_RENEW_MS) } catch (e: InterruptedException) { break }
+                    if (!leaseRenewActive) break
+                    val ok = runCatching { runBlocking { NodeControlClient.quiesce() } }.getOrDefault(false)
+                    if (ok) {
+                        consecutiveFails = 0
+                    } else if (++consecutiveFails >= 2) {
+                        // Two misses in a row → :node is gone (killed) or unreachable; stop renewing.
+                        break
+                    }
+                    iters++
+                }
+            }.apply { isDaemon = true; name = "xai-lease-renewer"; start() }
+        }
+
+        private fun stopLeaseRenewal() {
+            leaseRenewActive = false
+            leaseRenewer?.interrupt()
+            leaseRenewer = null
+        }
+
         private fun unquiesceUntilConfirmed(appCtx: Context, attempt: Int) {
             stopExecutor.execute {
                 val ok = runCatching { runBlocking { NodeControlClient.unquiesce() } }.getOrDefault(false)

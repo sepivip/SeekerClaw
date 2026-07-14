@@ -759,48 +759,35 @@ async function testDurabilitySignalsAndNotifyRetry() {
     r = await xaiApi.flushPendingPersist();
     ok('api_key: diskUnsafe always false (isOAuth-gated)', r.diskUnsafe === false);
 
-    // (5) notify-once retry: a failed mark is RETAINED (major-2), retried to success clears it.
+    // (5) RESERVE-before-send (Codex re-review): noteReauthNotified() returns whether the dead
+    //     epoch was DURABLY reserved. A failed reserve → false (ai.js must NOT send; it retries the
+    //     reserve+send later — nothing was sent, so no duplicate) and does NOT set the suppressor.
+    //     A successful reserve → true (ai.js sends the ONE notice) and sets the suppressor.
     xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
     xai._resetErrorStateForTests();
     xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
     _bridgeResult = { error: 'lock busy' };
     _bridgeCalls.length = 0;
-    await xai.noteReauthNotified();
-    ok('notify: failed mark is retained pending (not swallowed)', xai._getStateForTests().noteNotifiedPending === true);
+    let reserved = await xai.noteReauthNotified();
+    ok('reserve: a FAILED mark returns false (ai.js must NOT send)', reserved === false);
+    ok('reserve: a failed mark does NOT set the suppressor (no silent swallow)', xai._getStateForTests().reauthNotifiedEpoch !== 5);
+    ok('reserve: still SURFACEable so a later turn retries the reserve+send', xai.shouldSurfaceReauthNotice() === true);
     _bridgeResult = { success: true, epoch: 5 };
-    await xai._maybeRetryNotifyMark();
-    ok('notify: retry to success clears the pending mark', xai._getStateForTests().noteNotifiedPending === false);
+    reserved = await xai.noteReauthNotified();
+    ok('reserve: a SUCCESSFUL mark returns true (ai.js sends the one notice)', reserved === true);
+    ok('reserve: success sets the suppressor → no further autonomous notice for this epoch', xai._getStateForTests().reauthNotifiedEpoch === 5);
+    ok('reserve: suppressed after a durable reserve', xai.shouldSurfaceReauthNotice() === false);
 
-    // (6) notify retry that CAS-conflicts (fresh sign-in advanced the epoch) → drop the stale latch.
+    // (6) reserve that CAS-CONFLICTS (a fresh sign-in advanced the epoch) → false (no notice is
+    //     due for a superseded family); adopt the new epoch and drop the suppressor.
     xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
-    _bridgeResult = { error: 'lock busy' };
-    await xai.noteReauthNotified();
-    ok('notify: pre-conflict pending set', xai._getStateForTests().noteNotifiedPending === true);
     _bridgeResult = { code: 'XAI_OAUTH_EPOCH_CONFLICT', currentEpoch: 9 };
-    await xai._maybeRetryNotifyMark();
+    reserved = await xai.noteReauthNotified();
     const st = xai._getStateForTests();
-    ok('notify: conflict drops the stale pending mark AND the in-memory latch', st.noteNotifiedPending === false && st.reauthNotifiedEpoch === -1);
+    ok('reserve: a CAS conflict returns false (no notice for a superseded family)', reserved === false);
+    ok('reserve: conflict adopts the new epoch + drops the suppressor', st.currentEpoch === 9 && st.reauthNotifiedEpoch === -1);
 
-    // (7) MAJOR 2 — a controlled Stop DRAINS the pending notify mark (failed-notify → immediate
-    //     Stop must not re-notify on restart). flushPendingPersist reports notifyPending metadata.
-    xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
-    xai._resetErrorStateForTests();
-    xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
-    _bridgeResult = { error: 'lock busy' };
-    await xai.noteReauthNotified(); // mark fails → pending
-    _bridgeResult = { success: true, epoch: 5 }; // bridge recovers before/at Stop
-    let fr = await xai.flushPendingPersist();
-    ok('shutdown: flushPendingPersist DRAINS the pending notify mark', xai._getStateForTests().noteNotifiedPending === false);
-    ok('shutdown: notifyPending reported false after a successful drain', fr.notifyPending === false);
-    // If the mark still cannot land, report notifyPending:true (metadata, NOT diskUnsafe — a
-    // re-notify is a UX annoyance, not a brick).
-    xai._setStateForTests({ refreshDead: true, currentEpoch: 6, reauthNotifiedEpoch: -1 });
-    _bridgeResult = { error: 'still down' };
-    await xai.noteReauthNotified();
-    fr = await xai.flushPendingPersist();
-    ok('shutdown: notifyPending true when the mark still cannot land', fr.notifyPending === true && fr.diskUnsafe === false);
-
-    // (8) BLOCKER (quiesce) — while quiesced for a controlled Stop, a token ROTATION is refused
+    // (7) BLOCKER (quiesce) — while quiesced for a controlled Stop, a token ROTATION is refused
     //     (no consumed-T0/mint-T1 pair can form between the durability ack and the kill); it
     //     resumes after unquiesce.
     const quiesce = require(path.join(BUNDLE, 'quiesce.js'));

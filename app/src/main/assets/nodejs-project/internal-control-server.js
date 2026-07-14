@@ -367,6 +367,15 @@ async function _route(req, res) {
         return _json(res, 200, { ok: true });
     }
 
+    if (url === '/quiesce') {
+        // BAT-1155 Codex re-review blocker: (re)ARM the quiesce lease. Kotlin's lease renewer
+        // POSTs this on an independent (non-main-looper) cadence from the moment durability is
+        // proven until the process kill begins, so a delayed main-looper handoff can't let the
+        // lease expire and admit a new rotation between the durability ack and teardown. Idempotent.
+        require('./quiesce').quiesce();
+        return _json(res, 200, { ok: true });
+    }
+
     if (url === '/unquiesce') {
         // BAT-1155 Codex re-review blocker: Kotlin calls this when a controlled Stop is
         // ABANDONED (durability could not be established and the service is kept alive instead
