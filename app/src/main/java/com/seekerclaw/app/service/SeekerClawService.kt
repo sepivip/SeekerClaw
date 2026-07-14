@@ -17,6 +17,7 @@ import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.state.XaiOAuthDurabilityGate
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
@@ -706,7 +707,15 @@ class SeekerClawService : Service() {
      * in production.
      */
     private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_500L) {
-        if (!NodeBridge.isAlive()) return
+        if (!NodeBridge.isAlive()) {
+            // Codex blocker-1: Node already gone means we cannot flush to confirm a
+            // rotation wasn't stranded on disk (server consumed T0, minted T1, then the
+            // process died before persisting). Fail closed on the unknown rather than
+            // silently skip. No-op unless the store still shows a LIVE oauth family, and
+            // a no-op if the pre-stop gate already marked it (reauthRequired ⇒ not live).
+            guardXaiOAuthDurabilityOnStop()
+            return
+        }
         // BAT-1155 verify major-2 — tri-state so the durability gate fires ONLY on a
         // genuinely stranded rotation (or a truly-unconfirmed flush), never on a benign
         // summary-flush hiccup with no pending token write:
@@ -772,8 +781,10 @@ class SeekerClawService : Service() {
         }
         val live = !rec.tombstone && !rec.reauthRequired && rec.accessTokenEnc.isNotEmpty()
         if (!live) return
-        repeat(2) { attempt ->
-            when (val r = XaiOAuthTokenStore.markReauth()) {
+        repeat(3) { attempt ->
+            // CAS on the epoch we just read (Codex blocker-2): if a fresh sign-in landed
+            // concurrently, the mark conflicts and we must NOT touch the winning family.
+            when (val r = XaiOAuthTokenStore.markReauth(rec.epoch)) {
                 is XaiOAuthTokenStore.Result.Ok -> {
                     LogCollector.append(
                         "[Shutdown] xAI OAuth flush unconfirmed — durably marked reauth-required " +
@@ -782,10 +793,21 @@ class SeekerClawService : Service() {
                     )
                     return
                 }
-                else -> if (attempt == 1) {
+                is XaiOAuthTokenStore.Result.Conflict -> {
+                    // A fresh sign-in/out won the epoch — the live family we saw is gone,
+                    // so there is nothing to fail closed. Treat as durable and stop.
                     LogCollector.append(
-                        "[Shutdown] xAI OAuth fail-closed markReauth did NOT persist — " +
-                            "proceeding to kill (OS fallback)",
+                        "[Shutdown] xAI OAuth durability gate: epoch advanced (${rec.epoch}→${r.currentEpoch}) — winning family intact",
+                        LogLevel.WARN,
+                    )
+                    return
+                }
+                is XaiOAuthTokenStore.Result.Failed -> if (attempt == 2) {
+                    // OS/final fallback only (Codex: the onDestroy path cannot keep the
+                    // service alive; the PRE-STOP gate in stop() is the keep-alive path).
+                    LogCollector.append(
+                        "[Shutdown] xAI OAuth fail-closed markReauth did NOT persist after 3 tries " +
+                            "(${r.reason}) — OS fallback kill",
                         LogLevel.ERROR,
                     )
                 }
@@ -832,16 +854,87 @@ class SeekerClawService : Service() {
         private const val SETUP_NOTIFICATION_ID = 2 // separate ID — persists after service stops
         private val restartHandler = Handler(Looper.getMainLooper())
 
+        // BAT-1155 blocker-1: the pre-stop durability gate does blocking loopback I/O
+        // (Node flush) + a disk CAS, so it MUST run off the main thread or it ANRs.
+        // Single-thread so concurrent Stop/Restart presses serialize instead of racing
+        // the store. Daemon so it never blocks process exit.
+        private val stopExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "xai-stop-durability").apply { isDaemon = true }
+        }
+
+        /**
+         * Max times a non-durable Stop keeps the service ALIVE and retries (Codex
+         * blocker-1: prefer keep-alive over killing a family we couldn't save). Bounded
+         * so a truly-broken disk can't wedge Stop forever — after this we OS-fallback stop.
+         */
+        private const val MAX_KEEPALIVE_STOP_ATTEMPTS = 2
+        private const val KEEPALIVE_RETRY_MS = 1_500L
+
         fun start(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
             val intent = Intent(context, SeekerClawService::class.java)
             context.startForegroundService(intent)
         }
 
+        /**
+         * User-initiated Stop. Runs the xAI OAuth pre-stop durability gate BEFORE
+         * teardown so a mid-flight token rotation is either persisted or fail-closed
+         * marked — never killed into a family-revoking replay (BAT-1155 blocker-1).
+         */
         fun stop(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
+            stopWithDurability(context.applicationContext, attempt = 0, onStopped = null)
+        }
+
+        fun restart(context: Context, delayMs: Long = 1200L) {
+            restartHandler.removeCallbacksAndMessages(null)
+            val appCtx = context.applicationContext
+            // Gate durability BEFORE the stop, then schedule start on the main looper.
+            // A restart of a live oauth family is just as capable of stranding a rotation
+            // as a plain Stop, so it goes through the same gate.
+            stopWithDurability(appCtx, attempt = 0) {
+                restartHandler.postDelayed({ start(appCtx) }, delayMs)
+            }
+        }
+
+        /**
+         * Run the durability gate off-main; on success (or exhausted keep-alive budget)
+         * finish the stop and fire [onStopped]; otherwise keep the service alive and
+         * retry after a short delay. All teardown/status writes happen in [finishStop].
+         */
+        private fun stopWithDurability(appCtx: Context, attempt: Int, onStopped: (() -> Unit)?) {
+            stopExecutor.execute {
+                val durable = try {
+                    XaiOAuthDurabilityGate.ensureDurableBeforeStop()
+                } catch (e: Exception) {
+                    LogCollector.append("[Shutdown] durability gate threw (${e.javaClass.simpleName}) — proceeding", LogLevel.ERROR)
+                    true
+                }
+                if (durable || attempt >= MAX_KEEPALIVE_STOP_ATTEMPTS) {
+                    if (!durable) {
+                        LogCollector.append(
+                            "[Shutdown] durability unconfirmed after ${attempt + 1} attempts — OS-fallback stop",
+                            LogLevel.ERROR,
+                        )
+                    }
+                    restartHandler.post {
+                        finishStop(appCtx)
+                        onStopped?.invoke()
+                    }
+                } else {
+                    LogCollector.append(
+                        "[Shutdown] finishing secure session save — keeping service alive, retry ${attempt + 1}/$MAX_KEEPALIVE_STOP_ATTEMPTS",
+                        LogLevel.WARN,
+                    )
+                    restartHandler.postDelayed({ stopWithDurability(appCtx, attempt + 1, onStopped) }, KEEPALIVE_RETRY_MS)
+                }
+            }
+        }
+
+        /** Terminal teardown: status/uptime reset + [Context.stopService]. Runs on the main looper. */
+        private fun finishStop(appCtx: Context) {
             runCatching {
-                ServiceState.init(context.applicationContext)
+                ServiceState.init(appCtx)
                 // Mirror the same guard as onDestroy() — don't wipe ERROR status on a user-stop.
                 if (ServiceState.status.value != ServiceStatus.ERROR) {
                     ServiceState.updateStatus(ServiceStatus.STOPPED)
@@ -850,16 +943,7 @@ class SeekerClawService : Service() {
                 // launch derives uptime=0 until the service is started again.
                 ServiceState.setServiceStartTimeMs(0L)
             }
-            val intent = Intent(context, SeekerClawService::class.java)
-            context.stopService(intent)
-        }
-
-        fun restart(context: Context, delayMs: Long = 1200L) {
-            stop(context)
-            restartHandler.postDelayed(
-                { start(context) },
-                delayMs,
-)
+            appCtx.stopService(Intent(appCtx, SeekerClawService::class.java))
         }
     }
 }

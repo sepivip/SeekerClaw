@@ -145,3 +145,14 @@ Add `!_refreshDead` to the guard at `xai.js:328` (`!_oauth403RetriedOnce && !_ti
 5. **Recovery: restart `:node` after a successful sign-in** — D2 makes that restart zero-refresh while TTL is valid, and it reuses the established boot/H5 path (no new hot-reload state path).
 
 *Codex will sign off once these four amendments are explicit and the test matrix includes their failure cases (both satisfied in this v3).*
+
+---
+
+## 9. Code-review fold (post-v4 Codex CODE review — 3 blockers + 2 majors)
+Contract v4 was design-signed; Codex's subsequent **code** review returned NO SIGN-OFF with 3 blockers + 2 majors. Each is now folded (implementation-only; no D1–D9 intent change):
+
+- **Blocker 1 — shutdown could kill without positive durability.** Added a dedicated pre-stop **`XaiOAuthDurabilityGate`** (`state/`) run OFF the main thread by `SeekerClawService.stop()`/`restart()` BEFORE `stopService()`. It (1) re-drives Node's flush up to 3 rounds so a VALID rotated `T1` persists first, (2) on unpersisted/unreachable, CAS-marks the family reauth (`Ok`/`Conflict` ⇒ durable), all under ONE monotonic (`System.nanoTime`) end-to-end budget; a non-durable result KEEPS the service alive and retries (bounded) — *"finishing secure session save"* — instead of a blind kill. `onDestroy`'s fallback now fail-closes when Node is already gone (no silent skip) and `markReauth(rec.epoch)` CAS-handles a concurrent sign-in. The once-per-stop persist routes to a dedicated **`/xai/oauth/save-tokens-urgent`** bridge bucket (20/60s) so the normal 5/60s throttle can't strand a valid token.
+- **Blocker 2 — unversioned dead-marks could poison a fresh family.** `markReauth`/`markReauthNotified` are now **CAS'd on `expectedEpoch`** (epoch NOT advanced — annotations); Node sends `_currentEpoch` and, on `409`, adopts the winning epoch and clears the pending mark (retryable, never swallowed).
+- **Blocker 3 — epoch-0 tombstone was resurrectable.** `rotate()` rejects EVERY tombstone regardless of epoch; the epoch-0 fill exception lives ONLY in `migrateIfEmpty`.
+- **Major 1 — decrypt failure wasn't fail-closed.** `decryptXaiCiphertext` now returns `String?` (`null` = a NON-blank ciphertext failed to decrypt vs `""` = absent); `loadConfig` treats a required-token decrypt failure as effective reauth (blank tokens + `xaiOAuthReauthRequired`).
+- **Major 2 — no store tests + a red suite.** Added `XaiOAuthTokenStoreTest` (16-case v4 matrix driving the REAL store via a JVM seam: fail-closed default, corruption, signIn/signOut, rotate CAS, epoch-0 + tombstone rejection, versioned marks, fill-only migration + marker semantics). Fixed the 3 stale `shutdown-flush.test.js` greps to the D6 shapes and made `CrossProcessStoreTest`'s drift-guards CRLF-tolerant. Full suite green: **433 Kotlin tests + Node offline suite**, 0 BAT-1155 failures.

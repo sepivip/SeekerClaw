@@ -316,6 +316,7 @@ function classifyError(status, data) {
         // refresh — with tombstoned tokens the bearer is empty and xAI can 401 (not 403);
         // classify as reauth so the reconnect copy surfaces (not the stale api-key hint).
         if (isOAuth && _refreshDead) {
+            _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
             return {
                 type: 'reauth', retryable: false,
                 userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
@@ -376,6 +377,7 @@ function classifyError(status, data) {
         // revoked sign-in — surface reconnect, never "add an xAI API key". Keep the
         // tier-gate copy ONLY for a genuine fresh-token tier-gate (_refreshDead === false).
         if (isOAuth && _refreshDead) {
+            _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
             return {
                 type: 'reauth', retryable: false,
                 userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
@@ -485,15 +487,43 @@ function refreshOAuthToken() {
     return _refreshInFlight;
 }
 
+// A dead-family mark that did NOT durably persist. Codex blocker-2: a failed
+// mark must stay retryable (not swallowed) — else a restart re-seeds
+// _refreshDead=false and re-POSTs the revoked token. Retried on each subsequent
+// dead-path turn (classifyError) until it lands.
+let _markReauthPending = false;
+
 // BAT-1155 D4/D5: token-less durable mark of "this family is dead". POSTs
-// /xai/oauth/mark-reauth (a SEPARATE rate bucket, never throttled with the
-// rotation writes). Best-effort — the boot gate re-derives from config on restart;
-// swallow failures so a dead-token refresh path never itself throws on the marker.
+// /xai/oauth/mark-reauth (SEPARATE rate bucket) CAS'd on expectedEpoch (blocker-2).
 async function _persistReauthRequired() {
     try {
-        const result = await androidBridgeCall('/xai/oauth/mark-reauth', {});
-        if (result && typeof result.epoch === 'number') _currentEpoch = result.epoch;
-    } catch (_) { /* best-effort; restart re-derives reauthRequired from the store */ }
+        const result = await androidBridgeCall('/xai/oauth/mark-reauth', { expectedEpoch: _currentEpoch });
+        if (result && result.code === 'XAI_OAUTH_EPOCH_CONFLICT') {
+            // A fresh sign-in/out advanced the epoch — the OLD family's dead-mark is moot
+            // and must NOT land on the winning family. Adopt the new revision, drop the
+            // pending mark; the sign-in-triggered :node restart reloads the fresh family.
+            if (typeof result.currentEpoch === 'number') _currentEpoch = result.currentEpoch;
+            _markReauthPending = false;
+            return;
+        }
+        if (result && result.success === true) {
+            if (typeof result.epoch === 'number') _currentEpoch = result.epoch;
+            _markReauthPending = false;
+            return;
+        }
+        _markReauthPending = true; // Failed → keep retryable (not swallowed)
+    } catch (_) {
+        _markReauthPending = true;
+    }
+}
+
+// Fire-and-forget retry of a dead-mark that didn't persist (Codex blocker-2). Called
+// from the reauth classify path so a transient bridge/lock failure self-heals within
+// the process instead of waiting for a restart to re-derive dead state.
+function _maybeRetryReauthMark() {
+    if (_refreshDead && _markReauthPending) {
+        _persistReauthRequired().catch(() => {});
+    }
 }
 
 async function _performRefresh() {
@@ -628,21 +658,25 @@ let _persistInFlight = null;
 // is exhausted. Never throws — the caller (refresh or ensureFreshToken) proceeds
 // on the valid in-memory token regardless. `timeoutMs` (optional) is passed through
 // to androidBridgeCall — the USER_STOP drain passes 300 (bridge default is 10000).
-function _attemptPersist(timeoutMs) {
+function _attemptPersist(timeoutMs, urgent) {
     // D6 single-flight: coalesce concurrent callers onto one in-flight POST.
     if (_persistInFlight) return _persistInFlight;
-    _persistInFlight = _doAttemptPersist(timeoutMs).finally(() => { _persistInFlight = null; });
+    _persistInFlight = _doAttemptPersist(timeoutMs, urgent).finally(() => { _persistInFlight = null; });
     return _persistInFlight;
 }
 
-async function _doAttemptPersist(timeoutMs) {
+async function _doAttemptPersist(timeoutMs, urgent) {
     if (!_pendingPersistPayload) { _persistPending = false; return; }
     // BAT-1155 D1: carry expectedEpoch (the revision this process last saw) so the
     // Kotlin store can CAS-reject a stale rotation that lost a race to a MAIN sign-in/out.
     const payload = { ..._pendingPersistPayload, expectedEpoch: _currentEpoch };
+    // BAT-1155 blocker-1: the USER_STOP drain routes to the dedicated urgent endpoint
+    // (own generous rate bucket) so the once-per-shutdown persist of a VALID rotated pair
+    // is never throttled by the normal 5/60s save-tokens limit and forced into a re-pair.
+    const endpoint = urgent ? '/xai/oauth/save-tokens-urgent' : '/xai/oauth/save-tokens';
     const result = (typeof timeoutMs === 'number')
-        ? await androidBridgeCall('/xai/oauth/save-tokens', payload, timeoutMs)
-        : await androidBridgeCall('/xai/oauth/save-tokens', payload);
+        ? await androidBridgeCall(endpoint, payload, timeoutMs)
+        : await androidBridgeCall(endpoint, payload);
     if (result && result.success === true && !result.error) {
         _persistPending = false;
         _pendingPersistPayload = null;
@@ -719,8 +753,9 @@ async function flushPendingPersist() {
     // Phase 2: at most ONE forced retry, only if time remains AND a pair is still pending.
     // _attemptPersist is single-flight, so if phase 1's attempt is still running this just
     // re-awaits it within the remaining budget rather than starting a duplicate POST.
+    // urgent=true → dedicated bridge bucket so this shutdown-critical persist isn't throttled.
     if (_persistPending && _pendingPersistPayload && remaining() > 0) {
-        await raceRemaining(_attemptPersist(remaining()));
+        await raceRemaining(_attemptPersist(remaining(), /* urgent */ true));
     }
     // Report whether a rotated pair is STILL stranded. The Kotlin controlled-stop
     // durability gate fires ONLY on this signal — not on any unconfirmed flush — so a
@@ -866,15 +901,15 @@ function hasPersistDurableError() { return _persistDurableError; }
 function isRefreshDead() { return _refreshDead; }
 
 // BAT-1155 D4 notify-once. ai.js gates the AUTONOMOUS (background) reconnect notice on
-// this: true only while the family is dead AND the single notice for this dead family
-// hasn't fired yet. `_reauthNotifiedEpoch` is -1 until a notice is recorded and is reset
-// to -1 by the store on any sign-in/rotate, so this re-arms cleanly after a recovery.
-// (The store advances `epoch` on EVERY mutation — including markReauthNotified — so a
-// literal `notifiedEpoch === epoch` can never hold on disk; the -1 sentinel is the
-// restart-durable, epoch-scoped signal that actually works.) Explicit user requests are
-// answered via classifyError's reauth userMessage regardless of this gate — never silent.
+// this: true only while the family is dead AND the single notice for the CURRENT dead
+// epoch hasn't fired yet. markReauthNotified is epoch-STABLE (Codex blocker-2 — it does
+// NOT advance the epoch), and sets `reauthNotifiedEpoch = expectedEpoch`, so
+// `reauthNotifiedEpoch === _currentEpoch` durably means "already notified for this dead
+// family". A sign-in/rotate resets it to -1 and advances the epoch, so this re-arms
+// cleanly after recovery. Explicit user requests are answered via classifyError's reauth
+// userMessage regardless of this gate — never silent.
 function shouldSurfaceReauthNotice() {
-    return isOAuth && _refreshDead && _reauthNotifiedEpoch === -1;
+    return isOAuth && _refreshDead && _reauthNotifiedEpoch !== _currentEpoch;
 }
 
 // BAT-1155 D4: record that the single autonomous reconnect notice fired for this dead
@@ -885,8 +920,20 @@ async function noteReauthNotified() {
     const notifiedFor = _currentEpoch;
     _reauthNotifiedEpoch = notifiedFor; // in-memory suppressor (survives this session)
     try {
-        const result = await androidBridgeCall('/xai/oauth/mark-reauth', { notifiedEpoch: notifiedFor });
-        if (result && typeof result.epoch === 'number') _currentEpoch = result.epoch;
+        const result = await androidBridgeCall('/xai/oauth/mark-reauth', {
+            expectedEpoch: notifiedFor, notified: true,
+        });
+        if (result && result.code === 'XAI_OAUTH_EPOCH_CONFLICT') {
+            // A fresh sign-in/out advanced the epoch — this notice was for a family that no
+            // longer exists. Adopt the new revision and DROP the stale in-memory latch so a
+            // legitimate future notice isn't suppressed (Codex blocker-2).
+            if (typeof result.currentEpoch === 'number') _currentEpoch = result.currentEpoch;
+            _reauthNotifiedEpoch = -1;
+            return;
+        }
+        if (result && result.success === true && typeof result.epoch === 'number') {
+            _currentEpoch = result.epoch;
+        }
     } catch (_) { /* best-effort; boot seed re-derives reauthNotifiedEpoch from the store */ }
 }
 

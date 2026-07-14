@@ -12,7 +12,9 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.nio.channels.FileLock
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Cross-process, single-domain store for the xAI OAuth ("Sign in with Grok")
@@ -82,12 +84,18 @@ object XaiOAuthTokenStore {
     private val FAIL_CLOSED = XaiOAuthTokens(reauthRequired = true, tombstone = true, epoch = 0L)
 
     private val initialized = AtomicBoolean(false)
-    private var appContext: Context? = null
     private var ownedScope: CoroutineScope? = null
     private var store: CrossProcessStore<XaiOAuthTokens>? = null
+    /** Directory holding the sidecar lock file. `filesDir` in production; a temp dir under test. */
+    private var lockDir: File? = null
 
-    /** Per-JVM serialization for the sidecar file lock (see class KDoc). */
-    private val jvmMutex = Any()
+    /**
+     * Per-JVM serialization for the sidecar file lock (see class KDoc). A
+     * ReentrantLock (not `synchronized`) so acquisition is itself BOUNDED
+     * (Codex: `synchronized` can't time out — under the shutdown budget an
+     * unbounded monitor wait would blow the ceiling / risk a stuck thread).
+     */
+    private val jvmLock = ReentrantLock()
 
     val isInitialized: Boolean get() = store != null
 
@@ -95,7 +103,7 @@ object XaiOAuthTokenStore {
     fun init(context: Context) {
         if (!initialized.compareAndSet(false, true)) return
         val app = context.applicationContext
-        appContext = app
+        lockDir = app.filesDir
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         ownedScope = scope
         store = CrossProcessStore(
@@ -133,63 +141,85 @@ object XaiOAuthTokenStore {
      * [transform] must NOT itself set `epoch` — this method advances it so
      * every mutation is monotonic. Never throws.
      */
+    /**
+     * Acquire BOTH the in-JVM [jvmLock] and the cross-process sidecar file lock
+     * under ONE monotonic end-to-end deadline ([LOCK_TIMEOUT_MS]), run [action]
+     * with the store + the freshly-read current record, and always release both.
+     * Returns [Result.Failed] on a lock timeout — never blocks indefinitely and
+     * never throws (Codex blocker-1: the shutdown path must be bounded + deadlock-
+     * proof, so every acquisition here is time-bounded off a monotonic clock).
+     */
+    private fun withStoreLock(action: (CrossProcessStore<XaiOAuthTokens>, XaiOAuthTokens) -> Result): Result {
+        val cps = store ?: return Result.Failed("not initialized")
+        val dir = lockDir ?: return Result.Failed("not initialized")
+        // Monotonic deadline (Codex: System.currentTimeMillis can jump on an NTP
+        // correction and break the bound). Covers BOTH lock acquisitions.
+        val deadlineNs = System.nanoTime() + LOCK_TIMEOUT_MS * 1_000_000L
+        val remainingMs = { (deadlineNs - System.nanoTime()) / 1_000_000L }
+        val gotJvm = try {
+            jvmLock.tryLock(remainingMs().coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!gotJvm) return Result.Failed("jvm lock timeout")
+        var raf: RandomAccessFile? = null
+        var chan: FileChannel? = null
+        var lock: FileLock? = null
+        try {
+            val lockFile = File(dir, LOCK_NAME)
+            raf = RandomAccessFile(lockFile, "rw")
+            chan = raf.channel
+            // Bounded cross-process acquisition: tryLock + brief retries instead of a
+            // blocking lock() that could hang forever on a stuck other-process holder.
+            while (lock == null) {
+                lock = try {
+                    chan.tryLock()
+                } catch (_: java.nio.channels.OverlappingFileLockException) {
+                    null // jvmLock already serializes this process; back off + retry
+                }
+                if (lock == null) {
+                    if (remainingMs() <= 0L) return Result.Failed("lock timeout")
+                    Thread.sleep(15)
+                }
+            }
+            return action(cps, cps.read())
+        } catch (e: Exception) {
+            Log.w(TAG, "store op failed: ${e.message}")
+            return Result.Failed(e.message ?: "unknown")
+        } finally {
+            try { lock?.release() } catch (_: Exception) {}
+            try { chan?.close() } catch (_: Exception) {}
+            try { raf?.close() } catch (_: Exception) {}
+            jvmLock.unlock()
+        }
+    }
+
+    /**
+     * CAS mutation. [Result.Conflict] (no write) when [expectedEpoch] is non-null
+     * and differs from the on-disk epoch, or when [rejectIfTombstone] and the
+     * current record is any tombstone. Otherwise persists `transform(current)`
+     * with the epoch advanced by one — UNLESS [advanceEpoch] is false (annotation
+     * writes like markReauth that keep the family's epoch stable so their CAS
+     * stays meaningful across chained marks). Never throws.
+     */
     private fun mutate(
         expectedEpoch: Long?,
         rejectIfTombstone: Boolean = false,
+        advanceEpoch: Boolean = true,
         transform: (XaiOAuthTokens) -> XaiOAuthTokens,
-    ): Result {
-        val cps = store ?: return Result.Failed("not initialized")
-        val app = appContext ?: return Result.Failed("not initialized")
-        synchronized(jvmMutex) {
-            val lockFile = File(app.filesDir, LOCK_NAME)
-            var raf: RandomAccessFile? = null
-            var chan: FileChannel? = null
-            var lock: FileLock? = null
-            try {
-                raf = RandomAccessFile(lockFile, "rw")
-                chan = raf.channel
-                // Bounded cross-process acquisition (CodeRabbit): deadline + brief retries
-                // instead of a blocking lock() that could hang forever on a stuck holder.
-                val deadline = System.currentTimeMillis() + LOCK_TIMEOUT_MS
-                while (lock == null) {
-                    lock = try {
-                        chan.tryLock()
-                    } catch (_: java.nio.channels.OverlappingFileLockException) {
-                        // Same-JVM overlap is prevented by jvmMutex; if it ever occurs, back
-                        // off and retry rather than crash the mutation.
-                        null
-                    }
-                    if (lock == null) {
-                        if (System.currentTimeMillis() >= deadline) return Result.Failed("lock timeout")
-                        Thread.sleep(15)
-                    }
-                }
-                val current = cps.read()
-                if (expectedEpoch != null && current.epoch != expectedEpoch) {
-                    return Result.Conflict(current.epoch)
-                }
-                // A dead family (sign-out tombstone) is terminal for a
-                // rotation: even once Node syncs its epoch to the tombstone
-                // (via a prior conflict response), a later rotation must NOT
-                // revive it — only signIn clears a tombstone. Without this, a
-                // still-running :node could rotate back onto a signed-out
-                // account and silently undo the sign-out (BAT-1155 verify
-                // blocker-1). Persisted tombstones are epoch >= 1; the
-                // never-written FAIL_CLOSED sentinel (epoch 0) is excluded.
-                if (rejectIfTombstone && current.tombstone && current.epoch >= 1L) {
-                    return Result.Conflict(current.epoch)
-                }
-                val next = transform(current).copy(epoch = current.epoch + 1)
-                return if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
-            } catch (e: Exception) {
-                Log.w(TAG, "mutate failed: ${e.message}")
-                return Result.Failed(e.message ?: "unknown")
-            } finally {
-                try { lock?.release() } catch (_: Exception) {}
-                try { chan?.close() } catch (_: Exception) {}
-                try { raf?.close() } catch (_: Exception) {}
-            }
+    ): Result = withStoreLock { cps, current ->
+        if (expectedEpoch != null && current.epoch != expectedEpoch) {
+            return@withStoreLock Result.Conflict(current.epoch)
         }
+        // A dead family (sign-out tombstone OR the epoch-0 FAIL_CLOSED sentinel) is
+        // terminal for a rotation — reject EVERY tombstone regardless of epoch
+        // (Codex blocker-3); the epoch-0 fill exception lives ONLY in migrateIfEmpty.
+        if (rejectIfTombstone && current.tombstone) {
+            return@withStoreLock Result.Conflict(current.epoch)
+        }
+        val next = transform(current).copy(epoch = if (advanceEpoch) current.epoch + 1 else current.epoch)
+        if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
     }
 
     // ---- Mutations (each advances epoch under the CAS lock) --------------
@@ -243,18 +273,25 @@ object XaiOAuthTokenStore {
         }
 
     /**
-     * Mark the current family dead (revoked refresh token) WITHOUT touching
-     * the token fields — the token-less write D4 needs (a dead token has no
-     * new pair to persist). Idempotent.
+     * Mark the CURRENT family dead (revoked refresh token) WITHOUT touching the
+     * token fields — the token-less write D4 needs. **CAS'd on [expectedEpoch]**
+     * (Codex blocker-2): if a fresh sign-in/out has advanced the epoch, a delayed
+     * old-family mark returns [Result.Conflict] and NEVER poisons the winning
+     * family. Epoch is NOT advanced (an annotation on the same family), so a
+     * caller can chain markReauthNotified with the same epoch. Idempotent.
      */
-    fun markReauth(): Result = mutate(null) { it.copy(reauthRequired = true) }
+    fun markReauth(expectedEpoch: Long): Result =
+        mutate(expectedEpoch, advanceEpoch = false) { it.copy(reauthRequired = true) }
 
     /**
-     * Record that the single autonomous "reconnect" notice has fired for the
-     * current dead epoch, so restarts don't re-notify. Explicit user requests
-     * are answered regardless (that logic lives in Node, keyed on this field).
+     * Record that the single autonomous "reconnect" notice has fired for the dead
+     * family at [expectedEpoch], so restarts don't re-notify. **CAS'd** so a stale
+     * latch can't land on a fresh family (Codex blocker-2). Sets
+     * `reauthNotifiedEpoch = expectedEpoch`; epoch NOT advanced. Explicit user
+     * requests are answered regardless (that logic lives in Node, keyed on this).
      */
-    fun markReauthNotified(epoch: Long): Result = mutate(null) { it.copy(reauthNotifiedEpoch = epoch) }
+    fun markReauthNotified(expectedEpoch: Long): Result =
+        mutate(expectedEpoch, advanceEpoch = false) { it.copy(reauthNotifiedEpoch = expectedEpoch) }
 
     /**
      * One-time upgrade fill from the legacy `seekerclaw_prefs` xAI OAuth keys
@@ -287,71 +324,52 @@ object XaiOAuthTokenStore {
         refreshTokenEnc: String,
         emailEnc: String,
         expiresAt: String,
-    ): Result {
-        val cps = store ?: return Result.Failed("not initialized")
-        val app = appContext ?: return Result.Failed("not initialized")
-        synchronized(jvmMutex) {
-            val lockFile = File(app.filesDir, LOCK_NAME)
-            var raf: RandomAccessFile? = null
-            var chan: FileChannel? = null
-            var lock: FileLock? = null
-            try {
-                raf = RandomAccessFile(lockFile, "rw")
-                chan = raf.channel
-                // Bounded cross-process acquisition (CodeRabbit): deadline + brief retries
-                // instead of a blocking lock() that could hang forever on a stuck holder.
-                val deadline = System.currentTimeMillis() + LOCK_TIMEOUT_MS
-                while (lock == null) {
-                    lock = try {
-                        chan.tryLock()
-                    } catch (_: java.nio.channels.OverlappingFileLockException) {
-                        // Same-JVM overlap is prevented by jvmMutex; if it ever occurs, back
-                        // off and retry rather than crash the mutation.
-                        null
-                    }
-                    if (lock == null) {
-                        if (System.currentTimeMillis() >= deadline) return Result.Failed("lock timeout")
-                        Thread.sleep(15)
-                    }
-                }
-                val current = cps.read()
-                // Fill-only guard. A real persisted tombstone is epoch >= 1;
-                // the FAIL_CLOSED default (epoch 0) is the never-written
-                // sentinel and MUST fill.
-                val realTombstone = current.tombstone && current.epoch >= 1L
-                if (current.accessTokenEnc.isNotEmpty() || realTombstone) {
-                    return Result.Ok(current) // no-op — epoch deliberately NOT advanced
-                }
-                val next = XaiOAuthTokens(
-                    accessTokenEnc = accessTokenEnc,
-                    refreshTokenEnc = refreshTokenEnc,
-                    emailEnc = emailEnc,
-                    expiresAt = expiresAt,
-                    reauthRequired = false,
-                    reauthNotifiedEpoch = -1L,
-                    epoch = 1L,
-                    tombstone = false,
-                )
-                return if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
-            } catch (e: Exception) {
-                Log.w(TAG, "migrateIfEmpty failed: ${e.message}")
-                return Result.Failed(e.message ?: "unknown")
-            } finally {
-                try { lock?.release() } catch (_: Exception) {}
-                try { chan?.close() } catch (_: Exception) {}
-                try { raf?.close() } catch (_: Exception) {}
-            }
+    ): Result = withStoreLock { cps, current ->
+        // Fill-only guard. A real persisted tombstone is epoch >= 1; the
+        // FAIL_CLOSED default (epoch 0) is the never-written sentinel and MUST fill.
+        val realTombstone = current.tombstone && current.epoch >= 1L
+        if (current.accessTokenEnc.isNotEmpty() || realTombstone) {
+            return@withStoreLock Result.Ok(current) // no-op — epoch deliberately NOT advanced
         }
+        val next = XaiOAuthTokens(
+            accessTokenEnc = accessTokenEnc,
+            refreshTokenEnc = refreshTokenEnc,
+            emailEnc = emailEnc,
+            expiresAt = expiresAt,
+            reauthRequired = false,
+            reauthNotifiedEpoch = -1L,
+            epoch = 1L,
+            tombstone = false,
+        )
+        if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
     }
 
     // ---- Test seams -----------------------------------------------------
+
+    /**
+     * JVM-only init (no Android Context) mirroring CrossProcessStore's round-19 test
+     * constructor: drives the REAL mutate/CAS/epoch/tombstone/migration logic against a
+     * temp [filesDir] (which also holds the sidecar lock file). Lets the v4 matrix
+     * exercise production code paths — not a mirror — off a plain tmp dir.
+     */
+    internal fun initForTest(filesDir: File) {
+        resetForTest()
+        initialized.set(true)
+        lockDir = filesDir
+        store = CrossProcessStore(
+            filesDir = filesDir,
+            fileName = FILE_NAME,
+            serializer = XaiOAuthTokens.serializer(),
+            initial = FAIL_CLOSED,
+        )
+    }
 
     internal fun resetForTest() {
         ownedScope?.cancel()
         ownedScope = null
         store?.close()
         store = null
-        appContext = null
+        lockDir = null
         initialized.set(false)
     }
 }

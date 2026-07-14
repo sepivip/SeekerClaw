@@ -88,6 +88,11 @@ class AndroidBridge(
         "/location" to Pair(10, 60_000L),
         "/openai/oauth/save-tokens" to Pair(5, 60_000L),
         "/xai/oauth/save-tokens" to Pair(5, 60_000L), // BAT-1124 (5/60s parity with OpenAI)
+        // BAT-1155 blocker-1: the shutdown-critical durability persist. A generous
+        // 20/60s (vs the normal 5/60s) so the once-per-stop drain — and a couple of
+        // boot-churn recovery persists — are never throttled, while still bounding a
+        // pathological (non-agent-reachable) storm. Routes to the same CAS handler.
+        "/xai/oauth/save-tokens-urgent" to Pair(20, 60_000L),
         // BAT-1155: token-LESS reauth marker on its own SEPARATE bucket. A dead
         // token can heartbeat-storm this endpoint; a generous 30/60s keeps it
         // off the save-tokens bucket so marking-dead is never throttled by
@@ -218,6 +223,11 @@ class AndroidBridge(
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
                 "/xai/oauth/save-tokens" -> handleXaiOAuthSaveTokens(params)
+                // BAT-1155 blocker-1: same handler, dedicated generous bucket. The
+                // once-per-shutdown durability drain persists the just-rotated pair via
+                // this route so the normal 5/60s save-tokens throttle can't strand a
+                // VALID token at Stop and force an avoidable re-pair.
+                "/xai/oauth/save-tokens-urgent" -> handleXaiOAuthSaveTokens(params)
                 "/xai/oauth/mark-reauth" -> handleXaiOAuthMarkReauth(params)
                 "/config/credentials" -> handleConfigCredentials()
                 "/config/mcp-token" -> handleConfigMcpToken(params)
@@ -1039,26 +1049,43 @@ class AndroidBridge(
      * fields. On its own SEPARATE rate bucket so a dead-token heartbeat storm can't be
      * throttled by (or throttle) rotation traffic.
      *
-     * Body `{ notifiedEpoch?: number }`:
-     *  - present → record that the one autonomous "reconnect" notice fired for that epoch
-     *    (markReauthNotified) so restarts don't re-notify;
-     *  - absent  → mark the family dead (markReauth).
+     * Body `{ expectedEpoch: number, notified?: boolean }` — CAS'd on `expectedEpoch`
+     * (Codex blocker-2) so a delayed old-family mark can never poison a fresh sign-in:
+     *  - `notified == true` → record that the one autonomous "reconnect" notice fired for
+     *    that epoch (markReauthNotified) so restarts don't re-notify;
+     *  - else → mark the family dead (markReauth).
+     * A stale `expectedEpoch` returns 409 `XAI_OAUTH_EPOCH_CONFLICT` (Node discards it).
      */
     private fun handleXaiOAuthMarkReauth(params: JSONObject): Response {
-        val hasNotified = params.has("notifiedEpoch")
+        if (!params.has("expectedEpoch")) {
+            return jsonResponse(400, mapOf(
+                "error" to "expectedEpoch required",
+                "code" to "XAI_OAUTH_MARK_REAUTH_FAILED",
+            ))
+        }
+        val expectedEpoch = params.optLong("expectedEpoch", -1L)
+        val notified = params.optBoolean("notified", false)
         return try {
-            val result = if (hasNotified) {
-                XaiOAuthTokenStore.markReauthNotified(params.optLong("notifiedEpoch", -1L))
+            val result = if (notified) {
+                XaiOAuthTokenStore.markReauthNotified(expectedEpoch)
             } else {
-                XaiOAuthTokenStore.markReauth()
+                XaiOAuthTokenStore.markReauth(expectedEpoch)
             }
             when (result) {
                 is XaiOAuthTokenStore.Result.Ok ->
                     jsonResponse(200, mapOf("success" to true, "epoch" to result.record.epoch))
-                // markReauth/markReauthNotified pass expectedEpoch=null → never Conflict;
-                // fold any non-Ok into the failure body defensively.
-                else -> {
-                    Log.w(TAG, "xAI OAuth mark-reauth failed")
+                is XaiOAuthTokenStore.Result.Conflict -> {
+                    // A fresh sign-in/out advanced the epoch → this mark is stale. Node
+                    // discards it (never modifies the winning family) — Codex blocker-2.
+                    Log.w(TAG, "xAI OAuth mark-reauth CAS conflict (expected=$expectedEpoch current=${result.currentEpoch})")
+                    jsonResponse(409, mapOf(
+                        "error" to "epoch_conflict",
+                        "code" to "XAI_OAUTH_EPOCH_CONFLICT",
+                        "currentEpoch" to result.currentEpoch,
+                    ))
+                }
+                is XaiOAuthTokenStore.Result.Failed -> {
+                    Log.w(TAG, "xAI OAuth mark-reauth failed: ${result.reason}")
                     jsonResponse(500, mapOf(
                         "error" to "Failed to mark xAI OAuth reauth",
                         "code" to "XAI_OAUTH_MARK_REAUTH_FAILED",

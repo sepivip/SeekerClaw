@@ -1228,10 +1228,19 @@ object ConfigManager {
         // as usable. A missing/corrupt store fails closed to a reauth
         // tombstone inside read(). Never logs decrypted values.
         val xaiRec = XaiOAuthTokenStore.read()
-        val xaiDead = xaiRec.tombstone || xaiRec.reauthRequired
-        val xaiOAuthToken = if (xaiDead) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
-        val xaiOAuthRefresh = if (xaiDead) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
-        val xaiOAuthEmail = decryptXaiCiphertext(xaiRec.emailEnc)
+        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired
+        // Decrypt the required token fields; null = a NON-blank ciphertext failed to
+        // decrypt (Codex major-1). A decrypt failure makes the family effectively dead —
+        // fail closed to reauth (blank tokens + reauthRequired) so it boots INTO reconnect,
+        // never downgrades to api_key on a "" that merely looks like an absent token.
+        val accessDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
+        val refreshDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
+        val xaiDecryptFailed = accessDec == null || refreshDec == null
+        val xaiEffectiveReauth = xaiRec.reauthRequired || xaiDecryptFailed
+        val xaiDead = deadByFlag || xaiDecryptFailed
+        val xaiOAuthToken = if (xaiDead) "" else (accessDec ?: "")
+        val xaiOAuthRefresh = if (xaiDead) "" else (refreshDec ?: "")
+        val xaiOAuthEmail = decryptXaiCiphertext(xaiRec.emailEnc) ?: "" // email non-critical → "" on failure
 
         // BAT-515 v3 §4: prefer live AgentPreferencesStore values over
         // raw prefs. The observe-and-mirror collector already keeps
@@ -1300,7 +1309,7 @@ object ConfigManager {
             // BAT-1155: expiry + control fields come from the store, not prefs.
             xaiOAuthExpiresAt = xaiRec.expiresAt,
             xaiOAuthEpoch = xaiRec.epoch,
-            xaiOAuthReauthRequired = xaiRec.reauthRequired,
+            xaiOAuthReauthRequired = xaiEffectiveReauth,
             xaiOAuthReauthNotifiedEpoch = xaiRec.reauthNotifiedEpoch,
         )
 
@@ -1782,7 +1791,15 @@ object ConfigManager {
      * [XaiOAuthTokenStore]. Returns "" for a blank input or any decrypt
      * failure (never throws, never logs the cleartext).
      */
-    private fun decryptXaiCiphertext(enc: String): String {
+    /**
+     * Decrypt a stored xAI OAuth ciphertext. Returns the plaintext, `""` for a
+     * BLANK ciphertext (a legitimately absent field), or `null` when a NON-blank
+     * ciphertext FAILS to decrypt (corruption / Keystore key change). Codex major-1:
+     * the caller MUST distinguish these — a decrypt failure of a required token is
+     * NOT the same as an absent token, and must fail closed to reauth rather than
+     * downgrade to api_key on a `""` that looks empty. Never logs decrypted values.
+     */
+    private fun decryptXaiCiphertext(enc: String): String? {
         if (enc.isBlank()) return ""
         return try {
             KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
@@ -1792,7 +1809,7 @@ object ConfigManager {
                 "[Config] Failed to decrypt xAI OAuth field: ${e.javaClass.simpleName}",
                 LogLevel.ERROR,
             )
-            ""
+            null
         }
     }
 
