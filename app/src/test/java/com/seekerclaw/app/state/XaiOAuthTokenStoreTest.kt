@@ -217,9 +217,32 @@ class XaiOAuthTokenStoreTest {
 
     @Test
     fun `signIn resets both stop-fence markers`() {
-        val r1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp"))
-        assertEquals("fresh family unarmed", -1L, r1.rotationInFlightEpoch)
-        assertEquals("fresh family unfenced", -1L, r1.stopFenceEpoch)
+        // ARM both markers on a live family FIRST, so this actually pins the explicit clears in
+        // signIn (a trivial fresh-signIn starts at -1 and would pass even if the clears were dropped).
+        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch // epoch 1
+        ok(XaiOAuthTokenStore.prepareRefresh(e1)) // rotationInFlightEpoch = 1
+        ok(XaiOAuthTokenStore.armStopFenceAndProbeRotation(e1)) // stopFenceEpoch = 1
+        val armed = XaiOAuthTokenStore.read()
+        assertEquals("precondition: rotation marker armed", e1, armed.rotationInFlightEpoch)
+        assertEquals("precondition: stop fence armed", e1, armed.stopFenceEpoch)
+
+        // A fresh sign-in SUPERSEDES the prior family and must clear BOTH markers on the new epoch.
+        val r2 = ok(XaiOAuthTokenStore.signIn("acc2", "ref2", "email2", "exp2"))
+        assertEquals("fresh family unarmed", -1L, r2.rotationInFlightEpoch)
+        assertEquals("fresh family unfenced", -1L, r2.stopFenceEpoch)
+    }
+
+    @Test
+    fun `armStopFenceAndProbeRotation re-fences the WINNING epoch after a CAS conflict`() {
+        // Codex amendment 1: a stop that arms an already-superseded epoch must re-read and re-arm the
+        // WINNING live epoch, never leave it unfenced. Drive the retry loop into a real CAS conflict.
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        ok(XaiOAuthTokenStore.signIn("acc2", "ref2", "email", "exp")) // epoch 2 supersedes
+        // Call with the STALE epoch 1 → mutate CAS-conflicts (on-disk is 2) → the loop re-reads and
+        // re-arms epoch 2.
+        val r = ok(XaiOAuthTokenStore.armStopFenceAndProbeRotation(1L))
+        assertEquals("re-fenced the winning live epoch", 2L, r.epoch)
+        assertEquals("stop fence armed on the winning epoch, not the stale one", 2L, r.stopFenceEpoch)
     }
 
     @Test

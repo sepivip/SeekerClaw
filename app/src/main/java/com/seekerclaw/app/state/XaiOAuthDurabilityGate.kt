@@ -131,6 +131,60 @@ object XaiOAuthDurabilityGate {
     }
 
     /**
+     * Resolve the durable state left by an ABANDONED controlled stop (BAT-1155 M1 — the abort half of
+     * Codex decision 3: "explicit durable clear on abort/boot, no TTL"). [ensureDurableBeforeStop]
+     * arms `stopFenceEpoch == epoch` on disk as its FIRST action; if the caller could not confirm
+     * durability and is now KEEPING `:node` ALIVE (instead of killing it), that armed fence MUST be
+     * resolved before the process resumes — otherwise the resumed process's next refresh funnels
+     * through `prepareRefresh` and returns [XaiOAuthTokenStore.Result.Fenced] (mapped to `'skip'` in
+     * xai.js: no POST, no reconnect), silently bricking xAI refresh until a full process restart.
+     *
+     * Two durable writes, in order:
+     *   1. If a rotation marker is STILL armed on the live epoch, convert it to a durable reauth
+     *      ([XaiOAuthTokenStore.markReauthIfRotationInFlight]). `prepareRefresh` checks reauthRequired
+     *      (→ [XaiOAuthTokenStore.Result.Dead] → `'dead'` → explicit reLogin) BEFORE the stop fence
+     *      (→ Fenced → silent skip), so this makes the resumed agent surface a RECOVERABLE reconnect
+     *      even if the fence clear below races/fails. Conditional: a proven-not-sent clear may already
+     *      have made it [XaiOAuthTokenStore.Result.Safe] (family live → no mark, no brick). A
+     *      legitimately-completing in-flight rotation still clears the reauth via `rotate()`.
+     *   2. Clear the stop fence so a resumed refresh isn't skipped once the marker is resolved.
+     *
+     * Returns `true` when the family is in a safe-to-resume state — the fence was durably cleared OR
+     * the marker was converted to reauth (which short-circuits the fence in `prepareRefresh`). `false`
+     * only when neither write could be persisted (store I/O broken): the caller should prefer to stay
+     * stopped and retry, but a still-armed marker/fence is boot-safe regardless
+     * ([SeekerClawService.reconcileXaiOAuthOnBoot] converts it on the next start). Never throws.
+     */
+    fun resolveAbandonedStop(): Boolean {
+        if (!XaiOAuthTokenStore.isInitialized) return true
+        val rec = XaiOAuthTokenStore.read()
+        // (1) Convert a still-armed rotation marker on the LIVE epoch to a durable reauth. Ok ⇒ the
+        // resumed refresh will hit Dead→reLogin (recoverable) before it can hit Fenced→skip.
+        var reauthMarked = false
+        if (!rec.tombstone && !rec.reauthRequired && rec.rotationInFlightEpoch == rec.epoch) {
+            reauthMarked = try {
+                XaiOAuthTokenStore.markReauthIfRotationInFlight(rec.epoch) is XaiOAuthTokenStore.Result.Ok
+            } catch (e: Exception) {
+                LogCollector.append("[Shutdown] xAI durability gate: abandoned-stop reauth mark threw (${e.message})", LogLevel.WARN)
+                false
+            }
+        }
+        // (2) Clear the fence the gate armed (unconditional, epoch-stable).
+        val fenceCleared = try {
+            XaiOAuthTokenStore.clearStopFence() is XaiOAuthTokenStore.Result.Ok
+        } catch (e: Exception) {
+            LogCollector.append("[Shutdown] xAI durability gate: abandoned-stop clearStopFence threw (${e.message})", LogLevel.ERROR)
+            false
+        }
+        if (fenceCleared || reauthMarked) return true
+        LogCollector.append(
+            "[Shutdown] xAI durability gate: could NOT clear the stop fence or mark reauth on an abandoned stop — boot reconcile is the backstop",
+            LogLevel.ERROR,
+        )
+        return false
+    }
+
+    /**
      * Retry [XaiOAuthTokenStore.markReauthIfRotationInFlight] until durable or [deadlineNs] passes.
      * `Ok` ⇒ marked reauth (the marker was still armed → fail-closed). `Safe` ⇒ the marker was
      * cleared by a proven-not-sent refresh between the probe and now → the family is live and MUST

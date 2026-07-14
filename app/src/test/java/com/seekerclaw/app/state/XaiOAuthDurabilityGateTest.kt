@@ -138,4 +138,57 @@ class XaiOAuthDurabilityGateTest {
     // ---- Codex re-review major-1: the gate DRAINS a pending notify mark over the real
     //      Stop round-trip (not just the direct flushPendingPersist helper) ----
 
+    // ---- BAT-1155 M1: an ABANDONED stop must clear the armed fence before :node resumes ----
+
+    @Test
+    fun `resolveAbandonedStop clears the armed fence and converts an armed marker to reauth`() {
+        // Reconstruct the exact abandoned-stop disk state: a live family, a rotation POST in flight
+        // (marker armed), and the gate's stop fence armed on the same epoch (its first action). The
+        // gate returned false (could not drain/mark within budget) and the caller is keeping :node
+        // ALIVE. Resuming WITHOUT resolving this would silently Fence→skip the resumed refresh.
+        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch
+        ok(XaiOAuthTokenStore.prepareRefresh(e1)) // rotationInFlightEpoch = 1
+        ok(XaiOAuthTokenStore.armStopFenceAndProbeRotation(e1)) // stopFenceEpoch = 1
+        val armed = XaiOAuthTokenStore.read()
+        assertEquals("precondition: fence armed on the live epoch", e1, armed.stopFenceEpoch)
+        assertEquals("precondition: rotation marker armed on the live epoch", e1, armed.rotationInFlightEpoch)
+
+        val resolved = XaiOAuthDurabilityGate.resolveAbandonedStop()
+        assertTrue("abandoned stop must resolve to a safe-to-resume state", resolved)
+
+        val after = XaiOAuthTokenStore.read()
+        assertEquals("the stop fence must be durably cleared (-1) before resume", -1L, after.stopFenceEpoch)
+        assertTrue("the still-armed marker must become a durable reauth (Dead→reLogin, not Fenced→skip)", after.reauthRequired)
+        // The resumed process's next refresh must surface an explicit reconnect, NOT a silent skip.
+        assertTrue(
+            "prepareRefresh on the resumed family returns Dead (reauth), never Fenced",
+            XaiOAuthTokenStore.prepareRefresh(after.epoch) is XaiOAuthTokenStore.Result.Dead,
+        )
+    }
+
+    @Test
+    fun `resolveAbandonedStop clears a fence armed with no rotation marker`() {
+        // Defensive: a fence armed with no marker (nothing consumed) must still be cleared so the
+        // resumed refresh isn't Fenced; the live family stays usable (no needless reauth).
+        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch
+        ok(XaiOAuthTokenStore.armStopFenceAndProbeRotation(e1)) // fence armed, marker NOT armed
+        assertEquals(e1, XaiOAuthTokenStore.read().stopFenceEpoch)
+
+        assertTrue(XaiOAuthDurabilityGate.resolveAbandonedStop())
+
+        val after = XaiOAuthTokenStore.read()
+        assertEquals("fence cleared", -1L, after.stopFenceEpoch)
+        assertFalse("no marker was armed → the live family must NOT be bricked", after.reauthRequired)
+        assertTrue(
+            "prepareRefresh may proceed on the resumed live family (Ok)",
+            XaiOAuthTokenStore.prepareRefresh(after.epoch) is XaiOAuthTokenStore.Result.Ok,
+        )
+    }
+
+    @Test
+    fun `resolveAbandonedStop is durable when there is no live family`() {
+        // No family / already dead → nothing to resolve; must not throw or brick.
+        assertTrue("uninitialized-safe / no-op on the fail-closed default", XaiOAuthDurabilityGate.resolveAbandonedStop())
+        assertTrue(XaiOAuthTokenStore.read().tombstone)
+    }
 }

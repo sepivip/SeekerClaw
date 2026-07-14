@@ -517,19 +517,30 @@ async function _prepareRefreshGate() {
     try {
         r = await androidBridgeCall('/xai/oauth/prepare-refresh', { expectedEpoch: _currentEpoch });
     } catch (_) {
-        return 'skip'; // bridge unreachable → cannot arm the durable marker → fail-closed, no POST
+        // androidBridgeCall normally RESOLVES {error} (it never rejects), so this is defensive: a
+        // throw is treated identically to an ambiguous {error}/absent response below.
+        r = null;
     }
-    if (!r) return 'skip';
-    if (r.success === true) {
+    if (r && r.success === true) {
         if (typeof r.epoch === 'number') _currentEpoch = r.epoch;
         return 'ok';
     }
-    // A superseding sign-in/out advanced the epoch. DO NOT adopt r.currentEpoch (Codex break-fix) —
-    // the sign-in-triggered :node restart reloads the fresh family; abort this refresh.
-    if (r.code === 'XAI_OAUTH_EPOCH_CONFLICT') return 'skip';
-    if (r.dead === true || r.unsafe === true) return 'dead';
-    if (r.fenced === true) return 'skip';
-    return 'skip'; // prepare failed (500) → fail-closed, no POST
+    // RECOGNIZED durable-store outcomes — the store state they reflect is authoritative and must be
+    // preserved verbatim (never clear the marker on these):
+    if (r) {
+        // A superseding sign-in/out advanced the epoch. DO NOT adopt r.currentEpoch (Codex break-fix) —
+        // the sign-in-triggered :node restart reloads the fresh family; abort this refresh.
+        if (r.code === 'XAI_OAUTH_EPOCH_CONFLICT') return 'skip';
+        if (r.dead === true || r.unsafe === true) return 'dead';
+        if (r.fenced === true) return 'skip';
+    }
+    // AMBIGUOUS: an absent response, a bridge {error} shape (timeout/5xx), or an unrecognized body.
+    // The arm's fate on disk is unknown, but this call definitively did NOT POST — so if the arm DID
+    // land (a lost prepare-refresh RESPONSE, not a lost request), best-effort clear the marker
+    // (epoch-CAS'd; no-op if the epoch moved, best-effort if the bridge is still down) so it can't
+    // orphan into a false Unsafe→reauth on the next refresh. Then fail-closed (no POST).
+    await _clearRotationInFlightMarker();
+    return 'skip';
 }
 
 // Provably-not-sent classification (Codex decision 1): only a pre-connection DNS / connection-refused
@@ -799,16 +810,29 @@ async function _doAttemptPersist(timeoutMs, urgent) {
     _persistAttempts++;
     log(`[xAI] OAuth token persist attempt ${_persistAttempts} failed: ${lastErr}`, 'WARN');
     if (_persistAttempts >= MAX_PERSIST_CONVERGENCE_ATTEMPTS) {
-        // Convergence exhausted (D9 step 4). STOP hammering the bridge AND stop blocking
-        // proactive refresh: surface a durable error (health stays 'degraded' via
-        // hasPersistDurableError) and CLEAR _persistPending so ensureFreshToken resumes
-        // normal refresh. A future rotation re-persists a fresh pair if the bridge
-        // recovers (which clears the durable error); the in-memory token works meanwhile.
+        // Convergence exhausted (D9 step 4). STOP hammering the bridge AND stop blocking proactive
+        // refresh: surface a durable error (health stays 'degraded' via hasPersistDurableError) and
+        // CLEAR _persistPending so ensureFreshToken resumes. The VALID rotated pair stays in memory
+        // and serves requests until it expires.
+        //
+        // BAT-1155 conservative fail-close: the stop-fence rotation marker (rotationInFlightEpoch==E)
+        // stays ARMED on disk because the successor pair never landed there. That is fail-CLOSED and
+        // correct — the on-disk T0 IS consumed. At the next expiry, prepareRefresh(E) therefore
+        // returns Unsafe → an explicit, RECOVERABLE reconnect (markReauth supersedes the marker; a
+        // fresh sign-in mints a new family). It is NOT a family brick (the revoke class BAT-1155
+        // prevents), just a rare re-pair (precondition: MAX consecutive durable bridge-write failures
+        // AFTER a successful rotation POST, then survival to expiry).
+        //
+        // NOTE: because the armed marker blocks a fresh rotation, the family can no longer self-heal
+        // via a "future rotation" — a retain-and-re-converge variant (keep _pendingPersistPayload and
+        // re-persist at a bounded cadence until the bridge recovers, so the pair lands and the marker
+        // clears) would avoid the re-pair, but it changes the Codex-signed convergence contract and is
+        // deferred to the Codex diff re-review (BAT-1155 M2 in the PR notes), not folded here.
         _persistDurableError = true;
         _persistPending = false;
         _pendingPersistPayload = null;
-        log('[xAI] OAuth token could NOT be persisted after '
-            + `${_persistAttempts} attempts — re-login may be required after a restart`, 'ERROR');
+        log('[xAI] OAuth token persist convergence exhausted after '
+            + `${_persistAttempts} attempts — in-memory token valid until expiry, then a reconnect is required`, 'ERROR');
     }
 }
 
@@ -906,7 +930,18 @@ async function handleUnauthorized() {
     }
     log('[xAI] OAuth 401 — attempting token refresh...', 'INFO');
     try {
-        await refreshOAuthToken();
+        const refreshed = await refreshOAuthToken();
+        if (refreshed === null) {
+            // BAT-1155: the pre-POST gate returned 'skip' (a stop is fencing this epoch, the epoch
+            // was superseded, or the bridge could not arm the marker) → NO rotation happened, the
+            // token is UNCHANGED. Retrying against the same 401'ing token would just burn MAX_RETRIES,
+            // so surface a NON-retryable fatal — the caller stops; the next turn's ensureFreshToken
+            // (after any fence/blip clears) retries the refresh cleanly.
+            log('[xAI] OAuth 401 — refresh skipped (fenced/superseded/unavailable); no token change', 'WARN');
+            const fatal = new Error('OAuth refresh unavailable — token unchanged, reconnect or retry next turn');
+            fatal.retryable = false;
+            throw fatal;
+        }
         log('[xAI] Token refreshed — caller should retry', 'INFO');
         const retryError = new Error('OAuth token refreshed — retry');
         retryError.retryable = true;

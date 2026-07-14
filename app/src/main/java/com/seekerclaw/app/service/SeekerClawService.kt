@@ -633,14 +633,20 @@ class SeekerClawService : Service() {
 
     override fun onDestroy() {
         LogCollector.append("[Service] Stopping Claw Engine...")
-        // BAT-525: flush Node BEFORE everything else. The bridge token
-        // and Node process must both still be alive for the loopback
-        // POST /shutdown/flush to land. BAT-1155 D6: the Node flush now
-        // drains the xAI token persist FIRST (300ms) then the summary
-        // (1200ms), and this call is bounded by NodeControlClient timeouts
-        // (≤ 2250ms) inside an outer 2500ms withTimeoutOrNull. Precedes
-        // scope cancel, observer stop, NodeBridge.stop, and clearBridgeToken.
-        flushNodeBeforeProcessKill()
+        // BAT-525 / BAT-1155: flush Node BEFORE everything else — the bridge token + Node process
+        // must both still be alive for the loopback POST /shutdown/flush to land, and it precedes
+        // scope cancel / observer stop / NodeBridge.stop / clearBridgeToken. The work (the stop-fence
+        // durability gate = network I/O + a disk CAS drain, then a best-effort session summary) must
+        // NOT run on the service main thread (the gate's own off-main contract / StrictMode / ANR —
+        // CodeRabbit). Dispatch it to [stopExecutor] and bounded-WAIT here so the terminal killProcess
+        // below still happens only AFTER durability is resolved — or the bound elapses, in which case
+        // the durable fence/rotation marker already on disk protects the next boot regardless.
+        try {
+            stopExecutor.submit { flushNodeBeforeProcessKill() }
+                .get(ONDESTROY_FLUSH_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            LogCollector.append("[Shutdown] durability flush did not complete off-thread within ${ONDESTROY_FLUSH_WAIT_MS}ms (${e.javaClass.simpleName})", LogLevel.WARN)
+        }
         // Cancel the service scope before stopping the FileObserver
         // below. This stops any in-flight forwardNewNodeDebugLines or
         // observer reattach coroutines that would otherwise race
@@ -798,6 +804,10 @@ class SeekerClawService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val SETUP_NOTIFICATION_ID = 2 // separate ID — persists after service stops
+        // onDestroy dispatches the terminal durability flush to [stopExecutor] and bounded-waits this
+        // long. Covers the worst case (gate BUDGET_MS 2500 + summary flush 2500) with margin; if it
+        // elapses, the durable on-disk fence/marker still protects the next boot.
+        private const val ONDESTROY_FLUSH_WAIT_MS = 6_000L
         private val restartHandler = Handler(Looper.getMainLooper())
 
         // BAT-1155 blocker-1: the pre-stop durability gate does blocking loopback I/O
@@ -919,6 +929,34 @@ class SeekerClawService : Service() {
                                 "(the session token could not be safely saved; force-stop from system settings to override)",
                             LogLevel.ERROR,
                         )
+                        // BAT-1155 M1: the durability gate armed a durable stop fence as its FIRST
+                        // action. Abandoning the stop (keeping :node alive) WITHOUT resolving it would
+                        // leave the resumed process's next refresh silently Fenced→skip (no POST, no
+                        // reconnect) until a full restart. Durably clear the fence AND convert any
+                        // still-armed rotation marker to an explicit reauth (prepareRefresh returns
+                        // Dead→reLogin before it can return Fenced, so this is recoverable even if the
+                        // clear races) BEFORE resuming — Codex decision 3 (explicit durable clear on
+                        // abort, no TTL). resolveAbandonedStop() is best-effort; on total store-I/O
+                        // failure the still-armed state is boot-safe (reconcileXaiOAuthOnBoot converts
+                        // it on the next start), so we resume regardless rather than freeze the agent —
+                        // leaving :node quiesced does not help (the quiesce LEASE lapses and it resumes
+                        // fenced anyway).
+                        val resolved = try {
+                            XaiOAuthDurabilityGate.resolveAbandonedStop()
+                        } catch (e: Exception) {
+                            LogCollector.append(
+                                "[Shutdown] resolveAbandonedStop threw (${e.javaClass.simpleName}: ${e.message})",
+                                LogLevel.ERROR,
+                            )
+                            false
+                        }
+                        if (!resolved) {
+                            LogCollector.append(
+                                "[Shutdown] xAI stop fence could not be durably cleared on the abandoned stop — " +
+                                    "resuming with boot reconcile as the backstop",
+                                LogLevel.ERROR,
+                            )
+                        }
                         // Codex re-review: the Stop is abandoned (we are NOT killing) — CANCEL lease
                         // renewal (so the lease can lapse) and unquiesce so Node resumes. Retry with
                         // bounded backoff (a single ignored call could leave a kept-alive agent
