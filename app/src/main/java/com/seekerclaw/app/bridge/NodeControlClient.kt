@@ -152,8 +152,12 @@ object NodeControlClient {
         // ONLY real bound is the underlying connect/read timeouts. When the caller passes a
         // remaining end-to-end budget, cap those timeouts to it so a round started near the
         // deadline can't block the full 250+2000ms past it. Split the budget connect-first.
+        // An exhausted budget (<2ms) can't fit even a 1ms connect + 1ms read → don't issue a
+        // doomed request (CodeRabbit); the caller fail-closes on the null. Otherwise reserve
+        // ≥1ms for the read so connect + read never EXCEEDS maxTotalMs.
+        if (maxTotalMs != null && maxTotalMs < 2) return@withContext null
         val body = if (maxTotalMs != null) {
-            val connectMs = maxTotalMs.coerceIn(1, CONNECT_TIMEOUT_MS)
+            val connectMs = (maxTotalMs - 1).coerceIn(1, CONNECT_TIMEOUT_MS)
             val readMs = (maxTotalMs - connectMs).coerceIn(1, READ_TIMEOUT_MS)
             postForBody("/shutdown/flush", "{}", connectMs, readMs)
         } else {
