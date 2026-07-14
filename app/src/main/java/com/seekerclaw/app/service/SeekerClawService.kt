@@ -955,12 +955,18 @@ class SeekerClawService : Service() {
                             )
                             false
                         }
+                        // The notice is managed PER-BRANCH below (CodeRabbit round-3): a RESUME path
+                        // (fence cleared / last-resort) puts :node back to normal → CLEAR the
+                        // dismiss-resistant "force-stop to override" notice; a RETRY path stays
+                        // stopped → keep it posted. (A blanket re-post here would strand it on the
+                        // resume paths, showing "stuck" forever after the agent already recovered.)
                         when {
                             // Fence durably cleared → safe to resume: CANCEL lease renewal (let the
                             // lease lapse) and unquiesce so :node resumes. A completing rotation can no
                             // longer rebase an already-cleared fence, so no live-but-fenced family.
                             fenceCleared -> {
                                 stopLeaseRenewal()
+                                restartHandler.post { clearDurabilityStuckNotice(appCtx) }
                                 unquiesceUntilConfirmed(appCtx, 0)
                             }
                             // Fence NOT cleared → do NOT resume into it. Retry the stop (bounded): if
@@ -981,6 +987,8 @@ class SeekerClawService : Service() {
                                     "[Shutdown] xAI stop fence not yet cleared — staying stopped, retry ${attempt + 1}/$MAX_STOP_ATTEMPTS",
                                     LogLevel.WARN,
                                 )
+                                // Still stopped/retrying → keep the notice up.
+                                restartHandler.post { postDurabilityStuckNotice(appCtx) }
                                 restartHandler.postDelayed({ stopWithDurability(appCtx, attempt + 1, onStopped) }, KEEPALIVE_RETRY_MS)
                             }
                             // Store I/O broken past the retry ceiling (couldn't clear the fence OR mark
@@ -995,10 +1003,12 @@ class SeekerClawService : Service() {
                                     LogLevel.ERROR,
                                 )
                                 stopLeaseRenewal()
+                                // We ARE resuming :node here → clear the "stuck" notice (the xAI-fenced
+                                // degradation surfaces separately via the reconnect path, not this notice).
+                                restartHandler.post { clearDurabilityStuckNotice(appCtx) }
                                 unquiesceUntilConfirmed(appCtx, 0)
                             }
                         }
-                        restartHandler.post { postDurabilityStuckNotice(appCtx) }
                     }
                 }
             }
