@@ -84,10 +84,14 @@ object XaiOAuthTokenStore {
     private val FAIL_CLOSED = XaiOAuthTokens(reauthRequired = true, tombstone = true, epoch = 0L)
 
     private val initialized = AtomicBoolean(false)
-    private var ownedScope: CoroutineScope? = null
-    private var store: CrossProcessStore<XaiOAuthTokens>? = null
+    // CodeRabbit: @Volatile so a reader thread (read()/mutate()/migrateIfEmpty(), called
+    // off arbitrary threads) is GUARANTEED to observe the values init() publishes — without
+    // it the JMM gives no happens-before edge from the init() writer, so a late caller could
+    // read a stale null and fail-closed / "not initialized" forever on that thread.
+    @Volatile private var ownedScope: CoroutineScope? = null
+    @Volatile private var store: CrossProcessStore<XaiOAuthTokens>? = null
     /** Directory holding the sidecar lock file. `filesDir` in production; a temp dir under test. */
-    private var lockDir: File? = null
+    @Volatile private var lockDir: File? = null
 
     /**
      * Per-JVM serialization for the sidecar file lock (see class KDoc). A
@@ -180,7 +184,14 @@ object XaiOAuthTokenStore {
                 }
                 if (lock == null) {
                     if (remainingMs() <= 0L) return Result.Failed("lock timeout")
-                    Thread.sleep(15)
+                    // CodeRabbit: restore the interrupt flag (mirrors the jvmLock.tryLock path)
+                    // so an interrupt during back-off isn't silently lost by the outer catch.
+                    try {
+                        Thread.sleep(15)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return Result.Failed("interrupted")
+                    }
                 }
             }
             return action(cps, cps.read())

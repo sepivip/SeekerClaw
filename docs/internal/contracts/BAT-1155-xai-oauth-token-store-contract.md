@@ -1,8 +1,8 @@
 # BAT-1155 — xAI OAuth token durability (single-writer cross-process store + expiry round-trip) + revoked-token UX
 
 > **Severity:** High. The always-on agent on xAI "Sign in with Grok" (OAuth) **bricks** when a restart reloads an already-consumed refresh token: xAI's single-use reuse-detection revokes the whole token family, and every subsequent restart re-loads the same dead token. Recovery needs a manual re-pair (or switching to an API key). Live device incident (2026-07-13, agent "Cortana", grok-4.5).
-
-> **Status:** DRAFT v4 — v3 got Codex's "very close" ("two blockers + two consistency edits, then sign-off without another architecture round"). This v4 folds in: (blocker 1) §4 is marker-ONLY, sign-out preserves the marker, no token-presence heuristic; (blocker 2) D6 pins exact budgets (300/1200/≤1700/250+2000/2500 ms) and a controlled-stop durability gate instead of a blind kill on drain failure; (edit 1) D-recover is restart-only; (edit 2) the sidecar OS lock is wrapped by same-process serialization. Back to Codex for sign-off. No implementation until sign-off + owner OK.
+>
+> **Status:** v4 — design **Codex-signed**; **implemented** in PR #443. Codex's subsequent CODE review returned 3 blockers + 2 majors, all folded (see §9). Awaiting Codex re-review + the 24h device soak (§6.9) before merge. v4 design amendments over v3: (blocker 1) §4 is marker-ONLY, sign-out preserves the marker, no token-presence heuristic; (blocker 2) D6 pins exact budgets (300/1200/≤1700/250+2000/2500 ms) and a controlled-stop durability gate instead of a blind kill on drain failure; (edit 1) D-recover is restart-only; (edit 2) the sidecar OS lock is wrapped by same-process serialization.
 
 ---
 
@@ -43,7 +43,7 @@ D10 session-expiry counting (`ai.js:1963-1965`): a dead/revoked token (`refreshD
 ## 3. Design decisions
 
 ### D1 — Move the xAI OAuth record to a dedicated single-domain `CrossProcessStore` (durability root fix)
-Migrate `{ accessToken, refreshToken, expiresAt, email, reauthRequired, epoch }` out of `seekerclaw_prefs` into a **dedicated `CrossProcessStore<XaiOAuthTokens>`**, reusing the canonical atomic pattern (`.tmp` + `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`; `read()` reads fresh from disk every call — no cached map; FileObserver/broadcast reload).
+Migrate the full record `{ accessToken, refreshToken, expiresAt, email, reauthRequired, reauthNotifiedEpoch, epoch, tombstone }` out of `seekerclaw_prefs` into a **dedicated `CrossProcessStore<XaiOAuthTokens>`**, reusing the canonical atomic pattern (`.tmp` + `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`; `read()` reads fresh from disk every call — no cached map; FileObserver/broadcast reload).
 
 - **Location — `files/xai_oauth.json` (applicationContext.filesDir root), a SIBLING of `runtime_state.json`/`bridge_token`, explicitly NOT under `workspace/`.** `CrossProcessStore` roots at `filesDir` and `isValidFileName` rejects `/` (`CrossProcessStore.kt:161, 766-771`), so a `workspace/…` path is literally unconstructible AND unsafe: the agent's file tools are `safePath`-confined to `workDir=files/workspace` (`config.js:13`), so a workspace-resident store would be **readable** (leaks base64 ciphertext + expiry + `reauthRequired`) and **deletable** (one tool call → `read()` falls back to empty → tokens vanish → forced re-pair) by a prompt-injected agent. `filesDir` keeps it outside `safePath` exactly like `runtime_state.json` today, and avoids a second FileObserver on the workspace dir (one-observer-per-dir rule).
 - **Defense-in-depth:** add `xai_oauth.json` to `SECRETS_BLOCKED` (`config.js:768`) so the agent `read`/`write`/`delete` tools refuse it even if `workDir` is ever relocated.
@@ -67,7 +67,7 @@ With `expiresAt` in the D1 store (never blanked by an unrelated `saveConfig`), `
 
 ### D3 — `_refreshDead`-aware terminal 403 classification (UX fix)
 Before the terminal `provisioning` return (`xai.js:335-340`):
-```
+```kotlin
 if (isOAuth && _refreshDead) return { type: 'reauth', retryable: false,
     userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.' };
 ```
@@ -84,7 +84,7 @@ Keep *"add an xAI API key"* ONLY for a genuine fresh-token tier-gate (`_refreshD
 At `xai.js:504`, latch `err.reLogin` on `parsed.error === 'invalid_grant'` (primary) **OR** a specific description match `/revoked|already been used|token expired/i` on `parsed.error_description` for an HTTP 400 from the refresh endpoint. **Never** match the bare `refresh[_ ]?token` substring (it appears in benign transient 400s like *"refresh_token parameter is required"* → a single false match would persist `reauthRequired` and permanently brick a working account, since D4 then suppresses the refresh that would self-clear it). Only latch on a death **observed on an actual refresh attempt**, never inferred. Add a one-line **redacted** log of `parsed.error` on refresh failure so xAI's exact revoke code becomes deterministic.
 
 ### D6 — Drain the pending token persist on USER_STOP: single-flight + exact budgets (Codex amendment 4)
-- **Single-flight (must-have):** `_attemptPersist` has no in-flight guard today (`xai.js:544-546`), so a USER_STOP flush racing the original rotation persist can POST the **same payload twice** — and with the D1 CAS that second write becomes a **false conflict**. Add a `_persistInFlight` single-flight and export a **bounded `flushPendingPersist`**: `await` the existing in-flight attempt first, then make **at most one** forced retry if still pending.
+- **Single-flight (must-have):** `_attemptPersist` has no in-flight guard today (`xai.js:544-546`), so a USER_STOP flush racing the original rotation persist can POST the **same payload twice** — and with the D1 CAS that second write becomes a **false conflict**. Add a `_persistInFlight` single-flight and export a **bounded `flushPendingPersist`**: `await` the existing in-flight attempt first, then make **at most one** forced retry — but **only for a transport/timeout failure that leaves a pair genuinely still-pending**. A CAS **epoch conflict** clears the pending pair (per D1: discard-not-retry) so it is no longer pending and is **never** re-POSTed by this forced retry — re-POSTing a consumed pair is exactly the brick this whole contract prevents.
 - **Ordering (pinned):** run the token drain **BEFORE** the session-summary flush (not the vague "first and/or parallel" of v2) — token durability outranks a summary.
 - **Budgets — PINNED (one closed inequality, Codex blocker 2):**
   - `flushPendingPersist`: **300 ms hard bound as ONE end-to-end deadline** shared across both phases (the await of an in-flight attempt AND the single forced retry) — not 300 ms allocated to each — with the remaining budget passed explicitly to `androidBridgeCall` (whose default is 10 000 ms at `bridge.js:31`);
@@ -144,7 +144,7 @@ Add `!_refreshDead` to the guard at `xai.js:328` (`!_oauth403RetriedOnce && !_ti
 4. **Provider semantics:** do not block on undocumented family-revocation wording — the incident proves stale-token replay is unsafe; keep the exact xAI code empirical/redacted (D5). OpenAI = documented residual risk → **linked follow-up** ticket.
 5. **Recovery: restart `:node` after a successful sign-in** — D2 makes that restart zero-refresh while TTL is valid, and it reuses the established boot/H5 path (no new hot-reload state path).
 
-*Codex will sign off once these four amendments are explicit and the test matrix includes their failure cases (both satisfied in this v3).*
+*The four amendments are explicit and the test matrix includes their failure cases (both satisfied in v4). Codex design-signed v4; §9 folds the subsequent code-review blockers.*
 
 ---
 

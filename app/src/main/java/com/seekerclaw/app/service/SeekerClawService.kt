@@ -907,8 +907,15 @@ class SeekerClawService : Service() {
                 val durable = try {
                     XaiOAuthDurabilityGate.ensureDurableBeforeStop()
                 } catch (e: Exception) {
-                    LogCollector.append("[Shutdown] durability gate threw (${e.javaClass.simpleName}) — proceeding", LogLevel.ERROR)
-                    true
+                    // CodeRabbit: fail CLOSED, not open. A gate exception means durability is
+                    // UNCONFIRMED — treat it as not-durable so the stop keeps the service alive
+                    // and retries (or OS-fallback stops after the bounded attempts), instead of
+                    // blindly killing into a possibly-consumed-token replay.
+                    LogCollector.append(
+                        "[Shutdown] durability gate threw (${e.javaClass.simpleName}: ${e.message}) — treating as NOT durable",
+                        LogLevel.ERROR,
+                    )
+                    false
                 }
                 if (durable || attempt >= MAX_KEEPALIVE_STOP_ATTEMPTS) {
                     if (!durable) {

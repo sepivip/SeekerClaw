@@ -140,6 +140,9 @@ object NodeControlClient {
             val json = JSONObject(body)
             if (json.has("pendingPersist")) json.getBoolean("pendingPersist") else null
         } catch (e: Exception) {
+            // CodeRabbit: don't swallow silently — a malformed /shutdown/flush body must be
+            // distinguishable from a transport failure when debugging (both map to null).
+            Log.d(TAG, "flushShutdown: malformed response body: ${e.message}")
             null
         }
     }

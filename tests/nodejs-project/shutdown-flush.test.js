@@ -174,6 +174,8 @@ test('R2 Copilot: /shutdown/flush surfaces flush failures as 500', () => {
     // durability gate can decide whether a rotated xAI token is still stranded.
     assert.ok(/_json\(res,\s*200,\s*\{[^}]*pendingPersist/.test(flushBlock),
         '/shutdown/flush 200 body must include pendingPersist (BAT-1155 durability signal)');
+    assert.ok(/_json\(res,\s*500,[\s\S]{0,220}?pendingPersist/.test(flushBlock),
+        '/shutdown/flush 500 body must ALSO include pendingPersist (a flush that fails still reports whether a token is stranded)');
 });
 
 test('R3 Copilot: _readBody handles aborted/close events', () => {

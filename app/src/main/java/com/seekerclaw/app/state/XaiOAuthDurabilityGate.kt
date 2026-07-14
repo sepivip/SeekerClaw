@@ -4,6 +4,7 @@ import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
 
 /**
@@ -84,8 +85,16 @@ object XaiOAuthDurabilityGate {
         while (round < MAX_FLUSH_ROUNDS && remainingMs(deadlineNs) > 0L) {
             round++
             val pending: Boolean? = try {
-                runBlocking { NodeControlClient.flushShutdown() }
+                // Cap the round to the REMAINING budget (CodeRabbit): flushShutdown's HTTP
+                // timeout is fixed (~2250ms), so a late-starting round could overrun BUDGET_MS.
+                // withTimeoutOrNull returns null when the budget elapses → treated as
+                // unreachable → fail-closed, keeping the whole gate inside BUDGET_MS.
+                runBlocking { withTimeoutOrNull(remainingMs(deadlineNs)) { NodeControlClient.flushShutdown() } }
             } catch (e: Exception) {
+                LogCollector.append(
+                    "[Shutdown] xAI durability gate: flush round threw (${e.javaClass.simpleName}: ${e.message})",
+                    LogLevel.WARN,
+                )
                 null
             }
             when (pending) {
@@ -130,7 +139,15 @@ object XaiOAuthDurabilityGate {
      */
     private fun markReauthWithinDeadline(expectedEpoch: Long, deadlineNs: Long): Boolean {
         while (remainingMs(deadlineNs) > 0L) {
-            when (val r = XaiOAuthTokenStore.markReauth(expectedEpoch)) {
+            // The store's markReauth is documented never-throws, but keep the gate itself
+            // fail-closed (CodeRabbit): any unexpected throw becomes a retryable Failed rather
+            // than propagating out of ensureDurableBeforeStop (whose caller must NOT fail open).
+            val r = try {
+                XaiOAuthTokenStore.markReauth(expectedEpoch)
+            } catch (e: Exception) {
+                XaiOAuthTokenStore.Result.Failed(e.message ?: e.javaClass.simpleName)
+            }
+            when (r) {
                 is XaiOAuthTokenStore.Result.Ok -> {
                     LogCollector.append(
                         "[Shutdown] xAI durability gate: fail-closed reauth mark persisted (epoch=${r.record.epoch})",
