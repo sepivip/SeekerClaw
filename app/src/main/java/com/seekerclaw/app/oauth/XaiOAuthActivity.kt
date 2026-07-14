@@ -197,23 +197,26 @@ class XaiOAuthActivity : ComponentActivity() {
                     // sign-in so Node (which reads runtime_state FIRST) can't boot the
                     // (xai, api_key) pair over a valid oauth token.
                     ConfigManager.syncXaiRuntimeAuthType(appCtx)
+                    // Locked decision 5: recovery is restart-only. Restart :node so it
+                    // re-reads config.json and clears any in-memory _refreshDead /
+                    // reauthRequired from a prior dead family. D2 makes this restart
+                    // zero-refresh while the freshly-minted token's TTL is valid.
+                    // ONLY for in-place recovery (setup already complete → the agent is
+                    // the 24/7 service). During onboarding the SetupScreen's saveAndStart
+                    // starts the service fresh, so a premature restart here is skipped.
+                    // Kept INSIDE the NonCancellable block (CodeRabbit) so a cancellation
+                    // can't leave the store written but :node not restarted (recovery
+                    // half-done → stale in-memory dead flag persists until the next boot).
+                    if (ConfigManager.isSetupComplete(appCtx)) {
+                        try {
+                            SeekerClawService.restart(appCtx)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not restart :node after xAI sign-in", e)
+                        }
+                    }
                     writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                         put("status", "success")
                     })
-                }
-                // Locked decision 5: recovery is restart-only. Restart :node so it
-                // re-reads config.json and clears any in-memory _refreshDead /
-                // reauthRequired from a prior dead family. D2 makes this restart
-                // zero-refresh while the freshly-minted token's TTL is valid.
-                // ONLY for in-place recovery (setup already complete → the agent is
-                // the 24/7 service). During onboarding the SetupScreen's saveAndStart
-                // starts the service fresh, so a premature restart here is skipped.
-                if (ConfigManager.isSetupComplete(appCtx)) {
-                    try {
-                        SeekerClawService.restart(appCtx)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Could not restart :node after xAI sign-in", e)
-                    }
                 }
                 Log.i(TAG, "Browser flow completed successfully")
                 // BAT-1124 (device-test UX): xAI completes the loopback exchange in the

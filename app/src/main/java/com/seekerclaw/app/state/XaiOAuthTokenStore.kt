@@ -66,6 +66,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object XaiOAuthTokenStore {
     private const val TAG = "XaiOAuthTokenStore"
+    // CodeRabbit: bound the sidecar cross-process lock acquisition so a stuck holder in
+    // the other process can never hang a mutation indefinitely (the shutdown durability
+    // gate runs markReauth() under onDestroy's tight budget). 1000ms is far above the
+    // sub-ms real hold time while staying well inside the 2500ms stop ceiling.
+    private const val LOCK_TIMEOUT_MS = 1000L
     const val FILE_NAME = "xai_oauth.json"
     const val LOCK_NAME = "xai_oauth.lock"
 
@@ -143,7 +148,22 @@ object XaiOAuthTokenStore {
             try {
                 raf = RandomAccessFile(lockFile, "rw")
                 chan = raf.channel
-                lock = chan.lock() // blocking, cross-process exclusive
+                // Bounded cross-process acquisition (CodeRabbit): deadline + brief retries
+                // instead of a blocking lock() that could hang forever on a stuck holder.
+                val deadline = System.currentTimeMillis() + LOCK_TIMEOUT_MS
+                while (lock == null) {
+                    lock = try {
+                        chan.tryLock()
+                    } catch (_: java.nio.channels.OverlappingFileLockException) {
+                        // Same-JVM overlap is prevented by jvmMutex; if it ever occurs, back
+                        // off and retry rather than crash the mutation.
+                        null
+                    }
+                    if (lock == null) {
+                        if (System.currentTimeMillis() >= deadline) return Result.Failed("lock timeout")
+                        Thread.sleep(15)
+                    }
+                }
                 val current = cps.read()
                 if (expectedEpoch != null && current.epoch != expectedEpoch) {
                     return Result.Conflict(current.epoch)
@@ -278,7 +298,22 @@ object XaiOAuthTokenStore {
             try {
                 raf = RandomAccessFile(lockFile, "rw")
                 chan = raf.channel
-                lock = chan.lock() // blocking, cross-process exclusive
+                // Bounded cross-process acquisition (CodeRabbit): deadline + brief retries
+                // instead of a blocking lock() that could hang forever on a stuck holder.
+                val deadline = System.currentTimeMillis() + LOCK_TIMEOUT_MS
+                while (lock == null) {
+                    lock = try {
+                        chan.tryLock()
+                    } catch (_: java.nio.channels.OverlappingFileLockException) {
+                        // Same-JVM overlap is prevented by jvmMutex; if it ever occurs, back
+                        // off and retry rather than crash the mutation.
+                        null
+                    }
+                    if (lock == null) {
+                        if (System.currentTimeMillis() >= deadline) return Result.Failed("lock timeout")
+                        Thread.sleep(15)
+                    }
+                }
                 val current = cps.read()
                 // Fill-only guard. A real persisted tombstone is epoch >= 1;
                 // the FAIL_CLOSED default (epoch 0) is the never-written

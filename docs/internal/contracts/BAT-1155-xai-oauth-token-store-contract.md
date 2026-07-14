@@ -87,7 +87,7 @@ At `xai.js:504`, latch `err.reLogin` on `parsed.error === 'invalid_grant'` (prim
 - **Single-flight (must-have):** `_attemptPersist` has no in-flight guard today (`xai.js:544-546`), so a USER_STOP flush racing the original rotation persist can POST the **same payload twice** — and with the D1 CAS that second write becomes a **false conflict**. Add a `_persistInFlight` single-flight and export a **bounded `flushPendingPersist`**: `await` the existing in-flight attempt first, then make **at most one** forced retry if still pending.
 - **Ordering (pinned):** run the token drain **BEFORE** the session-summary flush (not the vague "first and/or parallel" of v2) — token durability outranks a summary.
 - **Budgets — PINNED (one closed inequality, Codex blocker 2):**
-  - `flushPendingPersist`: **300 ms hard bound**, passed explicitly to `androidBridgeCall` (whose default is 10 000 ms at `bridge.js:31`);
+  - `flushPendingPersist`: **300 ms hard bound as ONE end-to-end deadline** shared across both phases (the await of an in-flight attempt AND the single forced retry) — not 300 ms allocated to each — with the remaining budget passed explicitly to `androidBridgeCall` (whose default is 10 000 ms at `bridge.js:31`);
   - session summary: **1200 ms** (unchanged from today);
   - Node `/shutdown/flush` endpoint total target: **≤ 1700 ms** (300 drain + 1200 summary + DB/response overhead);
   - `NodeControlClient`: connect **250 ms**, read **2000 ms**;

@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +38,7 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.ui.theme.Sizing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -91,6 +93,10 @@ fun rememberXaiOAuthController(
             } catch (_: Exception) { /* best effort */ }
         }
     }
+
+    // CodeRabbit: sign-out does file I/O + a cross-process FileChannel lock (can block up
+    // to LOCK_TIMEOUT_MS) — must run off the UI thread, and its Result must gate the flow.
+    val scope = rememberCoroutineScope()
 
     // Poll the result file written by XaiOAuthActivity. Tokens are persisted by the
     // activity directly into XaiOAuthTokenStore (BAT-1155) — we just watch the
@@ -162,9 +168,22 @@ fun rememberXaiOAuthController(
             // migration marker is preserved (a signed-out family must never be
             // re-imported from stale legacy prefs). Then re-derive runtime_state's
             // xai authType (H5) so a stale (xai, oauth) can't re-open the boot-loop.
-            XaiOAuthTokenStore.signOut()
-            ConfigManager.syncXaiRuntimeAuthType(context)
-            onSignedOut()
+            // CodeRabbit: run off the UI thread and gate on the Result — do NOT sync
+            // runtime_state or fire onSignedOut() unless the tombstone write succeeded
+            // (else the UI would show "signed out" while the store still holds a live
+            // family that keeps rotating).
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val r = XaiOAuthTokenStore.signOut()
+                    if (r is XaiOAuthTokenStore.Result.Ok) ConfigManager.syncXaiRuntimeAuthType(context)
+                    r
+                }
+                if (result is XaiOAuthTokenStore.Result.Ok) {
+                    onSignedOut()
+                } else {
+                    error = "Sign-out failed — please try again."
+                }
+            }
         },
         cancel = {
             // BAT-1124 (CodeRabbit): stop the ACTIVE flow (loopback server + keep-alive service),

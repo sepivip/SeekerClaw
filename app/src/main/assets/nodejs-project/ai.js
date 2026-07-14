@@ -3707,11 +3707,15 @@ async function flushProviderPersist() {
     try {
         const adapter = getAdapter(PROVIDER);
         if (adapter && typeof adapter.flushPendingPersist === 'function') {
-            await adapter.flushPendingPersist();
+            // BAT-1155 CodeRabbit: MUST return the drain result — the control server's
+            // /shutdown/flush relays `pendingPersist` to Kotlin's durability gate. Dropping
+            // it made xaiPending always false → the gate never fired → the incident recurs.
+            return await adapter.flushPendingPersist();
         }
     } catch (e) {
         log(`[Shutdown] Provider token drain failed: ${e && e.message ? e.message : e}`, 'WARN');
     }
+    return { pendingPersist: false };
 }
 
 module.exports = {

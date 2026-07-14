@@ -699,22 +699,28 @@ async function _doAttemptPersist(timeoutMs) {
 // explicit 300ms bound passed to androidBridgeCall. Never throws.
 async function flushPendingPersist() {
     if (!isOAuth) return { pendingPersist: false };
-    // Await an already-running attempt (single-flight) so we don't re-POST the same
-    // pair — but BOUND the await to 300ms so a stalled 10s-default bridge POST can't
-    // blow the shutdown budget (BAT-1155 verify minor: the in-flight promise may be
-    // the original rotation persist started with the 10000ms bridge default).
-    if (_persistInFlight) {
+    // ONE 300ms end-to-end deadline across BOTH phases (CodeRabbit): the in-flight
+    // await and the single forced retry share the budget, so a stalled 10s-default
+    // bridge POST can never make the shutdown drain exceed 300ms total (the pinned D6
+    // budget), regardless of whether a persist was already in flight at USER_STOP.
+    const deadline = Date.now() + 300;
+    const remaining = () => Math.max(0, deadline - Date.now());
+    // Await a promise bounded by the remaining budget (never throws; clears its timer).
+    const raceRemaining = async (p) => {
+        const ms = remaining();
+        if (ms <= 0) return;
         let t;
         try {
-            await Promise.race([
-                _persistInFlight,
-                new Promise((resolve) => { t = setTimeout(resolve, 300); }),
-            ]);
+            await Promise.race([p, new Promise((resolve) => { t = setTimeout(resolve, ms); })]);
         } catch (_) { /* best-effort */ } finally { if (t) clearTimeout(t); }
-    }
-    // One forced, 300ms-bounded retry only if a pair is still unpersisted.
-    if (_persistPending && _pendingPersistPayload) {
-        try { await _attemptPersist(300); } catch (_) { /* best-effort */ }
+    };
+    // Phase 1: await an already-running attempt (single-flight → never re-POST the same pair).
+    if (_persistInFlight) await raceRemaining(_persistInFlight);
+    // Phase 2: at most ONE forced retry, only if time remains AND a pair is still pending.
+    // _attemptPersist is single-flight, so if phase 1's attempt is still running this just
+    // re-awaits it within the remaining budget rather than starting a duplicate POST.
+    if (_persistPending && _pendingPersistPayload && remaining() > 0) {
+        await raceRemaining(_attemptPersist(remaining()));
     }
     // Report whether a rotated pair is STILL stranded. The Kotlin controlled-stop
     // durability gate fires ONLY on this signal — not on any unconfirmed flush — so a

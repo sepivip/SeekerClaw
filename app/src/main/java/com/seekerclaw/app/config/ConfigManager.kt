@@ -2109,7 +2109,14 @@ object ConfigManager {
      * its existing behaviour; only the xAI single-use-token path needs this gate.)
      */
     internal fun runtimeAuthTypeFor(config: AppConfig): String =
-        if (config.provider == "xai" && config.authType == "oauth" && config.xaiOAuthToken.isBlank())
+        // BAT-1155 CodeRabbit: a DEAD xAI-OAuth family (reauthRequired, token blanked) must
+        // STAY oauth in runtime_state.json too — Node reads runtime_state FIRST for
+        // provider/authType, so downgrading it to api_key here would split-brain against the
+        // oauth config.json and stop the family booting INTO reauth. Only a FRESH
+        // oauth-selected-but-never-signed-in family (blank token, NOT reauth) downgrades.
+        // Matches the writeConfigJson effectiveAuthType guard.
+        if (config.provider == "xai" && config.authType == "oauth" &&
+            config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired)
             "api_key" else config.authType
 
     /**
