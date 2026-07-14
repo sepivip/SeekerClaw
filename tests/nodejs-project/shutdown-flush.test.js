@@ -174,8 +174,15 @@ test('R2 Copilot: /shutdown/flush surfaces flush failures as 500', () => {
     // durability gate can decide whether a rotated xAI token is still stranded.
     assert.ok(/_json\(res,\s*200,\s*\{[^}]*pendingPersist/.test(flushBlock),
         '/shutdown/flush 200 body must include pendingPersist (BAT-1155 durability signal)');
-    assert.ok(/_json\(res,\s*500,[\s\S]{0,220}?pendingPersist/.test(flushBlock),
+    assert.ok(/_json\(res,\s*500,[\s\S]{0,260}?pendingPersist/.test(flushBlock),
         '/shutdown/flush 500 body must ALSO include pendingPersist (a flush that fails still reports whether a token is stranded)');
+    // Codex re-review blocker-2: the AUTHORITATIVE diskUnsafe signal (superset of
+    // pendingPersist — also covers convergence-exhausted + failed dead-mark) must be
+    // emitted on BOTH the success and failure bodies so the Kotlin gate keys on it.
+    assert.ok(/_json\(res,\s*200,\s*\{[^}]*diskUnsafe/.test(flushBlock),
+        '/shutdown/flush 200 body must include diskUnsafe (Codex re-review blocker-2 authoritative signal)');
+    assert.ok(/_json\(res,\s*500,[\s\S]{0,260}?diskUnsafe/.test(flushBlock),
+        '/shutdown/flush 500 body must ALSO include diskUnsafe (a failed flush still reports whether the on-disk token is unsafe)');
 });
 
 test('R3 Copilot: _readBody handles aborted/close events', () => {
@@ -187,6 +194,31 @@ test('R3 Copilot: _readBody handles aborted/close events', () => {
         '_readBody must listen for aborted to handle client timeout');
     assert.ok(/req\.on\s*\(\s*['"]close['"]/.test(src),
         '_readBody must listen for close to handle abrupt disconnects');
+});
+
+test('BAT-1155 blocker-1: controlled Stop calls finishStop ONLY on positive durability', () => {
+    // Codex re-review blocker-1: a controlled Stop must NEVER call stopService()/finishStop()
+    // without positive durability. Pin that stopWithDurability invokes finishStop exactly once
+    // — inside the `durable ->` arm — and that the exhausted (else) arm keeps the service ALIVE
+    // (no finishStop, no blind "OS fallback" kill).
+    const src = fs.readFileSync(SERVICE_KT, 'utf8');
+    const startIdx = src.indexOf('private fun stopWithDurability');
+    assert.ok(startIdx >= 0, 'stopWithDurability must exist');
+    const endIdx = src.indexOf('private fun finishStop', startIdx);
+    assert.ok(endIdx > startIdx, 'finishStop must be defined right after stopWithDurability');
+    const body = src.slice(startIdx, endIdx);
+    const finishCalls = (body.match(/finishStop\s*\(/g) || []).length;
+    assert.strictEqual(finishCalls, 1,
+        `stopWithDurability must call finishStop EXACTLY once (the durable arm); found ${finishCalls}`);
+    assert.ok(/durable\s*->[\s\S]*?finishStop\s*\(/.test(body),
+        'the durable branch must be the one that calls finishStop');
+    const elseIdx = body.lastIndexOf('else ->');
+    assert.ok(elseIdx >= 0, 'the exhausted (else) arm must exist');
+    const elseArm = body.slice(elseIdx);
+    assert.ok(!/finishStop\s*\(/.test(elseArm),
+        'the exhausted arm must NOT call finishStop (never kill without durability)');
+    assert.ok(/postDurabilityStuckNotice/.test(elseArm),
+        'the exhausted arm must keep the service alive and surface the stuck notice');
 });
 
 test('main.js wires flushForShutdown into internal-control-server.start', () => {

@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.seekerclaw.app.MainActivity
 import com.seekerclaw.app.R
 import com.seekerclaw.app.SeekerClawApplication
@@ -917,23 +918,36 @@ class SeekerClawService : Service() {
                     )
                     false
                 }
-                if (durable || attempt >= MAX_KEEPALIVE_STOP_ATTEMPTS) {
-                    if (!durable) {
-                        LogCollector.append(
-                            "[Shutdown] durability unconfirmed after ${attempt + 1} attempts — OS-fallback stop",
-                            LogLevel.ERROR,
-                        )
-                    }
-                    restartHandler.post {
+                when {
+                    // Durable → tear down for real.
+                    durable -> restartHandler.post {
+                        clearDurabilityStuckNotice(appCtx)
                         finishStop(appCtx)
                         onStopped?.invoke()
                     }
-                } else {
-                    LogCollector.append(
-                        "[Shutdown] finishing secure session save — keeping service alive, retry ${attempt + 1}/$MAX_KEEPALIVE_STOP_ATTEMPTS",
-                        LogLevel.WARN,
-                    )
-                    restartHandler.postDelayed({ stopWithDurability(appCtx, attempt + 1, onStopped) }, KEEPALIVE_RETRY_MS)
+                    // Not durable, budget remaining → keep alive, surface the state, retry.
+                    attempt < MAX_KEEPALIVE_STOP_ATTEMPTS -> {
+                        LogCollector.append(
+                            "[Shutdown] finishing secure session save — keeping service alive, retry ${attempt + 1}/$MAX_KEEPALIVE_STOP_ATTEMPTS",
+                            LogLevel.WARN,
+                        )
+                        restartHandler.post { postDurabilityStuckNotice(appCtx) }
+                        restartHandler.postDelayed({ stopWithDurability(appCtx, attempt + 1, onStopped) }, KEEPALIVE_RETRY_MS)
+                    }
+                    // Codex re-review blocker-1: a controlled Stop must NEVER call stopService
+                    // without positive durability. Retries exhausted → keep the service ALIVE
+                    // (only an actual OS force-stop may bypass the gate) and leave the notice up;
+                    // do NOT finishStop and do NOT fire onStopped — a restart that can't durably
+                    // save the rotated token must not proceed into a consumed-token replay either.
+                    // Relabeling a blind kill "OS fallback" does not make a broken disk safe.
+                    else -> {
+                        LogCollector.append(
+                            "[Shutdown] durability UNCONFIRMED after ${attempt + 1} attempts — service kept ALIVE " +
+                                "(the session token could not be safely saved; force-stop from system settings to override)",
+                            LogLevel.ERROR,
+                        )
+                        restartHandler.post { postDurabilityStuckNotice(appCtx) }
+                    }
                 }
             }
         }
@@ -951,6 +965,41 @@ class SeekerClawService : Service() {
                 ServiceState.setServiceStartTimeMs(0L)
             }
             appCtx.stopService(Intent(appCtx, SeekerClawService::class.java))
+        }
+
+        // BAT-1155 blocker-1: a dismiss-resistant notice shown while a controlled Stop is
+        // held open because the xAI OAuth token could not yet be durably saved. It tells the
+        // user the agent is deliberately still running (and that a system force-stop is the
+        // override) rather than silently ignoring their Stop. Best-effort (POST_NOTIFICATIONS
+        // may be denied) — the durability invariant does not depend on it landing.
+        private const val DURABILITY_NOTICE_ID = 3
+
+        private fun postDurabilityStuckNotice(appCtx: Context) {
+            runCatching {
+                val pi = PendingIntent.getActivity(
+                    appCtx, 0,
+                    Intent(appCtx, MainActivity::class.java),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                val notification = NotificationCompat.Builder(appCtx, SeekerClawApplication.ERROR_CHANNEL_ID)
+                    .setContentTitle("Finishing secure session save")
+                    .setContentText("Keeping the agent running until your Grok sign-in is safely saved.")
+                    .setStyle(
+                        NotificationCompat.BigTextStyle().bigText(
+                            "Keeping the agent running until your Grok sign-in is safely saved, so it isn't " +
+                                "lost on the next restart. If this persists, force-stop the app from system settings.",
+                        ),
+                    )
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentIntent(pi)
+                    .setOngoing(true)
+                    .build()
+                NotificationManagerCompat.from(appCtx).notify(DURABILITY_NOTICE_ID, notification)
+            }
+        }
+
+        private fun clearDurabilityStuckNotice(appCtx: Context) {
+            runCatching { NotificationManagerCompat.from(appCtx).cancel(DURABILITY_NOTICE_ID) }
         }
     }
 }

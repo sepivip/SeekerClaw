@@ -138,7 +138,15 @@ object NodeControlClient {
         val body = postForBody("/shutdown/flush", "{}") ?: return@withContext null
         try {
             val json = JSONObject(body)
-            if (json.has("pendingPersist")) json.getBoolean("pendingPersist") else null
+            // Codex re-review blocker-2: prefer the AUTHORITATIVE `diskUnsafe` signal — it
+            // covers convergence-exhausted (T1 discarded, consumed T0 on disk) and a failed
+            // dead-family mark, not just a still-pending pair. Fall back to `pendingPersist`
+            // for a pre-blocker-2 Node, and null (→ fail-closed) if neither field is present.
+            when {
+                json.has("diskUnsafe") -> json.getBoolean("diskUnsafe")
+                json.has("pendingPersist") -> json.getBoolean("pendingPersist")
+                else -> null
+            }
         } catch (e: Exception) {
             // CodeRabbit: don't swallow silently — a malformed /shutdown/flush body must be
             // distinguishable from a transport failure when debugging (both map to null).

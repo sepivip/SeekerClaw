@@ -415,14 +415,21 @@ async function _route(req, res) {
         // this signal, so a benign summary-flush hiccup can't force a healthy family
         // to re-pair.
         let xaiPending = false;
+        // Codex re-review blocker-2: the AUTHORITATIVE "on-disk record unsafe to boot from"
+        // signal — a superset of pendingPersist that also covers convergence-exhausted
+        // (T1 discarded, consumed T0 on disk) and a failed dead-family mark (disk still
+        // says the revoked family is live). The Kotlin gate keys on THIS, not pendingPersist.
+        let xaiDiskUnsafe = false;
         if (_xaiFlush) {
             try {
                 const r = await _xaiFlush();
                 xaiPending = !!(r && r.pendingPersist);
+                xaiDiskUnsafe = !!(r && r.diskUnsafe);
             } catch (err) {
                 // flushPendingPersist is designed never to throw; if it does, a rotated
                 // pair may be stranded → fail closed so the Kotlin gate fires.
                 xaiPending = true;
+                xaiDiskUnsafe = true;
                 _logFn(`[ControlServer] /shutdown/flush xAI token drain failed: ${err.message}`, 'WARN');
             }
         }
@@ -452,7 +459,7 @@ async function _route(req, res) {
             // step errors are caught inside — but defense-in-depth).
             const result = await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1200 });
             if (result && result.ok) {
-                return _json(res, 200, { ok: true, pendingPersist: xaiPending });
+                return _json(res, 200, { ok: true, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe });
             }
             const detail = result || {};
             // R8 Copilot: log partial flush at WARN, not ERROR. A partial
@@ -471,10 +478,11 @@ async function _route(req, res) {
                 summaryFailed: detail.summaryFailed || null,
                 dbFailed: !!detail.dbFailed,
                 pendingPersist: xaiPending,
+                diskUnsafe: xaiDiskUnsafe,
             });
         } catch (err) {
             _logFn(`[ControlServer] /shutdown/flush threw: ${err.message}`, 'ERROR');
-            return _json(res, 500, { ok: false, error: err.message, pendingPersist: xaiPending });
+            return _json(res, 500, { ok: false, error: err.message, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe });
         }
     }
 

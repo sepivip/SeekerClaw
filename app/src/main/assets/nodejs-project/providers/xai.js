@@ -263,6 +263,9 @@ function _resetErrorStateForTests() {
     _pendingPersistPayload = null;
     _persistAttempts = 0;
     _persistDurableError = false;
+    _markReauthPending = false;
+    _noteNotifiedPending = false;
+    _noteNotifiedPendingEpoch = -1;
     _opportunisticRefreshDone = false;
     _lastRefreshFailMono = 0n;
     _refreshInFlight = null;
@@ -286,6 +289,8 @@ function _setStateForTests(patch) {
     if ('persistPending' in patch) _persistPending = patch.persistPending;
     if ('persistDurableError' in patch) _persistDurableError = patch.persistDurableError;
     if ('persistAttempts' in patch) _persistAttempts = patch.persistAttempts;
+    if ('markReauthPending' in patch) _markReauthPending = patch.markReauthPending;
+    if ('noteNotifiedPending' in patch) _noteNotifiedPending = patch.noteNotifiedPending;
     if ('pendingPersistPayload' in patch) _pendingPersistPayload = patch.pendingPersistPayload;
     if ('oauth403RetriedOnce' in patch) _oauth403RetriedOnce = patch.oauth403RetriedOnce;
     if ('opportunisticRefreshDone' in patch) _opportunisticRefreshDone = patch.opportunisticRefreshDone;
@@ -304,6 +309,9 @@ function _getStateForTests() {
         refreshDead: _refreshDead,
         persistPending: _persistPending,
         persistDurableError: _persistDurableError,
+        markReauthPending: _markReauthPending,
+        noteNotifiedPending: _noteNotifiedPending,
+        diskUnsafe: isDiskUnsafe(),
         opportunisticRefreshDone: _opportunisticRefreshDone,
         currentEpoch: _currentEpoch,
         reauthNotifiedEpoch: _reauthNotifiedEpoch,
@@ -317,6 +325,7 @@ function classifyError(status, data) {
         // classify as reauth so the reconnect copy surfaces (not the stale api-key hint).
         if (isOAuth && _refreshDead) {
             _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
+            _maybeRetryNotifyMark(); // Codex re-review major-2: retry a failed notify-once latch
             return {
                 type: 'reauth', retryable: false,
                 userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
@@ -378,6 +387,7 @@ function classifyError(status, data) {
         // tier-gate copy ONLY for a genuine fresh-token tier-gate (_refreshDead === false).
         if (isOAuth && _refreshDead) {
             _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
+            _maybeRetryNotifyMark(); // Codex re-review major-2: retry a failed notify-once latch
             return {
                 type: 'reauth', retryable: false,
                 userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
@@ -492,6 +502,13 @@ function refreshOAuthToken() {
 // _refreshDead=false and re-POSTs the revoked token. Retried on each subsequent
 // dead-path turn (classifyError) until it lands.
 let _markReauthPending = false;
+
+// Codex re-review major-2: the notify-once latch mark that did NOT durably persist.
+// Without a retry the in-memory latch is lost on restart and the same dead epoch is
+// re-notified (violating "exactly one autonomous notice per dead epoch"). Retained +
+// retried, CAS'd to the epoch it was recorded for; a conflict drops it, a success clears it.
+let _noteNotifiedPending = false;
+let _noteNotifiedPendingEpoch = -1;
 
 // BAT-1155 D4/D5: token-less durable mark of "this family is dead". POSTs
 // /xai/oauth/mark-reauth (SEPARATE rate bucket) CAS'd on expectedEpoch (blocker-2).
@@ -732,7 +749,7 @@ async function _doAttemptPersist(timeoutMs, urgent) {
 // first (never double-POST), then AT MOST ONE forced retry if still pending, with an
 // explicit 300ms bound passed to androidBridgeCall. Never throws.
 async function flushPendingPersist() {
-    if (!isOAuth) return { pendingPersist: false };
+    if (!isOAuth) return { pendingPersist: false, diskUnsafe: false };
     // ONE 300ms end-to-end deadline across BOTH phases (CodeRabbit): the in-flight
     // await and the single forced retry share the budget, so a stalled 10s-default
     // bridge POST can never make the shutdown drain exceed 300ms total (the pinned D6
@@ -757,10 +774,27 @@ async function flushPendingPersist() {
     if (_persistPending && _pendingPersistPayload && remaining() > 0) {
         await raceRemaining(_attemptPersist(remaining(), /* urgent */ true));
     }
-    // Report whether a rotated pair is STILL stranded. The Kotlin controlled-stop
-    // durability gate fires ONLY on this signal — not on any unconfirmed flush — so a
-    // benign summary-flush hiccup can't force a healthy family to re-pair (verify major-2).
-    return { pendingPersist: !!(_persistPending && _pendingPersistPayload) };
+    // Report BOTH the narrow pending-pair signal AND the authoritative disk-unsafe signal
+    // (Codex re-review blocker-2). pendingPersist alone is insufficient: `_persistDurableError`
+    // (convergence exhausted → T1 discarded, consumed T0 still on disk) and `_markReauthPending`
+    // (a dead-family mark that never landed → disk still says the revoked family is live) BOTH
+    // clear/never-set `_persistPending` yet leave the disk in a brick-on-boot state. The
+    // controlled-stop gate keys on `diskUnsafe` so a Stop in either state fails closed
+    // (CAS-marks reauth) instead of trusting a false-clean and reloading a consumed token.
+    return { pendingPersist: !!(_persistPending && _pendingPersistPayload), diskUnsafe: isDiskUnsafe() };
+}
+
+// BAT-1155 Codex re-review blocker-2 — the single authoritative "the on-disk xAI OAuth
+// record is NOT safe to boot from" signal. True whenever a consumed/rotated pair or a
+// revoked family is still reflected on disk as usable:
+//   - a rotated pair not yet persisted (T1 in memory, consumed T0 on disk);
+//   - convergence exhausted (T1 discarded, consumed T0 on disk) — the retained latch;
+//   - a dead-family reauth mark that failed to persist (disk still says the family is live).
+// Each is resolved by a durable store write: a successful persist, a CAS-winning conflict,
+// or a durable reauth mark. isOAuth-gated (api_key families have no rotation hazard).
+function isDiskUnsafe() {
+    if (!isOAuth) return false;
+    return !!(_persistPending && _pendingPersistPayload) || _persistDurableError || _markReauthPending;
 }
 
 /**
@@ -875,6 +909,9 @@ function repairReset() {
     _pendingPersistPayload = null;
     _persistAttempts = 0;
     _persistDurableError = false;
+    _markReauthPending = false;
+    _noteNotifiedPending = false;
+    _noteNotifiedPendingEpoch = -1;
     _opportunisticRefreshDone = false;
     _lastRefreshFailMono = 0n;
     // BAT-1155: a fresh sign-in re-arms the autonomous notice (the store also resets
@@ -919,6 +956,14 @@ function shouldSurfaceReauthNotice() {
 async function noteReauthNotified() {
     const notifiedFor = _currentEpoch;
     _reauthNotifiedEpoch = notifiedFor; // in-memory suppressor (survives this session)
+    await _persistNotifiedMark(notifiedFor);
+}
+
+// Persist the notify-once latch, CAS'd to the epoch it was recorded for. On a durable
+// failure (bridge/lock error or a non-success ack) retain a pending retry (Codex re-review
+// major-2) so a restart before it lands doesn't lose the latch and re-notify. A CAS
+// conflict means the dead family is gone → drop both the latch and the pending retry.
+async function _persistNotifiedMark(notifiedFor) {
     try {
         const result = await androidBridgeCall('/xai/oauth/mark-reauth', {
             expectedEpoch: notifiedFor, notified: true,
@@ -929,12 +974,32 @@ async function noteReauthNotified() {
             // legitimate future notice isn't suppressed (Codex blocker-2).
             if (typeof result.currentEpoch === 'number') _currentEpoch = result.currentEpoch;
             _reauthNotifiedEpoch = -1;
+            _noteNotifiedPending = false;
             return;
         }
-        if (result && result.success === true && typeof result.epoch === 'number') {
-            _currentEpoch = result.epoch;
+        if (result && result.success === true) {
+            if (typeof result.epoch === 'number') _currentEpoch = result.epoch;
+            _noteNotifiedPending = false; // durably recorded
+            return;
         }
-    } catch (_) { /* best-effort; boot seed re-derives reauthNotifiedEpoch from the store */ }
+        _noteNotifiedPending = true; _noteNotifiedPendingEpoch = notifiedFor; // failed → retry
+    } catch (_) {
+        _noteNotifiedPending = true; _noteNotifiedPendingEpoch = notifiedFor;
+    }
+}
+
+// Fire-and-forget retry of a notify-once mark that didn't persist (Codex re-review major-2).
+// Called on subsequent dead-path turns so a transient bridge/lock failure self-heals within
+// the process instead of re-notifying after a restart.
+function _maybeRetryNotifyMark() {
+    if (_noteNotifiedPending && _noteNotifiedPendingEpoch === _currentEpoch) {
+        // Returns the promise so tests can await; production callers fire-and-forget.
+        return _persistNotifiedMark(_noteNotifiedPendingEpoch).catch(() => {});
+    } else if (_noteNotifiedPending && _noteNotifiedPendingEpoch !== _currentEpoch) {
+        // Epoch moved on under us (sign-in) — the stale pending mark is moot.
+        _noteNotifiedPending = false;
+    }
+    return Promise.resolve();
 }
 
 // ── Connection test ─────────────────────────────────────────────────────────
@@ -995,6 +1060,9 @@ module.exports = {
     flushPendingPersist,
     shouldSurfaceReauthNotice,
     noteReauthNotified,
+    // Codex re-review test seams (major-2/3): drive the notify-mark retry deterministically.
+    _maybeRetryNotifyMark,
+    _maybeRetryReauthMark,
 
     // Capabilities
     supportsCache: false,

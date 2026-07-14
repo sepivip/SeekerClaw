@@ -84,7 +84,10 @@ object XaiOAuthDurabilityGate {
         var round = 0
         while (round < MAX_FLUSH_ROUNDS && remainingMs(deadlineNs) > 0L) {
             round++
-            val pending: Boolean? = try {
+            // The signal is Node's AUTHORITATIVE `diskUnsafe` (Codex re-review blocker-2):
+            // false = the on-disk record is safe to boot from; true = unsafe (pending pair OR
+            // convergence-exhausted OR failed dead-mark); null = unreachable/unparseable.
+            val unsafe: Boolean? = try {
                 // Cap the round to the REMAINING budget (CodeRabbit): flushShutdown's HTTP
                 // timeout is fixed (~2250ms), so a late-starting round could overrun BUDGET_MS.
                 // withTimeoutOrNull returns null when the budget elapses → treated as
@@ -97,20 +100,19 @@ object XaiOAuthDurabilityGate {
                 )
                 null
             }
-            when (pending) {
+            when (unsafe) {
                 false -> {
-                    // Node confirmed nothing stranded — the rotated pair (if any) persisted.
+                    // Node confirmed the on-disk record is safe — nothing stranded/unsafe.
                     if (round > 1) {
-                        LogCollector.append("[Shutdown] xAI durability gate: persist confirmed on round $round", LogLevel.INFO)
+                        LogCollector.append("[Shutdown] xAI durability gate: disk confirmed safe on round $round", LogLevel.INFO)
                     }
                     return true
                 }
                 true -> {
-                    // Still pending after Node's own drain. Another round MAY let a
-                    // momentary persist-failure recover; otherwise we fall through to
-                    // the fail-closed mark below.
+                    // Disk unsafe after Node's own drain. Another round MAY let a momentary
+                    // persist failure recover; otherwise we fall through to the fail-closed mark.
                     LogCollector.append(
-                        "[Shutdown] xAI durability gate: rotated token still unpersisted (round $round/$MAX_FLUSH_ROUNDS)",
+                        "[Shutdown] xAI durability gate: on-disk token unsafe to boot from (round $round/$MAX_FLUSH_ROUNDS)",
                         LogLevel.WARN,
                     )
                 }
@@ -143,7 +145,9 @@ object XaiOAuthDurabilityGate {
             // fail-closed (CodeRabbit): any unexpected throw becomes a retryable Failed rather
             // than propagating out of ensureDurableBeforeStop (whose caller must NOT fail open).
             val r = try {
-                XaiOAuthTokenStore.markReauth(expectedEpoch)
+                // Codex re-review major-1: cap the store lock to the gate's REMAINING budget so a
+                // mark started near expiry can't add its own full lock allowance on top of BUDGET_MS.
+                XaiOAuthTokenStore.markReauth(expectedEpoch, maxLockMs = remainingMs(deadlineNs))
             } catch (e: Exception) {
                 XaiOAuthTokenStore.Result.Failed(e.message ?: e.javaClass.simpleName)
             }

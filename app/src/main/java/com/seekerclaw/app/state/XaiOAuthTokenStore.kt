@@ -153,12 +153,19 @@ object XaiOAuthTokenStore {
      * never throws (Codex blocker-1: the shutdown path must be bounded + deadlock-
      * proof, so every acquisition here is time-bounded off a monotonic clock).
      */
-    private fun withStoreLock(action: (CrossProcessStore<XaiOAuthTokens>, XaiOAuthTokens) -> Result): Result {
+    private fun withStoreLock(
+        lockBudgetMs: Long = LOCK_TIMEOUT_MS,
+        action: (CrossProcessStore<XaiOAuthTokens>, XaiOAuthTokens) -> Result,
+    ): Result {
         val cps = store ?: return Result.Failed("not initialized")
         val dir = lockDir ?: return Result.Failed("not initialized")
         // Monotonic deadline (Codex: System.currentTimeMillis can jump on an NTP
-        // correction and break the bound). Covers BOTH lock acquisitions.
-        val deadlineNs = System.nanoTime() + LOCK_TIMEOUT_MS * 1_000_000L
+        // correction and break the bound). Covers BOTH lock acquisitions. Codex re-review
+        // major-1: cap the acquisition by the SMALLER of the standard allowance and the
+        // caller's remaining end-to-end budget, so a mutation started near a shutdown
+        // deadline can't overrun it by waiting the full LOCK_TIMEOUT_MS.
+        val budgetMs = minOf(LOCK_TIMEOUT_MS, lockBudgetMs).coerceAtLeast(0L)
+        val deadlineNs = System.nanoTime() + budgetMs * 1_000_000L
         val remainingMs = { (deadlineNs - System.nanoTime()) / 1_000_000L }
         val gotJvm = try {
             jvmLock.tryLock(remainingMs().coerceAtLeast(0L), TimeUnit.MILLISECONDS)
@@ -218,8 +225,9 @@ object XaiOAuthTokenStore {
         expectedEpoch: Long?,
         rejectIfTombstone: Boolean = false,
         advanceEpoch: Boolean = true,
+        lockBudgetMs: Long = LOCK_TIMEOUT_MS,
         transform: (XaiOAuthTokens) -> XaiOAuthTokens,
-    ): Result = withStoreLock { cps, current ->
+    ): Result = withStoreLock(lockBudgetMs) { cps, current ->
         if (expectedEpoch != null && current.epoch != expectedEpoch) {
             return@withStoreLock Result.Conflict(current.epoch)
         }
@@ -291,8 +299,8 @@ object XaiOAuthTokenStore {
      * family. Epoch is NOT advanced (an annotation on the same family), so a
      * caller can chain markReauthNotified with the same epoch. Idempotent.
      */
-    fun markReauth(expectedEpoch: Long): Result =
-        mutate(expectedEpoch, advanceEpoch = false) { it.copy(reauthRequired = true) }
+    fun markReauth(expectedEpoch: Long, maxLockMs: Long = LOCK_TIMEOUT_MS): Result =
+        mutate(expectedEpoch, advanceEpoch = false, lockBudgetMs = maxLockMs) { it.copy(reauthRequired = true) }
 
     /**
      * Record that the single autonomous "reconnect" notice has fired for the dead

@@ -729,10 +729,64 @@ async function testHandleUnauthorized() {
         catchIdx !== -1 && rebuildIdx !== -1 && rebuildIdx > catchIdx, `catchIdx=${catchIdx} rebuildIdx=${rebuildIdx}`);
 })();
 
+// Codex re-review blocker-2 + major-2: the AUTHORITATIVE diskUnsafe signal + the
+// notify-once retry. flushPendingPersist must report diskUnsafe:true for EVERY on-disk-unsafe
+// state (not just a pending pair), and a failed notify-once mark must be retained + retried.
+async function testDurabilitySignalsAndNotifyRetry() {
+    console.log('\n── Codex re-review: diskUnsafe signal + notify-once retry ──');
+
+    // (1) Clean oauth family → diskUnsafe false.
+    let xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    let r = await xai.flushPendingPersist();
+    ok('clean: flushPendingPersist reports diskUnsafe:false', r.diskUnsafe === false && r.pendingPersist === false);
+
+    // (2) Convergence exhausted (T1 discarded, consumed T0 on disk) → diskUnsafe TRUE
+    //     even though pendingPersist is false (the previously-hidden brick vector).
+    xai._setStateForTests({ persistPending: false, pendingPersistPayload: null, persistDurableError: true });
+    r = await xai.flushPendingPersist();
+    ok('convergence-exhausted: pendingPersist false but diskUnsafe TRUE', r.pendingPersist === false && r.diskUnsafe === true);
+
+    // (3) Failed dead-family mark (disk still says the revoked family is live) → diskUnsafe TRUE.
+    xai._setStateForTests({ persistDurableError: false, markReauthPending: true });
+    r = await xai.flushPendingPersist();
+    ok('failed dead-mark: diskUnsafe TRUE', r.diskUnsafe === true);
+
+    // (4) api_key family is never disk-unsafe (no rotation hazard).
+    const xaiApi = loadXai({ authType: 'api_key', apiKey: 'k' });
+    xaiApi._resetErrorStateForTests();
+    xaiApi._setStateForTests({ persistDurableError: true, markReauthPending: true });
+    r = await xaiApi.flushPendingPersist();
+    ok('api_key: diskUnsafe always false (isOAuth-gated)', r.diskUnsafe === false);
+
+    // (5) notify-once retry: a failed mark is RETAINED (major-2), retried to success clears it.
+    xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
+    _bridgeResult = { error: 'lock busy' };
+    _bridgeCalls.length = 0;
+    await xai.noteReauthNotified();
+    ok('notify: failed mark is retained pending (not swallowed)', xai._getStateForTests().noteNotifiedPending === true);
+    _bridgeResult = { success: true, epoch: 5 };
+    await xai._maybeRetryNotifyMark();
+    ok('notify: retry to success clears the pending mark', xai._getStateForTests().noteNotifiedPending === false);
+
+    // (6) notify retry that CAS-conflicts (fresh sign-in advanced the epoch) → drop the stale latch.
+    xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
+    _bridgeResult = { error: 'lock busy' };
+    await xai.noteReauthNotified();
+    ok('notify: pre-conflict pending set', xai._getStateForTests().noteNotifiedPending === true);
+    _bridgeResult = { code: 'XAI_OAUTH_EPOCH_CONFLICT', currentEpoch: 9 };
+    await xai._maybeRetryNotifyMark();
+    const st = xai._getStateForTests();
+    ok('notify: conflict drops the stale pending mark AND the in-memory latch', st.noteNotifiedPending === false && st.reauthNotifiedEpoch === -1);
+}
+
 // ── Runner ───────────────────────────────────────────────────────────────────
 
 (async function run() {
     try {
+        await testDurabilitySignalsAndNotifyRetry();
         await testRefreshSingleFlightAndPersist();
         await testRefreshMintStateD3();
         await testPersistFailureAvailabilityFirst();
