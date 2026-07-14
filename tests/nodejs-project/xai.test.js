@@ -57,10 +57,15 @@ const _securityStub = {
 // Configurable bridge stub (the real androidBridgeCall ALWAYS resolves — it
 // resolves { error } on failure and { success: true } on a persisted write).
 let _bridgeResult = { success: true };
+// BAT-1155 stop-fence: the pre-POST rotation gate. Defaults to Ok so refresh tests that only care
+// about the persist/mark path are unaffected; a gate test overrides it to Fenced/Dead/Unsafe/Conflict.
+let _prepareRefreshResult = { success: true };
 const _bridgeCalls = [];
 const _bridgeStub = {
     androidBridgeCall: (endpoint, data) => {
         _bridgeCalls.push({ endpoint, data });
+        if (endpoint === '/xai/oauth/prepare-refresh') return Promise.resolve(_prepareRefreshResult);
+        if (endpoint === '/xai/oauth/clear-rotation-in-flight') return Promise.resolve({ success: true });
         return Promise.resolve(_bridgeResult);
     },
 };
@@ -283,11 +288,16 @@ async function testRefreshSingleFlightAndPersist() {
 
     await Promise.all([p1, p2]);
     ok('single-flight: auth.x.ai token POST fired exactly once', _httpsCallCount === 1, `count=${_httpsCallCount}`);
-    ok('single-flight: bridge persist called exactly once', _bridgeCalls.length === 1, `calls=${_bridgeCalls.length}`);
+    // BAT-1155: a refresh now first hits /xai/oauth/prepare-refresh (the pre-POST rotation gate),
+    // then /xai/oauth/save-tokens (the persist). Filter to the persist to pin single-flight.
+    const persistCalls = _bridgeCalls.filter(c => c.endpoint.includes('save-tokens'));
+    ok('single-flight: bridge persist called exactly once', persistCalls.length === 1, `persistCalls=${persistCalls.length}`);
+    ok('single-flight: exactly one prepare-refresh gate call',
+        _bridgeCalls.filter(c => c.endpoint === '/xai/oauth/prepare-refresh').length === 1);
 
     // H2: the persist was AWAITED and got the rotated access token.
-    ok('await-persist: bridge received the ROTATED access token', _bridgeCalls[0] && _bridgeCalls[0].data.accessToken === 'eyJnew.acc.tok');
-    ok('await-persist: hit the /xai/oauth/save-tokens endpoint', _bridgeCalls[0] && _bridgeCalls[0].endpoint === '/xai/oauth/save-tokens', _bridgeCalls[0] && _bridgeCalls[0].endpoint);
+    ok('await-persist: bridge received the ROTATED access token', persistCalls[0] && persistCalls[0].data.accessToken === 'eyJnew.acc.tok');
+    ok('await-persist: hit the /xai/oauth/save-tokens endpoint', persistCalls[0] && persistCalls[0].endpoint === '/xai/oauth/save-tokens', persistCalls[0] && persistCalls[0].endpoint);
 
     // H1: both rotated tokens registered with the redactor.
     ok('H1: rotated ACCESS token registered for redaction', _registeredSecrets.includes('eyJnew.acc.tok'));
@@ -807,8 +817,37 @@ async function testDurabilitySignalsAndNotifyRetry() {
 
 // ── Runner ───────────────────────────────────────────────────────────────────
 
+// BAT-1155 stop-fence: the pre-POST rotation gate. Every non-Ok prepare-refresh outcome must
+// prevent the external token POST (auth.x.ai). Drives the REAL refresh path with a stubbed bridge.
+async function testPrepareRefreshGate() {
+    console.log('\n── BAT-1155 stop-fence: pre-POST prepare-refresh gate ──');
+    const near = () => ({ expiresAtMs: Date.now() + 60 * 1000 }); // inside the 5min buffer → refresh wants to fire
+    const runRefresh = async (prep) => {
+        _httpsCallCount = 0;
+        _bridgeResult = { success: true };
+        _prepareRefreshResult = prep;
+        installHttpsMock({ statusCode: 200, body: { access_token: 'n.e.w', refresh_token: 'r', expires_in: 21600 } });
+        const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0' });
+        xai._resetErrorStateForTests();
+        xai._setStateForTests(near());
+        await xai.ensureFreshToken(); // proactive path swallows a refusal/throw
+        restoreHttps();
+        return _httpsCallCount;
+    };
+
+    ok('prepare-refresh Ok → the refresh POST proceeds', (await runRefresh({ success: true })) === 1);
+    ok('prepare-refresh Fenced (a stop is in progress) → NO token POST', (await runRefresh({ success: false, fenced: true })) === 0);
+    ok('prepare-refresh Conflict (superseded epoch) → NO token POST', (await runRefresh({ success: false, code: 'XAI_OAUTH_EPOCH_CONFLICT', currentEpoch: 9 })) === 0);
+    ok('prepare-refresh Unsafe (rotation already in flight) → NO second token POST', (await runRefresh({ success: false, unsafe: true })) === 0);
+    ok('prepare-refresh Dead (reauth/tombstone family) → NO token POST', (await runRefresh({ success: false, dead: true })) === 0);
+
+    // Reset the gate default so later tests are unaffected.
+    _prepareRefreshResult = { success: true };
+}
+
 (async function run() {
     try {
+        await testPrepareRefreshGate();
         await testDurabilitySignalsAndNotifyRetry();
         await testRefreshSingleFlightAndPersist();
         await testRefreshMintStateD3();

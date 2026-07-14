@@ -125,23 +125,23 @@ class XaiSignInRestartDurabilityTest {
     }
 
     @Test
-    fun `durability gate requests the fast durabilityOnly flush, never the summary-blocking full flush`() {
-        // A freshly-signed-in family (state after XaiOAuthActivity's token exchange) → the
-        // sign-in restart runs the pre-stop gate. The gate must ask Node for the durability answer
-        // WITHOUT the summary, so a slow summary can never time its round out to null → fail-close.
+    fun `durability gate resolves a fresh sign-in from the durable store with NO Node round-trip`() {
+        // The soak-brick regression, now under the stop-fence protocol: a freshly-signed-in family
+        // (state after XaiOAuthActivity's token exchange) with NO rotation in flight. The gate arms
+        // the stop fence + probes the durable rotation marker — a pure sidecar-locked store op —
+        // and finds "fenced + nothing in flight = positively safe". So it NEVER contacts Node and
+        // can NEVER fail-close on a null/slow control probe (the exact soak brick). Independent of
+        // :node reachability, and org.json is not on the path at all.
         val signIn = XaiOAuthTokenStore.signIn("enc-access", "enc-refresh", "enc-email", "2099-01-01T00:00:00Z")
         assertTrue("sign-in must persist a live family", signIn is XaiOAuthTokenStore.Result.Ok)
 
-        XaiOAuthDurabilityGate.ensureDurableBeforeStop()
+        val durable = XaiOAuthDurabilityGate.ensureDurableBeforeStop()
 
-        assertTrue("gate must reach the fake control server at least once", requests.isNotEmpty())
+        assertTrue("gate must report durable for a safe fresh sign-in", durable)
+        assertFalse("REGRESSION: a fresh sign-in with nothing in flight must NEVER be bricked", XaiOAuthTokenStore.read().reauthRequired)
         assertTrue(
-            "REGRESSION: every gate flush must use the fast durabilityOnly path — a summary-blocking " +
-                "full flush is what let a slow summary null the gate and brick a valid sign-in.",
-            requests.all { it.contains("\"durabilityOnly\":true") },
+            "the gate must decide a safe family from the durable store alone — NO drain round-trip (was: $requests)",
+            requests.isEmpty(),
         )
-        // (The gate still ends up marking reauth HERE only because org.json is stubbed so the fast
-        //  diskUnsafe:false answer is unparseable in-JVM → null → fail-close. That is a unit-test
-        //  artifact, not the on-device behavior; see the class KDoc + the Node behavioral test.)
     }
 }

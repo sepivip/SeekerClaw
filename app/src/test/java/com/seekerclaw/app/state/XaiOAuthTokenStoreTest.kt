@@ -212,4 +212,103 @@ class XaiOAuthTokenStoreTest {
         assertEquals("acc2", XaiOAuthTokenStore.read().accessTokenEnc)
         assertEquals(2L, XaiOAuthTokenStore.read().epoch)
     }
+
+    // ---- BAT-1155 stop-fence protocol -----------------------------------------
+
+    @Test
+    fun `signIn resets both stop-fence markers`() {
+        val r1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp"))
+        assertEquals("fresh family unarmed", -1L, r1.rotationInFlightEpoch)
+        assertEquals("fresh family unfenced", -1L, r1.stopFenceEpoch)
+    }
+
+    @Test
+    fun `prepareRefresh arms the marker then returns Unsafe on a second call (no double-POST)`() {
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        assertTrue("first prepare arms the marker", XaiOAuthTokenStore.prepareRefresh(1L) is XaiOAuthTokenStore.Result.Ok)
+        assertEquals(1L, XaiOAuthTokenStore.read().rotationInFlightEpoch)
+        assertTrue(
+            "an already-armed marker (a prior POST timed out/5xx'd, marker retained) must reject a second prepare",
+            XaiOAuthTokenStore.prepareRefresh(1L) is XaiOAuthTokenStore.Result.Unsafe,
+        )
+    }
+
+    @Test
+    fun `prepareRefresh is Dead for a reauth family and Fenced under a stop`() {
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        ok(XaiOAuthTokenStore.markReauth(1L))
+        assertTrue("a reauth family → Dead (no POST)", XaiOAuthTokenStore.prepareRefresh(1L) is XaiOAuthTokenStore.Result.Dead)
+
+        ok(XaiOAuthTokenStore.signIn("acc2", "ref2", "email", "exp")) // epoch 2, live
+        ok(XaiOAuthTokenStore.armStopFenceAndProbeRotation(2L))
+        assertTrue("a fenced epoch → Fenced (no POST)", XaiOAuthTokenStore.prepareRefresh(2L) is XaiOAuthTokenStore.Result.Fenced)
+    }
+
+    @Test
+    fun `prepareRefresh Conflicts on a superseded epoch`() {
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        ok(XaiOAuthTokenStore.signIn("acc2", "ref2", "email", "exp")) // epoch 2 supersedes
+        val r = XaiOAuthTokenStore.prepareRefresh(1L) // Node still thinks it is epoch 1
+        assertTrue(r is XaiOAuthTokenStore.Result.Conflict)
+        assertEquals(2L, (r as XaiOAuthTokenStore.Result.Conflict).currentEpoch)
+    }
+
+    @Test
+    fun `rotate rebases an armed stop fence forward and clears the rotation marker`() {
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        ok(XaiOAuthTokenStore.prepareRefresh(1L)) // rotationInFlightEpoch=1 (refresh authorized)
+        val armed = ok(XaiOAuthTokenStore.armStopFenceAndProbeRotation(1L)) // stop arms the fence at 1
+        assertEquals("fence armed on the live epoch", 1L, armed.stopFenceEpoch)
+        assertEquals("probe sees the in-flight rotation", 1L, armed.rotationInFlightEpoch)
+        // The already-authorized rotation completes: rotate must REBASE the fence to the new epoch
+        // (amendment 1) so a completed-safe rotation never drops the fence before teardown.
+        val rot = ok(XaiOAuthTokenStore.rotate(1L, "acc2", "ref2", "exp2"))
+        assertEquals("epoch advanced", 2L, rot.epoch)
+        assertEquals("stop fence rebased to the new epoch", 2L, rot.stopFenceEpoch)
+        assertEquals("rotation marker cleared", -1L, rot.rotationInFlightEpoch)
+    }
+
+    @Test
+    fun `markReauthIfRotationInFlight marks when armed, is Safe when cleared`() {
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        ok(XaiOAuthTokenStore.prepareRefresh(1L))
+        assertTrue("armed marker → conditional mark lands", XaiOAuthTokenStore.markReauthIfRotationInFlight(1L) is XaiOAuthTokenStore.Result.Ok)
+        assertTrue("family reauth", XaiOAuthTokenStore.read().reauthRequired)
+
+        // clear-vs-mark race: a proven-not-sent clear before the conditional mark → Safe, no brick.
+        ok(XaiOAuthTokenStore.signIn("acc2", "ref2", "email", "exp")) // epoch 2, fresh live
+        ok(XaiOAuthTokenStore.prepareRefresh(2L))
+        ok(XaiOAuthTokenStore.clearRotationInFlight(2L))
+        assertTrue("cleared marker → Safe (family live, no brick)", XaiOAuthTokenStore.markReauthIfRotationInFlight(2L) is XaiOAuthTokenStore.Result.Safe)
+        assertFalse("family stays live", XaiOAuthTokenStore.read().reauthRequired)
+    }
+
+    @Test
+    fun `markReauthNotified PRESERVES the rotation marker`() {
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        ok(XaiOAuthTokenStore.prepareRefresh(1L)) // rotationInFlightEpoch=1
+        ok(XaiOAuthTokenStore.markReauthNotified(1L)) // amendment 3: must NEVER clear the safety marker
+        assertEquals("the notify path must not erase the rotation marker", 1L, XaiOAuthTokenStore.read().rotationInFlightEpoch)
+    }
+
+    @Test
+    fun `markReauth clears the rotation marker (durable reauth supersedes it)`() {
+        ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")) // epoch 1
+        ok(XaiOAuthTokenStore.prepareRefresh(1L))
+        ok(XaiOAuthTokenStore.markReauth(1L))
+        assertEquals("durable reauth clears the marker (a reconnect mints a fresh family)", -1L, XaiOAuthTokenStore.read().rotationInFlightEpoch)
+        assertTrue(XaiOAuthTokenStore.read().reauthRequired)
+    }
+
+    @Test
+    fun `a record missing the stop-fence fields decodes to -1 on upgrade (never spuriously armed)`() {
+        // Pre-upgrade file with no rotationInFlightEpoch / stopFenceEpoch keys.
+        File(workDir, XaiOAuthTokenStore.FILE_NAME).writeText(
+            """{"accessTokenEnc":"acc","refreshTokenEnc":"ref","emailEnc":"e","expiresAt":"x","reauthRequired":false,"reauthNotifiedEpoch":-1,"epoch":5,"tombstone":false}""",
+        )
+        val rec = XaiOAuthTokenStore.read()
+        assertEquals("epoch preserved on upgrade", 5L, rec.epoch)
+        assertEquals("missing marker decodes to -1 (never armed — -1 == epoch is impossible)", -1L, rec.rotationInFlightEpoch)
+        assertEquals("missing fence decodes to -1", -1L, rec.stopFenceEpoch)
+    }
 }

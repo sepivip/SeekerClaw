@@ -199,3 +199,42 @@ Contract v4 was design-signed; Codex's subsequent **code** review returned NO SI
 **Coverage:** behavioral proof in `tests/nodejs-project/shutdown-flush-durability-only.test.js` (durabilityOnly returns `diskUnsafe` fast and NEVER invokes the slow summary; a full flush STILL runs it); Kotlin request-contract proof in `XaiSignInRestartDurabilityTest` (the gate + `NodeControlClient` request the `durabilityOnly` path, never the summary-blocking full flush). `org.json` is stubbed in JVM unit tests, so the Kotlin response-parse (the final link) is exercised on-device, not in-JVM. Logcat-visible `Log.w` instrumentation added at every `markReauth` decision (gate null-branch, onDestroy guard) for device triage.
 
 *Any change here re-touches auth/shutdown/store/durability semantics → requires Codex re-review before merge.*
+
+## 10. Stop-fence durability protocol (device soak, 2026-07-14) — supersedes the reachability-gated design
+
+The §9.6 `durabilityOnly` fix was necessary but NOT sufficient: the sign-in restart can hit **genuine** `:node` control-plane unreachability (mid-kill/restart), and the gate/onDestroy guard fail-closed a **fresh** sign-in on that null probe — a false brick. Two Codex-rejected intermediates (a family-property `freshSignIn`, then a one-shot exact-epoch marker) proved that *any* control-plane-dependent decision is racy on the null branch (consume-vs-persist). **Codex-approved final design (Linear BAT-1155 threads):** decide durability entirely on **durable store state**.
+
+### Two store fields (`XaiOAuthTokens`, `Long = -1L`, armed ≡ `field == epoch` → self-disarms on any epoch advance)
+- `rotationInFlightEpoch` — a refresh POST for this epoch's on-disk refresh token has been initiated → potentially-consumed → feeds `isDiskUnsafe`.
+- `stopFenceEpoch` — a controlled stop is in progress for this epoch → no refresh may begin.
+
+`signInRestartEpoch` was **dropped** (Codex-approved): the fence, being positive safety evidence, subsumes the sign-in-restart exemption *and* fixes the pre-existing "healthy rotated family false-bricks on an unreachable stop." Upgrade-safe (`ignoreUnknownKeys` + `encodeDefaults`): a pre-upgrade record decodes both fields to `-1` (never spuriously armed).
+
+### `prepareRefresh(expectedEpoch)` — the single atomic pre-POST gate (`:node` funnels every rotation through it, before the T0 POST). Priority order under the sidecar lock:
+1. epoch mismatch → `Conflict` (superseded; Node discards, **does NOT adopt** the winner's epoch);
+2. tombstone/reauth → `Dead` (terminal, no POST);
+3. `stopFenceEpoch == epoch` → `Fenced` (no POST; keep the in-mem token);
+4. **`rotationInFlightEpoch == epoch` (already armed) → `Unsafe`** (a prior POST may have consumed the token; a second POST is forbidden — Codex blocker) — Node latches this;
+5. else arm `rotationInFlightEpoch = epoch` → `Ok`, POST may begin. At most one concurrent/cross-process `prepareRefresh(E)` returns `Ok`.
+
+### The stop side (`armStopFenceAndProbeRotation`) ⇄ the refresh side (`prepareRefresh`) are single sidecar-locked mutations, so they serialize:
+- **prepare wins** → `rotationInFlightEpoch=E` → the stop's arm/probe sees it → conditional fail-close;
+- **arm wins** → `stopFenceEpoch=E`, probes `rotationInFlightEpoch==-1` → pristine → safe → the refresh sees `Fenced` → no POST.
+Every interleaving is one of these — **independent of control-plane reachability**. An ungraceful kill (neither gate nor onDestroy) is still covered: the durable pre-POST marker ⇒ boot converts to reauth.
+
+### Mutation rules (explicit; Kotlin `.copy()` inherits otherwise)
+`signIn`/`signOut`/`migrate`/`FAIL_CLOSED` → both `-1`. `rotate` clears the marker and **REBASES** an armed fence forward to the new epoch (amendment 1 — a refresh authorized before the fence persisted safely must not drop the fence). `markReauth` clears the marker (durable reauth supersedes it). `markReauthNotified` **PRESERVES** the marker (amendment 3 — the notify path must never erase the safety marker before a durable reauth lands).
+
+### Gate + onDestroy (amendment 2 — the fence is *positive* safety in both paths)
+`ensureDurableBeforeStop`: not-live → durable; else `armStopFenceAndProbeRotation` (retries to fence the winning live epoch on a concurrent advance) → `rotationInFlightEpoch != epoch` ⇒ **positively safe, return true even on a null control path**; `rotationInFlightEpoch == epoch` ⇒ drain via a `durabilityOnly` flush (the store is authoritative, re-read after each round) then a **conditional** `markReauthIfRotationInFlight` (marks ONLY if still armed — a proven-not-sent clear returns `Safe`, never bricking a now-safe family — Codex major). onDestroy delegates to the same gate (unified).
+
+### Boot (amendment 3) — `SeekerClawService.reconcileXaiOAuthOnBoot`, BEFORE `writeConfigJson`/provider activation
+Read store → if a rotation marker is armed, durably CAS-convert it to `reauthRequired` → clear a stale stop fence. `ConfigManager.loadConfig` additionally blanks the emitted token when the marker is armed (fail-safe belt for a conversion that could not persist). `markReauthNotified` must never clear the marker.
+
+### Codex's 5 locked decisions
+1. Marker clear is conservative — only a **provably-not-sent** transport error (`ECONNREFUSED/ENOTFOUND/EAI_AGAIN` before write). 2. A 5xx / timeout / any received response is **potentially consumed** → retain the marker, never retry from the same disk token. 3. **No fence TTL** — explicit durable clear on abort/boot. 4. `/shutdown/flush` does NOT mutate the store. 5. A single atomic `prepareRefresh`; `Fenced`/`Conflict`/`Dead`/`Unsafe`/`Failed` all = no external POST; `Conflict` never adopts.
+
+### Coverage (Codex's ~20 required regressions)
+`XaiOAuthTokenStoreTest` (prepareRefresh order incl. already-armed→`Unsafe`, rotate-rebase, `markReauthIfRotationInFlight` Ok-vs-`Safe`, `markReauthNotified` preserves, upgrade→-1), `XaiOAuthDurabilityGateTest` (fenced+no-in-flight = safe on the null path; in-flight → conditional fail-close), `XaiSignInRestartDurabilityTest` (a fresh sign-in resolves from the durable store with NO Node round-trip), `xai.test.js` (Ok→POST; Fenced/Conflict/Unsafe/Dead→no POST), `XaiTwoProcessRaceTest` (prepareRefresh ⇄ armStopFence complete-state disjunction across two real JVMs). The final Kotlin↔Node HTTP link is device-exercised (org.json stubbed in-JVM). **Follow-up (coupled, diagnostics-only — NOT a correctness gate):** a live `tests/live/xai` probe of xAI's actual revoke response to broaden the reLogin latch.
+
+*Touches auth/shutdown/store/durability semantics → requires Codex diff re-review before merge.*

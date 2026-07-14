@@ -220,4 +220,29 @@ class XaiTwoProcessRaceTest {
         release.writeText("go") // let P1 release + exit
         if (!p1.waitFor(30, TimeUnit.SECONDS)) { p1.destroyForcibly(); fail("lock-holder P1 hung (>30s)") }
     }
+
+    // ---- BAT-1155 stop-fence: the two operations whose sidecar-lock serialization IS the protocol ----
+
+    @Test
+    fun `concurrent prepareRefresh vs armStopFence — either the refresh is fenced or the stop observes it (never both-clean)`() {
+        run("signin", "accA", "refA", "em", "e") // live family, epoch 1, no marker/fence
+        val (a, b) = race(listOf("armstopfence", "1"), listOf("preparerefresh", "1"))
+        val armLine = a.first(); val prepLine = b.first()
+        assertEquals("armStopFence always arms the live epoch", "OK", field(armLine, "outcome"))
+        assertEquals("the fence is armed on the live epoch", "1", field(armLine, "fence"))
+        val armRotInFlight = field(armLine, "rotInFlight")
+        val prepOutcome = field(prepLine, "outcome")
+
+        // The sidecar lock serializes the two ops, so exactly one of these SAFE interleavings holds
+        // (Codex #15 — assert the COMPLETE state, not merely "never both succeed"):
+        //   • stop fenced first → the refresh is refused (FENCED) and the stop saw no in-flight (rotInFlight=-1);
+        //   • refresh marked first → the refresh armed the marker (OK) and the stop OBSERVED it (rotInFlight=1).
+        // The dangerous "both clean" — a refresh Ok while the stop's probe saw no in-flight — is impossible.
+        val stopFencedFirst = prepOutcome == "FENCED" && armRotInFlight == "-1"
+        val refreshMarkedFirst = prepOutcome == "OK" && armRotInFlight == "1"
+        assertTrue(
+            "must land in exactly one safe interleaving (armRotInFlight=$armRotInFlight prep=$prepOutcome)",
+            stopFencedFirst != refreshMarkedFirst && (stopFencedFirst || refreshMarkedFirst),
+        )
+    }
 }

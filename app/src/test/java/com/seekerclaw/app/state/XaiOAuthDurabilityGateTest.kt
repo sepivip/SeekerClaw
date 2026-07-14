@@ -44,17 +44,32 @@ class XaiOAuthDurabilityGateTest {
         return (r as XaiOAuthTokenStore.Result.Ok).record
     }
 
-    // ---- fail-closed gate behavior --------------------------------------------
+    // ---- stop-fence gate behavior (BAT-1155) ----------------------------------
 
     @Test
-    fun `gate fail-closes a live family to reauth when Node cannot confirm safe`() {
-        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch // live, epoch 1
+    fun `gate is positively safe (NO brick) for a live family with no rotation in flight`() {
+        // The soak-brick regression: a fresh sign-in with no rotation marker, Node unreachable.
+        // The new gate arms the stop fence + probes the durable marker (a pure store op) — fenced +
+        // nothing-in-flight is POSITIVELY safe, so it must NOT fail-close on the null control path.
+        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch // live, epoch 1, no marker
         val durable = XaiOAuthDurabilityGate.ensureDurableBeforeStop()
-        assertTrue("gate must report durable once the fail-closed mark lands", durable)
+        assertTrue("fenced + no rotation in flight = positively safe, even with Node unreachable", durable)
         val rec = XaiOAuthTokenStore.read()
-        assertTrue("live family with an unconfirmed flush must be CAS-marked reauth", rec.reauthRequired)
-        assertEquals("markReauth is an annotation — epoch stays stable", e1, rec.epoch)
-        assertEquals("token material is NOT wiped by the mark (still on disk, but now dead-flagged)", "acc", rec.accessTokenEnc)
+        assertFalse("a live family with nothing consumed must NOT be bricked (the soak brick)", rec.reauthRequired)
+        assertEquals("armStopFence is epoch-stable — epoch unchanged", e1, rec.epoch)
+        assertEquals("the stop fence is armed on the live epoch", e1, rec.stopFenceEpoch)
+        assertEquals("token material intact", "acc", rec.accessTokenEnc)
+    }
+
+    @Test
+    fun `gate conditionally fail-closes a live family with a rotation marker armed and Node unreachable`() {
+        val e1 = ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp")).epoch // epoch 1
+        ok(XaiOAuthTokenStore.prepareRefresh(e1)) // arm rotationInFlightEpoch=1 — a refresh POST is "in flight"
+        val durable = XaiOAuthDurabilityGate.ensureDurableBeforeStop()
+        assertTrue("gate reports durable once the conditional mark lands", durable)
+        val rec = XaiOAuthTokenStore.read()
+        assertTrue("an in-flight rotation the unreachable Node can't drain must fail-close to reauth", rec.reauthRequired)
+        assertEquals("markReauthIfRotationInFlight is epoch-stable", e1, rec.epoch)
     }
 
     @Test

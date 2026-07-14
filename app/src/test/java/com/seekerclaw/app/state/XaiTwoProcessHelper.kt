@@ -48,6 +48,10 @@ object XaiTwoProcessHelper {
             "markreauth" -> render("markreauth", XaiOAuthTokenStore.markReauth(args[2].toLong()))
             "marknotified" -> render("marknotified", XaiOAuthTokenStore.markReauthNotified(args[2].toLong()))
             "migrate" -> render("migrate", XaiOAuthTokenStore.migrateIfEmpty(args[2], args[3], args[4], args[5]))
+            // BAT-1155 stop-fence: the two operations whose sidecar-lock serialization is the whole
+            // protocol — a cross-process prepareRefresh (refresh side) vs armStopFence (stop side).
+            "preparerefresh" -> render("preparerefresh", XaiOAuthTokenStore.prepareRefresh(args[2].toLong()))
+            "armstopfence" -> render("armstopfence", XaiOAuthTokenStore.armStopFenceAndProbeRotation(args[2].toLong()))
             "read" -> {
                 val r = XaiOAuthTokenStore.read()
                 "RESULT op=read outcome=OK epoch=${r.epoch} tomb=${r.tombstone} reauth=${r.reauthRequired} " +
@@ -81,10 +85,16 @@ object XaiTwoProcessHelper {
 
     private fun render(op: String, r: XaiOAuthTokenStore.Result): String = when (r) {
         is XaiOAuthTokenStore.Result.Ok ->
-            "RESULT op=$op outcome=OK epoch=${r.record.epoch} tomb=${r.record.tombstone} acc=${r.record.accessTokenEnc}"
+            "RESULT op=$op outcome=OK epoch=${r.record.epoch} tomb=${r.record.tombstone} acc=${r.record.accessTokenEnc}" +
+                " rotInFlight=${r.record.rotationInFlightEpoch} fence=${r.record.stopFenceEpoch}"
         is XaiOAuthTokenStore.Result.Conflict ->
             "RESULT op=$op outcome=CONFLICT currentEpoch=${r.currentEpoch}"
         is XaiOAuthTokenStore.Result.Failed ->
             "RESULT op=$op outcome=FAILED reason=${r.reason.replace(' ', '_')}"
+        // BAT-1155 stop-fence protocol results (render for the two-JVM race assertions).
+        is XaiOAuthTokenStore.Result.Fenced -> "RESULT op=$op outcome=FENCED"
+        is XaiOAuthTokenStore.Result.Dead -> "RESULT op=$op outcome=DEAD"
+        is XaiOAuthTokenStore.Result.Unsafe -> "RESULT op=$op outcome=UNSAFE"
+        is XaiOAuthTokenStore.Result.Safe -> "RESULT op=$op outcome=SAFE"
     }
 }
