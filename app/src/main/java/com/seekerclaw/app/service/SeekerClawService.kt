@@ -1049,8 +1049,10 @@ class SeekerClawService : Service() {
          * Codex re-review blocker: start renewing the Node quiesce lease from an independent daemon
          * thread. Called the instant durability is proven (before finishStop), it keeps the lease
          * armed across the main-looper handoff to onDestroy/kill — so quiescence can't lapse and
-         * admit a rotation in that window. Self-terminates once :node stops answering (killed) or
-         * the iteration cap elapses; also cancelled by the next lifecycle op ([stopLeaseRenewal]).
+         * admit a rotation in that window. LIFECYCLE-bound: it runs until an EXPLICIT
+         * [stopLeaseRenewal] (or a newer lifecycle supersedes its generation) or the process dies.
+         * It does NOT exit on a renew POST failure or any iteration/time cap — a failed POST is not
+         * proof :node is dead, so a transient outage must not let the lease lapse mid-Stop.
          */
         internal fun startLeaseRenewal() {
             val myGen = leaseRenewGen.incrementAndGet() // claim a generation; supersedes any prior renewer
