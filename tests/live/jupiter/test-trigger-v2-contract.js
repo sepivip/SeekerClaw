@@ -13,7 +13,7 @@
 // pubkey + a Jupiter API key. Creating/listing/cancelling orders needs a JWT
 // (requires signing) and stays in the device checklist.
 //
-//   JUPITER_API_KEY=<key> node testing/test-trigger-v2-contract.js
+//   JUPITER_API_KEY=<key> node tests/live/jupiter/test-trigger-v2-contract.js
 //   [JUPITER_PROBE_PUBKEY=<base58>]   # optional; any valid pubkey works
 //
 // Exit 0 = challenge accepted by our allowlist (or SKIP: no key). Exit 1 = the
@@ -36,7 +36,8 @@ if (!KEY) {
 // challenge to this key; on-chain funding is irrelevant). USDC mint by default.
 const PUBKEY = process.env.JUPITER_PROBE_PUBKEY || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-const BUNDLE = path.resolve(__dirname, '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
+// tests/live/jupiter/ → up 3 to repo root, then into the bundle.
+const BUNDLE = path.resolve(__dirname, '..', '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
 
 // Mock config.js (heavy load-time side effects) so we can require the adapter
 // just for its exported validators. We hit the network with raw https below.
