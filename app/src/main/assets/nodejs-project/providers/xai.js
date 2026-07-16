@@ -318,6 +318,53 @@ function _getStateForTests() {
     };
 }
 
+// BAT-1172: xAI's REST /v1/chat/completions returns a FLAT error shape
+// `{ code: "<machine-code>", error: "<human message string>" }` — NOT the nested
+// OpenAI/Anthropic `{ error: { type, code, message } }`. classifyError used to read
+// `error.message` (always undefined here) and hallucinated copy from the HTTP status
+// alone. Read BOTH shapes so we key on xAI's REAL code + message. (WebSocket/Responses
+// mode uses the nested shape, so tolerate it too.)
+function _xaiError(data) {
+    if (!data) return { code: '', message: '' };
+    if (typeof data === 'string') return { code: '', message: data };
+    if (Buffer.isBuffer(data)) return { code: '', message: data.toString('utf8') };
+    const err = data.error;
+    let code = '';
+    let message = '';
+    if (typeof err === 'string') {                    // flat REST: `error` IS the message
+        message = err;
+        code = typeof data.code === 'string' ? data.code : '';
+    } else if (err && typeof err === 'object') {      // nested: `error.{code,message}`
+        message = typeof err.message === 'string' ? err.message : '';
+        code = (typeof err.code === 'string' && err.code) || (typeof data.code === 'string' && data.code) || '';
+    } else {                                          // no `error` field
+        message = typeof data.message === 'string' ? data.message : '';
+        code = typeof data.code === 'string' ? data.code : '';
+    }
+    return { code: code || '', message: message || '' };
+}
+
+// Neutralize markdown/HTML formatting from a provider-controlled message before
+// showing it to the user, then bound the length. Strip only the chars that open
+// formatting or inject links/tags (`* _ \` ~ | [ ] < >`) — KEEP ordinary punctuation
+// (`. - : / ( )`) so model IDs (grok-4.5) and hosts (console.x.ai) stay readable. The
+// old inline strip removed `.`/`-` too, mangling exactly the identifiers we want to show.
+function _errReason(message) {
+    return (typeof message === 'string' ? message : '')
+        .replace(/[*_`~|\[\]<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+// Is this xAI error fundamentally an AUTH/credential failure (vs a genuine
+// permission/entitlement or request error)? Keeps us from telling an OAuth user to
+// "add an xAI API key" for what is really a sign-in problem (xAI's own copy is
+// api-key-centric even on the OAuth path). BAT-1172: narrowed to concrete auth phrases —
+// NO bare `\bapi key\b`, so a genuine entitlement 403 that merely says "requires an API key"
+// is NOT misrouted to reconnect (only "incorrect/invalid api key" — a real credential error — is).
+function _xaiAuthReason(code, message) {
+    return /unauthenticated|bad[ _-]?credential|no[ _-]?credential|(incorrect|invalid)[ _-]?(api[ _-]?key|token)|expired/i
+        .test(`${code || ''} ${message || ''}`);
+}
+
 function classifyError(status, data) {
     if (status === 401) {
         // BAT-1155 D3: a dead OAuth family (revoked / persisted reauth) never attempts a
@@ -391,11 +438,37 @@ function classifyError(status, data) {
                 userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
             };
         }
+        // BAT-1172: terminal 403 (not refreshable, not first-touch grace, not known-dead).
+        // Per xAI docs a 403 is a permissions/entitlement gate. Read xAI's REAL {code,error}
+        // and surface the actual reason instead of fabricating "subscription tier / add an
+        // API key" (that copy was wrong — the tier was fine in the BAT-1155 incident). Log the
+        // real code + sanitized reason so an unmapped in-the-wild 403 code gets precise copy later.
+        const { code: c403, message: m403 } = _xaiError(data);
+        const reason403 = _errReason(m403);
+        log(`[xAI] 403 forbidden: code=${c403 || '-'} reason=${reason403 || '(none)'}`, 'WARN');
+        // BAT-1172 D3 (Codex ruling: Option B). An auth-ish terminal 403 (xAI says
+        // "unauthenticated"/"bad credentials" while our clock still thinks the token is live —
+        // a server-side revoke not yet reflected, or clock skew) steers the COPY toward
+        // reconnect, but STAYS type:'provisioning' — NOT 'reauth'. 'reauth' participates in
+        // ai.js's D10 session-expiry counting + dead-family notify-once; latching it from a
+        // not-dead 403 would count toward _sessionExpired and suppress the LATER genuine
+        // dead-family reconnect notice (guarded by !_sessionExpired). 'reauth' stays reserved
+        // for known-dead durable state (handled above at the _refreshDead branch). We keep the
+        // real reason OUT of the auth-ish OAuth copy (it's in the WARN log for ops) so xAI's
+        // api-key-centric phrasing can never reach an OAuth user; a genuine (non-auth) 403
+        // surfaces xAI's real reason verbatim.
+        const authish403 = isOAuth && _xaiAuthReason(c403, m403);
         return {
             type: 'provisioning', retryable: false,
             userMessage: isOAuth
-                ? 'Your Grok subscription tier doesn\'t include API access — add an xAI API key instead'
-                : 'Your xAI API key doesn\'t have access to this model or endpoint. Check your plan at console.x.ai.'
+                ? (authish403
+                    ? 'Your Grok sign-in may need reconnecting — open Settings > AI Provider > xAI.'
+                    : (reason403
+                        ? `Grok denied the request: ${reason403} — if this keeps happening, reconnect xAI in Settings.`
+                        : 'Grok denied the request (403). Your Grok access may be limited — try reconnecting xAI in Settings.'))
+                : (reason403
+                    ? `xAI denied the request: ${reason403} Check your plan/permissions at console.x.ai.`
+                    : 'Your xAI API key doesn\'t have access to this model or endpoint. Check your plan at console.x.ai.')
         };
     }
     if (status === 402) {
@@ -410,8 +483,16 @@ function classifyError(status, data) {
         };
     }
     if (status === 429) {
-        const msg = data?.error?.message || '';
-        if (/quota|insufficient|credit/i.test(msg)) {
+        // BAT-1172: xAI's flat `{code, error:string}` never had `error.message`, so
+        // quota-vs-rate-limit always fell through to rate_limit (retry forever on a
+        // hard quota wall). Read the real message + code.
+        const { code: qCode, message: msg } = _xaiError(data);
+        // Genuine quota/credit signals only — NOT bare "limit" (would swallow a
+        // transient "rate limit exceeded" into a non-retryable quota wall). Codex: keep
+        // conservative — an unmatched 429 correctly stays retryable rate_limit rather than
+        // inventing a billing diagnosis. ('exhausted' dropped: unverified 429 shape, and
+        // "rate limit exhausted" phrasing would misclassify a transient throttle.)
+        if (/quota|insufficient|credit/i.test(`${qCode} ${msg}`)) {
             // Same mode-aware surface as 402 (console.x.ai is api-key-only).
             return {
                 type: 'quota', retryable: false,
@@ -437,13 +518,25 @@ function classifyError(status, data) {
             userMessage: 'xAI API is temporarily unavailable. Retrying...'
         };
     }
-    const rawReason = data?.error?.message || '';
-    const reason = rawReason.replace(/[*_`\[\]()~>#+\-=|{}.!]/g, '').slice(0, 200);
+    // BAT-1172: fallback for any unhandled status (incl. 400). Read xAI's REAL
+    // {code, error} — the old `data.error.message` was always undefined for xAI's
+    // flat shape, so every unmapped error degraded to a bare "Unexpected API error".
+    const { code: uCode, message: uMsg } = _xaiError(data);
+    // xAI's own copy is api-key-centric even on the OAuth path (e.g. a bad access
+    // token yields "Incorrect API key provided… obtain from console.x.ai"). Don't
+    // relay that to an OAuth user — an auth-ish error means reconnect, not "add a key".
+    if (isOAuth && _xaiAuthReason(uCode, uMsg)) {
+        return {
+            type: 'unknown', retryable: false,
+            userMessage: 'Can\'t reach Grok — your xAI sign-in may need reconnecting in Settings.'
+        };
+    }
+    const reason = _errReason(uMsg);
     return {
         type: 'unknown', retryable: false,
-        userMessage: reason.trim()
-            ? `API error (${status}): ${reason.trim()}`
-            : `Unexpected API error (${status}). Please try again.`
+        userMessage: reason
+            ? `xAI error (${status})${uCode ? ` [${uCode}]` : ''}: ${reason}`
+            : `Unexpected xAI error (${status}). Please try again.`
     };
 }
 
@@ -1179,4 +1272,8 @@ module.exports = {
     _resetErrorStateForTests,
     _setStateForTests,
     _getStateForTests,
+    // BAT-1172: shape-adapter internals, exposed for direct unit tests.
+    _xaiError,
+    _errReason,
+    _xaiAuthReason,
 };

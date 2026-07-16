@@ -240,7 +240,13 @@ function restoreHttps() { https.request = _origHttpsRequest; }
     const e403b = xai.classifyError(403, {});
     ok('403 (2nd): type is STILL NOT "auth" (C1)', e403b.type !== 'auth', e403b.type);
     ok('403 (2nd): retryable false — bounded to ONE retry then terminal', e403b.retryable === false);
-    ok('403 (2nd): terminal tier-gate userMessage', /subscription tier doesn't include API access — add an xAI API key/.test(e403b.userMessage), e403b.userMessage);
+    // BAT-1172: terminal 403 with no body must be TRUTHFUL — never fabricate a
+    // "subscription tier / add an xAI API key" gate (the tier was fine in the
+    // BAT-1155 incident; the message was hallucinated from the HTTP status alone).
+    ok('403 (2nd): terminal copy is truthful, NOT a fabricated tier-gate (BAT-1172)',
+        !/subscription tier|add an xAI API key/i.test(e403b.userMessage)
+        && /reconnect xAI in Settings|Grok access may be limited/i.test(e403b.userMessage),
+        e403b.userMessage);
 
     // A third 403 stays terminal (one-shot flag, not MAX_RETRIES).
     ok('403 (3rd): still terminal, still not auth', xai.classifyError(403, {}).retryable === false && xai.classifyError(403, {}).type !== 'auth');
@@ -276,6 +282,112 @@ function restoreHttps() { https.request = _origHttpsRequest; }
         /API key doesn't have access to this model or endpoint/.test(eak403.userMessage)
         && !/provisioning — retrying/.test(eak403.userMessage), eak403.userMessage);
     ok('403 (api_key, 2nd): stays terminal', xaiApi.classifyError(403, {}).retryable === false);
+})();
+
+// ── BAT-1172: xAI flat error-shape adapter ───────────────────────────────────
+// xAI's REST /v1/chat/completions returns a FLAT `{code, error:string}`, not the
+// nested OpenAI/Anthropic `{error:{type,code,message}}`. classifyError used to read
+// `error.message` (always undefined here) and hallucinated copy from the status.
+// These pin: (a) the extractor tolerates both shapes; (b) classifyError surfaces the
+// REAL reason; (c) an OAuth user is never told to "add an xAI API key".
+(function testXaiErrorShapeAdapter() {
+    console.log('\n── BAT-1172: flat {code,error} shape adapter ──');
+    const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+
+    // ---- _xaiError extractor: both shapes + degenerate inputs ----
+    const flat = xai._xaiError({ code: 'permission-denied', error: 'Access to grok-4.5 is not enabled for your team.' });
+    ok('_xaiError flat: reads top-level code', flat.code === 'permission-denied', flat.code);
+    ok('_xaiError flat: reads string error as message', /Access to grok-4.5/.test(flat.message), flat.message);
+
+    const nested = xai._xaiError({ error: { code: 'model_not_found', message: 'no such model', type: 'invalid_request_error' } });
+    ok('_xaiError nested: reads error.code', nested.code === 'model_not_found', nested.code);
+    ok('_xaiError nested: reads error.message', nested.message === 'no such model', nested.message);
+
+    ok('_xaiError string body → whole string is the message', xai._xaiError('502 Bad Gateway').message === '502 Bad Gateway');
+    ok('_xaiError Buffer body → decoded utf8 is the message', xai._xaiError(Buffer.from('502 Bad Gateway', 'utf8')).message === '502 Bad Gateway');
+    ok('_xaiError null → empty, no throw', xai._xaiError(null).code === '' && xai._xaiError(null).message === '');
+    ok('_xaiError {} → empty, no throw', xai._xaiError({}).code === '' && xai._xaiError({}).message === '');
+    // Defensive: a numeric `code` (spec says string) must not crash or leak a number into copy.
+    ok('_xaiError non-string code coerces to empty', xai._xaiError({ code: 42, error: 'x' }).code === '');
+
+    // ---- _xaiAuthReason: auth-ish vs genuine-permission (narrowed per Codex) ----
+    ok('_xaiAuthReason: unauthenticated code → true', xai._xaiAuthReason('unauthenticated:bad-credentials', 'Bad credentials.') === true);
+    ok('_xaiAuthReason: "Incorrect API key" → true', xai._xaiAuthReason('invalid-argument', 'Incorrect API key provided.') === true);
+    ok('_xaiAuthReason: genuine permission gate → false', xai._xaiAuthReason('permission-denied', 'Model not enabled for your team.') === false);
+    // Negative pin (Codex): a genuine entitlement 403 that merely mentions "api key" must NOT
+    // be misrouted to reconnect — only "incorrect/invalid api key" (a real credential error) is.
+    ok('_xaiAuthReason: "requires an API key" entitlement → false (no bare "api key" match)',
+        xai._xaiAuthReason('permission-denied', 'Access requires an xAI API key.') === false);
+
+    // ---- classifyError surfaces the REAL 403 reason (OAuth) ----
+    const x1 = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+    x1._resetErrorStateForTests();
+    x1.classifyError(403, { code: 'permission-denied', error: 'Access to grok-4.5 is not enabled for your team.' }); // burn the provisioning grace
+    const real403 = x1.classifyError(403, { code: 'permission-denied', error: 'Access to grok-4.5 is not enabled for your team.' });
+    ok('403 terminal: surfaces xAI\'s REAL reason', /Access to grok-4.5 is not enabled for your team/.test(real403.userMessage), real403.userMessage);
+    ok('403 terminal: no fabricated tier-gate / api-key advice to OAuth user',
+        !/subscription tier|add an xAI API key/i.test(real403.userMessage), real403.userMessage);
+
+    // ---- a 403 that is REALLY an auth failure (OAuth): Codex D3 Option B ----
+    // Stays type:'provisioning' — NOT 'reauth' (which participates in D10 session-expiry +
+    // dead-family notify; latching it from a not-dead 403 would suppress the later genuine
+    // dead-family reconnect notice). The auth-ish signal steers COPY to reconnect only.
+    const x2 = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+    x2._resetErrorStateForTests();
+    x2.classifyError(403, { code: 'unauthenticated:bad-credentials', error: 'Bad credentials.' }); // burn grace
+    const auth403 = x2.classifyError(403, { code: 'unauthenticated:bad-credentials', error: 'Bad credentials.' });
+    ok('403 auth-ish (OAuth): stays provisioning, NOT reauth (D3 Option B)', auth403.type === 'provisioning', auth403.type);
+    ok('403 auth-ish (OAuth): reconnect-flavored copy, never "API key"',
+        /reconnect/i.test(auth403.userMessage) && /Settings/i.test(auth403.userMessage) && !/api key/i.test(auth403.userMessage), auth403.userMessage);
+
+    // ---- 429 quota-detect now reads the flat shape ----
+    const x3 = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+    const quota429 = x3.classifyError(429, { code: 'resource-exhausted', error: 'Monthly quota exceeded.' });
+    ok('429 flat quota body → quota, NOT retryable', quota429.type === 'quota' && quota429.retryable === false, `${quota429.type}/${quota429.retryable}`);
+    const rate429 = x3.classifyError(429, { code: 'rate-limit', error: 'Too many requests, slow down.' });
+    ok('429 flat rate-limit body → still retryable rate_limit', rate429.type === 'rate_limit' && rate429.retryable === true, `${rate429.type}/${rate429.retryable}`);
+
+    // ---- unknown fallback (400) surfaces the real reason; OAuth auth-ish maps to reconnect ----
+    const x4api = loadXai({ authType: 'api_key', apiKey: 'xai-k' });
+    const badKey400 = x4api.classifyError(400, { code: 'invalid-argument', error: 'Incorrect API key provided.' });
+    ok('400 (api_key): surfaces real reason in fallback', /Incorrect API key provided/.test(badKey400.userMessage), badKey400.userMessage);
+
+    const x4oauth = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r' });
+    x4oauth._resetErrorStateForTests();
+    const badKey400oauth = x4oauth.classifyError(400, { code: 'invalid-argument', error: 'Incorrect API key provided.' });
+    ok('400 (OAuth, api-key-worded body): maps to reconnect, never relays "API key"',
+        /reconnect/i.test(badKey400oauth.userMessage) && !/API key/i.test(badKey400oauth.userMessage), badKey400oauth.userMessage);
+})();
+
+// ── BAT-1172: source pins the adversarial pass flagged (loggers + doc↔log coupling) ──
+// The two ai.js diagnostic loggers and the vision path can't be behavior-tested (they emit
+// via log() side-effects), so a revert to nested-only `error.message` would restore
+// `type=unknown code=- msgLen=0` for every xAI failure with ZERO test failures. Pin at source.
+(function testFlatShapeLoggerSourcePins() {
+    console.log('\n── BAT-1172: flat-shape logger + doc↔log source pins ──');
+    const aiSrc = fs.readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
+    const xaiSrc = fs.readFileSync(path.join(BUNDLE, 'providers', 'xai.js'), 'utf8');
+
+    // Both loggers must fall back to the flat shape: top-level `data.code` + string `error`.
+    // Count occurrences so BOTH sites (SessionSummary + chat) are covered, not just one.
+    const codeFallbacks = (aiSrc.match(/typeof (res\.data|d)\.code === 'string'/g) || []).length;
+    ok('ai.js: BOTH loggers read top-level data.code (flat) — 2 sites', codeFallbacks >= 2, `found=${codeFallbacks}`);
+    const errStrFallbacks = (aiSrc.match(/typeof (res\.data|d)\.error === 'string'/g) || []).length;
+    ok('ai.js: BOTH loggers read string data.error (flat) — 2 sites', errStrFallbacks >= 2, `found=${errStrFallbacks}`);
+    // Vision path reads the flat string error too (was `res.data?.error?.message` only).
+    ok('ai.js vision path: reads string res.data.error (flat)',
+        /typeof res\.data\.error === 'string' \? res\.data\.error/.test(aiSrc));
+
+    // DIAGNOSTICS.md tells operators to grep for this exact WARN line — pin that xai.js emits it,
+    // so the emitter and the playbook can't silently drift apart.
+    ok('xai.js emits the documented `[xAI] 403 forbidden: code=` WARN line',
+        /\[xAI\] 403 forbidden: code=/.test(xaiSrc));
+    const diagSrc = fs.readFileSync(path.join(BUNDLE, 'DIAGNOSTICS.md'), 'utf8');
+    ok('DIAGNOSTICS.md references the same `[xAI] 403 forbidden: code=` grep target',
+        /\[xAI\] 403 forbidden: code=/.test(diagSrc));
+    // And the fabricated tier-gate string is gone from the shipped bundle (Node side).
+    ok('xai.js no longer contains the fabricated "subscription tier" copy',
+        !/subscription tier doesn't include API access/.test(xaiSrc));
 })();
 
 // ── refreshOAuthToken: single-flight + await-persist + H1 registration ───────

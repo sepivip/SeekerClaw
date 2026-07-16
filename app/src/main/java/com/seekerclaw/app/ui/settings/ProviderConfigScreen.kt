@@ -1381,8 +1381,14 @@ private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
         val errorBody = try {
             (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
         } catch (_: Exception) { "" }
+        // BAT-1172: xAI REST returns a FLAT error shape `{code, error:"<string>"}`, NOT the
+        // nested `{error:{message}}` (OpenAI/Anthropic). The old nested-only parse was ALWAYS
+        // blank for xAI → the 403 branch below always fell through to fabricated tier-gate copy.
+        // Read both: nested `error.message` when `error` is an object, else the flat string `error`.
         val apiMessage = try {
-            JSONObject(errorBody).optJSONObject("error")?.optString("message", "") ?: ""
+            val json = JSONObject(errorBody)
+            if (json.optJSONObject("error") != null) json.optJSONObject("error")?.optString("message", "") ?: ""
+            else json.optString("error", "")
         } catch (_: Exception) { "" }
         val errorMessage = when {
             status == 401 -> apiMessage.ifBlank {
@@ -1390,10 +1396,11 @@ private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
                 else "Unauthorized — check your xAI API key"
             }
             status == 403 -> apiMessage.ifBlank {
-                // Path-specific: an OAuth user needs an API key (tier-gate); an api_key user
-                // already has one, so their 403 means the key lacks access/credits.
-                if (isOAuth) "Your Grok subscription tier doesn't include API access — add an xAI API key instead"
-                else "This API key lacks API access or credits — check your plan at console.x.ai"
+                // BAT-1172: no fabricated tier-gate. A 403 is a permissions/entitlement or auth
+                // response — xAI's real reason (parsed above) is surfaced when present; only an
+                // empty body falls back to this truthful, non-fabricated copy.
+                if (isOAuth) "Grok denied the request (403). If this persists, reconnect via Settings > AI Provider > xAI."
+                else "This xAI API key lacks access to that model or endpoint — check your plan at console.x.ai."
             }
             status == 429 -> "Rate limited — try again in a moment"
             status in 500..599 -> "xAI unavailable"
