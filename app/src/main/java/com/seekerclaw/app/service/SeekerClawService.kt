@@ -11,12 +11,15 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.seekerclaw.app.MainActivity
 import com.seekerclaw.app.R
 import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.state.XaiOAuthDurabilityGate
+import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
@@ -355,6 +358,11 @@ class SeekerClawService : Service() {
         val staleConfig = File(File(filesDir, "workspace"), "config.json")
         if (staleConfig.exists()) staleConfig.delete()
 
+        // BAT-1155 boot reconcile (amendment 3): convert an armed rotation marker to durable reauth
+        // and clear a stale stop fence — MUST run BEFORE writeConfigJson so the emitted token reflects
+        // the conversion (a potentially-consumed refresh token is never handed to the provider).
+        reconcileXaiOAuthOnBoot()
+
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
         // but writeConfigJson reads the XML file fresh on first access per process.
@@ -625,13 +633,20 @@ class SeekerClawService : Service() {
 
     override fun onDestroy() {
         LogCollector.append("[Service] Stopping Claw Engine...")
-        // BAT-525: flush Node BEFORE everything else. The bridge token
-        // and Node process must both still be alive for the loopback
-        // POST /shutdown/flush to land. This call is bounded
-        // (NodeControlClient timeouts ≤ 1750ms inside an outer 2000ms
-        // withTimeoutOrNull) and intentionally precedes scope cancel,
-        // observer stop, NodeBridge.stop, and clearBridgeToken below.
-        flushNodeBeforeProcessKill()
+        // BAT-525 / BAT-1155: flush Node BEFORE everything else — the bridge token + Node process
+        // must both still be alive for the loopback POST /shutdown/flush to land, and it precedes
+        // scope cancel / observer stop / NodeBridge.stop / clearBridgeToken. The work (the stop-fence
+        // durability gate = network I/O + a disk CAS drain, then a best-effort session summary) must
+        // NOT run on the service main thread (the gate's own off-main contract / StrictMode / ANR —
+        // CodeRabbit). Dispatch it to [stopExecutor] and bounded-WAIT here so the terminal killProcess
+        // below still happens only AFTER durability is resolved — or the bound elapses, in which case
+        // the durable fence/rotation marker already on disk protects the next boot regardless.
+        try {
+            stopExecutor.submit { flushNodeBeforeProcessKill() }
+                .get(ONDESTROY_FLUSH_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            LogCollector.append("[Shutdown] durability flush did not complete off-thread within ${ONDESTROY_FLUSH_WAIT_MS}ms (${e.javaClass.simpleName})", LogLevel.WARN)
+        }
         // Cancel the service scope before stopping the FileObserver
         // below. This stops any in-flight forwardNewNodeDebugLines or
         // observer reattach coroutines that would otherwise race
@@ -703,22 +718,53 @@ class SeekerClawService : Service() {
      * `/shutdown/flush` enforces — the flush would never have run
      * in production.
      */
-    private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_000L) {
-        if (!NodeBridge.isAlive()) return
-        val flushed = runBlocking {
-            withTimeoutOrNull(timeoutMs) {
-                NodeControlClient.flushShutdown()
-            }
-        } == true
-
-        if (flushed) {
-            LogCollector.append("[Shutdown] Node flush acknowledged")
-        } else {
-            LogCollector.append(
-                "[Shutdown] Node flush timed out or failed; continuing process kill",
-                LogLevel.WARN,
-            )
+    private fun flushNodeBeforeProcessKill(timeoutMs: Long = 2_500L) {
+        // (1) xAI OAuth durability (BAT-1155 stop-fence protocol). The gate decides on DURABLE STORE
+        //     state — arm the stop fence, probe the rotation marker, drain an in-flight rotation, and
+        //     conditionally fail-close — so it is correct even when :node is unreachable during
+        //     teardown (the original soak brick was fail-closing on a null control probe). This is the
+        //     TERMINAL path (we can't keep the service alive), so the boolean is ignored: the durable
+        //     fence / reauth mark it leaves is what the next boot honours. Idempotent with the pre-stop
+        //     gate — if stopWithDurability already resolved durability, this returns fast.
+        try {
+            XaiOAuthDurabilityGate.ensureDurableBeforeStop()
+        } catch (e: Exception) {
+            LogCollector.append("[Shutdown] xAI durability guard threw: ${e.message}", LogLevel.WARN)
         }
+        // (2) Best-effort session summary + SQL.js flush (BAT-525). NOT durability-critical — a slow or
+        //     failed summary is acceptable (the durable state above is independent of it). Skipped when
+        //     Node is already gone.
+        if (NodeBridge.isAlive()) {
+            runBlocking { withTimeoutOrNull(timeoutMs) { NodeControlClient.flushShutdown() } }
+        }
+    }
+
+    /**
+     * BAT-1155 boot reconcile (Codex amendment 3), run in the `:node` process BEFORE the config is
+     * emitted / the provider is activated:
+     *  1. If a rotation marker is armed for the current live epoch, a refresh POST was in flight when
+     *     the prior process died → the on-disk refresh token is POTENTIALLY CONSUMED → durably convert
+     *     it to `reauthRequired` (which also clears the marker) so the provider can never POST it.
+     *     (Belt: `ConfigManager.loadConfig` also blanks the token when the marker is armed, so even a
+     *     failed conversion emits no usable token this boot; the next boot re-tries.)
+     *  2. Clear a stale stop fence left by the prior stop generation so the reborn process is never
+     *     wedged (fences never carry across a process boundary).
+     */
+    private fun reconcileXaiOAuthOnBoot() {
+        if (!XaiOAuthTokenStore.isInitialized) return
+        val rec = XaiOAuthTokenStore.read()
+        val live = !rec.tombstone && !rec.reauthRequired && rec.accessTokenEnc.isNotEmpty()
+        if (live && rec.rotationInFlightEpoch == rec.epoch) {
+            when (val r = XaiOAuthTokenStore.markReauth(rec.epoch)) {
+                is XaiOAuthTokenStore.Result.Ok ->
+                    LogCollector.append("[Boot] xAI rotation marker armed at boot → durably converted to reauth (epoch=${r.record.epoch})", LogLevel.WARN)
+                is XaiOAuthTokenStore.Result.Conflict ->
+                    LogCollector.append("[Boot] xAI rotation marker: epoch advanced (${rec.epoch}→${r.currentEpoch}) — winning family intact", LogLevel.INFO)
+                else ->
+                    LogCollector.append("[Boot] xAI rotation marker conversion could not persist ($r) — loadConfig will still blank the token this boot", LogLevel.WARN)
+            }
+        }
+        XaiOAuthTokenStore.clearStopFence()
     }
 
     private fun createNotification(text: String): Notification {
@@ -758,18 +804,220 @@ class SeekerClawService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val SETUP_NOTIFICATION_ID = 2 // separate ID — persists after service stops
+        // onDestroy dispatches the terminal durability flush to [stopExecutor] and bounded-waits this
+        // long. Covers the worst case (gate BUDGET_MS 2500 + summary flush 2500) with margin; if it
+        // elapses, the durable on-disk fence/marker still protects the next boot.
+        private const val ONDESTROY_FLUSH_WAIT_MS = 6_000L
         private val restartHandler = Handler(Looper.getMainLooper())
+
+        // BAT-1155 blocker-1: the pre-stop durability gate does blocking loopback I/O
+        // (Node flush) + a disk CAS, so it MUST run off the main thread or it ANRs.
+        // Single-thread so concurrent Stop/Restart presses serialize instead of racing
+        // the store. Daemon so it never blocks process exit.
+        private val stopExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "xai-stop-durability").apply { isDaemon = true }
+        }
+
+        /**
+         * Max times a non-durable Stop keeps the service ALIVE and retries (Codex
+         * blocker-1: prefer keep-alive over killing a family we couldn't save). Bounded
+         * so a truly-broken disk can't wedge Stop forever — after this we OS-fallback stop.
+         */
+        private const val MAX_KEEPALIVE_STOP_ATTEMPTS = 2
+        private const val KEEPALIVE_RETRY_MS = 1_500L
+
+        /**
+         * Absolute ceiling on total [stopWithDurability] attempts, including the abandoned-stop
+         * fence-clear retries beyond [MAX_KEEPALIVE_STOP_ATTEMPTS] (BAT-1155 CodeRabbit round-2). A
+         * fence that cannot be cleared must NOT resume `:node` (a completing rotation would leave a
+         * live-but-fenced family); we retry instead — a marked reauth makes the retry resolve as a
+         * durable clean kill. Bounded so a broken disk can't retry forever; the ~15s quiesce-lease
+         * lapse is the ultimate backstop past this. Stays well under that lease at KEEPALIVE_RETRY_MS.
+         */
+        private const val MAX_STOP_ATTEMPTS = 6
+
+        /** Bounded best-effort /unquiesce retries for an abandoned Stop; the Node lease backstops the rest. */
+        private const val MAX_UNQUIESCE_ATTEMPTS = 5
+        private const val UNQUIESCE_RETRY_MS = 1_500L
+
+        // BAT-1155 Codex re-review blocker: renew the Node quiesce lease from an INDEPENDENT thread
+        // (not the main looper) from the moment durability is proven until kill, so a delayed
+        // main-looper handoff can't let the lease expire and admit a rotation before teardown.
+        // RENEW well under quiesce.js LEASE_MS (15s).
+        private const val LEASE_RENEW_MS = 5_000L
+        @Volatile private var leaseRenewMs = LEASE_RENEW_MS // shortened in tests to observe the cadence
+        internal fun setLeaseRenewMsForTest(ms: Long) { leaseRenewMs = ms }
+        // Renewal is LIFECYCLE-bound, not failure/time-bound: it runs until an EXPLICIT
+        // stopLeaseRenewal() (or a newer start) supersedes it, or the process dies (the thread is
+        // daemon). A failed renew POST is NOT evidence :node is dead — keep retrying so a transient
+        // outage can't let the lease lapse while teardown is still pending. A GENERATION token
+        // (not a reusable boolean) ensures a stale in-flight renewer can never observe a later
+        // "active" and rejoin a newer lifecycle.
+        private val leaseRenewGen = java.util.concurrent.atomic.AtomicInteger(0)
 
         fun start(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
+            // Cancel any lingering lease renewer (esp. from a restart's stop phase) BEFORE booting
+            // a new :node, so an old renewer can never re-quiesce the freshly-started process.
+            stopLeaseRenewal()
             val intent = Intent(context, SeekerClawService::class.java)
             context.startForegroundService(intent)
         }
 
+        /**
+         * User-initiated Stop. Runs the xAI OAuth pre-stop durability gate BEFORE
+         * teardown so a mid-flight token rotation is either persisted or fail-closed
+         * marked — never killed into a family-revoking replay (BAT-1155 blocker-1).
+         */
         fun stop(context: Context) {
             restartHandler.removeCallbacksAndMessages(null)
+            stopLeaseRenewal() // cancel any renewer from a prior stop before starting a new gate
+            stopWithDurability(context.applicationContext, attempt = 0, onStopped = null)
+        }
+
+        fun restart(context: Context, delayMs: Long = 1200L) {
+            restartHandler.removeCallbacksAndMessages(null)
+            stopLeaseRenewal()
+            val appCtx = context.applicationContext
+            // Gate durability BEFORE the stop, then schedule start on the main looper.
+            // A restart of a live oauth family is just as capable of stranding a rotation
+            // as a plain Stop, so it goes through the same gate.
+            stopWithDurability(appCtx, attempt = 0) {
+                restartHandler.postDelayed({ start(appCtx) }, delayMs)
+            }
+        }
+
+        /**
+         * Run the durability gate off-main; on success (or exhausted keep-alive budget)
+         * finish the stop and fire [onStopped]; otherwise keep the service alive and
+         * retry after a short delay. All teardown/status writes happen in [finishStop].
+         */
+        private fun stopWithDurability(appCtx: Context, attempt: Int, onStopped: (() -> Unit)?) {
+            stopExecutor.execute {
+                val durable = try {
+                    XaiOAuthDurabilityGate.ensureDurableBeforeStop()
+                } catch (e: Exception) {
+                    // CodeRabbit: fail CLOSED, not open. A gate exception means durability is
+                    // UNCONFIRMED — treat it as not-durable so the stop keeps the service alive
+                    // and retries (or OS-fallback stops after the bounded attempts), instead of
+                    // blindly killing into a possibly-consumed-token replay.
+                    LogCollector.append(
+                        "[Shutdown] durability gate threw (${e.javaClass.simpleName}: ${e.message}) — treating as NOT durable",
+                        LogLevel.ERROR,
+                    )
+                    false
+                }
+                when {
+                    // Durable → tear down for real. Start the lease renewer FIRST (Codex re-review
+                    // blocker) so quiescence stays armed across the main-looper handoff to the kill.
+                    durable -> {
+                        startLeaseRenewal()
+                        restartHandler.post {
+                            clearDurabilityStuckNotice(appCtx)
+                            finishStop(appCtx)
+                            onStopped?.invoke()
+                        }
+                    }
+                    // Not durable, budget remaining → keep alive, surface the state, retry.
+                    attempt < MAX_KEEPALIVE_STOP_ATTEMPTS -> {
+                        LogCollector.append(
+                            "[Shutdown] finishing secure session save — keeping service alive, retry ${attempt + 1}/$MAX_KEEPALIVE_STOP_ATTEMPTS",
+                            LogLevel.WARN,
+                        )
+                        restartHandler.post { postDurabilityStuckNotice(appCtx) }
+                        restartHandler.postDelayed({ stopWithDurability(appCtx, attempt + 1, onStopped) }, KEEPALIVE_RETRY_MS)
+                    }
+                    // Codex re-review blocker-1: a controlled Stop must NEVER call stopService
+                    // without positive durability. Retries exhausted → keep the service ALIVE
+                    // (only an actual OS force-stop may bypass the gate) and leave the notice up;
+                    // do NOT finishStop and do NOT fire onStopped — a restart that can't durably
+                    // save the rotated token must not proceed into a consumed-token replay either.
+                    // Relabeling a blind kill "OS fallback" does not make a broken disk safe.
+                    else -> {
+                        LogCollector.append(
+                            "[Shutdown] durability UNCONFIRMED after ${attempt + 1} attempts — service kept ALIVE " +
+                                "(the session token could not be safely saved; force-stop from system settings to override)",
+                            LogLevel.ERROR,
+                        )
+                        // BAT-1155 M1 (+ CodeRabbit round-2): the durability gate armed a durable stop
+                        // fence as its FIRST action. Abandoning the stop (keeping :node alive) WITHOUT
+                        // clearing that fence would leave the resumed process's next refresh silently
+                        // Fenced→skip (no POST, no reconnect) until a full restart. resolveAbandonedStop
+                        // returns true ONLY when the fence is durably cleared — a reauth mark alone is
+                        // insufficient (a completing in-flight rotation clears reauth AND rebases the
+                        // still-armed fence forward). Resume ONLY behind a cleared fence.
+                        val fenceCleared = try {
+                            XaiOAuthDurabilityGate.resolveAbandonedStop()
+                        } catch (e: Exception) {
+                            LogCollector.append(
+                                "[Shutdown] resolveAbandonedStop threw (${e.javaClass.simpleName}: ${e.message})",
+                                LogLevel.ERROR,
+                            )
+                            false
+                        }
+                        // The notice is managed PER-BRANCH below (CodeRabbit round-3): a RESUME path
+                        // (fence cleared / last-resort) puts :node back to normal → CLEAR the
+                        // dismiss-resistant "force-stop to override" notice; a RETRY path stays
+                        // stopped → keep it posted. (A blanket re-post here would strand it on the
+                        // resume paths, showing "stuck" forever after the agent already recovered.)
+                        when {
+                            // Fence durably cleared → safe to resume: CANCEL lease renewal (let the
+                            // lease lapse) and unquiesce so :node resumes. A completing rotation can no
+                            // longer rebase an already-cleared fence, so no live-but-fenced family.
+                            fenceCleared -> {
+                                stopLeaseRenewal()
+                                restartHandler.post { clearDurabilityStuckNotice(appCtx) }
+                                unquiesceUntilConfirmed(appCtx, 0)
+                            }
+                            // Fence NOT cleared → do NOT resume into it. Retry the stop (bounded): if
+                            // resolveAbandonedStop marked reauth, the retry's gate sees a not-live
+                            // family → durable → a CLEAN kill (boot blanks the token + clears the
+                            // fence) — this resolves within one retry, well inside the quiesce lease.
+                            // If reauth could NOT be marked either (store I/O broken for the mark too),
+                            // the disk gets more chances; and if the ~15s quiesce lease lapses before we
+                            // finish (each gate attempt can take up to BUDGET_MS), :node self-resumes
+                            // FENCED on its own. That is FAIL-CLOSED (a Fenced refresh returns 'skip'
+                            // and cannot present the token to xAI → no consumption, no revocation) and
+                            // boot-recoverable — the same terminal state as the last-resort branch
+                            // below. We do NOT re-arm the lease here (startLeaseRenewal is the
+                            // durability-PROVEN-kill mechanism); actively re-quiescing each retry is a
+                            // flagged hardening follow-up (Codex), not a safety gate.
+                            attempt < MAX_STOP_ATTEMPTS -> {
+                                LogCollector.append(
+                                    "[Shutdown] xAI stop fence not yet cleared — staying stopped, retry ${attempt + 1}/$MAX_STOP_ATTEMPTS",
+                                    LogLevel.WARN,
+                                )
+                                // Still stopped/retrying → keep the notice up.
+                                restartHandler.post { postDurabilityStuckNotice(appCtx) }
+                                restartHandler.postDelayed({ stopWithDurability(appCtx, attempt + 1, onStopped) }, KEEPALIVE_RETRY_MS)
+                            }
+                            // Store I/O broken past the retry ceiling (couldn't clear the fence OR mark
+                            // reauth). Least-bad: resume — the quiesce lease would lapse and resume
+                            // fenced anyway, and the still-armed fence is boot-recoverable once the disk
+                            // recovers (reconcileXaiOAuthOnBoot clears it; loadConfig blanks a token
+                            // whose family is marker/reauth-flagged).
+                            else -> {
+                                LogCollector.append(
+                                    "[Shutdown] xAI stop fence UNCLEARABLE after $MAX_STOP_ATTEMPTS attempts (store I/O broken) — " +
+                                        "resuming; boot reconcile is the backstop",
+                                    LogLevel.ERROR,
+                                )
+                                stopLeaseRenewal()
+                                // We ARE resuming :node here → clear the "stuck" notice (the xAI-fenced
+                                // degradation surfaces separately via the reconnect path, not this notice).
+                                restartHandler.post { clearDurabilityStuckNotice(appCtx) }
+                                unquiesceUntilConfirmed(appCtx, 0)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /** Terminal teardown: status/uptime reset + [Context.stopService]. Runs on the main looper. */
+        private fun finishStop(appCtx: Context) {
             runCatching {
-                ServiceState.init(context.applicationContext)
+                ServiceState.init(appCtx)
                 // Mirror the same guard as onDestroy() — don't wipe ERROR status on a user-stop.
                 if (ServiceState.status.value != ServiceStatus.ERROR) {
                     ServiceState.updateStatus(ServiceStatus.STOPPED)
@@ -778,16 +1026,92 @@ class SeekerClawService : Service() {
                 // launch derives uptime=0 until the service is started again.
                 ServiceState.setServiceStartTimeMs(0L)
             }
-            val intent = Intent(context, SeekerClawService::class.java)
-            context.stopService(intent)
+            appCtx.stopService(Intent(appCtx, SeekerClawService::class.java))
         }
 
-        fun restart(context: Context, delayMs: Long = 1200L) {
-            stop(context)
-            restartHandler.postDelayed(
-                { start(context) },
-                delayMs,
-)
+        // BAT-1155 blocker-1: a dismiss-resistant notice shown while a controlled Stop is
+        // held open because the xAI OAuth token could not yet be durably saved. It tells the
+        // user the agent is deliberately still running (and that a system force-stop is the
+        // override) rather than silently ignoring their Stop. Best-effort (POST_NOTIFICATIONS
+        // may be denied) — the durability invariant does not depend on it landing.
+        private const val DURABILITY_NOTICE_ID = 3
+
+        private fun postDurabilityStuckNotice(appCtx: Context) {
+            runCatching {
+                val pi = PendingIntent.getActivity(
+                    appCtx, 0,
+                    Intent(appCtx, MainActivity::class.java),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                val notification = NotificationCompat.Builder(appCtx, SeekerClawApplication.ERROR_CHANNEL_ID)
+                    .setContentTitle("Finishing secure session save")
+                    .setContentText("Keeping the agent running until your Grok sign-in is safely saved.")
+                    .setStyle(
+                        NotificationCompat.BigTextStyle().bigText(
+                            "Keeping the agent running until your Grok sign-in is safely saved, so it isn't " +
+                                "lost on the next restart. If this persists, force-stop the app from system settings.",
+                        ),
+                    )
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentIntent(pi)
+                    .setOngoing(true)
+                    .build()
+                NotificationManagerCompat.from(appCtx).notify(DURABILITY_NOTICE_ID, notification)
+            }
+        }
+
+        private fun clearDurabilityStuckNotice(appCtx: Context) {
+            runCatching { NotificationManagerCompat.from(appCtx).cancel(DURABILITY_NOTICE_ID) }
+        }
+
+        /**
+         * Codex re-review major-2: keep trying to unquiesce an abandoned (kept-alive) Stop with
+         * bounded backoff until a POST is confirmed, so a single transient failure can't leave the
+         * agent frozen. If all attempts fail, the Node quiesce lease still auto-resumes — this only
+         * shortens that window. Runs on [stopExecutor]; scheduling on [restartHandler] is cancelled
+         * by the next start()/stop() (removeCallbacksAndMessages).
+         */
+        /**
+         * Codex re-review blocker: start renewing the Node quiesce lease from an independent daemon
+         * thread. Called the instant durability is proven (before finishStop), it keeps the lease
+         * armed across the main-looper handoff to onDestroy/kill — so quiescence can't lapse and
+         * admit a rotation in that window. LIFECYCLE-bound: it runs until an EXPLICIT
+         * [stopLeaseRenewal] (or a newer lifecycle supersedes its generation) or the process dies.
+         * It does NOT exit on a renew POST failure or any iteration/time cap — a failed POST is not
+         * proof :node is dead, so a transient outage must not let the lease lapse mid-Stop.
+         */
+        internal fun startLeaseRenewal() {
+            val myGen = leaseRenewGen.incrementAndGet() // claim a generation; supersedes any prior renewer
+            Thread {
+                // Renew until THIS generation is superseded (explicit stop or a newer lifecycle) or
+                // the process dies. A failed POST is ignored — quiescence must not lapse on a
+                // transient outage while a controlled Stop is still pending.
+                while (leaseRenewGen.get() == myGen) {
+                    try { Thread.sleep(leaseRenewMs) } catch (e: InterruptedException) { break }
+                    if (leaseRenewGen.get() != myGen) break
+                    runCatching { runBlocking { NodeControlClient.quiesce() } }
+                }
+            }.apply { isDaemon = true; name = "xai-lease-renewer"; start() }
+        }
+
+        /** Supersede any active renewer generation so it exits on its next check. */
+        internal fun stopLeaseRenewal() {
+            leaseRenewGen.incrementAndGet()
+        }
+
+        private fun unquiesceUntilConfirmed(appCtx: Context, attempt: Int) {
+            stopExecutor.execute {
+                val ok = runCatching { runBlocking { NodeControlClient.unquiesce() } }.getOrDefault(false)
+                if (ok) return@execute
+                if (attempt < MAX_UNQUIESCE_ATTEMPTS) {
+                    restartHandler.postDelayed({ unquiesceUntilConfirmed(appCtx, attempt + 1) }, UNQUIESCE_RETRY_MS)
+                } else {
+                    LogCollector.append(
+                        "[Shutdown] unquiesce not confirmed after ${attempt + 1} tries — Node quiesce lease will auto-resume",
+                        LogLevel.WARN,
+                    )
+                }
+            }
         }
     }
 }

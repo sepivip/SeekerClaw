@@ -274,6 +274,16 @@ const XAI_OAUTH_REFRESH = normalizeSecret(config.xaiOAuthRefresh || '');
 // paired via OAuth or (pre-fix) never persisted → the adapter treats 0 as
 // "expiry-unknown" and does one opportunistic refresh on first use.
 const XAI_OAUTH_EXPIRES_AT = (typeof config.xaiOAuthExpiresAt === 'string' ? config.xaiOAuthExpiresAt.trim() : '');
+// BAT-1155: xAI OAuth durability — the single-writer store's control fields, sourced
+// (decrypted for the tokens above) from files/xai_oauth.json via Kotlin writeConfigJson,
+// NOT from prefs. epoch drives the rotation CAS (xai.js sends expectedEpoch); the reauth
+// flags drive the boot dead-family gate + notify-once suppression.
+const XAI_OAUTH_EPOCH = Number(config.xaiOAuthEpoch) || 0;
+const XAI_OAUTH_REAUTH_REQUIRED = !!config.xaiOAuthReauthRequired;
+// Epoch for which the single autonomous reconnect notice already fired; -1 = none.
+// Number() so a missing/blank value defaults to -1 (never a spurious 0).
+const _xaiReauthNotifiedEpoch = Number(config.xaiOAuthReauthNotifiedEpoch);
+const XAI_OAUTH_REAUTH_NOTIFIED_EPOCH = Number.isFinite(_xaiReauthNotifiedEpoch) ? _xaiReauthNotifiedEpoch : -1;
 // OpenAI symmetry (data-plumbing only; the OpenAI proactive hook is a follow-up).
 const OPENAI_OAUTH_EXPIRES_AT = (typeof config.openaiOAuthExpiresAt === 'string' ? config.openaiOAuthExpiresAt.trim() : '');
 
@@ -624,7 +634,13 @@ if (CHANNEL === 'discord' && !DISCORD_TOKEN) {
     log('ERROR: Missing required config (discordBotToken) for Discord channel', 'ERROR');
     process.exit(1);
 }
-if (!_activeKey) {
+// BAT-1155: a revoked / reauth-required xAI OAuth family boots INTO reauth
+// (the adapter surfaces "reconnect xAI in Settings" via classifyError('reauth')),
+// NOT process.exit — otherwise the watchdog turns a revoked token into a crash
+// loop and the user never sees the reconnect message, and the D6 fail-closed
+// durability path (which also lands here as a reauth-required boot) breaks.
+const _xaiReauthStartable = PROVIDER === 'xai' && AUTH_TYPE === 'oauth' && XAI_OAUTH_REAUTH_REQUIRED;
+if (!_activeKey && !_xaiReauthStartable) {
     const keyName = PROVIDER === 'openai' ? 'openaiApiKey or openaiOAuthToken'
         : PROVIDER === 'xai' ? 'xaiApiKey or xaiOAuthToken'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
@@ -765,7 +781,10 @@ function truncateToolResult(text) {
 // SENSITIVE FILE BLOCKLIST (shared by read tool, js_eval, delete tool)
 // ============================================================================
 
-const SECRETS_BLOCKED = new Set(['config.js', 'config.json', 'config.yaml', 'seekerclaw.db']);
+// BAT-1155: xai_oauth.json is the dedicated OAuth token store (filesDir sibling of
+// runtime_state.json, outside workDir). Belt-and-suspenders: block it from the agent's
+// read/write/delete tools too, so a relocated workDir can never expose or delete it.
+const SECRETS_BLOCKED = new Set(['config.js', 'config.json', 'config.yaml', 'seekerclaw.db', 'xai_oauth.json']);
 
 // ============================================================================
 // SHELL EXEC ALLOWLIST (shared by tools.js and skills.js requirements gating)
@@ -939,6 +958,7 @@ module.exports = {
     OPENAI_KEY,
     OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE, OPENAI_OAUTH_EXPIRES_AT,
     XAI_KEY, XAI_OAUTH_TOKEN, XAI_OAUTH_REFRESH, XAI_OAUTH_EXPIRES_AT,
+    XAI_OAUTH_EPOCH, XAI_OAUTH_REAUTH_REQUIRED, XAI_OAUTH_REAUTH_NOTIFIED_EPOCH,
     OPENROUTER_KEY,
     CUSTOM_KEY,
     CUSTOM_BASE_URL,

@@ -37,6 +37,10 @@ const {
     XAI_OAUTH_TOKEN,
     XAI_OAUTH_REFRESH,
     XAI_OAUTH_EXPIRES_AT,
+    // BAT-1155: xAI OAuth durability — store-sourced control fields.
+    XAI_OAUTH_EPOCH,
+    XAI_OAUTH_REAUTH_REQUIRED,
+    XAI_OAUTH_REAUTH_NOTIFIED_EPOCH,
     AUTH_TYPE,
 } = require('../config');
 const { androidBridgeCall } = require('../bridge');
@@ -130,7 +134,21 @@ let _currentTtlMs = _DEFAULT_EXPIRES_IN * 1000; // TTL of the last in-process mi
 // the just-refreshed generation is a genuine tier-gate → trip the breaker.
 let _refreshGeneration = 0;
 let _tierGated = false;   // circuit-breaker: stop rotating a genuinely tier-gated account
-let _refreshDead = false; // invalid_grant → suppress ALL further refresh until re-pair (D9)
+// BAT-1155 D4 REAUTH BOOT GATE: seed _refreshDead from the persisted store flag so a
+// dead family (revoked refresh token) skips ALL refresh on boot — before the fix, boot
+// re-seeded false and re-ran the doomed refresh cycle (the live incident's re-notify loop).
+// isOAuth-gated: an xAI api_key user never writes the store, so read() returns the
+// FAIL_CLOSED default (reauthRequired=true); without the isOAuth guard that would seed
+// _refreshDead=true for an api_key family and make ai.js miscount a genuine tier-gate 403
+// toward re-pair (BAT-1155 verify major-1).
+let _refreshDead = isOAuth && XAI_OAUTH_REAUTH_REQUIRED === true; // invalid_grant / persisted reauth → suppress ALL refresh until re-pair (D9)
+// BAT-1155 D1: the store revision this process last saw. Sent as expectedEpoch on every
+// rotation persist (CAS); advanced by adopting the bridge response epoch. Seeded from config.
+let _currentEpoch = XAI_OAUTH_EPOCH;
+// BAT-1155 D4 notify-once: the epoch for which the single autonomous reconnect notice
+// already fired (-1 = none). Reset to -1 by a sign-in/rotate (store side); while it is
+// non-(-1) the autonomous notice is suppressed, yet explicit user requests still answer.
+let _reauthNotifiedEpoch = XAI_OAUTH_REAUTH_NOTIFIED_EPOCH;
 // D9: a rotation that succeeded server-side but failed to persist. Keep the pair
 // in memory, complete the turn, and re-persist the SAME pair on later calls.
 let _persistPending = false;
@@ -245,9 +263,16 @@ function _resetErrorStateForTests() {
     _pendingPersistPayload = null;
     _persistAttempts = 0;
     _persistDurableError = false;
+    _markReauthPending = false;
+    _noteNotifiedPending = false;
+    _noteNotifiedPendingEpoch = -1;
     _opportunisticRefreshDone = false;
     _lastRefreshFailMono = 0n;
     _refreshInFlight = null;
+    // BAT-1155: reset the durability/notify state so a test starts from a known epoch.
+    _currentEpoch = XAI_OAUTH_EPOCH;
+    _reauthNotifiedEpoch = XAI_OAUTH_REAUTH_NOTIFIED_EPOCH;
+    _persistInFlight = null;
 }
 
 // Test seam — drive the BAT-1143 state machine deterministically without real
@@ -264,10 +289,15 @@ function _setStateForTests(patch) {
     if ('persistPending' in patch) _persistPending = patch.persistPending;
     if ('persistDurableError' in patch) _persistDurableError = patch.persistDurableError;
     if ('persistAttempts' in patch) _persistAttempts = patch.persistAttempts;
+    if ('markReauthPending' in patch) _markReauthPending = patch.markReauthPending;
+    if ('noteNotifiedPending' in patch) _noteNotifiedPending = patch.noteNotifiedPending;
     if ('pendingPersistPayload' in patch) _pendingPersistPayload = patch.pendingPersistPayload;
     if ('oauth403RetriedOnce' in patch) _oauth403RetriedOnce = patch.oauth403RetriedOnce;
     if ('opportunisticRefreshDone' in patch) _opportunisticRefreshDone = patch.opportunisticRefreshDone;
     if ('lastRefreshFailMono' in patch) _lastRefreshFailMono = patch.lastRefreshFailMono;
+    // BAT-1155 durability/notify state.
+    if ('currentEpoch' in patch) _currentEpoch = patch.currentEpoch;
+    if ('reauthNotifiedEpoch' in patch) _reauthNotifiedEpoch = patch.reauthNotifiedEpoch;
 }
 function _getStateForTests() {
     return {
@@ -279,12 +309,27 @@ function _getStateForTests() {
         refreshDead: _refreshDead,
         persistPending: _persistPending,
         persistDurableError: _persistDurableError,
+        markReauthPending: _markReauthPending,
+        noteNotifiedPending: _noteNotifiedPending,
+        diskUnsafe: isDiskUnsafe(),
         opportunisticRefreshDone: _opportunisticRefreshDone,
+        currentEpoch: _currentEpoch,
+        reauthNotifiedEpoch: _reauthNotifiedEpoch,
     };
 }
 
 function classifyError(status, data) {
     if (status === 401) {
+        // BAT-1155 D3: a dead OAuth family (revoked / persisted reauth) never attempts a
+        // refresh — with tombstoned tokens the bearer is empty and xAI can 401 (not 403);
+        // classify as reauth so the reconnect copy surfaces (not the stale api-key hint).
+        if (isOAuth && _refreshDead) {
+            _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
+            return {
+                type: 'reauth', retryable: false,
+                userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
+            };
+        }
         // The ONLY branch that may be type:'auth' → ai.js calls
         // handleUnauthorized() → single-flight refresh. Gated on OAuth mode
         // AND a refresh token actually being present; otherwise there is
@@ -325,11 +370,25 @@ function classifyError(status, data) {
         // likely still-provisioning and earns ONE grace retry. An api_key 403 is
         // a real tier/credit gate — terminal on the first hit. D8: once the
         // circuit-breaker has tripped (_tierGated), skip the grace and stay terminal.
-        if (isOAuth && !_oauth403RetriedOnce && !_tierGated) {
+        // BAT-1155 D7: gate the grace-retry on !_refreshDead. Without it, the FIRST
+        // dead-token 403 on a boot burns the one-shot grace (returns provisioning/retry)
+        // and only the SECOND 403 reaches the reauth return below — re-showing the wrong
+        // copy once per boot in the exact incident scenario. D3 + D7 are interdependent.
+        if (isOAuth && !_oauth403RetriedOnce && !_tierGated && !_refreshDead) {
             _oauth403RetriedOnce = true;
             return {
                 type: 'provisioning', retryable: true,
                 userMessage: 'Grok API access is provisioning — retrying once...'
+            };
+        }
+        // BAT-1155 D3: before the terminal tier-gate copy, a dead OAuth family is a
+        // revoked sign-in — surface reconnect, never "add an xAI API key". Keep the
+        // tier-gate copy ONLY for a genuine fresh-token tier-gate (_refreshDead === false).
+        if (isOAuth && _refreshDead) {
+            _maybeRetryReauthMark(); // Codex blocker-2: retry a failed dead-mark each dead turn
+            return {
+                type: 'reauth', retryable: false,
+                userMessage: 'Your Grok sign-in was revoked — reconnect xAI in Settings.'
             };
         }
         return {
@@ -411,8 +470,17 @@ function classifyNetworkError(err) {
 let _refreshInFlight = null;
 
 function refreshOAuthToken() {
+    // BAT-1155 Codex re-review blocker: refuse to ROTATE while the process is quiesced for a
+    // controlled Stop. A rotation here would consume the on-disk T0 and mint a T1 that the
+    // imminent kill strands → the next boot replays the consumed T0 (the brick). Any in-flight
+    // rotation is still awaited/drained by flushPendingPersist; this only blocks NEW ones.
+    if (require('../quiesce').isQuiesced()) {
+        // Return the in-flight rotation if one is already draining; otherwise a resolved no-op
+        // (the caller proceeds on the current in-memory token — the turn is being torn down anyway).
+        return _refreshInFlight || Promise.resolve(null);
+    }
     _refreshInFlight ??= _performRefresh()
-        .catch((e) => {
+        .catch(async (e) => {
             // BAT-1143: record the failure mode CENTRALLY so BOTH the proactive
             // (ensureFreshToken) and reactive (handleUnauthorized) paths agree:
             //  - invalid_grant → the refresh token is dead → suppress ALL further
@@ -421,16 +489,142 @@ function refreshOAuthToken() {
             //  - any OTHER failure (transport/timeout/5xx) → start a same-turn cooldown
             //    so a second caller can't immediately re-POST and consume a SECOND
             //    single-use rotation (D9/Q4 lost-refresh-response protection).
-            if (e && e.reLogin) _refreshDead = true;
-            else _lastRefreshFailMono = process.hrtime.bigint();
+            if (e && e.reLogin) {
+                _refreshDead = true;
+                // BAT-1155 D5: durably persist the dead flag (token-less) so a restart's
+                // boot gate re-derives _refreshDead=true instead of re-running the doomed
+                // cycle. Awaited so the marker lands before the rejection propagates.
+                await _persistReauthRequired();
+            } else {
+                _lastRefreshFailMono = process.hrtime.bigint();
+            }
             throw e;
         })
         .finally(() => { _refreshInFlight = null; });
     return _refreshInFlight;
 }
 
+// BAT-1155 stop-fence protocol — the single atomic pre-POST gate. Arms the durable rotation marker
+// under the store sidecar lock (via the AndroidBridge) and reports whether the external refresh POST
+// may proceed. Returns:
+//   'ok'   → the marker is armed on disk; the POST may proceed.
+//   'dead' → the family is tombstone/reauth OR a rotation marker is ALREADY armed (a prior POST may
+//            have consumed the on-disk refresh token) → the caller surfaces reconnect, never POSTs.
+//   'skip' → a stop is fencing this epoch, the epoch was superseded (a fresh sign-in/out), or the
+//            marker could not be armed (bridge/disk) → keep the in-memory token, do NOT POST.
+async function _prepareRefreshGate() {
+    let r;
+    try {
+        r = await androidBridgeCall('/xai/oauth/prepare-refresh', { expectedEpoch: _currentEpoch });
+    } catch (_) {
+        // androidBridgeCall normally RESOLVES {error} (it never rejects), so this is defensive: a
+        // throw is treated identically to an ambiguous {error}/absent response below.
+        r = null;
+    }
+    if (r && r.success === true) {
+        if (typeof r.epoch === 'number') _currentEpoch = r.epoch;
+        return 'ok';
+    }
+    // RECOGNIZED durable-store outcomes — the store state they reflect is authoritative and must be
+    // preserved verbatim (never clear the marker on these):
+    if (r) {
+        // A superseding sign-in/out advanced the epoch. DO NOT adopt r.currentEpoch (Codex break-fix) —
+        // the sign-in-triggered :node restart reloads the fresh family; abort this refresh.
+        if (r.code === 'XAI_OAUTH_EPOCH_CONFLICT') return 'skip';
+        if (r.dead === true || r.unsafe === true) return 'dead';
+        if (r.fenced === true) return 'skip';
+    }
+    // AMBIGUOUS: an absent response, a bridge {error} shape (timeout/5xx), or an unrecognized body.
+    // The arm's fate on disk is unknown, but this call definitively did NOT POST — so if the arm DID
+    // land (a lost prepare-refresh RESPONSE, not a lost request), best-effort clear the marker
+    // (epoch-CAS'd; no-op if the epoch moved, best-effort if the bridge is still down) so it can't
+    // orphan into a false Unsafe→reauth on the next refresh. Then fail-closed (no POST).
+    await _clearRotationInFlightMarker();
+    return 'skip';
+}
+
+// Provably-not-sent classification (Codex decision 1): only a pre-connection DNS / connection-refused
+// error proves the refresh-token bytes never reached the endpoint. A timeout or ANY received HTTP
+// response (including 5xx / TLS-after-connect) is NOT provable → the marker must be retained.
+function _isProvablyNotSent(e) {
+    return !!(e && (e.code === 'ECONNREFUSED' || e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN'));
+}
+
+// Clear the durable rotation marker after a provably-not-sent refresh (avoids a nuisance reconnect).
+// Best-effort: a retained marker only costs one conservative reconnect, never a brick.
+async function _clearRotationInFlightMarker() {
+    try {
+        await androidBridgeCall('/xai/oauth/clear-rotation-in-flight', { expectedEpoch: _currentEpoch });
+    } catch (_) { /* best-effort */ }
+}
+
+// A dead-family mark that did NOT durably persist. Codex blocker-2: a failed
+// mark must stay retryable (not swallowed) — else a restart re-seeds
+// _refreshDead=false and re-POSTs the revoked token. Retried on each subsequent
+// dead-path turn (classifyError) until it lands.
+let _markReauthPending = false;
+
+// Codex re-review major-2: the notify-once latch mark that did NOT durably persist.
+// Without a retry the in-memory latch is lost on restart and the same dead epoch is
+// re-notified (violating "exactly one autonomous notice per dead epoch"). Retained +
+// retried, CAS'd to the epoch it was recorded for; a conflict drops it, a success clears it.
+let _noteNotifiedPending = false;
+let _noteNotifiedPendingEpoch = -1;
+
+// BAT-1155 D4/D5: token-less durable mark of "this family is dead". POSTs
+// /xai/oauth/mark-reauth (SEPARATE rate bucket) CAS'd on expectedEpoch (blocker-2).
+async function _persistReauthRequired() {
+    try {
+        const result = await androidBridgeCall('/xai/oauth/mark-reauth', { expectedEpoch: _currentEpoch });
+        if (result && result.code === 'XAI_OAUTH_EPOCH_CONFLICT') {
+            // A fresh sign-in/out advanced the epoch — the OLD family's dead-mark is moot
+            // and must NOT land on the winning family. Adopt the new revision, drop the
+            // pending mark; the sign-in-triggered :node restart reloads the fresh family.
+            if (typeof result.currentEpoch === 'number') _currentEpoch = result.currentEpoch;
+            _markReauthPending = false;
+            return;
+        }
+        if (result && result.success === true) {
+            if (typeof result.epoch === 'number') _currentEpoch = result.epoch;
+            _markReauthPending = false;
+            return;
+        }
+        _markReauthPending = true; // Failed → keep retryable (not swallowed)
+    } catch (_) {
+        _markReauthPending = true;
+    }
+}
+
+// Fire-and-forget retry of a dead-mark that didn't persist (Codex blocker-2). Called
+// from the reauth classify path so a transient bridge/lock failure self-heals within
+// the process instead of waiting for a restart to re-derive dead state.
+function _maybeRetryReauthMark() {
+    if (_refreshDead && _markReauthPending) {
+        _persistReauthRequired().catch(() => {});
+    }
+}
+
 async function _performRefresh() {
-    const parsed = await _requestRotatedTokens();
+    // BAT-1155 stop-fence: durably ARM the rotation marker (atomically checking dead / stop-fence /
+    // already-armed) BEFORE presenting the on-disk refresh token to xAI. Every non-'ok' outcome = NO POST.
+    const gate = await _prepareRefreshGate();
+    if (gate === 'skip') return null; // fenced / superseded / prepare-deferred → keep the in-mem token, no POST
+    if (gate === 'dead') {            // dead family OR a rotation POST is already in flight (potentially consumed)
+        const e = new Error('xAI OAuth refresh blocked — reconnect required');
+        e.reLogin = true;             // → refreshOAuthToken.catch latches _refreshDead + persists reauth
+        throw e;
+    }
+    // gate === 'ok': the rotation marker is durably armed on disk BEFORE the POST below.
+    let parsed;
+    try {
+        parsed = await _requestRotatedTokens();
+    } catch (e) {
+        // Marker discipline (Codex decision 1 — conservative): clear the marker ONLY when the transport
+        // proves no request bytes reached xAI (DNS / connection-refused before the body was written).
+        // Timeout / any received response / 5xx retain the marker (the on-disk token may be consumed).
+        if (_isProvablyNotSent(e)) await _clearRotationInFlightMarker();
+        throw e;
+    }
     // H1: register the rotated pair with the redactor BEFORE any log/persist
     // so an eyJ… JWT can never surface in node_debug.log.
     if (parsed.access_token) registerRedactedSecret(parsed.access_token);
@@ -497,11 +691,25 @@ function _requestRotatedTokens() {
                     return;
                 }
                 if (parsed) {
+                    // BAT-1155 D5: redacted one-line log of the exact revoke code so
+                    // xAI's wording becomes deterministic. parsed.error is an OAuth error
+                    // CODE (e.g. "invalid_grant"), never token material — safe to log.
+                    log(`[xAI] OAuth refresh failed: error=${JSON.stringify(parsed.error || 'unknown')} (HTTP ${status})`, 'WARN');
                     // JSON error — surface error_description/error. `invalid_grant`
                     // means the refresh token is dead (revoked / already rotated)
                     // → re-login required. Never include the request body.
                     const err = new Error(`Token refresh failed (HTTP ${status}): ${parsed.error_description || parsed.error || 'unknown'}`);
-                    if (parsed.error === 'invalid_grant') err.reLogin = true;
+                    // BAT-1155 D5: latch dead-token NARROWLY — invalid_grant (primary) OR a
+                    // SPECIFIC description match on an HTTP 400 from the refresh endpoint.
+                    // NEVER the bare `refresh_token` substring: it appears in benign transient
+                    // 400s ("refresh_token parameter is required"), and a false latch would
+                    // persist reauthRequired and permanently brick a working account (D4 then
+                    // suppresses the refresh that would self-clear it).
+                    const desc = typeof parsed.error_description === 'string' ? parsed.error_description : '';
+                    if (parsed.error === 'invalid_grant'
+                        || (status === 400 && /revoked|already been used|token expired/i.test(desc))) {
+                        err.reLogin = true;
+                    }
                     reject(err);
                 } else {
                     const truncated = (data || '').slice(0, 200).replace(/\s+/g, ' ');
@@ -537,18 +745,55 @@ async function _persistRotatedTokens(parsed) {
     await _attemptPersist();
 }
 
+// BAT-1155 D6: single-flight guard so a concurrent flush (flushPendingPersist on
+// USER_STOP) cannot double-POST the SAME payload — a second POST of a pair already
+// persisted would land as a FALSE CAS conflict under D1. Memoize the in-flight attempt.
+let _persistInFlight = null;
+
 // One bounded persist attempt of the current _pendingPersistPayload. Clears the
 // pending/durable flags on success; escalates to a durable error once convergence
 // is exhausted. Never throws — the caller (refresh or ensureFreshToken) proceeds
-// on the valid in-memory token regardless.
-async function _attemptPersist() {
+// on the valid in-memory token regardless. `timeoutMs` (optional) is passed through
+// to androidBridgeCall — the USER_STOP drain passes 300 (bridge default is 10000).
+function _attemptPersist(timeoutMs, urgent) {
+    // D6 single-flight: coalesce concurrent callers onto one in-flight POST.
+    if (_persistInFlight) return _persistInFlight;
+    _persistInFlight = _doAttemptPersist(timeoutMs, urgent).finally(() => { _persistInFlight = null; });
+    return _persistInFlight;
+}
+
+async function _doAttemptPersist(timeoutMs, urgent) {
     if (!_pendingPersistPayload) { _persistPending = false; return; }
-    const result = await androidBridgeCall('/xai/oauth/save-tokens', _pendingPersistPayload);
+    // BAT-1155 D1: carry expectedEpoch (the revision this process last saw) so the
+    // Kotlin store can CAS-reject a stale rotation that lost a race to a MAIN sign-in/out.
+    const payload = { ..._pendingPersistPayload, expectedEpoch: _currentEpoch };
+    // BAT-1155 blocker-1: the USER_STOP drain routes to the dedicated urgent endpoint
+    // (own generous rate bucket) so the once-per-shutdown persist of a VALID rotated pair
+    // is never throttled by the normal 5/60s save-tokens limit and forced into a re-pair.
+    const endpoint = urgent ? '/xai/oauth/save-tokens-urgent' : '/xai/oauth/save-tokens';
+    const result = (typeof timeoutMs === 'number')
+        ? await androidBridgeCall(endpoint, payload, timeoutMs)
+        : await androidBridgeCall(endpoint, payload);
     if (result && result.success === true && !result.error) {
         _persistPending = false;
         _pendingPersistPayload = null;
         _persistAttempts = 0;
         _persistDurableError = false;
+        // Adopt the new on-disk revision so the NEXT rotation's expectedEpoch matches.
+        if (typeof result.epoch === 'number') _currentEpoch = result.epoch;
+        return;
+    }
+    // BAT-1155 D1 CAS conflict: a MAIN sign-in/out landed first, advancing the epoch.
+    // The winning family is already on disk and the sign-in that caused the conflict
+    // triggers a :node restart that reloads it — so DISCARD this stale pending pair and
+    // NEVER re-POST it (re-POSTing is exactly what would reuse a consumed refresh token).
+    if (result && result.code === 'XAI_OAUTH_EPOCH_CONFLICT') {
+        log('[xAI] OAuth token persist rejected (epoch conflict) — discarding stale pending pair; a restart will load the winning family', 'WARN');
+        _pendingPersistPayload = null;
+        _persistPending = false;
+        _persistAttempts = 0;
+        _persistDurableError = false;
+        if (typeof result.currentEpoch === 'number') _currentEpoch = result.currentEpoch;
         return;
     }
     const lastErr = (result && result.error) ? String(result.error) : 'no success acknowledgement';
@@ -565,17 +810,93 @@ async function _attemptPersist() {
     _persistAttempts++;
     log(`[xAI] OAuth token persist attempt ${_persistAttempts} failed: ${lastErr}`, 'WARN');
     if (_persistAttempts >= MAX_PERSIST_CONVERGENCE_ATTEMPTS) {
-        // Convergence exhausted (D9 step 4). STOP hammering the bridge AND stop blocking
-        // proactive refresh: surface a durable error (health stays 'degraded' via
-        // hasPersistDurableError) and CLEAR _persistPending so ensureFreshToken resumes
-        // normal refresh. A future rotation re-persists a fresh pair if the bridge
-        // recovers (which clears the durable error); the in-memory token works meanwhile.
+        // Convergence exhausted (D9 step 4). STOP hammering the bridge AND stop blocking proactive
+        // refresh: surface a durable error (health stays 'degraded' via hasPersistDurableError) and
+        // CLEAR _persistPending so ensureFreshToken resumes. The VALID rotated pair stays in memory
+        // and serves requests until it expires.
+        //
+        // BAT-1155 conservative fail-close: the stop-fence rotation marker (rotationInFlightEpoch==E)
+        // stays ARMED on disk because the successor pair never landed there. That is fail-CLOSED and
+        // correct — the on-disk T0 IS consumed. At the next expiry, prepareRefresh(E) therefore
+        // returns Unsafe → an explicit, RECOVERABLE reconnect (markReauth supersedes the marker; a
+        // fresh sign-in mints a new family). It is NOT a family brick (the revoke class BAT-1155
+        // prevents), just a rare re-pair (precondition: MAX consecutive durable bridge-write failures
+        // AFTER a successful rotation POST, then survival to expiry).
+        //
+        // NOTE: because the armed marker blocks a fresh rotation, the family can no longer self-heal
+        // via a "future rotation" — a retain-and-re-converge variant (keep _pendingPersistPayload and
+        // re-persist at a bounded cadence until the bridge recovers, so the pair lands and the marker
+        // clears) would avoid the re-pair, but it changes the Codex-signed convergence contract and is
+        // deferred to the Codex diff re-review (BAT-1155 M2 in the PR notes), not folded here.
         _persistDurableError = true;
         _persistPending = false;
         _pendingPersistPayload = null;
-        log('[xAI] OAuth token could NOT be persisted after '
-            + `${_persistAttempts} attempts — re-login may be required after a restart`, 'ERROR');
+        log('[xAI] OAuth token persist convergence exhausted after '
+            + `${_persistAttempts} attempts — in-memory token valid until expiry, then a reconnect is required`, 'ERROR');
     }
+}
+
+// BAT-1155 D6: USER_STOP drain. Called by internal-control-server.js /shutdown/flush
+// BEFORE the session-summary flush so a just-rotated pair reaches disk before the kill
+// (else the next boot reloads a consumed token). Bounded: await any in-flight attempt
+// first (never double-POST), then AT MOST ONE forced retry if still pending, with an
+// explicit 300ms bound passed to androidBridgeCall. Never throws.
+async function flushPendingPersist() {
+    if (!isOAuth) return { pendingPersist: false, diskUnsafe: false, notifyPending: false };
+    // ONE 300ms end-to-end deadline across BOTH phases (CodeRabbit): the in-flight
+    // await and the single forced retry share the budget, so a stalled 10s-default
+    // bridge POST can never make the shutdown drain exceed 300ms total (the pinned D6
+    // budget), regardless of whether a persist was already in flight at USER_STOP.
+    const deadline = Date.now() + 300;
+    const remaining = () => Math.max(0, deadline - Date.now());
+    // Await a promise bounded by the remaining budget (never throws; clears its timer).
+    const raceRemaining = async (p) => {
+        const ms = remaining();
+        if (ms <= 0) return;
+        let t;
+        try {
+            await Promise.race([p, new Promise((resolve) => { t = setTimeout(resolve, ms); })]);
+        } catch (_) { /* best-effort */ } finally { if (t) clearTimeout(t); }
+    };
+    // Phase 1: await an already-running attempt (single-flight → never re-POST the same pair).
+    if (_persistInFlight) await raceRemaining(_persistInFlight);
+    // Phase 2: at most ONE forced retry, only if time remains AND a pair is still pending.
+    // _attemptPersist is single-flight, so if phase 1's attempt is still running this just
+    // re-awaits it within the remaining budget rather than starting a duplicate POST.
+    // urgent=true → dedicated bridge bucket so this shutdown-critical persist isn't throttled.
+    if (_persistPending && _pendingPersistPayload && remaining() > 0) {
+        await raceRemaining(_attemptPersist(remaining(), /* urgent */ true));
+    }
+    // NOTE (Codex re-review): the notify-once mark is NOT drained here. Under reserve-before-send
+    // (see noteReauthNotified), a still-pending notify simply means the autonomous notice was NOT
+    // sent — the reserve+send is retried on a later dead turn / next boot, so a Stop never needs
+    // to block on this low-value metadata, and there is no duplicate to prevent. `notifyPending`
+    // is reported only for observability.
+    // Report BOTH the narrow pending-pair signal AND the authoritative disk-unsafe signal
+    // (Codex re-review blocker-2). pendingPersist alone is insufficient: `_persistDurableError`
+    // (convergence exhausted → T1 discarded, consumed T0 still on disk) and `_markReauthPending`
+    // (a dead-family mark that never landed → disk still says the revoked family is live) BOTH
+    // clear/never-set `_persistPending` yet leave the disk in a brick-on-boot state. The
+    // controlled-stop gate keys on `diskUnsafe` so a Stop in either state fails closed
+    // (CAS-marks reauth) instead of trusting a false-clean and reloading a consumed token.
+    return {
+        pendingPersist: !!(_persistPending && _pendingPersistPayload),
+        diskUnsafe: isDiskUnsafe(),
+        notifyPending: _noteNotifiedPending, // major-2 metadata: notify-once mark still unpersisted
+    };
+}
+
+// BAT-1155 Codex re-review blocker-2 — the single authoritative "the on-disk xAI OAuth
+// record is NOT safe to boot from" signal. True whenever a consumed/rotated pair or a
+// revoked family is still reflected on disk as usable:
+//   - a rotated pair not yet persisted (T1 in memory, consumed T0 on disk);
+//   - convergence exhausted (T1 discarded, consumed T0 on disk) — the retained latch;
+//   - a dead-family reauth mark that failed to persist (disk still says the family is live).
+// Each is resolved by a durable store write: a successful persist, a CAS-winning conflict,
+// or a durable reauth mark. isOAuth-gated (api_key families have no rotation hazard).
+function isDiskUnsafe() {
+    if (!isOAuth) return false;
+    return !!(_persistPending && _pendingPersistPayload) || _persistDurableError || _markReauthPending;
 }
 
 /**
@@ -609,7 +930,18 @@ async function handleUnauthorized() {
     }
     log('[xAI] OAuth 401 — attempting token refresh...', 'INFO');
     try {
-        await refreshOAuthToken();
+        const refreshed = await refreshOAuthToken();
+        if (refreshed === null) {
+            // BAT-1155: the pre-POST gate returned 'skip' (a stop is fencing this epoch, the epoch
+            // was superseded, or the bridge could not arm the marker) → NO rotation happened, the
+            // token is UNCHANGED. Retrying against the same 401'ing token would just burn MAX_RETRIES,
+            // so surface a NON-retryable fatal — the caller stops; the next turn's ensureFreshToken
+            // (after any fence/blip clears) retries the refresh cleanly.
+            log('[xAI] OAuth 401 — refresh skipped (fenced/superseded/unavailable); no token change', 'WARN');
+            const fatal = new Error('OAuth refresh unavailable — token unchanged, reconnect or retry next turn');
+            fatal.retryable = false;
+            throw fatal;
+        }
         log('[xAI] Token refreshed — caller should retry', 'INFO');
         const retryError = new Error('OAuth token refreshed — retry');
         retryError.retryable = true;
@@ -690,8 +1022,14 @@ function repairReset() {
     _pendingPersistPayload = null;
     _persistAttempts = 0;
     _persistDurableError = false;
+    _markReauthPending = false;
+    _noteNotifiedPending = false;
+    _noteNotifiedPendingEpoch = -1;
     _opportunisticRefreshDone = false;
     _lastRefreshFailMono = 0n;
+    // BAT-1155: a fresh sign-in re-arms the autonomous notice (the store also resets
+    // reauthNotifiedEpoch to -1 in the same epoch-advanced snapshot).
+    _reauthNotifiedEpoch = -1;
 }
 
 // D8: ai.js tags each request with the generation it was built under, so a
@@ -711,6 +1049,66 @@ function hasPersistDurableError() { return _persistDurableError; }
 // re-pair threshold even when the surviving 403 classifies as 'provisioning', so a
 // genuinely dead session still surfaces re-pair (a fresh-token tier-gate does not).
 function isRefreshDead() { return _refreshDead; }
+
+// BAT-1155 D4 notify-once. ai.js gates the AUTONOMOUS (background) reconnect notice on
+// this: true only while the family is dead AND the single notice for the CURRENT dead
+// epoch hasn't fired yet. markReauthNotified is epoch-STABLE (Codex blocker-2 — it does
+// NOT advance the epoch), and sets `reauthNotifiedEpoch = expectedEpoch`, so
+// `reauthNotifiedEpoch === _currentEpoch` durably means "already notified for this dead
+// family". A sign-in/rotate resets it to -1 and advances the epoch, so this re-arms
+// cleanly after recovery. Explicit user requests are answered via classifyError's reauth
+// userMessage regardless of this gate — never silent.
+function shouldSurfaceReauthNotice() {
+    return isOAuth && _refreshDead && _reauthNotifiedEpoch !== _currentEpoch;
+}
+
+// BAT-1155 D4 — RESERVE the single autonomous reconnect notice for this dead epoch. Codex
+// re-review: to guarantee "at most one autonomous notice per dead epoch", ai.js RESERVES the
+// mark BEFORE sending and sends ONLY if this returns true. Returns:
+//   - true  → the epoch is now durably reserved (CAS'd) → ai.js may send the ONE notice; the
+//             in-memory suppressor is set so no further autonomous notice fires for this epoch;
+//   - false → NOT reserved: either the write failed (retry the reserve+send on a later dead
+//             turn / next boot — nothing was sent, so no duplicate) OR a CAS conflict means the
+//             dead family was superseded (no notice is due). Either way ai.js does NOT send.
+// The suppressor is set ONLY on a durable reserve, so a failed reserve can never silently
+// suppress a notice that never went out. Explicit user requests are answered regardless.
+// Single-flight (CodeRabbit): two concurrent ai.js turns could otherwise both reserve the same
+// epoch and both send the notice. Only the caller that INITIATES the reserve gets the real result
+// (true → send); a concurrent caller awaits the in-flight reserve and returns false (do NOT send),
+// so at most one autonomous notice goes out per epoch even under concurrency.
+let _noteInFlight = null;
+async function noteReauthNotified() {
+    if (_noteInFlight) { await _noteInFlight.catch(() => {}); return false; }
+    _noteInFlight = _persistNotifiedMark(_currentEpoch).finally(() => { _noteInFlight = null; });
+    return _noteInFlight;
+}
+
+async function _persistNotifiedMark(notifiedFor) {
+    try {
+        const result = await androidBridgeCall('/xai/oauth/mark-reauth', {
+            expectedEpoch: notifiedFor, notified: true,
+        });
+        if (result && result.code === 'XAI_OAUTH_EPOCH_CONFLICT') {
+            // A fresh sign-in/out advanced the epoch — the dead family this notice was for no
+            // longer exists. Adopt the new revision, drop any latch; no notice is due → false.
+            if (typeof result.currentEpoch === 'number') _currentEpoch = result.currentEpoch;
+            _reauthNotifiedEpoch = -1;
+            _noteNotifiedPending = false;
+            return false;
+        }
+        if (result && result.success === true) {
+            if (typeof result.epoch === 'number') _currentEpoch = result.epoch;
+            _reauthNotifiedEpoch = notifiedFor; // reserved → suppress future autonomous notices
+            _noteNotifiedPending = false;
+            return true; // reserved → ai.js may send the single notice
+        }
+        _noteNotifiedPending = true; _noteNotifiedPendingEpoch = notifiedFor; // not reserved
+        return false;
+    } catch (_) {
+        _noteNotifiedPending = true; _noteNotifiedPendingEpoch = notifiedFor;
+        return false;
+    }
+}
 
 // ── Connection test ─────────────────────────────────────────────────────────
 // NOTE (contract M5): the Kotlin-side connection test must use a 1-token
@@ -765,6 +1163,13 @@ module.exports = {
     isPersistPending,
     hasPersistDurableError,
     isRefreshDead,
+
+    // BAT-1155: xAI OAuth durability — shutdown drain + notify-once (ai.js / control server)
+    flushPendingPersist,
+    shouldSurfaceReauthNotice,
+    noteReauthNotified,
+    // Codex re-review test seam: drive the dead-mark retry deterministically.
+    _maybeRetryReauthMark,
 
     // Capabilities
     supportsCache: false,

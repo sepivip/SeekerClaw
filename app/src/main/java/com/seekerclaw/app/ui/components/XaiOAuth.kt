@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,11 +32,13 @@ import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.config.ConfigManager
 // DangerOutlineButton + cornerGlowBorder live in this same package — no extra import needed
 import com.seekerclaw.app.oauth.XaiOAuthActivity
+import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.ui.theme.Sizing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -91,8 +94,12 @@ fun rememberXaiOAuthController(
         }
     }
 
+    // CodeRabbit: sign-out does file I/O + a cross-process FileChannel lock (can block up
+    // to LOCK_TIMEOUT_MS) — must run off the UI thread, and its Result must gate the flow.
+    val scope = rememberCoroutineScope()
+
     // Poll the result file written by XaiOAuthActivity. Tokens are persisted by the
-    // activity directly via ConfigManager.persistXaiOAuthTokens — we just watch the
+    // activity directly into XaiOAuthTokenStore (BAT-1155) — we just watch the
     // status flag here to update the UI state.
     LaunchedEffect(requestId, isPolling) {
         val reqId = requestId ?: return@LaunchedEffect
@@ -155,17 +162,28 @@ fun rememberXaiOAuthController(
             error = null
         },
         signOut = {
-            // Clear all 4 OAuth prefs directly — using updateConfigField would no-op on a
-            // fresh install (loadConfig returns null until setup is complete), leaving tokens
-            // orphaned after a mid-onboarding sign-out.
-            ConfigManager.persistXaiOAuthTokens(
-                context = context,
-                accessToken = "",
-                refreshToken = "",
-                email = "",
-                expiresAt = "",
-            )
-            onSignedOut()
+            // BAT-1155: write an epoch-advanced sign-out TOMBSTONE into the store
+            // (dead record, no token). The advanced epoch CAS-rejects any in-flight
+            // old-family rotation so it can't resurrect the account, and the
+            // migration marker is preserved (a signed-out family must never be
+            // re-imported from stale legacy prefs). Then re-derive runtime_state's
+            // xai authType (H5) so a stale (xai, oauth) can't re-open the boot-loop.
+            // CodeRabbit: run off the UI thread and gate on the Result — do NOT sync
+            // runtime_state or fire onSignedOut() unless the tombstone write succeeded
+            // (else the UI would show "signed out" while the store still holds a live
+            // family that keeps rotating).
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val r = XaiOAuthTokenStore.signOut()
+                    if (r is XaiOAuthTokenStore.Result.Ok) ConfigManager.syncXaiRuntimeAuthType(context)
+                    r
+                }
+                if (result is XaiOAuthTokenStore.Result.Ok) {
+                    onSignedOut()
+                } else {
+                    error = "Sign-out failed — please try again."
+                }
+            }
         },
         cancel = {
             // BAT-1124 (CodeRabbit): stop the ACTIVE flow (loopback server + keep-alive service),

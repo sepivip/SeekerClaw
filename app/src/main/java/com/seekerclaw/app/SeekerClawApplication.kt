@@ -12,6 +12,7 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.state.McpServersStore
 import com.seekerclaw.app.state.RuntimeStateStore
+import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.ServiceState
@@ -32,6 +33,17 @@ class SeekerClawApplication : Application() {
         // throws and leaves the registry uninitialized so a retry
         // can re-attempt the load.
         com.seekerclaw.app.config.ModelRegistry.init(this)
+
+        // BAT-1155: initialize the dedicated cross-process xAI OAuth token
+        // store in EVERY process (NOT gated on isMainProcess). Unlike
+        // RuntimeStateStore — which the `:node` process reads via JS
+        // (runtime-state.js) — this store is accessed from Kotlin in BOTH
+        // processes: the MAIN process (sign-in via XaiOAuthActivity,
+        // sign-out, loadConfig sourcing) AND the `:node` process (the
+        // AndroidBridge rotation/mark-reauth handlers, the shutdown
+        // durability gate, and the writeConfigJson/loadConfig migration).
+        // init() is idempotent, so a second call is a no-op.
+        XaiOAuthTokenStore.init(this)
 
         // Firebase Analytics
         Analytics.init(this)

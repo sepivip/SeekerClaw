@@ -19,6 +19,7 @@ import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.state.CustomConfigSignature
 import com.seekerclaw.app.state.RuntimeState
 import com.seekerclaw.app.state.RuntimeStateStore
+import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import org.json.JSONArray
@@ -82,6 +83,13 @@ data class AppConfig(
     val xaiOAuthRefresh: String = "",
     val xaiOAuthEmail: String = "",
     val xaiOAuthExpiresAt: String = "",
+    // BAT-1155: the xAI OAuth triple above is now SOURCED FROM the dedicated
+    // XaiOAuthTokenStore (decrypted from its ciphertext), NOT from prefs. The
+    // three control fields below carry the store's non-secret revision/state
+    // so writeConfigJson can round-trip them into config.json for Node.
+    val xaiOAuthEpoch: Long = 0L,
+    val xaiOAuthReauthRequired: Boolean = false,
+    val xaiOAuthReauthNotifiedEpoch: Long = -1L,
 ) {
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
@@ -267,6 +275,20 @@ object ConfigManager {
     private const val KEY_XAI_OAUTH_REFRESH_ENC = "xai_oauth_refresh_enc"
     private const val KEY_XAI_OAUTH_EMAIL_ENC = "xai_oauth_email_enc"
     private const val KEY_XAI_OAUTH_EXPIRES_AT = "xai_oauth_expires_at"
+
+    // BAT-1155 §4: marker file (filesDir root, NOT workspace/) whose mere
+    // EXISTENCE means the xAI OAuth record has been adopted into
+    // XaiOAuthTokenStore — independent of whether the record decodes. The
+    // migration gates on this marker ALONE (Codex blocker 1): never a
+    // token-presence heuristic (which would resurrect a signed-out family
+    // from stale legacy prefs). Sign-out preserves the marker.
+    private const val XAI_OAUTH_MIGRATED_MARKER = "xai_oauth.migrated"
+
+    // Process-local latch: once this process has confirmed migration +
+    // legacy-key sweep, skip the per-loadConfig FS check. Each process
+    // (MAIN + :node) has its own copy and its own prefs view.
+    @Volatile
+    private var xaiOAuthMigrationDone = false
 
     // Email migration is a true one-shot: legacy plaintext key is consumed exactly once
     // and the encrypted form persists thereafter. Process flag avoids re-checking the
@@ -593,33 +615,20 @@ object ConfigManager {
         }
         editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
 
-        // BAT-1124: xAI api-key + OAuth secrets (mirror the OpenAI block above).
+        // BAT-1124: xAI api-key secret (api_key path). The xAI *OAuth* triple
+        // is intentionally NOT written here anymore.
         if (config.xaiApiKey.isNotBlank()) {
             val encXai = KeystoreHelper.encrypt(config.xaiApiKey)
             editor.putString(KEY_XAI_API_KEY_ENC, Base64.encodeToString(encXai, Base64.NO_WRAP))
         } else {
             editor.remove(KEY_XAI_API_KEY_ENC)
         }
-        if (config.xaiOAuthToken.isNotBlank()) {
-            val encXaiToken = KeystoreHelper.encrypt(config.xaiOAuthToken)
-            editor.putString(KEY_XAI_OAUTH_TOKEN_ENC, Base64.encodeToString(encXaiToken, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_XAI_OAUTH_TOKEN_ENC)
-        }
-        if (config.xaiOAuthRefresh.isNotBlank()) {
-            val encXaiRefresh = KeystoreHelper.encrypt(config.xaiOAuthRefresh)
-            editor.putString(KEY_XAI_OAUTH_REFRESH_ENC, Base64.encodeToString(encXaiRefresh, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_XAI_OAUTH_REFRESH_ENC)
-        }
-        if (config.xaiOAuthEmail.isNotBlank()) {
-            // Email is PII — encrypt at rest like other OAuth fields.
-            val encXaiEmail = KeystoreHelper.encrypt(config.xaiOAuthEmail)
-            editor.putString(KEY_XAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encXaiEmail, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_XAI_OAUTH_EMAIL_ENC)
-        }
-        editor.putString(KEY_XAI_OAUTH_EXPIRES_AT, config.xaiOAuthExpiresAt)
+        // BAT-1155: the KEY_XAI_OAUTH_TOKEN/REFRESH/EMAIL/EXPIRES writes were
+        // REMOVED. That whole-map `editor.commit()` flushing this MAIN-process
+        // snapshot back over the token `:node` had just rotated in prefs was
+        // the durability root cause (§2a). The xAI OAuth record now lives in
+        // XaiOAuthTokenStore, written ONLY by sign-in/sign-out (MAIN) and
+        // rotation (:node bridge) — no unrelated config save can clobber it.
 
         val persisted = editor.commit()
         if (!persisted) {
@@ -1017,6 +1026,10 @@ object ConfigManager {
     fun loadConfigOrBootstrap(context: Context): AppConfig = loadConfigUnchecked(context)
 
     private fun loadConfigUnchecked(context: Context): AppConfig {
+        // BAT-1155 §4: adopt the xAI OAuth record into XaiOAuthTokenStore
+        // (marker-gated, idempotent) BEFORE we read it below. Runs in BOTH
+        // the MAIN and `:node` processes — whichever loads config first.
+        migrateXaiOAuthToStoreIfNeeded(context)
         val p = prefs(context)
 
         val apiKey = try {
@@ -1208,32 +1221,32 @@ object ConfigManager {
             ""
         }
 
-        val xaiOAuthToken = try {
-            val enc = p.getString(KEY_XAI_OAUTH_TOKEN_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt xAI OAuth token", e)
-            LogCollector.append("[Config] Failed to decrypt xAI OAuth token: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
-
-        val xaiOAuthRefresh = try {
-            val enc = p.getString(KEY_XAI_OAUTH_REFRESH_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt xAI OAuth refresh token", e)
-            LogCollector.append("[Config] Failed to decrypt xAI OAuth refresh token: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
-
-        val xaiOAuthEmail = try {
-            val enc = p.getString(KEY_XAI_OAUTH_EMAIL_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt xAI OAuth email", e)
-            LogCollector.append("[Config] Failed to decrypt xAI OAuth email: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
+        // BAT-1155: the xAI OAuth triple is now the SINGLE SOURCE OF TRUTH
+        // in XaiOAuthTokenStore (ciphertext at rest). Decrypt on read; emit
+        // "" for token/refresh whenever the family is dead (tombstone OR
+        // reauthRequired) so no reader ever surfaces a consumed/blank token
+        // as usable. A missing/corrupt store fails closed to a reauth
+        // tombstone inside read(). Never logs decrypted values.
+        val xaiRec = XaiOAuthTokenStore.read()
+        // BAT-1155 amendment 3 (fail-safe emission): an armed rotation marker means a refresh POST
+        // for this epoch was in flight when the prior process died → the on-disk refresh token is
+        // POTENTIALLY CONSUMED. Never hand it to the provider — treat the family as dead (blank +
+        // reauthRequired) so :node boots INTO reconnect. SeekerClawService.reconcileXaiOAuthOnBoot
+        // durably converts this to reauth; this belt covers a conversion that could not persist.
+        val rotationUnsafe = !xaiRec.tombstone && xaiRec.rotationInFlightEpoch == xaiRec.epoch
+        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired || rotationUnsafe
+        // Decrypt the required token fields; null = a NON-blank ciphertext failed to
+        // decrypt (Codex major-1). A decrypt failure makes the family effectively dead —
+        // fail closed to reauth (blank tokens + reauthRequired) so it boots INTO reconnect,
+        // never downgrades to api_key on a "" that merely looks like an absent token.
+        val accessDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
+        val refreshDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
+        val xaiDecryptFailed = accessDec == null || refreshDec == null
+        val xaiEffectiveReauth = xaiRec.reauthRequired || rotationUnsafe || xaiDecryptFailed
+        val xaiDead = deadByFlag || xaiDecryptFailed
+        val xaiOAuthToken = if (xaiDead) "" else (accessDec ?: "")
+        val xaiOAuthRefresh = if (xaiDead) "" else (refreshDec ?: "")
+        val xaiOAuthEmail = decryptXaiCiphertext(xaiRec.emailEnc) ?: "" // email non-critical → "" on failure
 
         // BAT-515 v3 §4: prefer live AgentPreferencesStore values over
         // raw prefs. The observe-and-mirror collector already keeps
@@ -1299,7 +1312,11 @@ object ConfigManager {
             xaiOAuthToken = xaiOAuthToken,
             xaiOAuthRefresh = xaiOAuthRefresh,
             xaiOAuthEmail = xaiOAuthEmail,
-            xaiOAuthExpiresAt = p.getString(KEY_XAI_OAUTH_EXPIRES_AT, "") ?: "",
+            // BAT-1155: expiry + control fields come from the store, not prefs.
+            xaiOAuthExpiresAt = xaiRec.expiresAt,
+            xaiOAuthEpoch = xaiRec.epoch,
+            xaiOAuthReauthRequired = xaiEffectiveReauth,
+            xaiOAuthReauthNotifiedEpoch = xaiRec.reauthNotifiedEpoch,
         )
 
         // Reconcile with agent_settings.json so TG-initiated changes (via
@@ -1776,83 +1793,170 @@ object ConfigManager {
     }
 
     /**
-     * BAT-1124 — persist xAI Grok OAuth tokens directly to SharedPreferences, bypassing
-     * the full [saveConfig] path. Mirror of [persistOpenAIOAuthTokens]: used by
-     * [com.seekerclaw.app.oauth.XaiOAuthActivity] during the post-callback token exchange
-     * (works on a fresh install where saveConfig's prerequisites don't exist yet) AND by
-     * [com.seekerclaw.app.bridge.AndroidBridge] on Node's rotated-token refresh callback.
-     *
-     * Deliberately does NOT set `KEY_SETUP_COMPLETE` and does NOT touch provider/authType
-     * (so it can never seed the H5 boot-loop pair). Writes only the four xAI OAuth prefs
-     * (token + refresh + email + expiry) and bumps [configVersion] so reactive UI updates.
+     * BAT-1155: decrypt a base64 Keystore ciphertext blob from
+     * [XaiOAuthTokenStore]. Returns "" for a blank input or any decrypt
+     * failure (never throws, never logs the cleartext).
      */
-    fun persistXaiOAuthTokens(
-        context: Context,
-        accessToken: String,
-        refreshToken: String,
-        email: String,
-        expiresAt: String,
-    ): Boolean {
-        val editor = prefs(context).edit()
+    /**
+     * Decrypt a stored xAI OAuth ciphertext. Returns the plaintext, `""` for a
+     * BLANK ciphertext (a legitimately absent field), or `null` when a NON-blank
+     * ciphertext FAILS to decrypt (corruption / Keystore key change). Codex major-1:
+     * the caller MUST distinguish these — a decrypt failure of a required token is
+     * NOT the same as an absent token, and must fail closed to reauth rather than
+     * downgrade to api_key on a `""` that looks empty. Never logs decrypted values.
+     */
+    private fun decryptXaiCiphertext(enc: String): String? {
+        if (enc.isBlank()) return ""
+        return try {
+            KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decrypt xAI OAuth field", e)
+            LogCollector.append(
+                "[Config] Failed to decrypt xAI OAuth field: ${e.javaClass.simpleName}",
+                LogLevel.ERROR,
+            )
+            null
+        }
+    }
 
-        if (accessToken.isNotBlank()) {
-            val enc = KeystoreHelper.encrypt(accessToken)
-            editor.putString(KEY_XAI_OAUTH_TOKEN_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_XAI_OAUTH_TOKEN_ENC)
+    /**
+     * BAT-1155 §4 — one-time adoption of the legacy `seekerclaw_prefs` xAI
+     * OAuth keys into [XaiOAuthTokenStore]. Runs BEFORE the first config emit
+     * in BOTH the MAIN and `:node` processes (called from [loadConfigUnchecked]
+     * and [writeConfigJson]). Idempotent + cheap once the process-local latch
+     * is set.
+     *
+     * MARKER-ONLY gate (Codex blocker 1): keyed on the mere existence of
+     * `files/xai_oauth.migrated`, NEVER on a token-presence heuristic (which
+     * would resurrect a signed-out family from stale legacy prefs) and never
+     * on the store file's presence.
+     *  - marker ABSENT → under the store's sidecar lock, read the legacy
+     *    base64 CIPHERTEXT verbatim (NEVER decrypt), fill-only into the store
+     *    via [XaiOAuthTokenStore.migrateIfEmpty], verify Ok, THEN atomically
+     *    create the marker, THEN drop the legacy prefs keys from this process.
+     *  - marker PRESENT → the store (incl. a sign-out tombstone) is the sole
+     *    source of truth forever; just sweep any legacy keys still lingering
+     *    in this process's prefs view.
+     *
+     * Corruption fails closed inside [XaiOAuthTokenStore.read] (reauth
+     * tombstone) — this path never emits a legacy token post-adoption. Never
+     * logs decrypted values.
+     */
+    private fun migrateXaiOAuthToStoreIfNeeded(context: Context) {
+        if (xaiOAuthMigrationDone) return
+        // Can't adopt without the store; a later call (after init) retries.
+        if (!XaiOAuthTokenStore.isInitialized) return
+        val marker = File(context.filesDir, XAI_OAUTH_MIGRATED_MARKER)
+        val p = prefs(context)
+
+        if (marker.exists()) {
+            // Already adopted (possibly by the other process). Belt-and-
+            // suspenders: sweep any legacy keys still in this process's prefs.
+            sweepLegacyXaiOAuthKeys(p)
+            xaiOAuthMigrationDone = true
+            return
         }
 
-        if (refreshToken.isNotBlank()) {
-            val enc = KeystoreHelper.encrypt(refreshToken)
-            editor.putString(KEY_XAI_OAUTH_REFRESH_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_XAI_OAUTH_REFRESH_ENC)
-        }
+        // Ciphertext passthrough — read the base64 blobs VERBATIM; never decrypt.
+        val accessEnc = p.getString(KEY_XAI_OAUTH_TOKEN_ENC, "") ?: ""
+        val refreshEnc = p.getString(KEY_XAI_OAUTH_REFRESH_ENC, "") ?: ""
+        val emailEnc = p.getString(KEY_XAI_OAUTH_EMAIL_ENC, "") ?: ""
+        val expiresAt = p.getString(KEY_XAI_OAUTH_EXPIRES_AT, "") ?: ""
 
-        if (email.isNotBlank()) {
-            val enc = KeystoreHelper.encrypt(email)
-            editor.putString(KEY_XAI_OAUTH_EMAIL_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_XAI_OAUTH_EMAIL_ENC)
-        }
-
-        editor.putString(KEY_XAI_OAUTH_EXPIRES_AT, expiresAt)
-
-        val persisted = editor.commit()
-        if (persisted) {
-            bumpConfigVersionOnMain()
-            // BAT-1124 H5: persistXaiOAuthTokens bypasses saveConfig's runtime_state
-            // write, so a Settings-screen "Sign in with Grok" (or sign-out) would leave
-            // runtime_state.json stale. Node reads authType from runtime_state FIRST, so a
-            // stale (xai, api_key) after sign-in makes Node boot with a blank key →
-            // process.exit(1) DESPITE a valid token; a stale (xai, oauth) after sign-out
-            // re-opens the boot-loop. Re-derive the xai runtime authType through the same
-            // H5 gate so runtime_state and config.json can never disagree on the xai auth
-            // mode. Main-process only (:node never inits the store); best-effort — a failure
-            // here does NOT invalidate the token we just persisted.
-            if (RuntimeStateStore.isInitialized) {
-                try {
-                    val reloaded = loadConfig(context)
-                    if (reloaded != null && reloaded.provider == "xai") {
-                        kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                            RuntimeStateStore.update { current ->
-                                if (current.provider == "xai") current.copy(authType = runtimeAuthTypeFor(reloaded))
-                                else current
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
+        val storeReady: Boolean = if (accessEnc.isNotBlank()) {
+            // A legacy OAuth token exists — fill the store (fill-only, epoch 1).
+            when (XaiOAuthTokenStore.migrateIfEmpty(accessEnc, refreshEnc, emailEnc, expiresAt)) {
+                is XaiOAuthTokenStore.Result.Ok -> true
+                else -> {
+                    LogCollector.append(
+                        "[Config] xAI OAuth store migration write failed — retry next boot (marker NOT set)",
+                        LogLevel.WARN,
+                    )
+                    false
                 }
             }
         } else {
-            LogCollector.append("[Config] Failed to persist xAI OAuth tokens (commit=false)", LogLevel.ERROR)
+            // No legacy OAuth token to migrate. Leave the store at its
+            // fail-closed default and still adopt it (set the marker) so it
+            // becomes the sole source of truth going forward.
+            true
         }
-        // BAT-1124 (CodeRabbit): return the commit result so the bridge can PROPAGATE a
-        // persist failure to Node — H2 relies on the bridge returning {error} (not success)
-        // on an unpersisted rotation, so the turn fails loud instead of silently losing the
-        // rotated single-use refresh token (which would lock the account out on restart).
-        return persisted
+        if (!storeReady) return // do NOT set the marker; retry on the next call
+
+        // Atomically create the marker (verify-then-mark). Its existence — not
+        // decoding the record — is what flips this install to store-only.
+        val markerCreated = try {
+            val tmp = File(context.filesDir, "$XAI_OAUTH_MIGRATED_MARKER.tmp")
+            tmp.writeText("1")
+            java.nio.file.Files.move(
+                tmp.toPath(),
+                marker.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+            true
+        } catch (e: Exception) {
+            // Fall back to a plain create; if even that fails, retry next call.
+            try {
+                marker.createNewFile() || marker.exists()
+            } catch (e2: Exception) {
+                LogCollector.append(
+                    "[Config] xAI OAuth migration marker create failed — retry next boot: ${e2.javaClass.simpleName}",
+                    LogLevel.WARN,
+                )
+                false
+            }
+        }
+        if (!markerCreated) return
+
+        sweepLegacyXaiOAuthKeys(p)
+        xaiOAuthMigrationDone = true
+        LogCollector.append("[Config] xAI OAuth token store adopted (marker set)", LogLevel.INFO)
+    }
+
+    /** Drop the legacy xAI OAuth prefs keys (post-adoption). Inert after the
+     *  store becomes the source of truth; removed to prevent any future
+     *  accidental read. Uses apply() — best-effort, non-blocking. */
+    private fun sweepLegacyXaiOAuthKeys(p: SharedPreferences) {
+        if (p.contains(KEY_XAI_OAUTH_TOKEN_ENC) ||
+            p.contains(KEY_XAI_OAUTH_REFRESH_ENC) ||
+            p.contains(KEY_XAI_OAUTH_EMAIL_ENC) ||
+            p.contains(KEY_XAI_OAUTH_EXPIRES_AT)
+        ) {
+            p.edit()
+                .remove(KEY_XAI_OAUTH_TOKEN_ENC)
+                .remove(KEY_XAI_OAUTH_REFRESH_ENC)
+                .remove(KEY_XAI_OAUTH_EMAIL_ENC)
+                .remove(KEY_XAI_OAUTH_EXPIRES_AT)
+                .apply()
+        }
+    }
+
+    /**
+     * BAT-1155 H5 — after a MAIN-process sign-in/sign-out writes the store,
+     * re-derive the xai `runtime_state.json` authType through the same H5 gate
+     * so runtime_state (which Node reads FIRST) can never disagree with
+     * config.json on the xai auth mode. Preserves the exact behaviour the old
+     * `persistXaiOAuthTokens` had (ConfigManager.kt H5 block). Main-process
+     * only (`:node` never inits RuntimeStateStore); best-effort — a failure
+     * here does not invalidate the token already durably in the store.
+     */
+    fun syncXaiRuntimeAuthType(context: Context) {
+        bumpConfigVersionOnMain()
+        if (!RuntimeStateStore.isInitialized) return
+        try {
+            val reloaded = loadConfigOrBootstrap(context)
+            if (reloaded.provider == "xai") {
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    RuntimeStateStore.update { current ->
+                        if (current.provider == "xai") current.copy(authType = runtimeAuthTypeFor(reloaded))
+                        else current
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
+        }
     }
 
     /**
@@ -1917,10 +2021,11 @@ object ConfigManager {
             "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
             "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
             "xaiApiKey" -> config.copy(xaiApiKey = value)
-            "xaiOAuthToken" -> config.copy(xaiOAuthToken = value)
-            "xaiOAuthRefresh" -> config.copy(xaiOAuthRefresh = value)
-            "xaiOAuthEmail" -> config.copy(xaiOAuthEmail = value)
-            "xaiOAuthExpiresAt" -> config.copy(xaiOAuthExpiresAt = value)
+            // BAT-1155: the xAI OAuth triple is owned by XaiOAuthTokenStore
+            // (sign-in / rotation / sign-out) — NOT settable via updateConfigField
+            // anymore (saveConfig no longer persists these fields). The prior
+            // "xaiOAuthToken/Refresh/Email/ExpiresAt" cases were removed so a
+            // caller can't silently no-op a token write here.
             else -> return false
         }
         // saveConfig now syncs the agent_settings.json overlay
@@ -2027,7 +2132,14 @@ object ConfigManager {
      * its existing behaviour; only the xAI single-use-token path needs this gate.)
      */
     internal fun runtimeAuthTypeFor(config: AppConfig): String =
-        if (config.provider == "xai" && config.authType == "oauth" && config.xaiOAuthToken.isBlank())
+        // BAT-1155 CodeRabbit: a DEAD xAI-OAuth family (reauthRequired, token blanked) must
+        // STAY oauth in runtime_state.json too — Node reads runtime_state FIRST for
+        // provider/authType, so downgrading it to api_key here would split-brain against the
+        // oauth config.json and stop the family booting INTO reauth. Only a FRESH
+        // oauth-selected-but-never-signed-in family (blank token, NOT reauth) downgrades.
+        // Matches the writeConfigJson effectiveAuthType guard.
+        if (config.provider == "xai" && config.authType == "oauth" &&
+            config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired)
             "api_key" else config.authType
 
     /**
@@ -2036,6 +2148,11 @@ object ConfigManager {
      * Uses JSONObject to prevent JSON injection via user-supplied values.
      */
     fun writeConfigJson(context: Context, bridgeToken: String) {
+        // BAT-1155 §4: ensure the xAI OAuth record is adopted into the store
+        // BEFORE this (the `:node`-boot) config emit — so `:node` never emits
+        // an empty store on the first boot after upgrade. loadConfig() also
+        // triggers this, but calling it explicitly documents the ordering.
+        migrateXaiOAuthToStoreIfNeeded(context)
         val config = loadConfig(context)
         if (config == null) {
             LogCollector.append("[Config] writeConfigJson: loadConfig returned null (cross-process?)", LogLevel.WARN)
@@ -2061,7 +2178,14 @@ object ConfigManager {
             // fallback engage; if there is also no xaiApiKey, Node cleanly process.exit(1)s).
             val effectiveAuthType = when {
                 config.provider == "openai" && config.authType == "oauth" && config.openaiOAuthToken.isBlank() -> "api_key"
-                config.provider == "xai" && config.authType == "oauth" && config.xaiOAuthToken.isBlank() -> "api_key"
+                // BAT-1155: a DEAD xAI-OAuth family (tombstone/reauthRequired →
+                // xaiOAuthReauthRequired=true, token blanked) stays authType=oauth
+                // so Node boots INTO reauth (shows reconnect) instead of crashing
+                // "Missing required config". Only a FRESH oauth-selected-but-never-
+                // signed-in family (blank token, NOT reauth) downgrades to api_key
+                // so the api-key fallback engages or Node exits cleanly.
+                config.provider == "xai" && config.authType == "oauth" &&
+                    config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired -> "api_key"
                 else -> config.authType
             }
             put("authType", effectiveAuthType)
@@ -2105,13 +2229,27 @@ object ConfigManager {
             // OpenAI proactive-refresh hook is a separate follow-up; adding the field now
             // does not change OpenAI behavior (BAT-1143 Q6).
             if (config.openaiOAuthExpiresAt.isNotBlank()) put("openaiOAuthExpiresAt", config.openaiOAuthExpiresAt)
-            // BAT-1124: xAI — write each field only when non-blank. Node reads
-            // xaiApiKey / xaiOAuthToken / xaiOAuthRefresh / xaiOAuthExpiresAt.
+            // BAT-1124/1155: xAI. The api-key path stays prefs-backed; the OAuth
+            // triple + expiry are SOURCED FROM XaiOAuthTokenStore (decrypted in
+            // loadConfig, blanked for a dead/reauth family). Token/refresh/expiry
+            // are emitted only when non-blank (upgrade-safe; blank reads as "" on
+            // the Node side).
             if (config.xaiApiKey.isNotBlank()) put("xaiApiKey", config.xaiApiKey)
             if (config.xaiOAuthToken.isNotBlank()) put("xaiOAuthToken", config.xaiOAuthToken)
             if (config.xaiOAuthRefresh.isNotBlank()) put("xaiOAuthRefresh", config.xaiOAuthRefresh)
             // BAT-1143: the ISO-8601 access-token expiry that drives Node's proactive refresh.
             if (config.xaiOAuthExpiresAt.isNotBlank()) put("xaiOAuthExpiresAt", config.xaiOAuthExpiresAt)
+            // BAT-1155: the store's non-secret control fields, round-tripped so
+            // Node seeds its epoch / reauth gate on boot. Emitted for the xai
+            // provider only (Node ignores them otherwise). reauthRequired is
+            // ALWAYS emitted (even false) so a recovered family clears its boot
+            // gate; a dead family (reauthRequired=true, blank token) boots into
+            // reauth rather than process.exit.
+            if (config.provider == "xai") {
+                put("xaiOAuthEpoch", config.xaiOAuthEpoch)
+                put("xaiOAuthReauthRequired", config.xaiOAuthReauthRequired)
+                put("xaiOAuthReauthNotifiedEpoch", config.xaiOAuthReauthNotifiedEpoch)
+            }
             // NOTE: loadEnvVars() decrypts on the calling thread, matching the
             // pre-existing pattern in this function — every secret field above
             // (bot tokens, API keys, OAuth tokens, MCP tokens) is also decrypted
@@ -2210,10 +2348,14 @@ object ConfigManager {
             // (matching writeConfigJson's oauth+blank→api_key downgrade), not "either".
             // Otherwise api_key mode with a blank key but a STALE xaiOAuthToken would report
             // "startable" while Node, on api_key, finds a blank key → process.exit(1).
-            "xai" -> if (config.authType == "oauth" && config.xaiOAuthToken.isNotBlank()) {
-                true // oauth mode with a live token
-            } else {
-                config.xaiApiKey.isNotBlank() // api_key mode, or oauth downgraded to api_key
+            // BAT-1155: a DEAD oauth family (reauthRequired, token blanked) is STILL
+            // startable — the agent must boot to show the "reconnect xAI" message
+            // (BootReceiver auto-start / Dashboard gate). Otherwise the revoked-token
+            // brick just becomes a "missing_credential" brick.
+            "xai" -> when {
+                config.authType == "oauth" && config.xaiOAuthReauthRequired -> true // boots into reauth
+                config.authType == "oauth" && config.xaiOAuthToken.isNotBlank() -> true // live token
+                else -> config.xaiApiKey.isNotBlank() // api_key mode, or oauth downgraded to api_key
             }
             "openrouter" -> config.openrouterApiKey.isNotBlank()
             "custom" -> config.customApiKey.isNotBlank() && config.customBaseUrl.isNotBlank()

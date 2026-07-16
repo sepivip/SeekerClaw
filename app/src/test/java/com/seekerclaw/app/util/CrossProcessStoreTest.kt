@@ -301,7 +301,7 @@ class CrossProcessStoreTest {
         // order and publish a stale on-disk value AFTER a newer one
         // — a real race that regresses _state.
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue("must declare a Channel for reload coalescing",
             Regex("""reloadChannel\s*:\s*Channel<Unit>""").containsMatchIn(text) ||
                 Regex("""reloadChannel\s*=\s*Channel\s*\(\s*Channel\.CONFLATED""").containsMatchIn(text))
@@ -339,7 +339,7 @@ class CrossProcessStoreTest {
         // so a coroutine in flight at close-time can't publish
         // afterwards.
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue("must declare a closed: AtomicBoolean flag",
             Regex("""closed\s*=\s*AtomicBoolean""").containsMatchIn(text))
         assertTrue("reload() must short-circuit on closed",
@@ -365,7 +365,7 @@ class CrossProcessStoreTest {
         // `cloneSafe(initialSnapshot)` elsewhere can't satisfy the
         // assertion (the round-7 broken-guard lesson applies here too).
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue(
             "store must snapshot the constructor initial via cloneSafe(initial)",
             Regex("""initialSnapshot\s*:\s*T\s*=\s*cloneSafe\s*\(\s*initial\s*\)""").containsMatchIn(text),
@@ -401,7 +401,7 @@ class CrossProcessStoreTest {
         //   3) `encodeToString(serializer, snapshot)` uses the same
         //      stable snapshot for the disk write
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         val writeBlock = Regex(
             """fun\s+write\s*\(\s*value\s*:\s*T\s*\)(?:\s*:\s*Boolean)?\s*\{[\s\S]*?(?=\n\s{4}\}\n)""",
         ).find(text)?.value ?: error("write() function body not found")
@@ -446,7 +446,7 @@ class CrossProcessStoreTest {
         // construct from SeekerClawApplication.onCreate (main).
         // Pin that the catch-up read goes through coroutineScope.
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         // Find the trailing init block (the one with the drain
         // coroutine, NOT the basename-validation init).
         val initBlocks = Regex("""\binit\s*\{[\s\S]*?\n\s{4}\}""").findAll(text).map { it.value }.toList()
@@ -490,7 +490,7 @@ class CrossProcessStoreTest {
         // own broadcast was outside ITS synchronized block but
         // still inside update's outer one — reentrant monitor).
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
 
         for ((funName, regex) in listOf(
             "write" to Regex("""fun\s+write\s*\(\s*value\s*:\s*T\s*\)(?:\s*:\s*Boolean)?\s*\{[\s\S]*?(?=\n\s{4}\}\n)"""),
@@ -540,7 +540,7 @@ class CrossProcessStoreTest {
         // mutated post-construction and the next missing/malformed
         // read would clone the mutated state.
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue(
             "constructor must NOT store `initial` as a property (must be a non-stored param so the original reference goes out of scope)",
             !Regex("""private\s+val\s+initial\s*:\s*T""").containsMatchIn(text),
@@ -570,7 +570,7 @@ class CrossProcessStoreTest {
         // contract is explicit at the class level so a future
         // maintainer can't accidentally drop one side of the symmetry.
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue(
             "class KDoc must contain the 'Mutation safety' section",
             text.contains("## Mutation safety"),
@@ -623,7 +623,7 @@ class CrossProcessStoreTest {
             "app/src/main/java/com/seekerclaw/app/util/CrossProcessStore.kt"
         )
         assertTrue("CrossProcessStore.kt locatable from test cwd", src.exists())
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue("ignoreUnknownKeys must remain true (forward-compat invariant)",
             Regex("""ignoreUnknownKeys\s*=\s*true""").containsMatchIn(text))
         assertTrue("Json must encodeDefaults so first-write hydrate stays stable",
@@ -679,7 +679,7 @@ class CrossProcessStoreTest {
         //      future refactor that flips the success flag without
         //      returning it can't sneak through).
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue(
             "write() must return Boolean (was Unit pre-BAT-513)",
             Regex("""fun\s+write\s*\(\s*value\s*:\s*T\s*\)\s*:\s*Boolean\s*\{""")
@@ -716,7 +716,7 @@ class CrossProcessStoreTest {
         // read+transform+write in `synchronized(writeLock)` (NOT in a
         // separate Mutex that wouldn't serialize against write()).
         val src = locateLiveSource()
-        val text = src.readText()
+        val text = src.readText().replace("\r\n", "\n") // CRLF-tolerant: drift regexes anchor on \n
         assertTrue(
             "update must be declared suspend with the (T) -> T transform shape",
             Regex(

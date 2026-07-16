@@ -163,10 +163,26 @@ test('R2 Copilot: /shutdown/flush surfaces flush failures as 500', () => {
     const tail = src.slice(startIdx);
     const endIdx = tail.search(/(?:^|\n)\s{4}(?:if \(url ===|return _json\(res, 404)/);
     const flushBlock = endIdx >= 0 ? tail.slice(0, endIdx) : tail;
-    assert.ok(/_json\(res,\s*200,\s*\{\s*ok:\s*true\s*\}/.test(flushBlock),
-        '/shutdown/flush must return 200/{ok:true} on success');
-    assert.ok(/_json\(res,\s*500,\s*\{\s*ok:\s*false/.test(flushBlock),
+    // BAT-1155 D6: the success body now also carries `pendingPersist` (the xAI
+    // token-drain signal the Kotlin durability gate reads), so match `ok:true`
+    // followed by more fields rather than an exact `{ok:true}`.
+    assert.ok(/_json\(res,\s*200,\s*\{[^}]*ok:\s*true/.test(flushBlock),
+        '/shutdown/flush must return 200 with ok:true on success');
+    assert.ok(/_json\(res,\s*500,\s*\{[^}]*ok:\s*false/.test(flushBlock),
         '/shutdown/flush must return 500/{ok:false} on flush failure (not 200/{ok:true})');
+    // The success + failure bodies must both surface pendingPersist so the Kotlin
+    // durability gate can decide whether a rotated xAI token is still stranded.
+    assert.ok(/_json\(res,\s*200,\s*\{[^}]*pendingPersist/.test(flushBlock),
+        '/shutdown/flush 200 body must include pendingPersist (BAT-1155 durability signal)');
+    assert.ok(/_json\(res,\s*500,[\s\S]{0,260}?pendingPersist/.test(flushBlock),
+        '/shutdown/flush 500 body must ALSO include pendingPersist (a flush that fails still reports whether a token is stranded)');
+    // Codex re-review blocker-2: the AUTHORITATIVE diskUnsafe signal (superset of
+    // pendingPersist — also covers convergence-exhausted + failed dead-mark) must be
+    // emitted on BOTH the success and failure bodies so the Kotlin gate keys on it.
+    assert.ok(/_json\(res,\s*200,\s*\{[^}]*diskUnsafe/.test(flushBlock),
+        '/shutdown/flush 200 body must include diskUnsafe (Codex re-review blocker-2 authoritative signal)');
+    assert.ok(/_json\(res,\s*500,[\s\S]{0,260}?diskUnsafe/.test(flushBlock),
+        '/shutdown/flush 500 body must ALSO include diskUnsafe (a failed flush still reports whether the on-disk token is unsafe)');
 });
 
 test('R3 Copilot: _readBody handles aborted/close events', () => {
@@ -178,6 +194,79 @@ test('R3 Copilot: _readBody handles aborted/close events', () => {
         '_readBody must listen for aborted to handle client timeout');
     assert.ok(/req\.on\s*\(\s*['"]close['"]/.test(src),
         '_readBody must listen for close to handle abrupt disconnects');
+});
+
+test('BAT-1155 blocker (quiesce): /shutdown/flush quiesces first; /unquiesce resumes', () => {
+    // Codex re-review blocker: a controlled Stop must QUIESCE (refuse new turns/heartbeats/
+    // rotations) BEFORE draining, so nothing strands a fresh token between the durability ack
+    // and the kill; an abandoned Stop must be able to /unquiesce.
+    const ctrl = fs.readFileSync(CONTROL_JS, 'utf8');
+    // quiesce() must be called inside the /shutdown/flush handler, BEFORE the drain (which
+    // starts at the _xaiFlush call). Pin the ordering, not just presence.
+    const flushIdx = ctrl.indexOf("url === '/shutdown/flush'");
+    const quiesceIdx = ctrl.indexOf('quiesce()', flushIdx);
+    const drainIdx = ctrl.indexOf('_xaiFlush()', flushIdx);
+    assert.ok(quiesceIdx > flushIdx && drainIdx > flushIdx && quiesceIdx < drainIdx,
+        '/shutdown/flush must call quiesce() before draining the xAI token state');
+    assert.ok(/url === '\/unquiesce'/.test(ctrl) && /require\(['"]\.\/quiesce['"]\)\.unquiesce\(\)/.test(ctrl),
+        'an /unquiesce endpoint must exist and call unquiesce()');
+    assert.ok(/_json\(res,\s*200,\s*\{[^}]*notifyPending/.test(ctrl),
+        '/shutdown/flush 200 body must include notifyPending (major-2 metadata)');
+    // The rotation-refusal gate lives at the rotation root.
+    const xai = fs.readFileSync(path.join(ROOT, 'app', 'src', 'main', 'assets', 'nodejs-project', 'providers', 'xai.js'), 'utf8');
+    assert.ok(/function refreshOAuthToken\(\)\s*\{[\s\S]{0,900}?isQuiesced\(\)/.test(xai),
+        'refreshOAuthToken must refuse to rotate while quiesced');
+    const nccKt = fs.readFileSync(path.join(ROOT, 'app', 'src', 'main', 'java', 'com', 'seekerclaw', 'app', 'bridge', 'NodeControlClient.kt'), 'utf8');
+    assert.ok(/suspend\s+fun\s+unquiesce\s*\(/.test(nccKt),
+        'NodeControlClient must expose suspend fun unquiesce() for the abandon path');
+    // Codex re-review major-2: quiesce must be a time-based LEASE (auto-expire), not a sticky
+    // flag, so an abandoned kept-alive agent self-resumes even if every unquiesce is lost.
+    const q = fs.readFileSync(path.join(ROOT, 'app', 'src', 'main', 'assets', 'nodejs-project', 'quiesce.js'), 'utf8');
+    assert.ok(/LEASE_MS/.test(q) && /hrtime/.test(q) && /_quiescedUntilMs/.test(q),
+        'quiesce.js must be a monotonic-clock lease that auto-expires, not a sticky boolean');
+    // And the abandoned Stop must RETRY unquiesce, not fire one ignored call.
+    const svc = fs.readFileSync(SERVICE_KT, 'utf8');
+    assert.ok(/unquiesceUntilConfirmed/.test(svc),
+        'an abandoned Stop must retry unquiesce (bounded), not a single ignored call');
+    // Codex re-review blocker: a SUCCESSFUL Stop must RENEW the lease from an independent thread
+    // until kill (via /quiesce). CodeRabbit: scope the check to the DURABLE arm of stopWithDurability
+    // (not a whole-file grep). The lifecycle-bound renewal BEHAVIOR itself is covered by the runtime
+    // regression LeaseRenewalTest (survives failures, runs past the old cap, stops only on cancel).
+    const stopWithDur = svc.slice(svc.indexOf('private fun stopWithDurability'), svc.indexOf('private fun finishStop'));
+    const durableArm = stopWithDur.slice(stopWithDur.indexOf('durable ->'), stopWithDur.indexOf('attempt < MAX_KEEPALIVE_STOP_ATTEMPTS'));
+    assert.ok(/startLeaseRenewal\s*\(\s*\)/.test(durableArm),
+        'the DURABLE arm of stopWithDurability must start lease renewal');
+    assert.ok(/stopLeaseRenewal/.test(svc),
+        'stopLeaseRenewal must exist (abandon path + lifecycle entries)');
+    assert.ok(/url === '\/quiesce'/.test(ctrl) && /require\(['"]\.\/quiesce['"]\)\.quiesce\(\)/.test(ctrl),
+        'a /quiesce endpoint must exist to re-arm the lease');
+    assert.ok(/suspend\s+fun\s+quiesce\s*\(/.test(nccKt),
+        'NodeControlClient must expose suspend fun quiesce() for the lease renewer');
+});
+
+test('BAT-1155 blocker-1: controlled Stop calls finishStop ONLY on positive durability', () => {
+    // Codex re-review blocker-1: a controlled Stop must NEVER call stopService()/finishStop()
+    // without positive durability. Pin that stopWithDurability invokes finishStop exactly once
+    // — inside the `durable ->` arm — and that the exhausted (else) arm keeps the service ALIVE
+    // (no finishStop, no blind "OS fallback" kill).
+    const src = fs.readFileSync(SERVICE_KT, 'utf8');
+    const startIdx = src.indexOf('private fun stopWithDurability');
+    assert.ok(startIdx >= 0, 'stopWithDurability must exist');
+    const endIdx = src.indexOf('private fun finishStop', startIdx);
+    assert.ok(endIdx > startIdx, 'finishStop must be defined right after stopWithDurability');
+    const body = src.slice(startIdx, endIdx);
+    const finishCalls = (body.match(/finishStop\s*\(/g) || []).length;
+    assert.strictEqual(finishCalls, 1,
+        `stopWithDurability must call finishStop EXACTLY once (the durable arm); found ${finishCalls}`);
+    assert.ok(/durable\s*->[\s\S]*?finishStop\s*\(/.test(body),
+        'the durable branch must be the one that calls finishStop');
+    const elseIdx = body.lastIndexOf('else ->');
+    assert.ok(elseIdx >= 0, 'the exhausted (else) arm must exist');
+    const elseArm = body.slice(elseIdx);
+    assert.ok(!/finishStop\s*\(/.test(elseArm),
+        'the exhausted arm must NOT call finishStop (never kill without durability)');
+    assert.ok(/postDurabilityStuckNotice/.test(elseArm),
+        'the exhausted arm must keep the service alive and surface the stuck notice');
 });
 
 test('main.js wires flushForShutdown into internal-control-server.start', () => {
@@ -242,8 +331,15 @@ test('R4 Copilot: timeout budget chain stays within outer 2000ms (HttpURLConnect
     assert.ok(Number.isFinite(connect) && Number.isFinite(read),
         'NodeControlClient must declare numeric CONNECT_TIMEOUT_MS + READ_TIMEOUT_MS');
     const ktWorstCase = connect + read;
-    assert.ok(ktWorstCase <= 2000,
-        `NodeControlClient timeout budget (CONNECT=${connect} + READ=${read} = ${ktWorstCase}ms) must fit within SeekerClawService.onDestroy() outer withTimeoutOrNull(2000)`);
+    // Derive the outer teardown budget from the service itself (BAT-1155 D6 raised it
+    // to 2500ms to cover the xAI token-drain 300ms + summary 1200ms) rather than
+    // hardcoding it, so this guard tracks the real code instead of drifting stale.
+    const svc = fs.readFileSync(SERVICE_KT, 'utf8');
+    const outer = parseInt(((svc.match(/flushNodeBeforeProcessKill\(timeoutMs:\s*Long\s*=\s*([\d_]+)L/) || [])[1] || '').replace(/_/g, ''), 10);
+    assert.ok(Number.isFinite(outer),
+        'SeekerClawService.flushNodeBeforeProcessKill must declare a numeric timeoutMs default (the outer teardown budget)');
+    assert.ok(ktWorstCase <= outer,
+        `NodeControlClient timeout budget (CONNECT=${connect} + READ=${read} = ${ktWorstCase}ms) must fit within SeekerClawService flush outer withTimeoutOrNull(${outer})`);
 
     const ctrl = fs.readFileSync(CONTROL_JS, 'utf8');
     const summary = parseInt((ctrl.match(/summaryTimeoutMs:\s*(\d+)/) || [])[1], 10);
@@ -266,10 +362,13 @@ test('NodeControlClient exposes flushShutdown that hits POST /shutdown/flush wit
     const NCC_KT = path.join(ROOT, 'app', 'src', 'main', 'java', 'com',
         'seekerclaw', 'app', 'bridge', 'NodeControlClient.kt');
     const src = fs.readFileSync(NCC_KT, 'utf8');
-    assert.ok(/suspend\s+fun\s+flushShutdown\s*\(\s*\)/.test(src),
-        'NodeControlClient must expose suspend fun flushShutdown()');
-    assert.ok(/post\s*\(\s*"\/shutdown\/flush"/.test(src),
-        'flushShutdown must POST to /shutdown/flush via the shared post() helper');
+    assert.ok(/suspend\s+fun\s+flushShutdown\s*\(/.test(src),
+        'NodeControlClient must expose suspend fun flushShutdown(...)');
+    // BAT-1155 D6: flushShutdown reads the response body (for `pendingPersist`) so it
+    // routes through the body-returning postForBody() helper — which sets the same
+    // X-Bridge-Token header — instead of the boolean-only post().
+    assert.ok(/postForBody\s*\(\s*"\/shutdown\/flush"/.test(src),
+        'flushShutdown must POST to /shutdown/flush via the shared postForBody() helper (returns body for pendingPersist)');
     // The shared post() helper sets the X-Bridge-Token header from
     // ServiceState.bridgeToken — these are pre-existing invariants
     // (since BAT-514) but pinning them here as well makes the

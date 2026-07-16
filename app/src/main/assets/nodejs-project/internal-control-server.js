@@ -138,6 +138,11 @@ let _requestReconcile = null;
 // `require('./database')` (which would create a circular import:
 // database -> ... -> internal-control-server -> database).
 let _flushShutdown = null;
+// BAT-1155 D6: xAI OAuth token drain, run BEFORE the session-summary flush on USER_STOP
+// so a just-rotated token pair reaches disk before the unavoidable killProcess() (else
+// the next boot reloads a consumed refresh token). Wired in main.js as the active
+// provider's bounded flushPendingPersist (300ms). No-op / absent for non-xAI providers.
+let _xaiFlush = null;
 let _logFn = console.log;
 
 /**
@@ -165,6 +170,7 @@ function start(options) {
     _getDbSummary = typeof options.getDbSummary === 'function' ? options.getDbSummary : null;
     _requestReconcile = typeof options.requestReconcile === 'function' ? options.requestReconcile : null;
     _flushShutdown = typeof options.flushShutdown === 'function' ? options.flushShutdown : null;
+    _xaiFlush = typeof options.xaiFlush === 'function' ? options.xaiFlush : null;
     _logFn = typeof options.logFn === 'function' ? options.logFn : console.log;
 
     if (_server) return _server;
@@ -361,6 +367,23 @@ async function _route(req, res) {
         return _json(res, 200, { ok: true });
     }
 
+    if (url === '/quiesce') {
+        // BAT-1155 Codex re-review blocker: (re)ARM the quiesce lease. Kotlin's lease renewer
+        // POSTs this on an independent (non-main-looper) cadence from the moment durability is
+        // proven until the process kill begins, so a delayed main-looper handoff can't let the
+        // lease expire and admit a new rotation between the durability ack and teardown. Idempotent.
+        require('./quiesce').quiesce();
+        return _json(res, 200, { ok: true });
+    }
+
+    if (url === '/unquiesce') {
+        // BAT-1155 Codex re-review blocker: Kotlin calls this when a controlled Stop is
+        // ABANDONED (durability could not be established and the service is kept alive instead
+        // of killed) so the agent resumes accepting turns/heartbeats/rotations. Idempotent.
+        require('./quiesce').unquiesce();
+        return _json(res, 200, { ok: true });
+    }
+
     if (url === '/shutdown/flush') {
         // BAT-525: Android user-Stop kills :node via `killProcess()`,
         // which bypasses Node's SIGTERM/SIGINT handlers (nodejs-mobile
@@ -373,14 +396,29 @@ async function _route(req, res) {
         if (!_flushShutdown) {
             return _json(res, 503, { error: 'flush unavailable' });
         }
+        // BAT-1155 Codex re-review blocker: QUIESCE first — atomically stop accepting new
+        // turns/heartbeats/token rotations BEFORE draining, so nothing can consume the on-disk
+        // T0 and mint a fresh unsafe pair between this "disk safe" acknowledgement and the kill.
+        // The process stays quiesced until teardown; if the Stop is abandoned (kept alive),
+        // Kotlin calls /unquiesce to resume normal operation.
+        require('./quiesce').quiesce();
         // R1 Copilot: drain the request body before awaiting the
         // flush. Body is currently expected to be `{}` (≤256 bytes
         // is generous). Leaving it unread can cause keep-alive
         // connection issues and unnecessary buffering on the
         // listener. The shared _readBody also handles abort/close
         // (R3) so a Kotlin-side timeout doesn't leak this handler.
+        // BAT-1155 hotfix: a `{"durabilityOnly":true}` body makes this endpoint answer the
+        // brick-critical durability question FAST (xAI drain only) and SKIP the best-effort
+        // session summary — see the durabilityOnly short-circuit after the drain. The pre-stop
+        // gate and onDestroy guard send this so a slow summary can't null out their durability
+        // answer. Absent/`{}` body preserves the full flush (summary + db) for a real shutdown.
+        let _durabilityOnly = false;
         try {
-            await _readBody(req, 256);
+            const _rawBody = await _readBody(req, 256);
+            if (_rawBody) {
+                try { _durabilityOnly = !!JSON.parse(_rawBody).durabilityOnly; } catch (_) { /* {} → full flush */ }
+            }
         } catch (err) {
             // Body-too-large is unlikely (Kotlin sends `{}`) but
             // surface as 413 for symmetry with the other endpoints.
@@ -400,6 +438,48 @@ async function _route(req, res) {
         // failure mode this endpoint exists to handle. Now: 200 +
         // `{ok:true}` only on clean success; 500 + `{ok:false,
         // error:...}` if `flushShutdown` rejects.
+        // BAT-1155 D6: drain the xAI OAuth token persist FIRST — token durability
+        // outranks the session summary. Bounded to 300ms inside flushPendingPersist so
+        // the endpoint total stays ≤1700ms (300 drain + 1200 summary + overhead). Never
+        // throws; a failed drain must not block the summary flush that follows.
+        // BAT-1155 verify major-2: report whether a rotated pair is STILL stranded
+        // after the drain. The Kotlin controlled-stop durability gate fires ONLY on
+        // this signal, so a benign summary-flush hiccup can't force a healthy family
+        // to re-pair.
+        let xaiPending = false;
+        // Codex re-review blocker-2: the AUTHORITATIVE "on-disk record unsafe to boot from"
+        // signal — a superset of pendingPersist that also covers convergence-exhausted
+        // (T1 discarded, consumed T0 on disk) and a failed dead-family mark (disk still
+        // says the revoked family is live). The Kotlin gate keys on THIS, not pendingPersist.
+        let xaiDiskUnsafe = false;
+        // Codex re-review major-2: separate metadata — the notify-once mark is still unpersisted.
+        // Not a brick (won't gate the kill); surfaced for observability + the shutdown drain attempt.
+        let xaiNotifyPending = false;
+        if (_xaiFlush) {
+            try {
+                const r = await _xaiFlush();
+                xaiPending = !!(r && r.pendingPersist);
+                xaiDiskUnsafe = !!(r && r.diskUnsafe);
+                xaiNotifyPending = !!(r && r.notifyPending);
+            } catch (err) {
+                // flushPendingPersist is designed never to throw; if it does, a rotated
+                // pair may be stranded → fail closed so the Kotlin gate fires.
+                xaiPending = true;
+                xaiDiskUnsafe = true;
+                _logFn(`[ControlServer] /shutdown/flush xAI token drain failed: ${err.message}`, 'WARN');
+            }
+        }
+        // BAT-1155 hotfix: the pre-stop durability gate and the onDestroy guard need ONLY the
+        // diskUnsafe signal, which the xAI drain above has already computed (≤300ms). Respond
+        // NOW — WITHOUT waiting on the best-effort, up-to-1200ms, sometimes-timing-out session
+        // summary. Blocking the durability answer behind the summary is what let a slow summary
+        // exceed the Kotlin gate's per-round read budget → return null → misread as "Node
+        // unreachable" → fail-closed markReauth on a VALID fresh sign-in (the soak brick). The
+        // terminal onDestroy path still flushes the summary via a separate (non-durabilityOnly)
+        // call, so no session-summary durability is lost.
+        if (_durabilityOnly) {
+            return _json(res, 200, { ok: true, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe, notifyPending: xaiNotifyPending });
+        }
         try {
             // R4 Copilot: summaryTimeoutMs reduced 1500 → 1200 so the
             // Kotlin-side worst-case wall time (CONNECT 250 + READ
@@ -426,7 +506,7 @@ async function _route(req, res) {
             // step errors are caught inside — but defense-in-depth).
             const result = await _flushShutdown('USER_STOP', { summaryTimeoutMs: 1200 });
             if (result && result.ok) {
-                return _json(res, 200, { ok: true });
+                return _json(res, 200, { ok: true, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe, notifyPending: xaiNotifyPending });
             }
             const detail = result || {};
             // R8 Copilot: log partial flush at WARN, not ERROR. A partial
@@ -444,10 +524,13 @@ async function _route(req, res) {
                 ok: false,
                 summaryFailed: detail.summaryFailed || null,
                 dbFailed: !!detail.dbFailed,
+                pendingPersist: xaiPending,
+                diskUnsafe: xaiDiskUnsafe,
+                notifyPending: xaiNotifyPending,
             });
         } catch (err) {
             _logFn(`[ControlServer] /shutdown/flush threw: ${err.message}`, 'ERROR');
-            return _json(res, 500, { ok: false, error: err.message });
+            return _json(res, 500, { ok: false, error: err.message, pendingPersist: xaiPending, diskUnsafe: xaiDiskUnsafe, notifyPending: xaiNotifyPending });
         }
     }
 

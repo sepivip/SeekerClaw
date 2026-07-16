@@ -57,10 +57,15 @@ const _securityStub = {
 // Configurable bridge stub (the real androidBridgeCall ALWAYS resolves — it
 // resolves { error } on failure and { success: true } on a persisted write).
 let _bridgeResult = { success: true };
+// BAT-1155 stop-fence: the pre-POST rotation gate. Defaults to Ok so refresh tests that only care
+// about the persist/mark path are unaffected; a gate test overrides it to Fenced/Dead/Unsafe/Conflict.
+let _prepareRefreshResult = { success: true };
 const _bridgeCalls = [];
 const _bridgeStub = {
     androidBridgeCall: (endpoint, data) => {
         _bridgeCalls.push({ endpoint, data });
+        if (endpoint === '/xai/oauth/prepare-refresh') return Promise.resolve(_prepareRefreshResult);
+        if (endpoint === '/xai/oauth/clear-rotation-in-flight') return Promise.resolve({ success: true });
         return Promise.resolve(_bridgeResult);
     },
 };
@@ -97,9 +102,25 @@ function loadXai({ authType = 'api_key', oauthToken = '', refresh = '', apiKey =
 // Monkeypatch the real https module (xai.js does `require('https').request`).
 let _httpsCallCount = 0;
 const _origHttpsRequest = https.request;
-function installHttpsMock({ statusCode = 200, body = {}, delayMs = 0 } = {}) {
+// `reqError` (a coded Error-like, e.g. { code:'ECONNREFUSED' }) or `reqTimeout:true` emulate a
+// TRANSPORT-layer failure with NO HTTP response — the path that reaches _performRefresh's catch and
+// the marker-clear discipline (BAT-1155 M3). Otherwise a normal `statusCode`/`body` response fires.
+function installHttpsMock({ statusCode = 200, body = {}, delayMs = 0, reqError = null, reqTimeout = false } = {}) {
     https.request = function (opts, cb) {
         _httpsCallCount++;
+        const req = new EventEmitter();
+        req.write = () => {};
+        req.end = () => {};
+        req.destroy = () => {};
+        if (reqError || reqTimeout) {
+            // Transport failure: emit on `req` (after _requestRotatedTokens attaches its
+            // 'error'/'timeout' handlers) — cb(res) is NEVER called, mirroring a real socket error.
+            setTimeout(() => {
+                if (reqTimeout) req.emit('timeout');
+                else req.emit('error', reqError);
+            }, delayMs);
+            return req;
+        }
         const res = new EventEmitter();
         res.statusCode = statusCode;
         // Fire on a later tick so the caller has attached res.on(...) (inside cb)
@@ -109,10 +130,6 @@ function installHttpsMock({ statusCode = 200, body = {}, delayMs = 0 } = {}) {
             res.emit('data', JSON.stringify(body));
             res.emit('end');
         }, delayMs);
-        const req = new EventEmitter();
-        req.write = () => {};
-        req.end = () => {};
-        req.destroy = () => {};
         return req;
     };
 }
@@ -283,11 +300,16 @@ async function testRefreshSingleFlightAndPersist() {
 
     await Promise.all([p1, p2]);
     ok('single-flight: auth.x.ai token POST fired exactly once', _httpsCallCount === 1, `count=${_httpsCallCount}`);
-    ok('single-flight: bridge persist called exactly once', _bridgeCalls.length === 1, `calls=${_bridgeCalls.length}`);
+    // BAT-1155: a refresh now first hits /xai/oauth/prepare-refresh (the pre-POST rotation gate),
+    // then /xai/oauth/save-tokens (the persist). Filter to the persist to pin single-flight.
+    const persistCalls = _bridgeCalls.filter(c => c.endpoint.includes('save-tokens'));
+    ok('single-flight: bridge persist called exactly once', persistCalls.length === 1, `persistCalls=${persistCalls.length}`);
+    ok('single-flight: exactly one prepare-refresh gate call',
+        _bridgeCalls.filter(c => c.endpoint === '/xai/oauth/prepare-refresh').length === 1);
 
     // H2: the persist was AWAITED and got the rotated access token.
-    ok('await-persist: bridge received the ROTATED access token', _bridgeCalls[0] && _bridgeCalls[0].data.accessToken === 'eyJnew.acc.tok');
-    ok('await-persist: hit the /xai/oauth/save-tokens endpoint', _bridgeCalls[0] && _bridgeCalls[0].endpoint === '/xai/oauth/save-tokens', _bridgeCalls[0] && _bridgeCalls[0].endpoint);
+    ok('await-persist: bridge received the ROTATED access token', persistCalls[0] && persistCalls[0].data.accessToken === 'eyJnew.acc.tok');
+    ok('await-persist: hit the /xai/oauth/save-tokens endpoint', persistCalls[0] && persistCalls[0].endpoint === '/xai/oauth/save-tokens', persistCalls[0] && persistCalls[0].endpoint);
 
     // H1: both rotated tokens registered with the redactor.
     ok('H1: rotated ACCESS token registered for redaction', _registeredSecrets.includes('eyJnew.acc.tok'));
@@ -729,10 +751,193 @@ async function testHandleUnauthorized() {
         catchIdx !== -1 && rebuildIdx !== -1 && rebuildIdx > catchIdx, `catchIdx=${catchIdx} rebuildIdx=${rebuildIdx}`);
 })();
 
+// Codex re-review blocker-2 + major-2: the AUTHORITATIVE diskUnsafe signal + the
+// notify-once retry. flushPendingPersist must report diskUnsafe:true for EVERY on-disk-unsafe
+// state (not just a pending pair), and a failed notify-once mark must be retained + retried.
+async function testDurabilitySignalsAndNotifyRetry() {
+    console.log('\n── Codex re-review: diskUnsafe signal + notify-once retry ──');
+
+    // (1) Clean oauth family → diskUnsafe false.
+    let xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    let r = await xai.flushPendingPersist();
+    ok('clean: flushPendingPersist reports diskUnsafe:false', r.diskUnsafe === false && r.pendingPersist === false);
+
+    // (2) Convergence exhausted (T1 discarded, consumed T0 on disk) → diskUnsafe TRUE
+    //     even though pendingPersist is false (the previously-hidden brick vector).
+    xai._setStateForTests({ persistPending: false, pendingPersistPayload: null, persistDurableError: true });
+    r = await xai.flushPendingPersist();
+    ok('convergence-exhausted: pendingPersist false but diskUnsafe TRUE', r.pendingPersist === false && r.diskUnsafe === true);
+
+    // (3) Failed dead-family mark (disk still says the revoked family is live) → diskUnsafe TRUE.
+    xai._setStateForTests({ persistDurableError: false, markReauthPending: true });
+    r = await xai.flushPendingPersist();
+    ok('failed dead-mark: diskUnsafe TRUE', r.diskUnsafe === true);
+
+    // (4) api_key family is never disk-unsafe (no rotation hazard).
+    const xaiApi = loadXai({ authType: 'api_key', apiKey: 'k' });
+    xaiApi._resetErrorStateForTests();
+    xaiApi._setStateForTests({ persistDurableError: true, markReauthPending: true });
+    r = await xaiApi.flushPendingPersist();
+    ok('api_key: diskUnsafe always false (isOAuth-gated)', r.diskUnsafe === false);
+
+    // (5) RESERVE-before-send (Codex re-review): noteReauthNotified() returns whether the dead
+    //     epoch was DURABLY reserved. A failed reserve → false (ai.js must NOT send; it retries the
+    //     reserve+send later — nothing was sent, so no duplicate) and does NOT set the suppressor.
+    //     A successful reserve → true (ai.js sends the ONE notice) and sets the suppressor.
+    xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
+    _bridgeResult = { error: 'lock busy' };
+    _bridgeCalls.length = 0;
+    let reserved = await xai.noteReauthNotified();
+    ok('reserve: a FAILED mark returns false (ai.js must NOT send)', reserved === false);
+    ok('reserve: a failed mark does NOT set the suppressor (no silent swallow)', xai._getStateForTests().reauthNotifiedEpoch !== 5);
+    ok('reserve: still SURFACEable so a later turn retries the reserve+send', xai.shouldSurfaceReauthNotice() === true);
+    _bridgeResult = { success: true, epoch: 5 };
+    reserved = await xai.noteReauthNotified();
+    ok('reserve: a SUCCESSFUL mark returns true (ai.js sends the one notice)', reserved === true);
+    ok('reserve: success sets the suppressor → no further autonomous notice for this epoch', xai._getStateForTests().reauthNotifiedEpoch === 5);
+    ok('reserve: suppressed after a durable reserve', xai.shouldSurfaceReauthNotice() === false);
+
+    // (6) reserve that CAS-CONFLICTS (a fresh sign-in advanced the epoch) → false (no notice is
+    //     due for a superseded family); adopt the new epoch and drop the suppressor.
+    xai._setStateForTests({ refreshDead: true, currentEpoch: 5, reauthNotifiedEpoch: -1 });
+    _bridgeResult = { code: 'XAI_OAUTH_EPOCH_CONFLICT', currentEpoch: 9 };
+    reserved = await xai.noteReauthNotified();
+    const st = xai._getStateForTests();
+    ok('reserve: a CAS conflict returns false (no notice for a superseded family)', reserved === false);
+    ok('reserve: conflict adopts the new epoch + drops the suppressor', st.currentEpoch === 9 && st.reauthNotifiedEpoch === -1);
+
+    // (7) BLOCKER (quiesce) — while quiesced for a controlled Stop, a token ROTATION is refused
+    //     (no consumed-T0/mint-T1 pair can form between the durability ack and the kill); it
+    //     resumes after unquiesce.
+    const quiesce = require(path.join(BUNDLE, 'quiesce.js'));
+    xai = loadXai({ authType: 'oauth', oauthToken: 'o', refresh: 'r0' });
+    xai._resetErrorStateForTests();
+    installHttpsMock({ statusCode: 200, body: { access_token: 'a.b.c', refresh_token: 'r1', expires_in: 21600 } });
+    quiesce.quiesce();
+    _httpsCallCount = 0;
+    await xai.refreshOAuthToken();
+    ok('quiesce: refreshOAuthToken does NOT rotate while quiesced (no https POST)', _httpsCallCount === 0);
+    quiesce.unquiesce();
+    await xai.refreshOAuthToken();
+    ok('unquiesce: rotation resumes (one https POST)', _httpsCallCount === 1);
+    restoreHttps();
+    quiesce.unquiesce(); // leave clean for any later test
+}
+
 // ── Runner ───────────────────────────────────────────────────────────────────
+
+// BAT-1155 stop-fence: the pre-POST rotation gate. Every non-Ok prepare-refresh outcome must
+// prevent the external token POST (auth.x.ai). Drives the REAL refresh path with a stubbed bridge.
+async function testPrepareRefreshGate() {
+    console.log('\n── BAT-1155 stop-fence: pre-POST prepare-refresh gate ──');
+    const near = () => ({ expiresAtMs: Date.now() + 60 * 1000 }); // inside the 5min buffer → refresh wants to fire
+    // Returns the observable OUTCOME of one gated refresh, not just the POST count — so the tests can
+    // tell 'skip' (keep the family LIVE: no POST, refreshDead stays false, epoch NOT adopted) apart
+    // from 'dead' (surface reconnect: no POST, but refreshDead latched + reauth persisted). Keying on
+    // POST-count alone can't distinguish them (M4), and can't catch a Conflict re-adopting the winning
+    // epoch (M5) — both would ship a healthy-family-bricking regression green.
+    const runRefresh = async (prep) => {
+        _httpsCallCount = 0;
+        _bridgeResult = { success: true };
+        _prepareRefreshResult = prep;
+        installHttpsMock({ statusCode: 200, body: { access_token: 'n.e.w', refresh_token: 'r', expires_in: 21600 } });
+        const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0' });
+        xai._resetErrorStateForTests();
+        xai._setStateForTests(near());
+        const epochBefore = xai._getStateForTests().currentEpoch;
+        await xai.ensureFreshToken(); // proactive path swallows a refusal/throw
+        restoreHttps();
+        const st = xai._getStateForTests();
+        return { posts: _httpsCallCount, refreshDead: st.refreshDead, epochBefore, epochAfter: st.currentEpoch };
+    };
+
+    // Ok → POST proceeds; success adopts the winning epoch (the positive half of M5's invariant).
+    const okRes = await runRefresh({ success: true, epoch: 7 });
+    ok('prepare-refresh Ok → the refresh POST proceeds', okRes.posts === 1);
+    ok('prepare-refresh Ok → the success branch ADOPTS r.epoch', okRes.epochAfter === 7);
+
+    // Fenced / Conflict → 'skip': NO POST, family stays LIVE (refreshDead false).
+    const fenced = await runRefresh({ success: false, fenced: true });
+    ok('prepare-refresh Fenced (a stop is in progress) → NO token POST', fenced.posts === 0);
+    ok('prepare-refresh Fenced → family stays live (refreshDead NOT latched — skip, not dead)', fenced.refreshDead === false);
+
+    const conflict = await runRefresh({ success: false, code: 'XAI_OAUTH_EPOCH_CONFLICT', currentEpoch: 9 });
+    ok('prepare-refresh Conflict (superseded epoch) → NO token POST', conflict.posts === 0);
+    ok('prepare-refresh Conflict → family stays live (refreshDead NOT latched)', conflict.refreshDead === false);
+    // M5 (Codex break-fix): a Conflict must NOT adopt the winner's epoch (adopting would poison a
+    // later mark-reauth/persist onto the freshly-signed-in family, bricking it).
+    ok('prepare-refresh Conflict → does NOT adopt r.currentEpoch (epoch unchanged)',
+        conflict.epochAfter === conflict.epochBefore, `before=${conflict.epochBefore} after=${conflict.epochAfter}`);
+
+    // Unsafe / Dead → 'dead': NO POST, but the family is surfaced for reconnect (refreshDead latched).
+    const unsafe = await runRefresh({ success: false, unsafe: true });
+    ok('prepare-refresh Unsafe (rotation already in flight) → NO second token POST', unsafe.posts === 0);
+    ok('prepare-refresh Unsafe → surfaces reconnect (refreshDead LATCHED — dead, not skip)', unsafe.refreshDead === true);
+
+    const dead = await runRefresh({ success: false, dead: true });
+    ok('prepare-refresh Dead (reauth/tombstone family) → NO token POST', dead.posts === 0);
+    ok('prepare-refresh Dead → surfaces reconnect (refreshDead LATCHED)', dead.refreshDead === true);
+
+    // Reset the gate default so later tests are unaffected.
+    _prepareRefreshResult = { success: true };
+}
+
+// BAT-1155 M3: the rotation-marker CLEAR discipline (Codex decisions #1/#2). After a gate-'ok' POST
+// fails, the durable marker is cleared ONLY when the transport PROVES no request bytes reached xAI
+// (pre-connection DNS / connection-refused). A timeout, a socket reset, or ANY received HTTP response
+// RETAINS the marker (the on-disk refresh token may be consumed) — else a consumed-token replay on the
+// next boot revokes the whole family. Drives the REAL _performRefresh catch via an erroring socket.
+async function testMarkerClearDiscipline() {
+    console.log('\n── BAT-1155 M3: rotation-marker clear discipline (provably-not-sent) ──');
+    // Run one refresh whose POST fails per `mockOpts`; report whether a clear-rotation-in-flight
+    // bridge call fired (the marker was cleared) AND how many token POSTs were issued. The POST count
+    // proves the failure happened AFTER the request was sent (CodeRabbit round-2) — a retained-marker
+    // case that never POSTed (e.g. a gate skip) would be a false pass.
+    const failedPost = async (mockOpts) => {
+        _bridgeCalls.length = 0;
+        _httpsCallCount = 0;
+        _bridgeResult = { success: true };
+        _prepareRefreshResult = { success: true }; // gate arms the marker → the POST proceeds
+        installHttpsMock(mockOpts);
+        const xai = loadXai({ authType: 'oauth', oauthToken: 'a.b.c', refresh: 'r0' });
+        xai._resetErrorStateForTests();
+        try { await xai.refreshOAuthToken(); } catch (_) { /* the POST failure rejects — expected */ }
+        restoreHttps();
+        return {
+            cleared: _bridgeCalls.some((c) => c.endpoint === '/xai/oauth/clear-rotation-in-flight'),
+            posts: _httpsCallCount,
+        };
+    };
+    // Assert the marker outcome AND that exactly one token POST was issued (the failure is post-send).
+    const expectMarker = async (label, mockOpts, wantCleared) => {
+        const r = await failedPost(mockOpts);
+        ok(`${label} (token POST was issued)`, r.posts === 1, `posts=${r.posts}`);
+        ok(label, r.cleared === wantCleared);
+    };
+
+    // Provably-not-sent (pre-connection) → marker CLEARED (avoids a needless reconnect).
+    await expectMarker('ECONNREFUSED → marker CLEARED (provably not sent)', { reqError: { code: 'ECONNREFUSED' } }, true);
+    await expectMarker('ENOTFOUND → marker CLEARED (DNS, provably not sent)', { reqError: { code: 'ENOTFOUND' } }, true);
+    await expectMarker('EAI_AGAIN → marker CLEARED (DNS temp, provably not sent)', { reqError: { code: 'EAI_AGAIN' } }, true);
+
+    // NOT provable (the token MAY be consumed) → marker RETAINED (no clear call).
+    await expectMarker('timeout → marker RETAINED (token may be consumed)', { reqTimeout: true }, false);
+    await expectMarker('ECONNRESET (mid-flight reset) → marker RETAINED', { reqError: { code: 'ECONNRESET' } }, false);
+    await expectMarker('HTTP 500 (a response WAS received) → marker RETAINED', { statusCode: 500, body: {} }, false);
+    await expectMarker('HTTP 400 invalid_grant (a response WAS received) → marker RETAINED', { statusCode: 400, body: { error: 'invalid_grant' } }, false);
+
+    _prepareRefreshResult = { success: true };
+    _bridgeResult = { success: true };
+}
 
 (async function run() {
     try {
+        await testPrepareRefreshGate();
+        await testMarkerClearDiscipline();
+        await testDurabilitySignalsAndNotifyRetry();
         await testRefreshSingleFlightAndPersist();
         await testRefreshMintStateD3();
         await testPersistFailureAvailabilityFirst();

@@ -261,6 +261,8 @@ const {
     writeAgentHealthFile,
     setChatDeps,
     getActiveTask, clearActiveTask,
+    // BAT-1155: USER_STOP xAI OAuth token drain (wired into the control server below).
+    flushProviderPersist,
 } = require('./ai');
 
 const { loadCheckpoint, listCheckpoints, saveCheckpoint, deleteCheckpoint, cleanupChatCheckpoints } = require('./task-store');
@@ -785,6 +787,8 @@ telegram('getMe')
                 getDbSummary,
                 requestReconcile: (id) => mcpManager.requestReconcile(id),
                 flushShutdown: flushForShutdown,
+                // BAT-1155 D6: xAI OAuth token drain, run before the summary flush.
+                xaiFlush: flushProviderPersist,
                 logFn: log,
             });
             startMcpFileWatch();
@@ -930,6 +934,8 @@ telegram('getMe')
             getDbSummary,
             requestReconcile: (id) => mcpManager.requestReconcile(id),
             flushShutdown: flushForShutdown,
+            // BAT-1155 D6: xAI OAuth token drain, run before the summary flush.
+            xaiFlush: flushProviderPersist,
             logFn: log,
         });
         startMcpFileWatch();
@@ -1091,6 +1097,10 @@ let isHeartbeatInFlight = false;
 let lastHeartbeatAt = Date.now();
 
 async function runHeartbeat() {
+    // BAT-1155 Codex re-review blocker: skip heartbeat-triggered turns while quiesced for a
+    // controlled Stop — a heartbeat turn could otherwise start work (and a token rotation)
+    // after the durability acknowledgement and before the process kill.
+    if (require('./quiesce').isQuiesced()) return;
     const rawOwnerChatId = channel.getOwnerChatId();
     if (!rawOwnerChatId) return; // agent not set up yet (or DM channel not opened for Discord)
 
