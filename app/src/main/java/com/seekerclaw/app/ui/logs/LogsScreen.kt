@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.LogRedactor
 import java.util.Date
 
 @Composable
@@ -172,9 +173,13 @@ fun LogsScreen() {
                             appendLine("[${entry.level.name}] [$timeStr] ${entry.message}")
                         }
                     }
+                    // BAT-1161 P1A gate 6: Share second pass. Entries are already redacted at
+                    // LogCollector.append ingress; re-redact the assembled blob defense-in-depth
+                    // so nothing leaves the device unmasked even if a raw path ever slips in.
+                    val shareText = try { LogRedactor.redact(logText) } catch (_: Throwable) { "[[redaction-error]]" }
                     val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                         type = "text/plain"
-                        putExtra(android.content.Intent.EXTRA_TEXT, logText)
+                        putExtra(android.content.Intent.EXTRA_TEXT, shareText)
                         putExtra(android.content.Intent.EXTRA_SUBJECT, "SeekerClaw Logs")
                     }
                     context.startActivity(android.content.Intent.createChooser(sendIntent, "Share Logs"))

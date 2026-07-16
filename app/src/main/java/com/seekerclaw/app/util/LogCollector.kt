@@ -99,9 +99,15 @@ object LogCollector {
     // happened, not when it was forwarded. Omitted (null) for Kotlin-native logs and legacy
     // Node lines → receipt time, as before.
     fun append(message: String, level: LogLevel = LogLevel.INFO, eventTimeMs: Long? = null) {
+        // BAT-1161 P1A gate 6: redact at the TOP so the in-memory ring (screen), service_logs,
+        // AND Share all receive the masked text in ONE pass. Secrecy-fail-CLOSED / operation-
+        // fail-OPEN: if the redactor throws, replace the whole entry with a marker (never show
+        // the raw message, which might contain the secret) but NEVER drop the log or crash the
+        // caller — and do NOT recursively log the redactor failure.
+        val safe = try { LogRedactor.redact(message) } catch (_: Throwable) { "[[redaction-error]]" }
         val entry = LogEntry(
             timestamp = eventTimeMs ?: System.currentTimeMillis(),
-            message = message,
+            message = safe,
             level = level,
         )
 
