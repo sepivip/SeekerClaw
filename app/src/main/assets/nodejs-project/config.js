@@ -14,28 +14,43 @@ const workDir = process.argv[2] || __dirname;
 const debugLog = path.join(workDir, 'node_debug.log');
 
 // ============================================================================
-// LOG ROTATION — prevent debug log from growing unbounded on mobile
+// LOG ROTATION — continuous bounded rotation (BAT-1161 P1A)
 // ============================================================================
+// node_debug.log is bounded by a size check INSIDE log() (running byte count, not
+// boot-only), so a long-running session can't grow it unbounded. Rotation renames the
+// whole current file to `.old` (single generation, NO carryover) and starts a fresh
+// current with a `=== ROTATED gen=N ===` marker. The Kotlin forwarder detects the
+// identity change (inode) and drains `.old` to EOF before resetting to the new current
+// (see SeekerClawService). Numbers are PROVISIONAL pending gate-8 device measurement.
+const LOG_MAX_BYTES = 5 * 1024 * 1024;      // rotate current at ~5 MB
+const LOG_MAX_RECORD_BYTES = 64 * 1024;     // per physical-line cap (< 256 KB forwarder delta)
+const LOG_FMT_VERSION = 1;                  // wire format: LEVEL|epochMs|message
+let _logRotationSeq = 0;                    // Node-local rotation counter for this boot
+let _logCurrentBytes = -1;                  // running size of current file; -1 = (re)stat next call
 
-const LOG_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
-try {
-    if (fs.existsSync(debugLog)) {
-        const stat = fs.statSync(debugLog);
-        if (stat.size > LOG_MAX_BYTES) {
-            // Read as Buffer to work with byte offsets (not character length)
-            const buffer = fs.readFileSync(debugLog);
-            const KEEP_BYTES = 1024 * 1024; // 1 MB
-            const startOffset = Math.max(0, buffer.length - KEEP_BYTES);
-            const trimmed = buffer.subarray(startOffset).toString('utf8');
-            // Find first complete line
-            const firstNewline = trimmed.indexOf('\n');
-            const clean = firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed;
-            // Archive old log, write trimmed version
-            try { fs.renameSync(debugLog, debugLog + '.old'); } catch (_) {}
-            fs.writeFileSync(debugLog, `INFO|--- Log rotated (was ${(stat.size / 1024 / 1024).toFixed(1)} MB, kept last ~1 MB) ---\n` + clean);
-        }
+// Truncate a string to at most maxBytes UTF-8 bytes without splitting a multibyte char.
+function _truncateUtf8(s, maxBytes) {
+    const buf = Buffer.from(s, 'utf8');
+    if (buf.length <= maxBytes) return s;
+    let end = maxBytes;
+    while (end > 0 && (buf[end] & 0xC0) === 0x80) end--; // back off a UTF-8 continuation byte
+    return buf.subarray(0, end).toString('utf8') + '…[truncated]';
+}
+
+// Rotate the current log to `.old` and start a fresh current. NO carryover — the whole
+// current becomes the completed `.old` generation. MUST NOT call log() (a recursive
+// failure could loop): errors are swallowed and retried on a later size check.
+function _rotateLog() {
+    try {
+        try { fs.renameSync(debugLog, debugLog + '.old'); } catch (_) { /* rename may fail; still start a fresh current */ }
+        _logRotationSeq++;
+        const marker = `INFO|${Date.now()}|=== ROTATED gen=${_logRotationSeq} logfmt=${LOG_FMT_VERSION} ===\n`;
+        fs.writeFileSync(debugLog, marker);
+        _logCurrentBytes = Buffer.byteLength(marker, 'utf8');
+    } catch (_) {
+        _logCurrentBytes = -1; // couldn't write a fresh current — force a re-stat + retry next call
     }
-} catch (_) {} // Non-fatal — don't prevent startup
+}
 
 // ============================================================================
 // TIME UTILITIES
@@ -71,8 +86,28 @@ function setRedactFn(fn) {
 
 function log(msg, level = 'INFO') {
     const safe = _redactFn ? _redactFn(msg) : msg;
-    const line = `${level}|${safe}\n`;
-    try { fs.appendFileSync(debugLog, line); } catch (_) {}
+    const epoch = Date.now();
+    // Wire format: `LEVEL|epochMs|message`. A multiline message is framed one physical line
+    // per record (all sharing this call's epoch) so every forwarded line is a complete record;
+    // redaction already ran on the whole message above (redact-before-split). Per-record UTF-8 cap.
+    const text = String(safe);
+    const parts = text.length ? text.split('\n') : [''];
+    let out = '';
+    for (let ln of parts) {
+        if (Buffer.byteLength(ln, 'utf8') > LOG_MAX_RECORD_BYTES) ln = _truncateUtf8(ln, LOG_MAX_RECORD_BYTES);
+        out += `${level}|${epoch}|${ln}\n`;
+    }
+    try {
+        fs.appendFileSync(debugLog, out);
+    } catch (_) { return; }
+    // Continuous size check via a running byte count (no per-call stat: only (re)stat to
+    // initialize/recover). Overshoot is bounded to at most one max record.
+    if (_logCurrentBytes < 0) {
+        try { _logCurrentBytes = fs.statSync(debugLog).size; } catch (_) { _logCurrentBytes = 0; }
+    } else {
+        _logCurrentBytes += Buffer.byteLength(out, 'utf8');
+    }
+    if (_logCurrentBytes > LOG_MAX_BYTES) _rotateLog();
 }
 
 log('Starting SeekerClaw AI Agent...', 'DEBUG');
@@ -90,6 +125,11 @@ if (!fs.existsSync(configPath)) {
 }
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+// BAT-1161 P1A: session-boundary banner, emitted right after config parse so the Kotlin
+// startup-watermark forwarder and humans can delimit each :node session. boot/build/version
+// are generated Kotlin-side and transported via config.json — never a packaged asset (BAT-1073).
+log(`=== SESSION boot=${config.bootId || 'unknown'} build=${config.gitSha || '?'} ver=${config.appVersion || '?'} logfmt=${LOG_FMT_VERSION} pid=${process.pid} ===`, 'INFO');
 
 // Strip hidden line breaks from secrets (clipboard paste can include \r\n, Unicode separators)
 function normalizeSecret(val) {
