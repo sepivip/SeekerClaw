@@ -64,7 +64,11 @@ object DeviceInfoProvider {
         val filesDir = context.filesDir
         val workspaceDir = File(filesDir, "workspace")
         val databaseMb = fileSizeMb(File(workspaceDir, "seekerclaw.db"))
-        val nodeDebugLogMb = fileSizeMb(File(workspaceDir, "node_debug.log"))
+        // BAT-1161 P1A: count the rotated `.old` generation too — continuous rotation means
+        // node_debug.log.old is a real sibling on disk; without it the log's storage footprint
+        // (and the workspace subtraction) was under-reported by up to a full generation.
+        val nodeDebugLogMb = fileSizeMb(File(workspaceDir, "node_debug.log")) +
+            fileSizeMb(File(workspaceDir, "node_debug.log.old"))
         val workspaceMb = dirSizeMb(workspaceDir) - databaseMb - nodeDebugLogMb
         val logsMb = fileSizeMb(File(filesDir, "service_logs")) + nodeDebugLogMb
         val runtimeMb = dirSizeMb(File(filesDir, "nodejs-project"))

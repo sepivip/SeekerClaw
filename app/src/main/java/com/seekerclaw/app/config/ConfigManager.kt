@@ -2147,6 +2147,16 @@ object ConfigManager {
      * Includes per-boot bridge auth token. File is deleted after Node.js reads it.
      * Uses JSONObject to prevent JSON injection via user-supplied values.
      */
+    // BAT-1161 P1A gate 5: ONE shared boot ID per service process. Generated once here (this
+    // ConfigManager object lives for the process lifetime), transported to Node via config.json
+    // — never a packaged asset (BAT-1073). Node stamps it into the `=== SESSION boot=… ===`
+    // banner; the rotation-generation identity (gate 3) keys off the same id so Node and Kotlin
+    // agree on which :node boot a forwarded log line belongs to.
+    @Volatile private var _bootId: String? = null
+    fun currentBootId(): String = _bootId ?: synchronized(this) {
+        _bootId ?: java.util.UUID.randomUUID().toString().replace("-", "").take(8).also { _bootId = it }
+    }
+
     fun writeConfigJson(context: Context, bridgeToken: String) {
         // BAT-1155 §4: ensure the xAI OAuth record is adopted into the store
         // BEFORE this (the `:node`-boot) config emit — so `:node` never emits
@@ -2196,6 +2206,11 @@ object ConfigManager {
             put("maxStepsPerTurn", config.maxStepsPerTurn)
             put("richMessages", config.richMessages)
             put("bridgeToken", bridgeToken)
+            // BAT-1161 P1A gate 5: session-banner metadata. Node has no BuildConfig and log()'s
+            // first calls run before config parse, so boot/build/version travel via config.json.
+            put("bootId", currentBootId())
+            put("appVersion", BuildConfig.VERSION_NAME)
+            put("gitSha", BuildConfig.GIT_SHA)
             if (config.braveApiKey.isNotBlank()) put("braveApiKey", config.braveApiKey)
             put("searchProvider", config.searchProvider)
             if (config.perplexityApiKey.isNotBlank()) put("perplexityApiKey", config.perplexityApiKey)

@@ -185,16 +185,18 @@ fun LogsScreen() {
                         tint = SeekerClawColors.TextDim,
                     )
                 }
+                // BAT-1161 P1A: "Clear console" — this only clears the service_logs mirror +
+                // in-memory ring, NOT Node's node_debug.log (which keeps recording and re-forwards).
                 TextButton(onClick = { showClearDialog = true }) {
                     Icon(
                         Icons.Default.Delete,
-                        contentDescription = "Clear logs",
+                        contentDescription = "Clear console",
                         tint = SeekerClawColors.TextDim,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Clear",
+                        text = "Clear console",
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextDim,
@@ -473,7 +475,7 @@ fun LogsScreen() {
             },
             text = {
                 Text(
-                    "This will delete all log entries. This cannot be undone.",
+                    "This clears the on-screen console and its mirror. Node's own debug log keeps recording, so new entries will appear again.",
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
