@@ -38,6 +38,51 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.UUID
 
+// ── BAT-1161 P1A: node_debug.log line parser (the Kotlin half of the one-wire contract) ──
+// config.js log() writes `LEVEL|epochMs|message` (epochMs = Node Date.now(), 13 digits).
+// Backward compatible with the legacy `LEVEL|message` (and raw) format.
+
+internal data class ParsedNodeLine(
+    val level: LogLevel,
+    val message: String,
+    val eventTimeMs: Long?,   // Node event time for new-format lines; null ⇒ receipt time
+    val malformedEpoch: Boolean = false, // 2nd token looked epoch-shaped but was out of range
+)
+
+private const val LOG_EPOCH_FLOOR_MS = 1_600_000_000_000L // 2020-09-13; older ⇒ not an epoch we emit
+private const val LOG_EPOCH_SKEW_MS = 5 * 60 * 1000L      // tolerate 5 min of device clock skew
+
+// Pure, unit-testable. `nowMs` is injected so the range check is deterministic in tests.
+internal fun parseNodeDebugLine(line: String, nowMs: Long): ParsedNodeLine {
+    val firstPipe = line.indexOf('|')
+    if (firstPipe <= 0) return ParsedNodeLine(LogLevel.INFO, line, null) // raw / no level
+    val level = when (line.substring(0, firstPipe)) {
+        "ERROR" -> LogLevel.ERROR
+        "WARN" -> LogLevel.WARN
+        "DEBUG" -> LogLevel.DEBUG
+        "INFO" -> LogLevel.INFO
+        else -> null
+    } ?: return ParsedNodeLine(LogLevel.INFO, line, null) // unknown prefix ⇒ whole line as INFO
+    val secondPipe = line.indexOf('|', firstPipe + 1)
+    // Absent 2nd pipe ⇒ UNCONDITIONAL legacy: everything after the level is the message.
+    // (Critical: a bare `WARN|1784100000000` must NOT adopt the epoch and drop its message.)
+    if (secondPipe < 0) return ParsedNodeLine(level, line.substring(firstPipe + 1), null)
+    val token = line.substring(firstPipe + 1, secondPipe)
+    val epochShaped = token.length in 12..14 && token.all { it in '0'..'9' }
+    if (epochShaped) {
+        val v = token.toLongOrNull()
+        if (v != null && v >= LOG_EPOCH_FLOOR_MS && v <= nowMs + LOG_EPOCH_SKEW_MS) {
+            // New format. Message = everything after the 2nd pipe (later `|` preserved).
+            return ParsedNodeLine(level, line.substring(secondPipe + 1), v)
+        }
+        // Epoch-shaped but out of range ⇒ corruption: receipt-time, and flag a (throttled) warn.
+        return ParsedNodeLine(level, line.substring(firstPipe + 1), null, malformedEpoch = true)
+    }
+    // 2nd pipe present but not epoch-shaped ⇒ a LEGACY message that merely contains a pipe.
+    // Keep the whole remainder as the message, receipt time, and DO NOT warn (no false positive).
+    return ParsedNodeLine(level, line.substring(firstPipe + 1), null)
+}
+
 class SeekerClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
@@ -65,6 +110,9 @@ class SeekerClawService : Service() {
     // either fully drained or the trailing partial-line case is hit.
     // The loop replaces a prior per-event recursive launch.
     private val nodeDebugMaxDeltaBytes = 256 * 1024L // 256 KB
+
+    // BAT-1161 P1A: throttle the "corrupt epoch token" forward diagnostic to >=60s.
+    @Volatile private var lastMalformedEpochWarnMs = 0L
 
     // SupervisorJob so a single coroutine failure doesn't cancel the
     // whole scope. Cancellable from onDestroy to ensure no in-flight
@@ -218,25 +266,19 @@ class SeekerClawService : Service() {
             // decoding could mojibake non-ASCII messages on devices
             // where the JVM default differs.
             val lines = String(forwardBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
+            val nowMs = System.currentTimeMillis()
+            var malformedEpochSeen = false
             for (line in lines) {
-                val pipeIdx = line.indexOf('|')
-                val (level, message) = if (pipeIdx > 0) {
-                    val lvl = line.substring(0, pipeIdx)
-                    val msg = line.substring(pipeIdx + 1)
-                    val parsed = when (lvl) {
-                        "ERROR" -> LogLevel.ERROR
-                        "WARN" -> LogLevel.WARN
-                        "DEBUG" -> LogLevel.DEBUG
-                        "INFO" -> LogLevel.INFO
-                        else -> null
-                    }
-                    if (parsed != null) parsed to msg
-                    else LogLevel.INFO to line // unknown prefix — treat whole line as INFO
-                } else {
-                    // Fallback for unparsed lines (old format, raw output)
-                    LogLevel.INFO to line
-                }
-                LogCollector.append("[Node] $message", level)
+                val parsed = parseNodeDebugLine(line, nowMs)
+                if (parsed.malformedEpoch) malformedEpochSeen = true
+                // Node event-time for new-format lines; receipt-time (null) for legacy/raw.
+                LogCollector.append("[Node] ${parsed.message}", parsed.level, parsed.eventTimeMs)
+            }
+            // Rate-limited (>=60s) diagnostic: an epoch-shaped-but-out-of-range 2nd token
+            // means the wire format is corrupt (not just a legacy pipe-in-message line).
+            if (malformedEpochSeen && nowMs - lastMalformedEpochWarnMs >= 60_000L) {
+                lastMalformedEpochWarnMs = nowMs
+                LogCollector.append("[Service] node_debug.log: out-of-range epoch token in a forwarded line (using receipt time)", LogLevel.WARN)
             }
 
             // Capped the read and there's still more in the file? Tell

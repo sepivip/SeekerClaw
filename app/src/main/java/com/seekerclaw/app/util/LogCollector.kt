@@ -94,8 +94,16 @@ object LogCollector {
         logFile = File(context.filesDir, LOG_FILE_NAME)
     }
 
-    fun append(message: String, level: LogLevel = LogLevel.INFO) {
-        val entry = LogEntry(message = message, level = level)
+    // BAT-1161 P1A gate 4: `eventTimeMs` carries the Node-side event time (epochMs parsed
+    // from a `LEVEL|epochMs|message` line) so `service_logs` and the UI show WHEN the event
+    // happened, not when it was forwarded. Omitted (null) for Kotlin-native logs and legacy
+    // Node lines → receipt time, as before.
+    fun append(message: String, level: LogLevel = LogLevel.INFO, eventTimeMs: Long? = null) {
+        val entry = LogEntry(
+            timestamp = eventTimeMs ?: System.currentTimeMillis(),
+            message = message,
+            level = level,
+        )
 
         // Thread-safe update of in-memory list
         synchronized(logsLock) {
