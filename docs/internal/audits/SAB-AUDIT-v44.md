@@ -19,6 +19,7 @@
 > **The low delta pre-fix is the whole point of BAT-1172, not new drift.** The xAI-403 self-knowledge (prompt + diagnostics) was a *fabrication* — "your Grok subscription tier doesn't include API access — add an xAI API key" — presented as fact. v43 scored these items ✅ because the prompt *matched the code*; but the code itself was fabricating, which was only proven afterward by the BAT-1155 incident + the live probe (`xai_403_probe.js`) + context7 `/websites/x_ai_developers` (403 = permissions/entitlement, NOT tier/API-key). With that ground truth, the pre-fix state is correctly re-scored ⚠️. This PR corrects prompt + code + diagnostics + Kotlin in lockstep → post-fix 100%, no leftover gaps, no new drift. Negative-knowledge boundaries unchanged (6/6); no identity/architecture/config drift.
 
 ## Pre-fix Trend
+
 | Audit | Pre-fix % | Post-fix % |
 |-------|-----------|------------|
 | v40 | 100% | 100% |

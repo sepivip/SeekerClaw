@@ -192,13 +192,17 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
     const res = await claudeApiCall(body, 'vision');
 
     if (res.status !== 200) {
-        // BAT-1172: also read the FLAT `{error:string}` shape (xAI) — nested `error.message`
-        // is undefined for it, which used to drop xAI's real reason to a bare status number.
-        const vErr = res.data && (
-            (res.data.error && res.data.error.message)
-            || (typeof res.data.error === 'string' ? res.data.error : '')
-            || res.data.message
-        );
+        // BAT-1172: read the FLAT `{error:string}` shape (xAI) AND raw string/Buffer bodies
+        // (plaintext/HTML error pages from upstream CDNs) — the same shapes the [SessionSummary]
+        // and chat() loggers handle. Nested `error.message` is undefined for xAI's flat body, and
+        // a string/Buffer body has no `.error` at all, so both used to drop to a bare status.
+        const vErr = typeof res.data === 'string' ? res.data
+            : Buffer.isBuffer(res.data) ? res.data.toString('utf8')
+            : res.data && (
+                (res.data.error && res.data.error.message)
+                || (typeof res.data.error === 'string' ? res.data.error : '')
+                || res.data.message
+            );
         return { error: `Vision API error: ${vErr || res.status}` };
     }
 

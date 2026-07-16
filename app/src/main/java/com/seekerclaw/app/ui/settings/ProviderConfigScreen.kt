@@ -1354,6 +1354,48 @@ private suspend fun testXaiConnection(apiKey: String): Result<Unit> = withContex
  * May-2026 retirements redirect TO it), NOT the registry default `grok-4.5`: a newer default
  * can be tier-gated on some accounts and would make a working sign-in fail the connection test.
  */
+// ── BAT-1172: xAI connection-test error helpers (pure, unit-tested; mirror providers/xai.js) ──
+
+// Parse the xAI error body. Mirrors `_xaiError` message extraction: nested `error.message`
+// (OpenAI/Anthropic) → flat `error` string (xAI REST) → top-level `message`. "" when none.
+internal fun parseXaiConnErrorMessage(errorBody: String): String = try {
+    val json = JSONObject(errorBody)
+    when (val error = json.opt("error")) {
+        is JSONObject -> error.optString("message", "")
+        is String -> error
+        else -> json.optString("message", "")
+    }
+} catch (_: Exception) { "" }
+
+// Mirrors the narrowed `_xaiAuthReason` (NO bare "api key"): is this reason fundamentally an
+// auth/credential failure (vs a genuine permission/entitlement or request error)?
+private val XAI_AUTH_LIKE_REASON = Regex(
+    "unauthenticated|bad[ _-]?credential|no[ _-]?credential|(incorrect|invalid)[ _-]?(api[ _-]?key|token)|expired",
+    RegexOption.IGNORE_CASE,
+)
+internal fun isXaiAuthLikeReason(msg: String): Boolean = msg.isNotBlank() && XAI_AUTH_LIKE_REASON.containsMatchIn(msg)
+
+// Build the connection-test error text. For OAuth, an AUTH-like reason (xAI's api-key-centric
+// copy) must NOT override the reconnect guidance — mirrors classifyError's Option-B behavior.
+// A genuine non-auth 403 reason still surfaces; api_key users always see the real reason.
+internal fun xaiConnErrorText(status: Int, apiMessage: String, isOAuth: Boolean): String {
+    val suppressForOAuth = isOAuth && isXaiAuthLikeReason(apiMessage)
+    return when {
+        status == 401 -> if (apiMessage.isBlank() || suppressForOAuth) {
+            if (isOAuth) "Unauthorized — your Grok sign-in may have expired; sign in again"
+            else "Unauthorized — check your xAI API key"
+        } else apiMessage
+        status == 403 -> if (apiMessage.isBlank() || suppressForOAuth) {
+            // No fabricated tier-gate: a 403 is a permissions/entitlement or auth response.
+            if (isOAuth) "Grok denied the request (403). If this persists, reconnect via Settings > AI Provider > xAI."
+            else "This xAI API key lacks access to that model or endpoint — check your plan at console.x.ai."
+        } else apiMessage
+        status == 429 -> "Rate limited — try again in a moment"
+        status in 500..599 -> "xAI unavailable"
+        else -> apiMessage.ifBlank { "HTTP $status" }
+    }
+}
+
 private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
     val url = URL("https://api.x.ai/v1/chat/completions")
     val conn = url.openConnection() as HttpURLConnection
@@ -1381,31 +1423,12 @@ private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
         val errorBody = try {
             (conn.errorStream ?: conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
         } catch (_: Exception) { "" }
-        // BAT-1172: xAI REST returns a FLAT error shape `{code, error:"<string>"}`, NOT the
-        // nested `{error:{message}}` (OpenAI/Anthropic). The old nested-only parse was ALWAYS
-        // blank for xAI → the 403 branch below always fell through to fabricated tier-gate copy.
-        // Read both: nested `error.message` when `error` is an object, else the flat string `error`.
-        val apiMessage = try {
-            val json = JSONObject(errorBody)
-            if (json.optJSONObject("error") != null) json.optJSONObject("error")?.optString("message", "") ?: ""
-            else json.optString("error", "")
-        } catch (_: Exception) { "" }
-        val errorMessage = when {
-            status == 401 -> apiMessage.ifBlank {
-                if (isOAuth) "Unauthorized — your Grok sign-in may have expired; sign in again"
-                else "Unauthorized — check your xAI API key"
-            }
-            status == 403 -> apiMessage.ifBlank {
-                // BAT-1172: no fabricated tier-gate. A 403 is a permissions/entitlement or auth
-                // response — xAI's real reason (parsed above) is surfaced when present; only an
-                // empty body falls back to this truthful, non-fabricated copy.
-                if (isOAuth) "Grok denied the request (403). If this persists, reconnect via Settings > AI Provider > xAI."
-                else "This xAI API key lacks access to that model or endpoint — check your plan at console.x.ai."
-            }
-            status == 429 -> "Rate limited — try again in a moment"
-            status in 500..599 -> "xAI unavailable"
-            else -> apiMessage.ifBlank { "HTTP $status" }
-        }
+        // BAT-1172: xAI REST returns a FLAT `{code, error:"<string>"}`, NOT the nested
+        // `{error:{message}}` (OpenAI/Anthropic). parseXaiConnErrorMessage reads both (+ top-level
+        // `message`); xaiConnErrorText builds mode-aware copy that never shows an OAuth user xAI's
+        // api-key-centric auth text (mirrors classifyError). Both are pure + unit-tested.
+        val apiMessage = parseXaiConnErrorMessage(errorBody)
+        val errorMessage = xaiConnErrorText(status, apiMessage, isOAuth)
         error("Connection failed ($errorMessage)")
     } catch (_: java.net.SocketTimeoutException) {
         error("Connection timed out")
