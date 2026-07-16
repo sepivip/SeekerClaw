@@ -216,14 +216,16 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 - **Cloudflare block during token exchange:** auth.x.ai is Cloudflare-gated and blocks empty/default User-Agents. The app sends `User-Agent: SeekerClaw/<version>` on the token POST, so this should not occur; if it does (`node_debug.log` / Logcat shows a Cloudflare "you have been blocked" HTML page), it is transient — retry.
 **Fix:** The OAuth section stays visible after a failed sign-in — the user just taps "Sign in with Grok" again (no need to re-pick the auth type). Sign-out (clears tokens, keeps OAuth selected) then sign back in is the last resort.
 
-### xAI Grok — 403 "API access" / Tier-Gate (add API key, do NOT re-login)
-**Symptoms:** Grok messages fail with a 403 / "update permissions at console.x.ai" / "permission-denied". The user is signed in via OAuth.
-**Check:** `grep -i "xai\|grok" node_debug.log | tail -20` — look for `403`, `permission-denied`, or the terminal message "Your Grok subscription tier doesn't include API access".
-**Diagnosis:** xAI enforces API entitlement server-side.
-- On the **first** login, `/v1/models` can 403 because API access provisions *lazily on first touch* — the provider retries once after a short delay, so a single transient 403 is expected and self-heals.
-- A **persistent** 403 means the account's Grok tier does not include `api.x.ai` access. This is NOT an auth failure — do NOT trigger a token refresh or ask the user to re-login (that would burn xAI's single-use refresh-token rotation for nothing).
-**Fix:** Tell the user to add an **xAI API key** instead: Settings > AI Provider > xAI > Auth Type → API Key, and paste a key from `console.x.ai`. The api_key path is always selectable even while OAuth is the chosen auth type.
-- **api_key mode 403 (BAT-1124):** an api_key 403 is a real credit/tier gate — **terminal on the FIRST hit** (the retry-once grace is OAuth-first-touch only, never api_key). Message: "Your xAI API key doesn't have access to this model or endpoint. Check your plan at `console.x.ai`." Fix: the key lacks access to that model/endpoint — check the plan, or pick a broadly-available model (`grok-4.3`, the default).
+### xAI Grok — 403 "Grok denied the request" (read the REAL reason — not automatically a tier-gate)
+**Symptoms:** Grok messages fail with a 403 / "Grok denied the request" / "permission-denied". The user is signed in via OAuth.
+**Check:** `grep -i "xai\|grok" node_debug.log | tail -20` — look for the `[xAI] 403 forbidden: code=<...> reason=<...>` line the provider logs on every terminal 403 (it records xAI's REAL error code + message).
+**Diagnosis:** A 403 is **NOT** automatically a subscription-tier gate — that copy used to be fabricated from the HTTP status alone (fixed in BAT-1172). xAI returns a flat `{code, error}` body; the provider now reads it and classifies on the real code/message:
+- On the **first** touch, API access can provision *lazily* — the provider retries a 403 ONCE after a short delay, so a single transient 403 is expected and self-heals.
+- A **persistent** 403 is surfaced with xAI's actual reason. If the code/message is auth-ish (`unauthenticated:*`, "bad credentials", expired) it is treated as a sign-in problem → reconnect. Otherwise it is a genuine permission/entitlement limit and xAI's real message is shown. A genuine non-auth gate does NOT trigger a token refresh (no rotation is burned).
+**Fix:** Follow the surfaced reason — do NOT assert "your subscription tier doesn't include API access" unless xAI's message actually says so:
+- **Auth-ish 403** ("reconnect xAI in Settings") — the sign-in/credentials are bad: Settings > AI Provider > xAI > Sign in with Grok.
+- **Genuine access/entitlement 403** ("Grok denied the request: <reason>") — the account/plan lacks access to that model or endpoint. The user can pick a broadly-available model, upgrade their plan, or add an **xAI API key** (Settings > AI Provider > xAI > Auth Type → API Key, key from `console.x.ai` — always selectable even while OAuth is chosen).
+- **api_key mode 403 (BAT-1124):** an api_key 403 is a real credit/tier gate — **terminal on the FIRST hit** (the retry-once grace is OAuth-first-touch only, never api_key). The provider surfaces xAI's real reason when present, else "Your xAI API key doesn't have access to this model or endpoint. Check your plan at `console.x.ai`." Fix: check the plan, or pick a broadly-available model.
 - **Billing / quota (402, or 429 with a quota/credit message):** mode-aware — an **OAuth** user sees "check your SuperGrok / X Premium+ subscription" (their billing lives on their X subscription, NOT `console.x.ai`); an **api_key** user sees "check billing at `console.x.ai`". A plain 429 (no quota text) is transient rate-limiting and self-heals with backoff.
 
 ### xAI Grok OAuth — Token Refresh / Persist Failure

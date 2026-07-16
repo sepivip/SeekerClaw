@@ -192,7 +192,18 @@ async function visionAnalyzeImage(imageBase64, prompt, maxTokens = 400) {
     const res = await claudeApiCall(body, 'vision');
 
     if (res.status !== 200) {
-        return { error: `Vision API error: ${res.data?.error?.message || res.status}` };
+        // BAT-1172: read the FLAT `{error:string}` shape (xAI) AND raw string/Buffer bodies
+        // (plaintext/HTML error pages from upstream CDNs) — the same shapes the [SessionSummary]
+        // and chat() loggers handle. Nested `error.message` is undefined for xAI's flat body, and
+        // a string/Buffer body has no `.error` at all, so both used to drop to a bare status.
+        const vErr = typeof res.data === 'string' ? res.data
+            : Buffer.isBuffer(res.data) ? res.data.toString('utf8')
+            : res.data && (
+                (res.data.error && res.data.error.message)
+                || (typeof res.data.error === 'string' ? res.data.error : '')
+                || res.data.message
+            );
+        return { error: `Vision API error: ${vErr || res.status}` };
     }
 
     const parsed = adapter.fromApiResponse(res.data);
@@ -488,15 +499,20 @@ async function generateSessionSummary(chatId) {
         // HTML error pages from upstream CDNs would otherwise log
         // msgLen=0 msgFp=- and lose ALL diagnostic signal).
         const d = res.data;
+        // BAT-1172: also read the FLAT `{code, error:string}` shape (xAI's REST) so this
+        // path keeps diagnostic signal on xAI failures — see the matching chat() logger below.
         const errType = (d && d.error && d.error.type) || 'unknown';
-        const errCode = (d && d.error && d.error.code) || null;
+        const errCode = (d && d.error && d.error.code)
+            || (d && typeof d.code === 'string' ? d.code : null)
+            || null;
         let errMsg = '';
         if (typeof d === 'string') {
             errMsg = d;
         } else if (Buffer.isBuffer(d)) {
             errMsg = d;
         } else if (d) {
-            errMsg = (d.error && d.error.message) || d.message || '';
+            errMsg = (typeof d.error === 'string' ? d.error : null)
+                || (d.error && d.error.message) || d.message || '';
         }
         // R6 Copilot: report msgLen in UTF-8 BYTES (not JS String code-point
         // length) so the value aligns with what _reasoningFingerprint hashes.
@@ -1196,7 +1212,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     // xAI Grok OAuth-specific playbook (only injected when running on OAuth)
     if (PROVIDER === 'xai' && AUTH_TYPE === 'oauth') {
         lines.push('**If xAI (Grok) OAuth fails:**');
-        lines.push('1. 403 tier-gate: a persistent 403 means your Grok subscription tier does NOT include API access on api.x.ai. The system retries a 403 ONCE (access can provision lazily on first touch), then stops. If it keeps failing, the fix is to add an xAI API key in Settings > AI Provider > xAI — do NOT keep retrying, and this is NOT a sign-in expiry.');
+        lines.push('1. 403 (Grok denied the request): a 403 is NOT automatically a subscription-tier gate. The system retries a 403 ONCE (access can provision lazily on first touch), then surfaces xAI\'s REAL error code + message (e.g. `permission-denied`, `unauthenticated:*`) — read THAT actual reason instead of assuming a fixed cause. If it looks like bad credentials / an expired sign-in, the fix is to reconnect via Settings > AI Provider > xAI; if it is a genuine access/entitlement limit, the user may need a plan with access or an xAI API key. Do NOT tell an OAuth user their "subscription tier doesn\'t include API access" unless xAI\'s message actually says so.');
         lines.push('2. Token expired (401): the system auto-refreshes via the refresh token. If you see "OAuth refresh failed" in node_debug.log, the refresh token is invalid (revoked, or already rotated) — the user must re-sign-in via Settings > AI Provider > xAI > Sign in with Grok.');
         lines.push('3. "token persist failed" in node_debug.log: the rotated token could not be saved. The current session keeps working, but a re-login may be needed after the next restart — tell the user to sign in again if Grok stops responding after a restart.');
         lines.push('4. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider > xAI. They can also switch to API Key in the auth picker if they have a console.x.ai key.');
@@ -1429,7 +1445,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('## Provider');
         lines.push(`You are running on xAI Grok (model: ${activeModel}, auth: ${AUTH_TYPE}).`);
         if (AUTH_TYPE === 'oauth') {
-            lines.push('Auth mode: **Sign in with Grok (OAuth)** — the user signed in with their SuperGrok / X Premium+ subscription instead of using an API key. Requests route through api.x.ai/v1/chat/completions with the subscription\'s OAuth token (auto-refreshed on expiry). If the tier does not include API access you will get a 403 tier-gate — the fix is to add an xAI API key, NOT to re-sign-in. If refresh fails, the user must re-sign-in via Settings > AI Provider > xAI > Sign in with Grok.');
+            lines.push('Auth mode: **Sign in with Grok (OAuth)** — the user signed in with their SuperGrok / X Premium+ subscription instead of using an API key. Requests route through api.x.ai/v1/chat/completions with the subscription\'s OAuth token (auto-refreshed on expiry). A 403 means Grok denied the request — the system retries once (access can provision lazily), then surfaces xAI\'s real reason; treat it per that message (a genuine access limit vs. an auth problem), NOT as an automatic "add an API key" tier-gate. If token refresh fails, the user must re-sign-in via Settings > AI Provider > xAI > Sign in with Grok.');
         } else {
             lines.push('Auth mode: **API Key** — the user configured an xAI API key from console.x.ai. Requests route through api.x.ai/v1/chat/completions. To use a Grok subscription instead (SuperGrok / X Premium+), the user can switch to "Sign in with Grok" in Settings > AI Provider > xAI.');
         }
@@ -2956,15 +2972,23 @@ async function chat(chatId, userMessage, options = {}) {
                 // loses ALL diagnostic signal. Strings are still safe to
                 // fingerprint via _reasoningFingerprint (it's
                 // length+sha256[:8], no raw content).
+                // BAT-1172: also read the FLAT error shape some providers return —
+                // xAI's REST returns `{ code: "<machine>", error: "<string message>" }`,
+                // where `error` is a string, not an `{type,code,message}` object. Without
+                // this the log showed type=unknown code=- msgLen=0 for every xAI failure,
+                // erasing all diagnostic signal (the exact gap behind the BAT-1155 403).
                 const errType = (res.data && res.data.error && res.data.error.type) || 'unknown';
-                const errCode = (res.data && res.data.error && res.data.error.code) || null;
+                const errCode = (res.data && res.data.error && res.data.error.code)
+                    || (res.data && typeof res.data.code === 'string' ? res.data.code : null)
+                    || null;
                 let errMsg = '';
                 if (typeof res.data === 'string') {
                     errMsg = res.data;
                 } else if (Buffer.isBuffer(res.data)) {
                     errMsg = res.data; // _reasoningFingerprint handles Buffer
                 } else if (res.data) {
-                    errMsg = (res.data.error && res.data.error.message)
+                    errMsg = (typeof res.data.error === 'string' ? res.data.error : null)
+                        || (res.data.error && res.data.error.message)
                         || res.data.message
                         || '';
                 }

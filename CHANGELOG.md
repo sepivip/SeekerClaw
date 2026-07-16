@@ -9,6 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 - Fixed a condition where the agent could stop responding — showing a misleading "out of extra usage" error — on a Pro/Max sign-in even with usage remaining. An automatically-generated internal note summarizing routine background check-ins could contain a phrase the AI service rejected; because that note was included in every request, it blocked all replies until it aged out. These trivial check-in notes are no longer generated, any left over from a previous version are filtered out, and the agent now automatically retries once without recent-activity context if a request is unexpectedly rejected — so a single bad note can no longer stall it. The background check-in (heartbeat) mechanism itself is unchanged.
 - Clearer authentication-error message: it no longer suggests "API key might be wrong" for Pro/Max sign-in users, who have no API key.
+- Grok (xAI) error messages now show the provider's real reason instead of a fabricated "your subscription tier doesn't include API access — add an xAI API key" notice. This applies to both chat replies and the Settings "Test connection" check, and Grok users signed in with a subscription are no longer wrongly told to add an API key. Debug logs also now record the real error code and message. (BAT-1172)
 
 ### Changed
 
