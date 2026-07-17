@@ -543,10 +543,12 @@ class LogCollectorTest {
     }
 
     @Test
-    fun `parseLine redacts every secret shape the append path masks`() {
-        // Same-class guard: the restore path must not mask a narrower set than append(). If a
-        // pattern is added to LogRedactor it is covered here automatically, since both call the
-        // same redactor — this pins that parseLine actually calls it at all.
+    fun `parseLine routes through the redactor for a representative spread of shapes`() {
+        // This pins that parseLine ACTUALLY CALLS LogRedactor — it does not re-prove the redactor's
+        // full pattern set (LogRedactorTest owns that, all 8 shapes). One key from each of the two
+        // rule families that are easy to get wrong (prefix keys, and the JWT), plus the sk-ant case
+        // in the pre-upgrade test above, is enough to prove the wiring; the redactor is a single
+        // shared object, so if it is invoked here at all, every shape it knows is covered.
         val secrets = listOf(
             "xai-AAAAAAAAAAAAAAAAAAAA" to "xai-***",
             "sk-or-AAAAAAAAAAAAAAAAAAAA" to "sk-or-***",
