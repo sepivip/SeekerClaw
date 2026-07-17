@@ -23,8 +23,18 @@
 //     resolves through the documented `modelsByAuth.oauth ?: models` fallback.
 //     (An earlier BAT-1151 verdict marked gpt-5.6-luna oauth-404 and pinned that
 //     asymmetry here; the re-sweep showed luna 200s on oauth 5/5 — the exclusion
-//     would have hidden a working model. Do NOT re-couple these tests to whichever
-//     models happen to be listed; assert the mechanism, not the roster.)
+//     would have hidden a working model. Do NOT re-snapshot the roster here; assert
+//     the mechanism, plus the few membership facts this PR deliberately decided
+//     (luna reachable on oauth, 5.4-mini on api_key, 5.3-codex retired from both).
+//
+//     KNOWN GAP (follow-up): openai was the ONLY provider carrying `modelsByAuth`, so
+//     with the override gone NO Node test exercises the override branch of
+//     `modelsByAuth[auth] ?: models` — the schema loops below short-circuit on
+//     `if (!p.modelsByAuth) continue`. Kotlin still covers it via a SYNTHETIC fixture
+//     (ModelRegistryTest / ConfigManagerModelReconcileTest). Giving Node the same
+//     coverage needs `modelsForProvider` to accept an injected provider (it resolves
+//     `_byId[providerId]` from the module-level registry today) — a production change
+//     deliberately kept out of this PR's scope.
 //   - defaultModelForProvider('openai') returns gpt-5.6-sol, present in BOTH
 //     auth lists (a legitimate shared default; not tier-gated).
 //   - Defaults are EXPLICIT constants, not list-order-derived — a new
@@ -59,12 +69,13 @@ check('openai api_key list starts with gpt-5.6-sol', mc.modelsForProvider('opena
 // (verified live via the BAT-1144 exact-agent-copy harness), so there is no per-auth split and
 // the registry carries NO `modelsByAuth.oauth` override. These pin the documented fallback
 // (`modelsByAuth.oauth ?: models`, model-catalog.js:89/131 + Kotlin) — oauth resolves to `models`.
-check('openai oauth list === api_key list (no per-auth split)',
+// The fallback IS "oauth resolves to the base `models`", and api_key returns `models`
+// verbatim — so asserting the two lists are equal proves the fallback without snapshotting
+// the roster (a snapshot would fail on every legitimate model add/retire).
+check('openai oauth list === api_key list (fallback: no modelsByAuth override)',
     mc.modelsForProvider('openai', 'oauth').map((m) => m.id),
     mc.modelsForProvider('openai', 'api_key').map((m) => m.id));
-check('openai oauth falls back to models when no modelsByAuth override',
-    mc.modelsForProvider('openai', 'oauth').map((m) => m.id),
-    ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']);
+check('openai oauth list is non-empty', mc.modelsForProvider('openai', 'oauth').length > 0, true);
 // gpt-5.6-luna: 200 on oauth (5/5 runs) — it is NOT api_key-only. The earlier 404 verdict was stale.
 check('openai oauth list includes gpt-5.6-luna', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-5.6-luna'), true);
 check('openai api_key list includes gpt-5.4-mini', mc.modelsForProvider('openai', 'api_key').some((m) => m.id === 'gpt-5.4-mini'), true);
