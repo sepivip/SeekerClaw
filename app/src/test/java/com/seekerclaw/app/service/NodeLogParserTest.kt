@@ -107,3 +107,39 @@ class NodeLogParserTest {
         assertEquals(goodEpoch, p.eventTimeMs)
     }
 }
+
+/**
+ * BAT-1161 P1A gate 3 — the rotation-decision matrix (inode identity). Pins the forwarder's
+ * branch selection without needing a real filesystem / Os.stat.
+ */
+class NodeLogRotationDecisionTest {
+
+    @Test fun `top action — missing current file`() {
+        assertEquals(NodeLogTopAction.MISSING, nodeDebugTopAction(currentInode = -1L, trackedInode = 100L))
+        assertEquals(NodeLogTopAction.MISSING, nodeDebugTopAction(currentInode = -1L, trackedInode = -1L))
+    }
+
+    @Test fun `top action — rotation when inode changed`() {
+        assertEquals(NodeLogTopAction.ROTATED, nodeDebugTopAction(currentInode = 200L, trackedInode = 100L))
+    }
+
+    @Test fun `top action — first-drain adopt when nothing tracked yet`() {
+        assertEquals(NodeLogTopAction.ADOPT_FIRST, nodeDebugTopAction(currentInode = 200L, trackedInode = -1L))
+    }
+
+    @Test fun `top action — continue when same inode`() {
+        assertEquals(NodeLogTopAction.CONTINUE, nodeDebugTopAction(currentInode = 100L, trackedInode = 100L))
+    }
+
+    @Test fun `rotate action — old is our generation, drain its tail`() {
+        assertEquals(NodeLogRotateAction.DRAIN_OLD_TAIL, nodeDebugRotateAction(oldInode = 100L, trackedInode = 100L))
+    }
+
+    @Test fun `rotate action — old already gone, pure gap`() {
+        assertEquals(NodeLogRotateAction.GAP_NONE, nodeDebugRotateAction(oldInode = -1L, trackedInode = 100L))
+    }
+
+    @Test fun `rotate action — old is a newer gen, our gen was evicted`() {
+        assertEquals(NodeLogRotateAction.GAP_EVICTED, nodeDebugRotateAction(oldInode = 300L, trackedInode = 100L))
+    }
+}
