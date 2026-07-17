@@ -570,7 +570,7 @@ class SeekerClawService : Service() {
             androidBridge?.start()
             LogCollector.append("[Service] AndroidBridge started on 127.0.0.1:8765 (auth required)")
         } catch (e: Exception) {
-            LogCollector.append("[Service] Failed to start AndroidBridge: ${e.message}", LogLevel.ERROR)
+            LogCollector.append("[Service] Failed to start AndroidBridge: ${e.javaClass.simpleName}", LogLevel.ERROR)
         }
 
         // Mark as running
@@ -642,7 +642,7 @@ class SeekerClawService : Service() {
                     // Sweep failures should never bring the service down.
                     // Log and keep going; next iteration retries.
                     LogCollector.append(
-                        "[Service] Burner cap sweepStale error: ${e.javaClass.simpleName}: ${e.message}",
+                        "[Service] Burner cap sweepStale error: ${e.javaClass.simpleName}",
                         LogLevel.WARN,
                     )
                 }
@@ -882,7 +882,7 @@ class SeekerClawService : Service() {
         try {
             XaiOAuthDurabilityGate.ensureDurableBeforeStop()
         } catch (e: Exception) {
-            LogCollector.append("[Shutdown] xAI durability guard threw: ${e.message}", LogLevel.WARN)
+            LogCollector.append("[Shutdown] xAI durability guard threw: ${e.javaClass.simpleName}", LogLevel.WARN)
         }
         // (2) Best-effort session summary + SQL.js flush (BAT-525). NOT durability-critical — a slow or
         //     failed summary is acceptable (the durable state above is independent of it). Skipped when
@@ -1055,7 +1055,7 @@ class SeekerClawService : Service() {
                     // and retries (or OS-fallback stops after the bounded attempts), instead of
                     // blindly killing into a possibly-consumed-token replay.
                     LogCollector.append(
-                        "[Shutdown] durability gate threw (${e.javaClass.simpleName}: ${e.message}) — treating as NOT durable",
+                        "[Shutdown] durability gate threw (${e.javaClass.simpleName}) — treating as NOT durable",
                         LogLevel.ERROR,
                     )
                     false
@@ -1103,7 +1103,7 @@ class SeekerClawService : Service() {
                             XaiOAuthDurabilityGate.resolveAbandonedStop()
                         } catch (e: Exception) {
                             LogCollector.append(
-                                "[Shutdown] resolveAbandonedStop threw (${e.javaClass.simpleName}: ${e.message})",
+                                "[Shutdown] resolveAbandonedStop threw (${e.javaClass.simpleName})",
                                 LogLevel.ERROR,
                             )
                             false
