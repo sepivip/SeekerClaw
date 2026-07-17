@@ -15,9 +15,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 - The agent's system prompt now caches more effectively across background check-ins by keeping frequently-changing recent-activity context out of the cached section, lowering token usage per turn.
 - Refreshed the Claude Code client version reported on Pro/Max sign-in requests to the current stable, keeping the integration up to date.
+- Diagnostic logs are now timestamped per line and kept to a bounded size. Every log line carries the time the event actually happened (previously the Logs screen showed the time the line was received, which drifted under load), and the debug log now rotates continuously at roughly 5 MB instead of only being trimmed at startup — so a long-running session can no longer grow it without limit. The previous generation is retained alongside the current one. (BAT-1161)
+- The Logs screen's "Clear logs" action is now called **Clear console**, which is what it actually does — it clears the on-screen console, not the agent's debug log on disk. (BAT-1161)
 
 ### Security
 
+- Secrets are now stripped from the Logs screen and from anything shared out of it. Log lines are redacted as they are collected, so API keys and tokens are masked on screen, in the saved log file, and in the one-tap Share output — previously redaction ran only on the Node side, leaving lines written directly by the app unmasked. (BAT-1161)
 - Hardened `web_fetch` against credential exfiltration on cross-origin redirects: caller-supplied headers (API keys, bearer tokens) are now dropped when a request redirects to a different origin, and a cross-origin `307`/`308` can no longer forward the request body to the new host. Same-origin flows are unchanged. (BAT-1086)
 - API-key values stored in `agent_settings.json` are now masked before they reach the AI model. The agent can still read its settings and save keys, but raw key values are never exposed to the model or the chat — the read tool returns them masked, and the `js_eval`/`shell_exec` paths are blocked for that file. Protects provider billing keys even against prompt injection. This is model-facing output masking; the file on disk and the save flow are unchanged. (BAT-1087)
 - Strengthened `web_fetch`'s SSRF guard to block private/loopback/link-local addresses across all IPv4 and IPv6 encodings — including IPv6 loopback, IPv4-mapped, ULA, link-local, zone-identifier, and decimal/hex/octal literal forms — and applied the same guard to the file-download path. Only requests to internal addresses are affected. (BAT-1088)

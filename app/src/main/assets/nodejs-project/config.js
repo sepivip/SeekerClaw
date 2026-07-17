@@ -21,9 +21,19 @@ const debugLog = path.join(workDir, 'node_debug.log');
 // whole current file to `.old` (single generation, NO carryover) and starts a fresh
 // current with a `=== ROTATED gen=N ===` marker. The Kotlin forwarder detects the
 // identity change (inode) and drains `.old` to EOF before resetting to the new current
-// (see SeekerClawService). Numbers are PROVISIONAL pending gate-8 device measurement.
-const LOG_MAX_BYTES = 5 * 1024 * 1024;      // rotate current at ~5 MB
-const LOG_MAX_RECORD_BYTES = 64 * 1024;     // per physical-line cap (< 256 KB forwarder delta)
+// (see SeekerClawService). Constants are gate-8 validated on d9fc86bb (2026-07-17): over 46 days
+// of real device history (37,280 lines / 1,988 agent turns) the per-record cap was hit 0 times
+// (max physical line 437 B) and 5 MiB was measured against 1,350 B/agent-turn.
+const LOG_MAX_BYTES = 5 * 1024 * 1024;      // rotate current ABOVE 5 MiB (strict >, checked post-append)
+const LOG_MAX_RECORD_BYTES = 64 * 1024;     // per physical-line payload cap (< 256 KB forwarder delta)
+// Ceiling on ONE log() call's TOTAL framed output. Without it a single multiline call frames one
+// record per physical line and appends the whole batch before the next size check, so the permitted
+// overshoot — and hence the current+archive bound — would be unbounded by construction (every
+// caller happens to clamp its input today, but that is not a structural invariant). Sized >= one
+// max framed record (65,571 B) so a legitimate max-size line is never dropped, and < the 256 KB
+// forwarder delta. Bound: current + .old <= 2 * (LOG_MAX_BYTES + LOG_MAX_CALL_BYTES) = 10.25 MiB.
+const LOG_MAX_CALL_BYTES = 128 * 1024;
+const LOG_CALL_NOTE_RESERVE = 128;          // bytes held back for the framed "N line(s) dropped" record
 const LOG_FMT_VERSION = 1;                  // wire format: LEVEL|epochMs|message
 let _logRotationSeq = 0;                    // Node-local rotation counter for this boot
 let _logCurrentBytes = -1;                  // running size of current file; -1 = (re)stat next call
@@ -37,17 +47,40 @@ function _truncateUtf8(s, maxBytes) {
     return buf.subarray(0, end).toString('utf8') + '…[truncated]';
 }
 
+// Bounded, NON-RECURSIVE rotation-failure diagnostic. Deliberately does NOT go through log():
+// rotation is reached FROM log(), so routing the failure back through it could loop. Emits exactly
+// one framed record carrying a stable reason code — never an exception message (an errno string can
+// carry a path). Best-effort: if this write fails too, swallow it. Returns the bytes written so the
+// caller can keep the running byte count honest (0 when nothing was written).
+function _rotateDiag(reason) {
+    try {
+        const rec = `ERROR|${Date.now()}|=== ROTATE_FAILED reason=${reason} ===\n`;
+        fs.appendFileSync(debugLog, rec);
+        return Buffer.byteLength(rec, 'utf8');
+    } catch (_) {
+        return 0;
+    }
+}
+
 // Rotate the current log to `.old` and start a fresh current. NO carryover — the whole
 // current becomes the completed `.old` generation. MUST NOT call log() (a recursive
-// failure could loop): errors are swallowed and retried on a later size check.
+// failure could loop): errors are swallowed, surfaced via _rotateDiag, and retried on a
+// later size check.
 function _rotateLog() {
+    let renameFailed = false;
     try {
-        try { fs.renameSync(debugLog, debugLog + '.old'); } catch (_) { /* rename may fail; still start a fresh current */ }
+        // A failed rename means this generation is NOT archived and the writeFileSync below
+        // truncates it in place — a deliberate bound-over-archive trade (the alternative is an
+        // unbounded current for as long as rename keeps failing). The diagnostic is deferred to
+        // after the fresh current exists, because writing it here would be truncated away with it.
+        try { fs.renameSync(debugLog, debugLog + '.old'); } catch (_) { renameFailed = true; }
         _logRotationSeq++;
         const marker = `INFO|${Date.now()}|=== ROTATED gen=${_logRotationSeq} logfmt=${LOG_FMT_VERSION} ===\n`;
         fs.writeFileSync(debugLog, marker);
         _logCurrentBytes = Buffer.byteLength(marker, 'utf8');
+        if (renameFailed) _logCurrentBytes += _rotateDiag('rename_failed');
     } catch (_) {
+        _rotateDiag('write_current_failed');
         _logCurrentBytes = -1; // couldn't write a fresh current — force a re-stat + retry next call
     }
 }
@@ -93,15 +126,31 @@ function log(msg, level = 'INFO') {
     const text = String(safe);
     const parts = text.length ? text.split('\n') : [''];
     let out = '';
-    for (let ln of parts) {
+    let outBytes = 0;
+    let dropped = 0;
+    for (let i = 0; i < parts.length; i++) {
+        let ln = parts[i];
         if (Buffer.byteLength(ln, 'utf8') > LOG_MAX_RECORD_BYTES) ln = _truncateUtf8(ln, LOG_MAX_RECORD_BYTES);
-        out += `${level}|${epoch}|${ln}\n`;
+        const rec = `${level}|${epoch}|${ln}\n`;
+        const recBytes = Buffer.byteLength(rec, 'utf8');
+        // Enforce the per-call ceiling BETWEEN whole records, never by slicing `out` — a byte-sliced
+        // batch would emit a torn final line that no longer parses as `LEVEL|epochMs|message`. The
+        // first record is always admitted so a lone max-size line can't be dropped by its own cap.
+        if (i > 0 && outBytes + recBytes > LOG_MAX_CALL_BYTES - LOG_CALL_NOTE_RESERVE) {
+            dropped = parts.length - i;
+            break;
+        }
+        out += rec;
+        outBytes += recBytes;
     }
+    // The dropped-line notice is itself a well-framed record, so every physical line stays parseable.
+    if (dropped > 0) out += `${level}|${epoch}|…[${dropped} line(s) dropped: per-call cap]\n`;
     try {
         fs.appendFileSync(debugLog, out);
     } catch (_) { return; }
     // Continuous size check via a running byte count (no per-call stat: only (re)stat to
-    // initialize/recover). Overshoot is bounded to at most one max record.
+    // initialize/recover). The check runs once per call, AFTER the whole batch is appended, so the
+    // overshoot it permits is one call's total framed output — bounded above by LOG_MAX_CALL_BYTES.
     if (_logCurrentBytes < 0) {
         try { _logCurrentBytes = fs.statSync(debugLog).size; } catch (_) { _logCurrentBytes = 0; }
     } else {

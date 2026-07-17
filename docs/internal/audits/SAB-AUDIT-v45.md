@@ -76,7 +76,9 @@ Fixed probes ("Web search is broken", "Agent won't respond") unaffected by this 
 None beyond what P1A fixes.
 
 ## Remaining Gaps
-**One coupling to watch (gate 8):** the "~5 MB" figure now stated in the prompt (`ai.js:1039`, `:1124`), `CLAUDE.md`, and DIAGNOSTICS is tied to `LOG_MAX_BYTES`, which is **provisional pending the gate-8 device measurement**. If gate 8 changes the constant, the prompt + CLAUDE.md + DIAGNOSTICS + CHANGELOG must move **in lockstep** — otherwise this audit's Section A regresses to the same class of drift it just fixed.
+**One coupling to watch (gate 8) — RESOLVED 2026-07-17.** The "~5 MB" figure stated in the prompt (`ai.js:1039`, `:1124`), `CLAUDE.md`, and DIAGNOSTICS is tied to `LOG_MAX_BYTES`. Gate 8 ran on device `d9fc86bb` and **did not change the constant** (5 MiB validated against 46 days of real history: 1,350 B/agent-turn, a measured 3,566 B/h idle floor, max physical line 437 B, the 64 KiB per-record cap hit 0 times in 37,280 lines) — so every one of those surfaces stays as written and no lockstep move is required.
+
+Gate 8 did, however, add one constant those surfaces do **not** mention and do not need to: `LOG_MAX_CALL_BYTES` (128 KiB), a per-`log()`-call output ceiling. It exists because the per-record cap alone did not bound a *call* — a multiline message frames one record per physical line and appends the whole batch before the next size check, so the permitted overshoot was one call's total output, not one record (the code comment asserting otherwise was false and is fixed). The user- and agent-facing "~5 MB" story is unchanged; only the internal worst-case bound moved, from a conditional 10.125 MiB to a structurally-enforced **10.25 MiB** = `2 × (LOG_MAX_BYTES + LOG_MAX_CALL_BYTES)`. Section A does not regress.
 
 ## Validation
 - `node tests/nodejs-project/smoke.js` — PASS

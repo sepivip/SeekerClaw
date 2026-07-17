@@ -338,8 +338,11 @@ class SeekerClawService : Service() {
 
             val length = debugLogFile.length()
             var pos = nodeDebugLastPos
-            // Defensive only: Node rotates by rename (new inode), never truncates in place, so a
-            // same-inode shrink shouldn't happen — but reset rather than stall if it ever does.
+            // Node normally rotates by rename (new inode), which the identity check above catches.
+            // It CAN still truncate in place on one path: if the rename fails, _rotateLog() logs a
+            // ROTATE_FAILED diagnostic and starts a fresh current over the same inode anyway — a
+            // deliberate bound-over-archive trade (config.js), so the inode is unchanged and only
+            // the length shrinks. Reset rather than stall; the un-archived tail is already gone.
             if (length < pos) {
                 pos = 0L
                 nodeDebugLastPos = 0L
