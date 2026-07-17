@@ -113,6 +113,7 @@ jobs:
             xai \
             quiesce \
             shutdown-flush-durability-only \
+            logging-substrate \
             ci-coverage-manifest
           do
             echo "── $t ──"

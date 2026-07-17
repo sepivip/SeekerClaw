@@ -94,8 +94,22 @@ object LogCollector {
         logFile = File(context.filesDir, LOG_FILE_NAME)
     }
 
-    fun append(message: String, level: LogLevel = LogLevel.INFO) {
-        val entry = LogEntry(message = message, level = level)
+    // BAT-1161 P1A gate 4: `eventTimeMs` carries the Node-side event time (epochMs parsed
+    // from a `LEVEL|epochMs|message` line) so `service_logs` and the UI show WHEN the event
+    // happened, not when it was forwarded. Omitted (null) for Kotlin-native logs and legacy
+    // Node lines → receipt time, as before.
+    fun append(message: String, level: LogLevel = LogLevel.INFO, eventTimeMs: Long? = null) {
+        // BAT-1161 P1A gate 6: redact at the TOP so the in-memory ring (screen), service_logs,
+        // AND Share all receive the masked text in ONE pass. Secrecy-fail-CLOSED / operation-
+        // fail-OPEN: if the redactor throws, replace the whole entry with a marker (never show
+        // the raw message, which might contain the secret) but NEVER drop the log or crash the
+        // caller — and do NOT recursively log the redactor failure.
+        val safe = try { LogRedactor.redact(message) } catch (_: Throwable) { "[[redaction-error]]" }
+        val entry = LogEntry(
+            timestamp = eventTimeMs ?: System.currentTimeMillis(),
+            message = safe,
+            level = level,
+        )
 
         // Thread-safe update of in-memory list
         synchronized(logsLock) {
@@ -624,12 +638,20 @@ object LogCollector {
         }
     }
 
-    private fun parseLine(line: String): LogEntry? {
+    // `internal` (not private) so the redaction of restored entries is unit-testable — same
+    // pattern as fileNameFromObserverPath below. This is the ONLY ingress that does not go
+    // through append(), so its redaction needs its own regression guard.
+    internal fun parseLine(line: String): LogEntry? {
         val parts = line.split("|", limit = 3)
         if (parts.size < 3) return null
         val timestamp = parts[0].toLongOrNull() ?: return null
         val level = try { LogLevel.valueOf(parts[1]) } catch (_: Exception) { LogLevel.INFO }
-        return LogEntry(timestamp = timestamp, message = parts[2], level = level)
+        // BAT-1161 P1A gate 6: redact HERE too, not only in append(). This path rebuilds the ring
+        // straight from service_logs on start and never goes through append(), so an entry written
+        // by a PRE-UPGRADE build — when Kotlin had no redaction at all — would otherwise be restored
+        // raw, then rendered on screen and handed to Share. Same fail-closed posture as append().
+        val safe = try { LogRedactor.redact(parts[2]) } catch (_: Throwable) { "[[redaction-error]]" }
+        return LogEntry(timestamp = timestamp, message = safe, level = level)
     }
 
     internal fun fileNameFromObserverPath(path: String?): String? =
