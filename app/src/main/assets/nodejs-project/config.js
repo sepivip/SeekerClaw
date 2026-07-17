@@ -31,7 +31,13 @@ const LOG_MAX_RECORD_BYTES = 64 * 1024;     // per physical-line payload cap (< 
 // overshoot — and hence the current+archive bound — would be unbounded by construction (every
 // caller happens to clamp its input today, but that is not a structural invariant). Sized >= one
 // max framed record (65,571 B) so a legitimate max-size line is never dropped, and < the 256 KB
-// forwarder delta. Bound: current + .old <= 2 * (LOG_MAX_BYTES + LOG_MAX_CALL_BYTES) = 10.25 MiB.
+// forwarder delta. STEADY-STATE bound for generations this build writes/rotates:
+//   current + .old <= 2 * (LOG_MAX_BYTES + LOG_MAX_CALL_BYTES) = 10,747,904 B = 10.25 MiB.
+// Upgrade exception (Codex, BAT-1161): a log INHERITED from a pre-BAT-1161 build was trimmed only
+// at module load, so it can be arbitrarily large; the first rotation here renames that whole file
+// to `.old`, so current + .old may exceed the bound ONCE. P1A preserves the user's existing log
+// rather than truncate it; the next rotation retires the oversized `.old` and the bound holds
+// from then on. This is finite legacy state, not a permitted steady-state overshoot.
 const LOG_MAX_CALL_BYTES = 128 * 1024;
 const LOG_CALL_NOTE_RESERVE = 128;          // bytes held back for the framed "N line(s) dropped" record
 const LOG_FMT_VERSION = 1;                  // wire format: LEVEL|epochMs|message
