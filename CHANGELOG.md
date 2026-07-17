@@ -7,7 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- New OpenAI models in the picker: the GPT-5.6 family — Sol (the new default for the OpenAI provider), Terra, and Luna. Sol and Terra work on both an OpenAI API key and Pro/Max (ChatGPT) sign-in; Luna is available on API-key setups. Older GPT-5.x entries were removed from the picker but keep working for anyone already using them.
+- New OpenAI models in the picker: the GPT-5.6 family — Sol (the new default for the OpenAI provider), Terra, and Luna. All three work on both an OpenAI API key and a ChatGPT sign-in, alongside GPT-5.5, GPT-5.4, and GPT-5.4 Mini. The retired GPT-5.3 Codex entry was removed from the picker (it is superseded, and was never usable on a ChatGPT sign-in); GPT-5.5 and GPT-5.4 remain available, and anyone already using GPT-5.3 Codex keeps working.
 
 ### Fixed
 

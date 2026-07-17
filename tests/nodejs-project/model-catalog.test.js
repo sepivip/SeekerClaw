@@ -17,9 +17,14 @@
 // disagree about which models are valid. These tests lock in the contract.
 //
 // Invariants these tests protect:
-//   - openai api_key allowlist includes gpt-5.6-luna (api_key-ONLY — the first
-//     model NOT in the oauth list) but NOT gpt-5.4-mini (oauth-only). Neither
-//     the api_key nor the oauth list is a subset of the other (BAT-1151).
+//   - openai has NO per-auth model split: every listed model answers 200 on BOTH
+//     api_key and oauth (re-swept live 2026-07-17 via the BAT-1144 exact-agent-copy
+//     harness), so the registry carries no `modelsByAuth.oauth` override and oauth
+//     resolves through the documented `modelsByAuth.oauth ?: models` fallback.
+//     (An earlier BAT-1151 verdict marked gpt-5.6-luna oauth-404 and pinned that
+//     asymmetry here; the re-sweep showed luna 200s on oauth 5/5 — the exclusion
+//     would have hidden a working model. Do NOT re-couple these tests to whichever
+//     models happen to be listed; assert the mechanism, not the roster.)
 //   - defaultModelForProvider('openai') returns gpt-5.6-sol, present in BOTH
 //     auth lists (a legitimate shared default; not tier-gated).
 //   - Defaults are EXPLICIT constants, not list-order-derived — a new
@@ -50,11 +55,23 @@ function check(label, actual, expected) {
 
 console.log('── modelsForProvider ────────────────────────────');
 check('openai api_key list starts with gpt-5.6-sol', mc.modelsForProvider('openai', 'api_key')[0].id, 'gpt-5.6-sol');
-check('openai oauth list includes gpt-5.4-mini', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-5.4-mini'), true);
-check('openai api_key list EXCLUDES gpt-5.4-mini', mc.modelsForProvider('openai', 'api_key').some((m) => m.id === 'gpt-5.4-mini'), false);
-// BAT-1151: gpt-5.6-luna is api_key-ONLY — the REVERSE asymmetry (first model NOT in the oauth list).
-check('openai api_key list includes gpt-5.6-luna', mc.modelsForProvider('openai', 'api_key').some((m) => m.id === 'gpt-5.6-luna'), true);
-check('openai oauth list EXCLUDES gpt-5.6-luna', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-5.6-luna'), false);
+// BAT-1151 (re-swept 2026-07-17): EVERY listed openai model answers 200 on BOTH auth paths
+// (verified live via the BAT-1144 exact-agent-copy harness), so there is no per-auth split and
+// the registry carries NO `modelsByAuth.oauth` override. These pin the documented fallback
+// (`modelsByAuth.oauth ?: models`, model-catalog.js:89/131 + Kotlin) — oauth resolves to `models`.
+check('openai oauth list === api_key list (no per-auth split)',
+    mc.modelsForProvider('openai', 'oauth').map((m) => m.id),
+    mc.modelsForProvider('openai', 'api_key').map((m) => m.id));
+check('openai oauth falls back to models when no modelsByAuth override',
+    mc.modelsForProvider('openai', 'oauth').map((m) => m.id),
+    ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']);
+// gpt-5.6-luna: 200 on oauth (5/5 runs) — it is NOT api_key-only. The earlier 404 verdict was stale.
+check('openai oauth list includes gpt-5.6-luna', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-5.6-luna'), true);
+check('openai api_key list includes gpt-5.4-mini', mc.modelsForProvider('openai', 'api_key').some((m) => m.id === 'gpt-5.4-mini'), true);
+// gpt-5.3-codex retired (superseded; also 400s on oauth "not supported with a ChatGPT account").
+check('openai lists NO gpt-5.3-codex on either path',
+    mc.modelsForProvider('openai', 'api_key').concat(mc.modelsForProvider('openai', 'oauth')).some((m) => m.id === 'gpt-5.3-codex'),
+    false);
 check('claude list non-empty', mc.modelsForProvider('claude', 'api_key').length > 0, true);
 check('openrouter is freeform (empty list)', mc.modelsForProvider('openrouter', 'api_key'), []);
 check('custom is freeform (empty list)', mc.modelsForProvider('custom', null), []);
@@ -94,8 +111,13 @@ check('custom has api_key only', mc.authTypesForProvider('custom'), ['api_key'])
 console.log();
 console.log('── validateModelForProvider (allowlist) ─────────');
 check('gpt-5.5 valid on openai api_key', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.5').ok, true);
+// BAT-1151 re-sweep 2026-07-17: no per-auth split — every listed model validates on BOTH paths.
 check('gpt-5.4-mini valid on openai oauth', mc.validateModelForProvider('openai', 'oauth', 'gpt-5.4-mini').ok, true);
-check('gpt-5.4-mini INVALID on openai api_key', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.4-mini').ok, false);
+check('gpt-5.4-mini valid on openai api_key', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.4-mini').ok, true);
+check('gpt-5.6-luna valid on openai oauth', mc.validateModelForProvider('openai', 'oauth', 'gpt-5.6-luna').ok, true);
+// A retired id must still be rejected by the allowlist on both paths.
+check('gpt-5.3-codex INVALID on openai api_key (retired)', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.3-codex').ok, false);
+check('gpt-5.3-codex INVALID on openai oauth (retired)', mc.validateModelForProvider('openai', 'oauth', 'gpt-5.3-codex').ok, false);
 
 const bogus = mc.validateModelForProvider('openai', 'api_key', 'gpt-99');
 check('unknown model rejected with reason', bogus.ok === false && typeof bogus.reason === 'string', true);
@@ -384,17 +406,22 @@ check('openai/gpt-5.4 (api_key) → yes',
 check('openai/gpt-5.6-sol (api_key) → yes',
     mc.reasoningSupportFor('openai', 'gpt-5.6-sol', 'api_key'), 'yes');
 
-// gpt-5.4-mini is OAuth-only — yes via oauth path, unknown via api_key
+// BAT-1151 re-sweep 2026-07-17: no per-auth split — every listed model resolves on BOTH paths.
 check('openai/gpt-5.4-mini (oauth) → yes',
     mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'oauth'), 'yes');
-check('openai/gpt-5.4-mini (api_key) → unknown (not in api_key list)',
-    mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'api_key'), 'unknown');
-
-// BAT-1151: gpt-5.6-luna is api_key-ONLY — reverse of 5.4-mini: yes via api_key, unknown via oauth
+check('openai/gpt-5.4-mini (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'api_key'), 'yes');
 check('openai/gpt-5.6-luna (api_key) → yes',
     mc.reasoningSupportFor('openai', 'gpt-5.6-luna', 'api_key'), 'yes');
-check('openai/gpt-5.6-luna (oauth) → unknown (not in oauth list)',
-    mc.reasoningSupportFor('openai', 'gpt-5.6-luna', 'oauth'), 'unknown');
+check('openai/gpt-5.6-luna (oauth) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-5.6-luna', 'oauth'), 'yes');
+
+// The strict-authType semantics still hold regardless of the roster: an unlisted/retired id
+// is "unknown" on both paths, and a null authType never falls through to the api_key list.
+check('openai/gpt-5.3-codex (api_key) → unknown (retired, unlisted)',
+    mc.reasoningSupportFor('openai', 'gpt-5.3-codex', 'api_key'), 'unknown');
+check('openai/gpt-5.6-sol (null authType) → unknown (strict)',
+    mc.reasoningSupportFor('openai', 'gpt-5.6-sol', null), 'unknown');
 
 // Freeform providers → always unknown (we don't list specific models)
 check('openrouter/<any> → unknown',

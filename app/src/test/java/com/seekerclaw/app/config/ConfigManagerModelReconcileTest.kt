@@ -38,10 +38,14 @@ class ConfigManagerModelReconcileTest {
             keysUrl = "https://platform.openai.com/api-keys",
             freeform = false,
             defaultModel = "gpt-5.6-sol",
+            // SYNTHETIC fixture — deliberately asymmetric so the auth-switch CLAMP is tested in
+            // both directions. NOT a mirror of the shipped registry: per the BAT-1151 re-sweep
+            // (2026-07-17) the real openai registry has no per-auth split. The clamp must keep
+            // working for any future split, so the fixture keeps one model on each side.
             models = listOf(
                 ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
                 ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
-                ModelInfo("gpt-5.6-luna", "GPT-5.6 Luna", "yes"), // api_key-ONLY (BAT-1151)
+                ModelInfo("gpt-5.6-luna", "GPT-5.6 Luna", "yes"), // fixture-only: absent from the oauth override
                 ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                 ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
             ),
@@ -51,7 +55,7 @@ class ConfigManagerModelReconcileTest {
                     ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
                     ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                     ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"), // oauth-ONLY
+                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"), // fixture-only: absent from `models`
                 ),
             ),
         ),
@@ -251,9 +255,11 @@ class ConfigManagerModelReconcileTest {
 
     @Test
     fun `auth switch clamps api_key-only model`() {
-        // BAT-1151: the REVERSE asymmetry — openai api_key→oauth with gpt-5.6-luna
-        // (api_key-only, absent from the oauth list) must clamp to the default
-        // gpt-5.6-sol. Direct regression-catcher for the luna 404 trap.
+        // The REVERSE direction of the clamp, against the synthetic fixture above:
+        // api_key→oauth with a model absent from the oauth override must clamp to the
+        // default gpt-5.6-sol. (The fixture uses gpt-5.6-luna for this; note the SHIPPED
+        // registry no longer excludes luna from oauth — the 2026-07-17 re-sweep showed it
+        // answers 200 on both paths. This test pins the clamp MECHANISM, not that roster.)
         assertEquals(
             "gpt-5.6-sol",
             ConfigManager.resolveModelForReconcile(

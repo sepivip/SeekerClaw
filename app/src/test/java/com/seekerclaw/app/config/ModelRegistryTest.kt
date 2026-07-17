@@ -58,10 +58,17 @@ class ModelRegistryTest {
             keysUrl = "https://platform.openai.com/api-keys",
             freeform = false,
             defaultModel = "gpt-5.6-sol",
+            // SYNTHETIC fixture — deliberately asymmetric to exercise `modelsByAuth` in BOTH
+            // directions (a model only in `models`, and one only in the oauth override). It is
+            // NOT a mirror of the shipped registry: as of the BAT-1151 re-sweep (2026-07-17) the
+            // real openai registry has NO per-auth split at all (every listed model answers on
+            // both paths, so it ships no `modelsByAuth`). Keep this fixture asymmetric anyway —
+            // the mechanism must stay tested even when no provider currently uses it, and the
+            // test must not depend on whichever models happen to be listed in prod.
             models = listOf(
                 ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
                 ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
-                ModelInfo("gpt-5.6-luna", "GPT-5.6 Luna", "yes"), // api_key-ONLY (BAT-1151)
+                ModelInfo("gpt-5.6-luna", "GPT-5.6 Luna", "yes"), // fixture-only: absent from the oauth override below
                 ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                 ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
             ),
@@ -71,7 +78,7 @@ class ModelRegistryTest {
                     ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
                     ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                     ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"), // oauth-ONLY
+                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"), // fixture-only: absent from `models` above
                 ),
             ),
         ),
@@ -166,11 +173,11 @@ class ModelRegistryTest {
     @Test
     fun `no duplicate model ids within each provider's lists`() {
         // BAT-517 R1 Copilot: the previous version of this test asserted
-        // uniqueness across the UNION of `models` + `modelsByAuth.values`,
-        // which is incompatible with the live OpenAI shape — the api_key and
-        // oauth lists now DIVERGE (BAT-1151): oauth has oauth-only gpt-5.4-mini
-        // AND api_key has api_key-only gpt-5.6-luna, so NEITHER is a subset of
-        // the other and the union carries the shared ids twice by design.
+        // uniqueness across the UNION of `models` + `modelsByAuth.values`, which
+        // is wrong whenever a provider carries an override — the two lists share
+        // ids by design, so the union legitimately repeats them. That holds for
+        // ANY asymmetric override (see the synthetic fixture above); it does not
+        // depend on which models the shipped registry happens to list.
         // The actual invariant is: no duplicates WITHIN any single list.
         for (provider in productionProviders) {
             assertEquals(
