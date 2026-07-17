@@ -519,6 +519,34 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 
 ---
 
+## Agent Logs (node_debug.log ⇄ Logs screen)
+
+### Log format + what each surface is (BAT-1161)
+**Format:** every line in `node_debug.log` is `LEVEL|epochMs|message` (epochMs = Node's `Date.now()`). A multiline message is framed one physical line per record, all sharing that call's timestamp — so every line is a complete record. Any later `|` belongs to the message.
+**Session boundary:** each `:node` session opens with `=== SESSION boot=<id> build=<sha> ver=<v> logfmt=1 pid=<n> ===`. Use `boot=<id>` to tell one session's lines from another's.
+**Rotation:** continuously rotated at ~5 MB — the whole current file becomes `node_debug.log.old` (no carryover) and a fresh one starts with `=== ROTATED gen=N logfmt=1 ===`. Only ONE archive is kept.
+**Two surfaces, different jobs:**
+- `node_debug.log` (+ `.old`) — the **authoritative** Node transcript. Read this for the full picture.
+- `service_logs` / the **Logs screen** — a **bounded mirror** (300-entry in-memory ring + a 1 MB→512 KB compacted file) fed by the Kotlin forwarder. NOT a complete replica. "Clear console" clears only this mirror, never `node_debug.log`.
+
+### Logs screen missing lines / stopped updating
+**Symptoms:** the Logs screen lags, skips entries, or stops after a rotation.
+**Check:** `grep -i "rotation gap\|forward error\|drain error\|out-of-range epoch" node_debug.log | tail -10`
+**Diagnosis:**
+- `rotation gap — a log generation was evicted before forwarding` — Node rotated **twice** before the forwarder drained (only one archive is kept), so a generation never reached the mirror. Those lines still exist on disk in `node_debug.log`/`.old`; they're only missing from the mirror. Expect this only under heavy logging + Doze.
+- `rotation gap — previous generation unavailable` — the archive was already gone at drain time. Same story.
+- `node_debug.log.old drain error: <Class>` — the archived generation couldn't be read (IO). The fresh current still forwards.
+- `node_debug.log forward error: <Class>` — the drain itself failed; forwarding resumes on the next filesystem event.
+- A routine restart does **not** replay the previous session (a startup watermark starts each session at the pre-boot EOF) — an apparent "gap" at a restart boundary is by design; the SESSION banner marks it.
+**Fix:** the mirror is best-effort by design — read `node_debug.log` directly for anything missing. Repeated `forward error` means a real IO problem (check storage/permissions).
+
+### Timestamps look wrong in the Logs screen
+**Symptoms:** odd times, or `out-of-range epoch token in a forwarded line (using receipt time)` appears.
+**Diagnosis:** the forwarder uses Node's **event time** for new-format lines and falls back to **receipt time** for legacy/raw lines (a pre-BAT-1161 log, or a line whose 2nd token isn't a valid epoch). The WARN fires only when a token *looks* like an epoch but is out of range — genuine corruption or a Node/Kotlin version skew, not an ordinary legacy line.
+**Fix:** none needed for legacy lines. If it repeats on a current build the wire format is drifting — check that Node's `log()` and the Kotlin parser agree (`logfmt=` in the SESSION banner).
+
+---
+
 ## Service Lifecycle
 
 ### Shutdown Flush Timed Out or Failed (BAT-525)
