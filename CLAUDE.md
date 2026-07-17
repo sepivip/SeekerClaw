@@ -271,8 +271,9 @@ These are standard OpenClaw workspace files — the agent creates and manages th
 │   │   ├── SOUL.md          # Agent personality (seeded on first launch)
 │   │   ├── MEMORY.md        # Long-term memory (empty on first launch)
 │   │   ├── memory/          # Daily memory files
-│   │   └── HEARTBEAT.md
-│   └── logs/                # Rotated logs (10MB max, 7-day retention)
+│   │   ├── HEARTBEAT.md
+│   │   └── node_debug.log   # Node runtime debug log (LEVEL|epochMs|message; ~5MB continuous rotation → node_debug.log.old)
+│   └── service_logs         # Kotlin service-log mirror (300-line in-memory ring + 1MB→512KB file compaction)
 ├── databases/seekerclaw.db
 └── shared_prefs/seekerclaw_prefs.xml
 ```
@@ -282,7 +283,7 @@ These are standard OpenClaw workspace files — the agent creates and manages th
 OpenClaw config overrides for mobile environment:
 - Heartbeat interval: 5 min (save battery vs desktop default)
 - Memory max daily files: 30 (limit disk usage)
-- Log max size: 10MB (rotate), 7-day retention
+- Debug log (node_debug.log): ~5MB continuous rotation, previous generation kept as .old (size-based, no time retention); service_logs mirror: 300-line ring + 1MB→512KB compaction
 - Max context tokens: 100,000 (limit memory usage)
 - Web fetch timeout: 15s (shorter for mobile networks)
 - Disabled skills: browser, canvas, nodes, screen
@@ -431,7 +432,7 @@ The `/model` and `/provider` commands shipped functional but invisible — devic
   - All existing tools (read, write, web_fetch, etc.) already work within the Node.js process — they don't shell out
 - **Phase 1 mock:** Create `assets/openclaw/` with `package.json` and `index.js` that starts a Telegram bot (`grammy`/`telegraf`), responds to a hardcoded message from the owner, and sends heartbeat pings back to the Android bridge.
 - **Phase 2 real:** Replace mock with actual OpenClaw gateway bundle. Config, workspace, and all features work as documented.
-- **Logs:** Capture Node.js stdout/stderr via nodejs-mobile event bridge. Ring buffer of last 1000 lines in memory. Write to `logs/openclaw.log` with rotation at 10MB.
+- **Logs:** Node writes `node_debug.log` (workspace/) via `log()` in `LEVEL|epochMs|message` format, continuously rotated at ~5MB (previous kept as `.old`, no carryover). A Kotlin FileObserver forwarder (SeekerClawService) mirrors new lines into `service_logs` (filesDir) — a 300-line in-memory ring surfaced in the Logs screen, plus a 1MB→512KB compacted file. `service_logs` is a bounded diagnostic mirror, NOT an authoritative replica; `node_debug.log` is the full Node transcript.
 - **Battery:** On first launch after setup, show dialog explaining battery optimization exemption, then call `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`.
 - **ServiceState:** Singleton with `StateFlow<ServiceStatus>` (STOPPED, STARTING, RUNNING, ERROR), uptime, and message count. UI observes these flows.
 - **Metrics:** Message count, uptime, and response times tracked locally on-device. Usage analytics (Firebase) tracks feature usage, service health, and model selection — no personal data, no messages, no wallet keys. Fully optional — users can disable in Settings.

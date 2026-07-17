@@ -64,7 +64,14 @@ object DeviceInfoProvider {
         val filesDir = context.filesDir
         val workspaceDir = File(filesDir, "workspace")
         val databaseMb = fileSizeMb(File(workspaceDir, "seekerclaw.db"))
-        val nodeDebugLogMb = fileSizeMb(File(workspaceDir, "node_debug.log"))
+        // BAT-1161 P1A: count the rotated `.old` generation too — continuous rotation means
+        // node_debug.log.old is a real sibling on disk; without it the log's storage footprint
+        // (and the workspace subtraction) was under-reported by up to a full generation. These are
+        // the ACTUAL on-disk byte sizes (Codex, BAT-1161): a log inherited from a pre-BAT-1161 build
+        // can legitimately exceed the 10.25 MiB steady-state bound until its first post-upgrade
+        // rotation, and this reports what is really there rather than implying the bound normalized it.
+        val nodeDebugLogMb = fileSizeMb(File(workspaceDir, "node_debug.log")) +
+            fileSizeMb(File(workspaceDir, "node_debug.log.old"))
         val workspaceMb = dirSizeMb(workspaceDir) - databaseMb - nodeDebugLogMb
         val logsMb = fileSizeMb(File(filesDir, "service_logs")) + nodeDebugLogMb
         val runtimeMb = dirSizeMb(File(filesDir, "nodejs-project"))

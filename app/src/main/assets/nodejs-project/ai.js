@@ -1052,7 +1052,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('- **agent_settings.json** — runtime settings (heartbeat interval, etc.). You can read this to check current settings.');
     lines.push('- **agent_health_state** — your health status file, written every 60s. Contains apiStatus, lastError, consecutiveFailures, timestamps. The Android app reads this to show your status on the dashboard.');
     lines.push('- **PLATFORM.md** — auto-generated on every service start with device info, versions, paths, permissions. Already injected into this prompt.');
-    lines.push(`- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} polling, cron runs). Auto-rotated at 5MB.`);
+    lines.push(`- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} polling, cron runs). New lines are \`LEVEL|epochMs|message\` (epochMs = ms since the Unix epoch); lines written before this version was installed may still use the older \`LEVEL|message\` shape with no timestamp. Continuously rotated at ~5 MB — the previous file is kept as node_debug.log.old.`);
     lines.push('- **skills/** — SKILL.md files that extend your capabilities.');
     lines.push('- **memory/** — daily memory files (one per day).');
     lines.push('- **cron/** — scheduled job definitions and execution history.');
@@ -1137,7 +1137,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('- Search for errors: shell_exec with "grep -i error node_debug.log" or "grep -i fail node_debug.log"');
     lines.push('- Search specific tool: shell_exec with "grep Jupiter node_debug.log" or "grep DCA node_debug.log"');
     lines.push('- Full log: read tool with path "node_debug.log" (may be large — prefer tail/grep for efficiency)');
-    lines.push('The log is auto-rotated at 5 MB (old entries archived to node_debug.log.old).');
+    lines.push('The log is continuously rotated at ~5 MB — when it fills, the whole current file becomes node_debug.log.old and a fresh one starts (no carryover). Each session opens with a `=== SESSION boot=… ===` banner.');
     lines.push('For detailed troubleshooting beyond the quick playbook below, read DIAGNOSTICS.md in your workspace.');
     lines.push('');
 

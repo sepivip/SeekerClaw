@@ -38,6 +38,76 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.UUID
 
+// ── BAT-1161 P1A: node_debug.log line parser (the Kotlin half of the one-wire contract) ──
+// config.js log() writes `LEVEL|epochMs|message` (epochMs = Node Date.now(), 13 digits).
+// Backward compatible with the legacy `LEVEL|message` (and raw) format.
+
+internal data class ParsedNodeLine(
+    val level: LogLevel,
+    val message: String,
+    val eventTimeMs: Long?,   // Node event time for new-format lines; null ⇒ receipt time
+    val malformedEpoch: Boolean = false, // 2nd token looked epoch-shaped but was out of range
+)
+
+private const val LOG_EPOCH_FLOOR_MS = 1_600_000_000_000L // 2020-09-13; older ⇒ not an epoch we emit
+private const val LOG_EPOCH_SKEW_MS = 5 * 60 * 1000L      // tolerate 5 min of device clock skew
+
+// Pure, unit-testable. `nowMs` is injected so the range check is deterministic in tests.
+internal fun parseNodeDebugLine(line: String, nowMs: Long): ParsedNodeLine {
+    val firstPipe = line.indexOf('|')
+    if (firstPipe <= 0) return ParsedNodeLine(LogLevel.INFO, line, null) // raw / no level
+    val level = when (line.substring(0, firstPipe)) {
+        "ERROR" -> LogLevel.ERROR
+        "WARN" -> LogLevel.WARN
+        "DEBUG" -> LogLevel.DEBUG
+        "INFO" -> LogLevel.INFO
+        else -> null
+    } ?: return ParsedNodeLine(LogLevel.INFO, line, null) // unknown prefix ⇒ whole line as INFO
+    val secondPipe = line.indexOf('|', firstPipe + 1)
+    // Absent 2nd pipe ⇒ UNCONDITIONAL legacy: everything after the level is the message.
+    // (Critical: a bare `WARN|1784100000000` must NOT adopt the epoch and drop its message.)
+    if (secondPipe < 0) return ParsedNodeLine(level, line.substring(firstPipe + 1), null)
+    val token = line.substring(firstPipe + 1, secondPipe)
+    // 13..14, not 12..14: LOG_EPOCH_FLOOR_MS is 13 digits, so NO 12-digit value can ever pass the
+    // range check below — admitting length 12 only guarantees a false "corrupt epoch" warn for a
+    // legacy line whose message happens to open with a 12-digit number and a pipe.
+    val epochShaped = token.length in 13..14 && token.all { it in '0'..'9' }
+    if (epochShaped) {
+        val v = token.toLongOrNull()
+        if (v != null && v >= LOG_EPOCH_FLOOR_MS && v <= nowMs + LOG_EPOCH_SKEW_MS) {
+            // New format. Message = everything after the 2nd pipe (later `|` preserved).
+            return ParsedNodeLine(level, line.substring(secondPipe + 1), v)
+        }
+        // Epoch-shaped but out of range ⇒ corruption: receipt-time, and flag a (throttled) warn.
+        return ParsedNodeLine(level, line.substring(firstPipe + 1), null, malformedEpoch = true)
+    }
+    // 2nd pipe present but not epoch-shaped ⇒ a LEGACY message that merely contains a pipe.
+    // Keep the whole remainder as the message, receipt time, and DO NOT warn (no false positive).
+    return ParsedNodeLine(level, line.substring(firstPipe + 1), null)
+}
+
+// ── BAT-1161 P1A gate 3: pure rotation-decision matrix (unit-tested) ──
+// Given the inode currently at node_debug.log, the inode we were tracking, and (on a rotation)
+// the inode of node_debug.log.old, decide what the forwarder does. Split top-level vs. rotate
+// sub-decision so the drain only stats `.old` on an actual rotation.
+
+internal enum class NodeLogTopAction { MISSING, ROTATED, ADOPT_FIRST, CONTINUE }
+
+internal fun nodeDebugTopAction(currentInode: Long, trackedInode: Long): NodeLogTopAction = when {
+    currentInode == -1L -> NodeLogTopAction.MISSING
+    trackedInode != -1L && currentInode != trackedInode -> NodeLogTopAction.ROTATED
+    trackedInode == -1L -> NodeLogTopAction.ADOPT_FIRST
+    else -> NodeLogTopAction.CONTINUE
+}
+
+internal enum class NodeLogRotateAction { DRAIN_OLD_TAIL, GAP_EVICTED, GAP_NONE }
+
+internal fun nodeDebugRotateAction(oldInode: Long, trackedInode: Long): NodeLogRotateAction = when {
+    oldInode == trackedInode -> NodeLogRotateAction.DRAIN_OLD_TAIL // `.old` IS our generation
+    oldInode == -1L -> NodeLogRotateAction.GAP_NONE                // `.old` already gone
+    else -> NodeLogRotateAction.GAP_EVICTED                        // `.old` is a newer gen (≥2 rotations)
+}
+
 class SeekerClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
@@ -54,6 +124,11 @@ class SeekerClawService : Service() {
     // same byte range and double-forward).
     private var nodeDebugObserver: FileObserver? = null
     @Volatile private var nodeDebugLastPos = 0L
+    // BAT-1161 P1A gate 3: inode of the node_debug.log generation we're tracking (-1 = unknown).
+    // Rotation is detected when the file at the path has a DIFFERENT inode than this — robust
+    // under Doze-delayed forwarding, where `length < pos` misses a rotation whose fresh current
+    // has already grown past the stale cursor.
+    @Volatile private var nodeDebugInode = -1L
     private val nodeDebugMutex = Mutex()
     private var nodeDebugDrainChannel: Channel<Unit>? = null
     // Per-chunk cap to prevent OOM if events are batched (e.g. Doze mode
@@ -65,6 +140,9 @@ class SeekerClawService : Service() {
     // either fully drained or the trailing partial-line case is hit.
     // The loop replaces a prior per-event recursive launch.
     private val nodeDebugMaxDeltaBytes = 256 * 1024L // 256 KB
+
+    // BAT-1161 P1A: throttle the "corrupt epoch token" forward diagnostic to >=60s.
+    @Volatile private var lastMalformedEpochWarnMs = 0L
 
     // SupervisorJob so a single coroutine failure doesn't cancel the
     // whole scope. Cancellable from onDestroy to ensure no in-flight
@@ -155,27 +233,157 @@ class SeekerClawService : Service() {
         nodeDebugDrainChannel?.trySend(Unit)
     }
 
+    /** inode of a path via Os.stat, or -1 if missing/inaccessible (the rotation identity signal). */
+    private fun statInode(path: String): Long = try {
+        android.system.Os.stat(path).st_ino
+    } catch (_: Exception) { -1L } // ErrnoException (ENOENT, …) or SecurityException
+
     /**
-     * Single iteration of the node-debug drain loop. Returns true if
-     * there's likely more content to drain (caller should re-invoke);
-     * false otherwise. Caller holds `nodeDebugMutex`.
+     * Forward a byte-run of COMPLETE lines to LogCollector — shared by the current-file drain and
+     * the `.old`-generation drain — parsing each physical line per the one-wire format.
+     */
+    private fun forwardBytesToCollector(forwardBytes: ByteArray) {
+        val lines = String(forwardBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
+        val nowMs = System.currentTimeMillis()
+        var malformedEpochSeen = false
+        for (line in lines) {
+            val parsed = parseNodeDebugLine(line, nowMs)
+            if (parsed.malformedEpoch) malformedEpochSeen = true
+            LogCollector.append("[Node] ${parsed.message}", parsed.level, parsed.eventTimeMs)
+        }
+        if (malformedEpochSeen && nowMs - lastMalformedEpochWarnMs >= 60_000L) {
+            lastMalformedEpochWarnMs = nowMs
+            LogCollector.append("[Service] node_debug.log: out-of-range epoch token in a forwarded line (using receipt time)", LogLevel.WARN)
+        }
+    }
+
+    /**
+     * BAT-1161 P1A gate 3: drain a ROTATED-OUT generation (node_debug.log.old) from `fromPos` to
+     * EOF, holding ONE stable file descriptor for the whole drain — never reopening by path per
+     * chunk (a later rotation could replace the path mid-drain). `.old` is immutable after the
+     * rename, so a trailing partial line is force-flushed (no more bytes are coming).
+     */
+    private fun drainOldGeneration(oldFile: java.io.File, fromPos: Long, expectInode: Long) {
+        try {
+            java.io.RandomAccessFile(oldFile, "r").use { raf ->
+                // Bind identity to the OPEN HANDLE, not the path. The caller chose `fromPos` based
+                // on a path-based stat; if a second rotation replaced `.old` between that stat and
+                // this open, we would resume a DIFFERENT generation from a cursor that means
+                // nothing in it — forwarding misattributed bytes from an arbitrary offset, likely
+                // mid-line. fstat on the descriptor we are actually about to read closes that
+                // window: identity is now decided by the same object the reads come from.
+                val openInode = try { android.system.Os.fstat(raf.fd).st_ino } catch (_: Exception) { -1L }
+                if (openInode != expectInode) {
+                    LogCollector.append("[Service] node_debug.log.old changed identity between stat and open — skipping drain to avoid forwarding misattributed bytes", LogLevel.WARN)
+                    return
+                }
+                val end = raf.length()
+                var p = fromPos.coerceIn(0L, end)
+                var carry = ByteArray(0)
+                while (p < end) {
+                    val readSize = minOf(end - p, nodeDebugMaxDeltaBytes).toInt()
+                    raf.seek(p)
+                    val buf = ByteArray(readSize)
+                    raf.readFully(buf)
+                    p += readSize
+                    val data = if (carry.isEmpty()) buf else carry + buf
+                    var lastNl = -1
+                    for (i in data.size - 1 downTo 0) { if (data[i] == 0x0A.toByte()) { lastNl = i; break } }
+                    if (lastNl >= 0) {
+                        forwardBytesToCollector(data.copyOfRange(0, lastNl + 1))
+                        carry = data.copyOfRange(lastNl + 1, data.size)
+                    } else {
+                        carry = data
+                    }
+                }
+                if (carry.isNotEmpty()) forwardBytesToCollector(carry) // immutable → flush the last partial
+            }
+        } catch (e: Exception) {
+            LogCollector.append("[Service] node_debug.log.old drain error: ${e.javaClass.simpleName}", LogLevel.WARN)
+        }
+    }
+
+    /**
+     * BAT-1161 P1A gate 3: drain whatever remains of the generation we were tracking, now that it
+     * is no longer the file at the current path. Shared by both displacement cases — ROTATED (the
+     * fresh current already exists) and MISSING (the fresh current does not exist YET, e.g. the
+     * rename succeeded but the fresh-current write threw, leaving the path absent until the next
+     * log() call recreates it). Caller resets the cursor/identity afterwards.
+     *
+     * Only call with `nodeDebugInode != -1L` — with nothing tracked there is no generation to
+     * recover, and GAP_NONE would fire a spurious warning on every cold boot.
+     */
+    private fun drainDisplacedGeneration(debugLogFile: java.io.File) {
+        val oldFile = java.io.File(debugLogFile.path + ".old")
+        val oldInode = statInode(oldFile.path)
+        when (nodeDebugRotateAction(oldInode, nodeDebugInode)) {
+            NodeLogRotateAction.DRAIN_OLD_TAIL ->
+                // Normal single rotation — our generation is now `.old`; drain its tail to EOF.
+                // Resume from our cursor, which is only meaningful if `.old` is still the same
+                // inode we just stat'd — drainOldGeneration re-checks that on the open handle.
+                drainOldGeneration(oldFile, nodeDebugLastPos, expectInode = nodeDebugInode)
+            NodeLogRotateAction.GAP_NONE ->
+                LogCollector.append("[Service] node_debug.log: rotation gap — previous generation unavailable", LogLevel.WARN)
+            NodeLogRotateAction.GAP_EVICTED -> {
+                // ≥2 rotations before we drained: with a single archive slot, `.old` now holds a
+                // NEWER generation and the one we were tracking has been overwritten — it is gone
+                // from disk too, not just from the mirror. Recover what survives (the intermediate
+                // generation, from 0) and say plainly that the rest is unrecoverable; claiming it
+                // is "still on disk in node_debug.log" would send the reader looking for a file
+                // that no longer contains it.
+                LogCollector.append("[Service] node_debug.log: rotation gap — a log generation was evicted before forwarding and is permanently lost; recovering the surviving archive only", LogLevel.WARN)
+                drainOldGeneration(oldFile, 0L, expectInode = oldInode)
+            }
+        }
+    }
+
+    /**
+     * Single iteration of the node-debug drain loop. Returns true if there's likely more content
+     * to drain (caller should re-invoke); false otherwise. Caller holds `nodeDebugMutex`.
+     *
+     * BAT-1161 P1A gate 3: rotation is detected by IDENTITY (inode), not `length < pos`. On an
+     * inode change the renamed `.old` generation is drained to EOF (stable FD) before the cursor
+     * resets to the fresh current. Exact-once for RETAINED generations; a ≥2-rotation burst evicts
+     * the single archive → the gap is detected and WARNed rather than silently lost.
      */
     private fun drainOneNodeDebugChunk(debugLogFile: java.io.File): Boolean {
         try {
-            if (!debugLogFile.exists()) {
-                // File doesn't exist yet (cold boot before Node writes,
-                // OR rotation deleted it before re-creating). Reset
-                // lastPos so the next CREATE event starts from 0.
-                nodeDebugLastPos = 0L
-                return false
+            val currentInode = statInode(debugLogFile.path)
+            when (nodeDebugTopAction(currentInode, nodeDebugInode)) {
+                NodeLogTopAction.MISSING -> {
+                    // The current path is gone. Usually a cold boot before Node writes (nothing
+                    // tracked yet), but it is ALSO reachable mid-rotation: _rotateLog() renames
+                    // current→.old and only then writes the fresh current, and if that write throws
+                    // the path stays absent until the next log() call recreates it — minutes at the
+                    // measured idle rate, not microseconds. If we were tracking a generation, it is
+                    // sitting in `.old` right now with un-forwarded bytes; drain it BEFORE dropping
+                    // the identity or those lines are lost with no gap warning, which would break
+                    // gate 3's "exact-once for RETAINED generations" term.
+                    if (nodeDebugInode != -1L) drainDisplacedGeneration(debugLogFile)
+                    nodeDebugLastPos = 0L
+                    nodeDebugInode = -1L
+                    return false
+                }
+                NodeLogTopAction.ROTATED -> {
+                    // The file we were reading was renamed to `.old`.
+                    drainDisplacedGeneration(debugLogFile)
+                    nodeDebugLastPos = 0L
+                    nodeDebugInode = currentInode
+                    // fall through: drain the fresh current from 0
+                }
+                NodeLogTopAction.ADOPT_FIRST ->
+                    // First drain for this file — adopt its identity, keep the (watermark) cursor.
+                    nodeDebugInode = currentInode
+                NodeLogTopAction.CONTINUE -> { /* same generation — fall through to the read below */ }
             }
+
             val length = debugLogFile.length()
             var pos = nodeDebugLastPos
-
-            // Rotation/truncation: file shrunk, reset to start. Either
-            // Node truncated in place or rotation replaced it with a
-            // smaller file — either way, lastPos points past the new
-            // EOF and we'd silently never forward again without this.
+            // Node normally rotates by rename (new inode), which the identity check above catches.
+            // It CAN still truncate in place on one path: if the rename fails, _rotateLog() logs a
+            // ROTATE_FAILED diagnostic and starts a fresh current over the same inode anyway — a
+            // deliberate bound-over-archive trade (config.js), so the inode is unchanged and only
+            // the length shrinks. Reset rather than stall; the un-archived tail is already gone.
             if (length < pos) {
                 pos = 0L
                 nodeDebugLastPos = 0L
@@ -214,30 +422,7 @@ class SeekerClawService : Service() {
             }
             nodeDebugLastPos = pos + advanceBy
 
-            // Explicit UTF-8 — Node writes UTF-8; platform-default
-            // decoding could mojibake non-ASCII messages on devices
-            // where the JVM default differs.
-            val lines = String(forwardBytes, Charsets.UTF_8).lines().filter { it.isNotBlank() }
-            for (line in lines) {
-                val pipeIdx = line.indexOf('|')
-                val (level, message) = if (pipeIdx > 0) {
-                    val lvl = line.substring(0, pipeIdx)
-                    val msg = line.substring(pipeIdx + 1)
-                    val parsed = when (lvl) {
-                        "ERROR" -> LogLevel.ERROR
-                        "WARN" -> LogLevel.WARN
-                        "DEBUG" -> LogLevel.DEBUG
-                        "INFO" -> LogLevel.INFO
-                        else -> null
-                    }
-                    if (parsed != null) parsed to msg
-                    else LogLevel.INFO to line // unknown prefix — treat whole line as INFO
-                } else {
-                    // Fallback for unparsed lines (old format, raw output)
-                    LogLevel.INFO to line
-                }
-                LogCollector.append("[Node] $message", level)
-            }
+            forwardBytesToCollector(forwardBytes)
 
             // Capped the read and there's still more in the file? Tell
             // caller to keep draining. The drain loop releases + reacquires
@@ -248,10 +433,12 @@ class SeekerClawService : Service() {
             // Surface failures so silent forwarding stops are diagnosable.
             // Previously: catch (_) {} which made "Node logs stopped
             // appearing" impossible to attribute.
+            // BAT-1161 gate 6b: class only, never ${e.message} (a file path/errno could carry
+            // a token-adjacent string; the class name is enough to attribute a forwarding stall).
             LogCollector.append(
-                "[Service] node_debug.log forward error: ${e.javaClass.simpleName}: ${e.message}",
+                "[Service] node_debug.log forward error: ${e.javaClass.simpleName}",
                 LogLevel.WARN,
-)
+            )
             return false // Don't loop on a persistent error
         }
     }
@@ -391,6 +578,16 @@ class SeekerClawService : Service() {
         // Setup node project directory (workDir already created above)
         val nodeProjectDir = filesDir.absolutePath + "/nodejs-project"
 
+        // BAT-1161 P1A gate 3: startup watermark. Capture the retained node_debug.log's identity
+        // (inode) + EOF BEFORE Node starts, so this :node session forwards only its OWN new lines
+        // (no replay of the whole retained log into the 1 MB mirror on every routine restart) and
+        // correctly follows a rotation that happens during startup — the pre-Node EOF is the
+        // session boundary. Only runs on a fresh process start; a re-fired onStartCommand with
+        // NodeBridge already alive returned earlier and keeps the live cursor.
+        val nodeDebugAtStart = File(workDir, "node_debug.log")
+        nodeDebugInode = statInode(nodeDebugAtStart.path)
+        nodeDebugLastPos = if (nodeDebugAtStart.exists()) nodeDebugAtStart.length() else 0L
+
         // Start Node.js runtime
         NodeBridge.start(workDir = workDir.absolutePath, openclawDir = nodeProjectDir)
         if (!NodeBridge.isAlive()) {
@@ -417,7 +614,7 @@ class SeekerClawService : Service() {
             androidBridge?.start()
             LogCollector.append("[Service] AndroidBridge started on 127.0.0.1:8765 (auth required)")
         } catch (e: Exception) {
-            LogCollector.append("[Service] Failed to start AndroidBridge: ${e.message}", LogLevel.ERROR)
+            LogCollector.append("[Service] Failed to start AndroidBridge: ${e.javaClass.simpleName}", LogLevel.ERROR)
         }
 
         // Mark as running
@@ -489,7 +686,7 @@ class SeekerClawService : Service() {
                     // Sweep failures should never bring the service down.
                     // Log and keep going; next iteration retries.
                     LogCollector.append(
-                        "[Service] Burner cap sweepStale error: ${e.javaClass.simpleName}: ${e.message}",
+                        "[Service] Burner cap sweepStale error: ${e.javaClass.simpleName}",
                         LogLevel.WARN,
                     )
                 }
@@ -729,7 +926,7 @@ class SeekerClawService : Service() {
         try {
             XaiOAuthDurabilityGate.ensureDurableBeforeStop()
         } catch (e: Exception) {
-            LogCollector.append("[Shutdown] xAI durability guard threw: ${e.message}", LogLevel.WARN)
+            LogCollector.append("[Shutdown] xAI durability guard threw: ${e.javaClass.simpleName}", LogLevel.WARN)
         }
         // (2) Best-effort session summary + SQL.js flush (BAT-525). NOT durability-critical — a slow or
         //     failed summary is acceptable (the durable state above is independent of it). Skipped when
@@ -902,7 +1099,7 @@ class SeekerClawService : Service() {
                     // and retries (or OS-fallback stops after the bounded attempts), instead of
                     // blindly killing into a possibly-consumed-token replay.
                     LogCollector.append(
-                        "[Shutdown] durability gate threw (${e.javaClass.simpleName}: ${e.message}) — treating as NOT durable",
+                        "[Shutdown] durability gate threw (${e.javaClass.simpleName}) — treating as NOT durable",
                         LogLevel.ERROR,
                     )
                     false
@@ -950,7 +1147,7 @@ class SeekerClawService : Service() {
                             XaiOAuthDurabilityGate.resolveAbandonedStop()
                         } catch (e: Exception) {
                             LogCollector.append(
-                                "[Shutdown] resolveAbandonedStop threw (${e.javaClass.simpleName}: ${e.message})",
+                                "[Shutdown] resolveAbandonedStop threw (${e.javaClass.simpleName})",
                                 LogLevel.ERROR,
                             )
                             false

@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.LogRedactor
 import java.util.Date
 
 @Composable
@@ -172,9 +173,17 @@ fun LogsScreen() {
                             appendLine("[${entry.level.name}] [$timeStr] ${entry.message}")
                         }
                     }
+                    // BAT-1161 P1A gate 6: Share second pass, defense-in-depth over the redaction
+                    // already applied at LogCollector ingress (append + the parseLine restore path).
+                    // Secrecy-fail-CLOSED: if the redactor throws we must NOT fall back to the
+                    // unmasked text. It is tempting to reason "the entries were already redacted,
+                    // so logText is safe" — but the same redactor is what masked them, so a throw
+                    // here is evidence it may have failed there too. Share is a one-tap path OFF
+                    // the device; a useless export is recoverable, a leaked token is not.
+                    val shareText = try { LogRedactor.redact(logText) } catch (_: Throwable) { "[[redaction-error]]" }
                     val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                         type = "text/plain"
-                        putExtra(android.content.Intent.EXTRA_TEXT, logText)
+                        putExtra(android.content.Intent.EXTRA_TEXT, shareText)
                         putExtra(android.content.Intent.EXTRA_SUBJECT, "SeekerClaw Logs")
                     }
                     context.startActivity(android.content.Intent.createChooser(sendIntent, "Share Logs"))
@@ -185,16 +194,18 @@ fun LogsScreen() {
                         tint = SeekerClawColors.TextDim,
                     )
                 }
+                // BAT-1161 P1A: "Clear console" — this only clears the service_logs mirror +
+                // in-memory ring, NOT Node's node_debug.log (which keeps recording and re-forwards).
                 TextButton(onClick = { showClearDialog = true }) {
                     Icon(
                         Icons.Default.Delete,
-                        contentDescription = "Clear logs",
+                        contentDescription = "Clear console",
                         tint = SeekerClawColors.TextDim,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Clear",
+                        text = "Clear console",
                         fontFamily = RethinkSans,
                         fontSize = 13.sp,
                         color = SeekerClawColors.TextDim,
@@ -465,7 +476,7 @@ fun LogsScreen() {
             onDismissRequest = { showClearDialog = false },
             title = {
                 Text(
-                    "Clear Logs",
+                    "Clear console",
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,
@@ -473,7 +484,7 @@ fun LogsScreen() {
             },
             text = {
                 Text(
-                    "This will delete all log entries. This cannot be undone.",
+                    "This clears the on-screen console and its mirror. Node's own debug log keeps recording, so new entries will appear again.",
                     fontFamily = RethinkSans,
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextSecondary,
