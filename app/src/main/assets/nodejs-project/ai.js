@@ -1052,7 +1052,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('- **agent_settings.json** — runtime settings (heartbeat interval, etc.). You can read this to check current settings.');
     lines.push('- **agent_health_state** — your health status file, written every 60s. Contains apiStatus, lastError, consecutiveFailures, timestamps. The Android app reads this to show your status on the dashboard.');
     lines.push('- **PLATFORM.md** — auto-generated on every service start with device info, versions, paths, permissions. Already injected into this prompt.');
-    lines.push(`- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} polling, cron runs). Each line is \`LEVEL|epochMs|message\`. Continuously rotated at ~5 MB — the previous file is kept as node_debug.log.old.`);
+    lines.push(`- **node_debug.log** — your runtime debug log (startup, API calls, tool errors, ${CHANNEL === 'discord' ? 'Discord' : 'Telegram'} polling, cron runs). New lines are \`LEVEL|epochMs|message\` (epochMs = ms since the Unix epoch); lines written before this version was installed may still use the older \`LEVEL|message\` shape with no timestamp. Continuously rotated at ~5 MB — the previous file is kept as node_debug.log.old.`);
     lines.push('- **skills/** — SKILL.md files that extend your capabilities.');
     lines.push('- **memory/** — daily memory files (one per day).');
     lines.push('- **cron/** — scheduled job definitions and execution history.');

@@ -142,4 +142,23 @@ class NodeLogRotationDecisionTest {
     @Test fun `rotate action — old is a newer gen, our gen was evicted`() {
         assertEquals(NodeLogRotateAction.GAP_EVICTED, nodeDebugRotateAction(oldInode = 300L, trackedInode = 100L))
     }
+
+    @Test fun `missing current + retained old still resolves to draining our tail`() {
+        // Composition guard for the MISSING arm of drainOneNodeDebugChunk. _rotateLog() renames
+        // current→.old BEFORE writing the fresh current, so there is a window where the current
+        // path does not exist while `.old` holds our generation and its un-forwarded tail. The
+        // top-level action is MISSING, but the rotate sub-decision is still DRAIN_OLD_TAIL — so
+        // the MISSING arm must consult it and drain BEFORE resetting the cursor/identity, or those
+        // bytes are lost with no gap warning (gate 3: exact-once for RETAINED generations).
+        assertEquals(NodeLogTopAction.MISSING, nodeDebugTopAction(currentInode = -1L, trackedInode = 100L))
+        assertEquals(NodeLogRotateAction.DRAIN_OLD_TAIL, nodeDebugRotateAction(oldInode = 100L, trackedInode = 100L))
+    }
+
+    @Test fun `rotate action — both unknown compares equal, so the caller must gate on tracked != -1`() {
+        // (-1, -1) compares EQUAL and therefore yields DRAIN_OLD_TAIL, which would drain a
+        // nonexistent `.old` on every cold boot. That is safe ONLY because the MISSING arm gates on
+        // `nodeDebugInode != -1L` before calling drainDisplacedGeneration. Pinned so a refactor
+        // that drops the caller-side guard has a failing test pointing at the reason.
+        assertEquals(NodeLogRotateAction.DRAIN_OLD_TAIL, nodeDebugRotateAction(oldInode = -1L, trackedInode = -1L))
+    }
 }

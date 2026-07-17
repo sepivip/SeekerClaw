@@ -68,7 +68,10 @@ internal fun parseNodeDebugLine(line: String, nowMs: Long): ParsedNodeLine {
     // (Critical: a bare `WARN|1784100000000` must NOT adopt the epoch and drop its message.)
     if (secondPipe < 0) return ParsedNodeLine(level, line.substring(firstPipe + 1), null)
     val token = line.substring(firstPipe + 1, secondPipe)
-    val epochShaped = token.length in 12..14 && token.all { it in '0'..'9' }
+    // 13..14, not 12..14: LOG_EPOCH_FLOOR_MS is 13 digits, so NO 12-digit value can ever pass the
+    // range check below — admitting length 12 only guarantees a false "corrupt epoch" warn for a
+    // legacy line whose message happens to open with a 12-digit number and a pipe.
+    val epochShaped = token.length in 13..14 && token.all { it in '0'..'9' }
     if (epochShaped) {
         val v = token.toLongOrNull()
         if (v != null && v >= LOG_EPOCH_FLOOR_MS && v <= nowMs + LOG_EPOCH_SKEW_MS) {
@@ -291,6 +294,34 @@ class SeekerClawService : Service() {
     }
 
     /**
+     * BAT-1161 P1A gate 3: drain whatever remains of the generation we were tracking, now that it
+     * is no longer the file at the current path. Shared by both displacement cases — ROTATED (the
+     * fresh current already exists) and MISSING (the fresh current does not exist YET, e.g. the
+     * rename succeeded but the fresh-current write threw, leaving the path absent until the next
+     * log() call recreates it). Caller resets the cursor/identity afterwards.
+     *
+     * Only call with `nodeDebugInode != -1L` — with nothing tracked there is no generation to
+     * recover, and GAP_NONE would fire a spurious warning on every cold boot.
+     */
+    private fun drainDisplacedGeneration(debugLogFile: java.io.File) {
+        val oldFile = java.io.File(debugLogFile.path + ".old")
+        when (nodeDebugRotateAction(statInode(oldFile.path), nodeDebugInode)) {
+            NodeLogRotateAction.DRAIN_OLD_TAIL ->
+                // Normal single rotation — our generation is now `.old`; drain its tail to EOF.
+                drainOldGeneration(oldFile, nodeDebugLastPos)
+            NodeLogRotateAction.GAP_NONE ->
+                LogCollector.append("[Service] node_debug.log: rotation gap — previous generation unavailable", LogLevel.WARN)
+            NodeLogRotateAction.GAP_EVICTED -> {
+                // ≥2 rotations before we drained: our generation was evicted (one archive).
+                // Recover the surviving intermediate generation; the evicted tail stays
+                // only in the authoritative node_debug.log on disk.
+                LogCollector.append("[Service] node_debug.log: rotation gap — a log generation was evicted before forwarding (still on disk in node_debug.log)", LogLevel.WARN)
+                drainOldGeneration(oldFile, 0L)
+            }
+        }
+    }
+
+    /**
      * Single iteration of the node-debug drain loop. Returns true if there's likely more content
      * to drain (caller should re-invoke); false otherwise. Caller holds `nodeDebugMutex`.
      *
@@ -304,28 +335,22 @@ class SeekerClawService : Service() {
             val currentInode = statInode(debugLogFile.path)
             when (nodeDebugTopAction(currentInode, nodeDebugInode)) {
                 NodeLogTopAction.MISSING -> {
-                    // Missing (cold boot before Node writes, or rotation deleted before re-creating).
+                    // The current path is gone. Usually a cold boot before Node writes (nothing
+                    // tracked yet), but it is ALSO reachable mid-rotation: _rotateLog() renames
+                    // current→.old and only then writes the fresh current, and if that write throws
+                    // the path stays absent until the next log() call recreates it — minutes at the
+                    // measured idle rate, not microseconds. If we were tracking a generation, it is
+                    // sitting in `.old` right now with un-forwarded bytes; drain it BEFORE dropping
+                    // the identity or those lines are lost with no gap warning, which would break
+                    // gate 3's "exact-once for RETAINED generations" term.
+                    if (nodeDebugInode != -1L) drainDisplacedGeneration(debugLogFile)
                     nodeDebugLastPos = 0L
                     nodeDebugInode = -1L
                     return false
                 }
                 NodeLogTopAction.ROTATED -> {
                     // The file we were reading was renamed to `.old`.
-                    val oldFile = java.io.File(debugLogFile.path + ".old")
-                    when (nodeDebugRotateAction(statInode(oldFile.path), nodeDebugInode)) {
-                        NodeLogRotateAction.DRAIN_OLD_TAIL ->
-                            // Normal single rotation — our generation is now `.old`; drain its tail to EOF.
-                            drainOldGeneration(oldFile, nodeDebugLastPos)
-                        NodeLogRotateAction.GAP_NONE ->
-                            LogCollector.append("[Service] node_debug.log: rotation gap — previous generation unavailable", LogLevel.WARN)
-                        NodeLogRotateAction.GAP_EVICTED -> {
-                            // ≥2 rotations before we drained: our generation was evicted (one archive).
-                            // Recover the surviving intermediate generation; the evicted tail stays
-                            // only in the authoritative node_debug.log on disk.
-                            LogCollector.append("[Service] node_debug.log: rotation gap — a log generation was evicted before forwarding (still on disk in node_debug.log)", LogLevel.WARN)
-                            drainOldGeneration(oldFile, 0L)
-                        }
-                    }
+                    drainDisplacedGeneration(debugLogFile)
                     nodeDebugLastPos = 0L
                     nodeDebugInode = currentInode
                     // fall through: drain the fresh current from 0

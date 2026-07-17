@@ -176,7 +176,12 @@ fun LogsScreen() {
                     // BAT-1161 P1A gate 6: Share second pass. Entries are already redacted at
                     // LogCollector.append ingress; re-redact the assembled blob defense-in-depth
                     // so nothing leaves the device unmasked even if a raw path ever slips in.
-                    val shareText = try { LogRedactor.redact(logText) } catch (_: Throwable) { "[[redaction-error]]" }
+                    // On a throw, fall back to `logText` — NOT to a marker: every line in it was
+                    // already masked at ingress, so the already-safe text is the correct fallback,
+                    // whereas replacing the whole blob would silently hand the user an export
+                    // containing nothing but the marker. (LogCollector's identical fail-open is
+                    // scoped to ONE entry; here the unit is the entire share.)
+                    val shareText = try { LogRedactor.redact(logText) } catch (_: Throwable) { logText }
                     val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                         type = "text/plain"
                         putExtra(android.content.Intent.EXTRA_TEXT, shareText)
