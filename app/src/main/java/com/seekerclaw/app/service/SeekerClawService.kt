@@ -263,10 +263,20 @@ class SeekerClawService : Service() {
      * chunk (a later rotation could replace the path mid-drain). `.old` is immutable after the
      * rename, so a trailing partial line is force-flushed (no more bytes are coming).
      */
-    private fun drainOldGeneration(oldFile: java.io.File, fromPos: Long) {
-        if (!oldFile.exists()) return
+    private fun drainOldGeneration(oldFile: java.io.File, fromPos: Long, expectInode: Long) {
         try {
             java.io.RandomAccessFile(oldFile, "r").use { raf ->
+                // Bind identity to the OPEN HANDLE, not the path. The caller chose `fromPos` based
+                // on a path-based stat; if a second rotation replaced `.old` between that stat and
+                // this open, we would resume a DIFFERENT generation from a cursor that means
+                // nothing in it — forwarding misattributed bytes from an arbitrary offset, likely
+                // mid-line. fstat on the descriptor we are actually about to read closes that
+                // window: identity is now decided by the same object the reads come from.
+                val openInode = try { android.system.Os.fstat(raf.fd).st_ino } catch (_: Exception) { -1L }
+                if (openInode != expectInode) {
+                    LogCollector.append("[Service] node_debug.log.old changed identity between stat and open — skipping drain to avoid forwarding misattributed bytes", LogLevel.WARN)
+                    return
+                }
                 val end = raf.length()
                 var p = fromPos.coerceIn(0L, end)
                 var carry = ByteArray(0)
@@ -305,18 +315,24 @@ class SeekerClawService : Service() {
      */
     private fun drainDisplacedGeneration(debugLogFile: java.io.File) {
         val oldFile = java.io.File(debugLogFile.path + ".old")
-        when (nodeDebugRotateAction(statInode(oldFile.path), nodeDebugInode)) {
+        val oldInode = statInode(oldFile.path)
+        when (nodeDebugRotateAction(oldInode, nodeDebugInode)) {
             NodeLogRotateAction.DRAIN_OLD_TAIL ->
                 // Normal single rotation — our generation is now `.old`; drain its tail to EOF.
-                drainOldGeneration(oldFile, nodeDebugLastPos)
+                // Resume from our cursor, which is only meaningful if `.old` is still the same
+                // inode we just stat'd — drainOldGeneration re-checks that on the open handle.
+                drainOldGeneration(oldFile, nodeDebugLastPos, expectInode = nodeDebugInode)
             NodeLogRotateAction.GAP_NONE ->
                 LogCollector.append("[Service] node_debug.log: rotation gap — previous generation unavailable", LogLevel.WARN)
             NodeLogRotateAction.GAP_EVICTED -> {
-                // ≥2 rotations before we drained: our generation was evicted (one archive).
-                // Recover the surviving intermediate generation; the evicted tail stays
-                // only in the authoritative node_debug.log on disk.
-                LogCollector.append("[Service] node_debug.log: rotation gap — a log generation was evicted before forwarding (still on disk in node_debug.log)", LogLevel.WARN)
-                drainOldGeneration(oldFile, 0L)
+                // ≥2 rotations before we drained: with a single archive slot, `.old` now holds a
+                // NEWER generation and the one we were tracking has been overwritten — it is gone
+                // from disk too, not just from the mirror. Recover what survives (the intermediate
+                // generation, from 0) and say plainly that the rest is unrecoverable; claiming it
+                // is "still on disk in node_debug.log" would send the reader looking for a file
+                // that no longer contains it.
+                LogCollector.append("[Service] node_debug.log: rotation gap — a log generation was evicted before forwarding and is permanently lost; recovering the surviving archive only", LogLevel.WARN)
+                drainOldGeneration(oldFile, 0L, expectInode = oldInode)
             }
         }
     }

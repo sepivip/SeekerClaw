@@ -522,7 +522,7 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 ## Agent Logs (node_debug.log ⇄ Logs screen)
 
 ### Log format + what each surface is (BAT-1161)
-**Format:** every line in `node_debug.log` is `LEVEL|epochMs|message` (epochMs = Node's `Date.now()`). A multiline message is framed one physical line per record, all sharing that call's timestamp — so every line is a complete record. Any later `|` belongs to the message.
+**Format:** every **new** line in `node_debug.log` is `LEVEL|epochMs|message` (epochMs = Node's `Date.now()`). A multiline message is framed one physical line per record, all sharing that call's timestamp — so every new line is a complete record. Any later `|` belongs to the message. **Lines written before this version was installed** are different in two ways: they use the older `LEVEL|message` shape with no timestamp field, and a multiline message was written as ONE record with embedded newlines, so its continuation lines carry no `LEVEL|` prefix at all. The log survives app upgrades, so a retained file holds such lines until rotation ages them out. Don't assume field 2 is an epoch (on a legacy line it's the start of the message), and don't assume every physical line is its own record.
 **Session boundary:** each `:node` session opens with `=== SESSION boot=<id> build=<sha> ver=<v> logfmt=1 pid=<n> ===`. Use `boot=<id>` to tell one session's lines from another's.
 **Rotation:** continuously rotated at ~5 MB — the whole current file becomes `node_debug.log.old` (no carryover) and a fresh one starts with `=== ROTATED gen=N logfmt=1 ===`. Only ONE archive is kept.
 **Two surfaces, different jobs:**
@@ -531,14 +531,15 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 
 ### Logs screen missing lines / stopped updating
 **Symptoms:** the Logs screen lags, skips entries, or stops after a rotation.
-**Check:** `grep -i "rotation gap\|forward error\|drain error\|out-of-range epoch" node_debug.log | tail -10`
-**Diagnosis:**
-- `rotation gap — a log generation was evicted before forwarding` — Node rotated **twice** before the forwarder drained (only one archive is kept), so a generation never reached the mirror. Those lines still exist on disk in `node_debug.log`/`.old`; they're only missing from the mirror. Expect this only under heavy logging + Doze.
-- `rotation gap — previous generation unavailable` — the archive was already gone at drain time. Same story.
-- `node_debug.log.old drain error: <Class>` — the archived generation couldn't be read (IO). The fresh current still forwards.
-- `node_debug.log forward error: <Class>` — the drain itself failed; forwarding resumes on the next filesystem event.
+**Check:** these warnings are emitted by the **Kotlin** forwarder, so they are NOT in `node_debug.log` — grepping it for them finds nothing and proves nothing. They land in the Kotlin mirror (`service_logs`), which lives outside your workspace and which you cannot read. Ask the user to look on the **Logs screen** for a line starting `[Service] node_debug.log:`.
+**Diagnosis** (what the user may report seeing):
+- `rotation gap — a log generation was evicted before forwarding and is permanently lost` — Node rotated **twice** before the forwarder drained. Only ONE archive is kept, so the second rotation overwrote the generation that was still waiting: those lines are gone from `node_debug.log` and `.old` as well, not just from the mirror. Unrecoverable. Expect this only under heavy logging + Doze.
+- `rotation gap — previous generation unavailable` — the archive was already gone at drain time. Same story: unrecoverable.
+- `node_debug.log.old changed identity between stat and open` — a rotation landed mid-handoff and the drain was skipped rather than forward misattributed bytes. Only that archive's tail is missing from the mirror.
+- `node_debug.log.old drain error: <Class>` — the archived generation couldn't be read (IO). The fresh current still forwards; `.old` is still readable on disk.
+- `node_debug.log forward error: <Class>` — the drain itself failed; forwarding resumes on the next filesystem event. Nothing is lost from `node_debug.log`.
 - A routine restart does **not** replay the previous session (a startup watermark starts each session at the pre-boot EOF) — an apparent "gap" at a restart boundary is by design; the SESSION banner marks it.
-**Fix:** the mirror is best-effort by design — read `node_debug.log` directly for anything missing. Repeated `forward error` means a real IO problem (check storage/permissions).
+**Fix:** the mirror is best-effort by design. What that means for recovery depends on the warning: for `forward error`, `drain error`, and restart boundaries the records are still in `node_debug.log`/`.old`, so read those directly. For an **evicted** generation they are not — no file still holds them, and no amount of grepping will surface them. Repeated `forward error` means a real IO problem (check storage/permissions).
 
 ### Timestamps look wrong in the Logs screen
 **Symptoms:** odd times, or `out-of-range epoch token in a forwarded line (using receipt time)` appears.

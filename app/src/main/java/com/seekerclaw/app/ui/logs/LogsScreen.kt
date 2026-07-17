@@ -173,15 +173,14 @@ fun LogsScreen() {
                             appendLine("[${entry.level.name}] [$timeStr] ${entry.message}")
                         }
                     }
-                    // BAT-1161 P1A gate 6: Share second pass. Entries are already redacted at
-                    // LogCollector.append ingress; re-redact the assembled blob defense-in-depth
-                    // so nothing leaves the device unmasked even if a raw path ever slips in.
-                    // On a throw, fall back to `logText` — NOT to a marker: every line in it was
-                    // already masked at ingress, so the already-safe text is the correct fallback,
-                    // whereas replacing the whole blob would silently hand the user an export
-                    // containing nothing but the marker. (LogCollector's identical fail-open is
-                    // scoped to ONE entry; here the unit is the entire share.)
-                    val shareText = try { LogRedactor.redact(logText) } catch (_: Throwable) { logText }
+                    // BAT-1161 P1A gate 6: Share second pass, defense-in-depth over the redaction
+                    // already applied at LogCollector ingress (append + the parseLine restore path).
+                    // Secrecy-fail-CLOSED: if the redactor throws we must NOT fall back to the
+                    // unmasked text. It is tempting to reason "the entries were already redacted,
+                    // so logText is safe" — but the same redactor is what masked them, so a throw
+                    // here is evidence it may have failed there too. Share is a one-tap path OFF
+                    // the device; a useless export is recoverable, a leaked token is not.
+                    val shareText = try { LogRedactor.redact(logText) } catch (_: Throwable) { "[[redaction-error]]" }
                     val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                         type = "text/plain"
                         putExtra(android.content.Intent.EXTRA_TEXT, shareText)
@@ -477,7 +476,7 @@ fun LogsScreen() {
             onDismissRequest = { showClearDialog = false },
             title = {
                 Text(
-                    "Clear Logs",
+                    "Clear console",
                     fontFamily = RethinkSans,
                     fontWeight = FontWeight.Bold,
                     color = SeekerClawColors.TextPrimary,

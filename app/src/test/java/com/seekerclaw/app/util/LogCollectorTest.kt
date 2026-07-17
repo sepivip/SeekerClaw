@@ -520,4 +520,52 @@ class LogCollectorTest {
             tmp.delete()
         }
     }
+
+    // ── BAT-1161 P1A gate 6: redaction of RESTORED entries ──
+    //
+    // parseLine rebuilds the ring straight from service_logs on start and is the ONLY ingress that
+    // does not pass through append(). It shipped unredacted, which meant an entry written by a
+    // PRE-UPGRADE build — when Kotlin had no redaction at all — was restored raw, rendered on
+    // screen, and handed to Share. These pin that it can't regress.
+
+    @Test
+    fun `parseLine redacts a secret restored from a pre-upgrade log line`() {
+        // Exactly what a pre-BAT-1161 service_logs line looks like: written before any Kotlin
+        // redaction existed, so the raw key is sitting in the file on disk right now.
+        val restored = LogCollector.parseLine("1784290000000|ERROR|auth failed for sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA")
+        assertNotNull(restored)
+        assertEquals(LogLevel.ERROR, restored!!.level)
+        assertEquals(1784290000000L, restored.timestamp)
+        assertTrue(
+            "restored entry must be redacted, got: ${restored.message}",
+            restored.message.contains("sk-ant-***") && !restored.message.contains("AAAAAAAAAAAAAAAAAAAAAAAA"),
+        )
+    }
+
+    @Test
+    fun `parseLine redacts every secret shape the append path masks`() {
+        // Same-class guard: the restore path must not mask a narrower set than append(). If a
+        // pattern is added to LogRedactor it is covered here automatically, since both call the
+        // same redactor — this pins that parseLine actually calls it at all.
+        val secrets = listOf(
+            "xai-AAAAAAAAAAAAAAAAAAAA" to "xai-***",
+            "sk-or-AAAAAAAAAAAAAAAAAAAA" to "sk-or-***",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.AAAAAAAAAAAA" to "eyJ***",
+        )
+        for ((raw, masked) in secrets) {
+            val e = LogCollector.parseLine("1784290000000|INFO|token=$raw")
+            assertNotNull(e)
+            assertTrue("expected $masked in restored line, got: ${e!!.message}", e.message.contains(masked))
+            assertTrue("raw secret survived restore: ${e.message}", !e.message.contains(raw))
+        }
+    }
+
+    @Test
+    fun `parseLine preserves an ordinary message and its later pipes`() {
+        // The redaction pass must not mangle normal content: limit=3 keeps later pipes in the
+        // message, and a line with no secret must come back byte-identical.
+        val e = LogCollector.parseLine("1784290000000|INFO|[Node] a|b|c")
+        assertNotNull(e)
+        assertEquals("[Node] a|b|c", e!!.message)
+    }
 }
