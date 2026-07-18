@@ -89,6 +89,7 @@ jobs:
             tools-solana-routing \
             solana-send-guard \
             solana-dca-routing \
+            trigger-v2-flag \
             tx-parser \
             public-rpc-shaper \
             skills-priority \

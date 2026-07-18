@@ -740,6 +740,15 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 2. If the order was actually created from the burner: the cancel still works through main if the main wallet is the same authority (it isn't, in V1 — burner ≠ main pubkey). For now, this means the cancel will fail to authorize at Jupiter; the user must wait for the order to expire OR contact Jupiter support.
 3. Long-term fix: enable the Jupiter ownership write retry queue (Phase 6+ scope).
 
+### Jupiter Trigger V2 create is ambiguous / `create_ambiguous_no_recovery`
+**Symptoms:** A `jupiter_trigger_create` (V2) call returns `error: "create_ambiguous_no_recovery"`, or `node_debug.log` shows `[trigger-v2] … — entering recovery` followed by `history query returned no matching order`. The user is told the order's status is **uncertain** (not that it failed) and to verify with `jupiter_trigger_list`.
+**Diagnosis:** V2 create is a two-step deposit → create. After the deposit was signed and submitted, the create POST (`/trigger/v2/orders/price`) response was **lost** — the POST threw, returned 5xx, returned no body, or returned 2xx without an order `id`. The deposit **may or may not** have landed on-chain, so the adapter cannot claim failure. It enters recovery (`jupiter/trigger-v2.js` `_recoverFromAmbiguousCreate`): waits 5s, queries `/trigger/v2/orders/history?walletPubkey=…`, and matches on inputMint + outputMint + initialInputAmount within a tight time window, skipping terminal/dead order states. A live match returns `recovered: true`; if the history query throws, is 401, or finds nothing, it returns `create_ambiguous_no_recovery` and commits the burner cap **conservatively** (as if spent) so a create that actually succeeded can't under-count daily spend.
+**Fix:**
+1. Call `jupiter_trigger_list` and check **both `status: active` and `status: history`**. If the order appears in either (active, or a terminal filled/cancelled row), it **existed** — the ambiguity was only the lost response; do NOT re-create.
+2. If it's absent from **both**, the status is still **uncertain** — a just-created order can lag in indexing, so absence is NOT proof it failed. Wait briefly and re-check `jupiter_trigger_list` before doing anything; only re-create once history has stayed empty across a re-check, to avoid a duplicate. The conservatively-committed cap frees on the next UTC-midnight rollover.
+3. `grep -i "trigger-v2" node_debug.log | tail -30` for the `entering recovery` reason (`create POST threw` / `ambiguous create response status=…` / `2xx without id`) and whether `/orders/history` threw or matched nothing.
+4. A `JWT rejected by /orders/history` line during recovery means the cached JWT expired mid-flow; it's invalidated automatically and the next V2 call re-auths — just retry the list.
+
 ---
 
 ## agent_pay (BAT-582 — x402 client)

@@ -5,6 +5,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Jupiter **limit and stop orders now use the newer Trigger V2 engine by default**: USD-denominated trigger prices and clearer, explicit order-expiry handling. Your burner spending caps, confirmations, and main-wallet routing all apply unchanged, and the older V1 engine stays available as a fallback (an advanced `SEEKERCLAW_USE_TRIGGER_V2=false` override forces it back). If a create response is ever lost mid-flight, the agent now recovers by checking your order history before deciding, and tells you to verify with the order list rather than guessing.
+
 ### Fixed
 
 - Fixed a condition where the agent could stop responding — showing a misleading "out of extra usage" error — on a Pro/Max sign-in even with usage remaining. An automatically-generated internal note summarizing routine background check-ins could contain a phrase the AI service rejected; because that note was included in every request, it blocked all replies until it aged out. These trivial check-in notes are no longer generated, any left over from a previous version are filtered out, and the agent now automatically retries once without recent-activity context if a request is unexpectedly rejected — so a single bad note can no longer stall it. The background check-in (heartbeat) mechanism itself is unchanged.

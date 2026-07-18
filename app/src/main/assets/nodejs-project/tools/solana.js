@@ -43,10 +43,10 @@ const {
     forwardDispatchError,
 } = require('../wallet/dispatch');
 
-// BAT-697 PR B: Jupiter Trigger V2 adapter. Activated when
-// `config.useTriggerV2 === true` (default false). V1 paths in
-// jupiter_trigger_* handlers remain the shipping default until the staged
-// rollout (live smoke → default flip → V1 deletion) lands in subsequent PRs.
+// BAT-697 PR B: Jupiter Trigger V2 adapter. Active by DEFAULT since BAT-1148
+// (`config.useTriggerV2 === true` unless the kill-switch forces V1 — see
+// config.js). V1 paths in jupiter_trigger_* handlers remain in the tree as a
+// fallback until the staged rollout's final V1 deletion (BAT-1146).
 const triggerV2 = require('../jupiter/trigger-v2');
 
 // BAT-255: Safe number-to-decimal-string conversion (imported from index.js shared state)
@@ -234,9 +234,9 @@ const tools = [
             required: ['inputToken', 'outputToken', 'amount']
         }
     },
-    // PR #388 R6: the jupiter_trigger_create schema is flag-aware. V1 (default
-    // when config.useTriggerV2 is false) requires `triggerPrice`; V2 (when the
-    // flag is true) requires `triggerPriceUsd`. Pre-fix the schema relaxed
+    // PR #388 R6: the jupiter_trigger_create schema is flag-aware. V1 (when
+    // config.useTriggerV2 is false) requires `triggerPrice`; V2 (the default;
+    // when the flag is true) requires `triggerPriceUsd`. Pre-fix the schema relaxed
     // `required` to allow BOTH callers, but that meant the model/gate would
     // accept a V1 call missing triggerPrice and only fail at runtime with
     // "Invalid trigger price". Build the schema once at module load against
@@ -284,7 +284,7 @@ const tools = [
         return {
             name: 'jupiter_trigger_create',
             description: v2Enabled
-                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
+                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. If this returns `create_ambiguous_no_recovery` the order\'s existence is UNCERTAIN (lost create response) — verify via jupiter_trigger_list (check active AND history) before re-creating; never assume it failed. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
                 : 'Create a trigger (limit) order on Jupiter (V1 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the output/input price ratio reaches `triggerPrice`. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
             input_schema: v2Enabled ? v2Schema : v1Schema,
         };
@@ -2462,8 +2462,9 @@ const handlers = {
     // ========== JUPITER API TOOLS ==========
 
     async jupiter_trigger_create(input, chatId) {
-        // BAT-697 PR B: gate on useTriggerV2 flag. Default false → V1 path
-        // below. Flag flips in commit 4 of the staged rollout.
+        // BAT-697 PR B / BAT-1148: now default ON → V2 path. V1 (below) is the
+        // kill-switch fallback (config.js resolves the flag; env
+        // SEEKERCLAW_USE_TRIGGER_V2=false forces V1; V1 deletion → BAT-1146).
         if (config.useTriggerV2 === true) {
             return _jupiterTriggerCreateV2(input, chatId);
         }

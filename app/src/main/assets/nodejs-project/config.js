@@ -682,22 +682,23 @@ if (config.exaApiKey) config.exaApiKey = normalizeSecret(config.exaApiKey);
 if (config.tavilyApiKey) config.tavilyApiKey = normalizeSecret(config.tavilyApiKey);
 if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.firecrawlApiKey);
 
-// BAT-697 PR B: Jupiter Trigger V2 adapter feature flag. Default false —
-// V1 remains the shipping path until the staged-rollout commits (live smoke
-// → default flip → V1 removal) land in subsequent PRs. Normalize to a real
-// boolean so handlers can branch on `config.useTriggerV2 === true` without
-// truthy-coercing a string "false".
-//
-// PR #388 R7: Kotlin's writeConfigJson() does not yet emit a `useTriggerV2`
-// field (that arrives with PR C's Settings toggle), so the JSON-load path
-// always normalizes to false in the live runtime. To make PR B actually
-// enable-able for the PR C live-smoke phase WITHOUT shipping the UI early,
-// also accept SEEKERCLAW_USE_TRIGGER_V2=true via the env-var bridge (Settings
-// → Env Vars), which is already plumbed Kotlin → Node and merged into
-// process.env at line ~142 above. PR C migrates this to a proper Config
-// field + Settings toggle and can drop the env-var path.
-config.useTriggerV2 = config.useTriggerV2 === true
-    || process.env.SEEKERCLAW_USE_TRIGGER_V2 === 'true';
+// BAT-1148 (delivers BAT-1091): Jupiter Trigger V2 is now the DEFAULT order
+// path (staged rollout: live smoke → default flip [here] → V1 removal). V1
+// stays in the tree as a fallback, reachable via a kill-switch:
+//   • config `useTriggerV2: false`  (future Settings toggle — BAT-1145), or
+//   • env  `SEEKERCLAW_USE_TRIGGER_V2=false`  (Settings → Env Vars, already
+//     plumbed Kotlin → Node → process.env at line ~142 above).
+// Precedence: env > config > default(ON). Env wins so support can force V1
+// without a rebuild. V1 removal is tracked in BAT-1146; the UI toggle + Kotlin
+// config field (writeConfigJson still doesn't emit `useTriggerV2`) in BAT-1145.
+// `config.useTriggerV2` stays a strict boolean so handlers branch on `=== true`.
+// Precedence (env > config > default-ON) lives in ./jupiter/trigger-flag.js —
+// a pure, unit-tested module (config.js can't be cleanly required in a test).
+const { resolveUseTriggerV2 } = require('./jupiter/trigger-flag');
+config.useTriggerV2 = resolveUseTriggerV2({
+    configValue: config.useTriggerV2,
+    envValue: process.env.SEEKERCLAW_USE_TRIGGER_V2,
+});
 
 // MCP server configs (remote tool servers) — normalize first, then filter invalid
 const MCP_SERVERS = (config.mcpServers || [])
