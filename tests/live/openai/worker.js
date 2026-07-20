@@ -323,11 +323,13 @@ async function liveSweep() {
 }
 
 function defaultModelsForMode() {
-    // Kept in sync with model-registry.json (the parent passes SC_MODELS in
-    // practice; this is the fallback if it doesn't).
-    return MODE === 'oauth'
-        ? ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex']
-        : ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex'];
+    // Fallback only — the parent passes SC_MODELS in practice. Read the roster from the
+    // registry rather than hand-syncing a copy: the previous hardcoded list silently went
+    // stale (it still swept the retired gpt-5.3-codex and knew nothing of the 5.6 family),
+    // which is the same drift BAT-1151 exists to fix. Both auth paths resolve through the
+    // real `modelsByAuth[auth] ?: models` rule, so this fallback tracks any future split too.
+    const mc = require(path.join(BUNDLE, 'model-catalog.js'));
+    return mc.modelsForProvider('openai', MODE === 'oauth' ? 'oauth' : 'api_key').map((m) => m.id);
 }
 
 // GET /v1/models via the adapter's testEndpoint (api.openai.com/v1/models) — used

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // reasoning-request-enablement.test.js — pin BAT-549 Commit 3c per-adapter
 // request-side reasoning enablement gating, EXTENDED for BAT-558 v4:
-// per-request budget clamp on Claude, synthetic-turn marker
-// (`reasoningMode: 'off'`) suppression matrix, OpenRouter explicit
-// `effort: 'none'` disablement signal.
+// Claude adaptive thinking (BAT-1033 — the old per-request budget clamp
+// was retired), synthetic-turn marker (`reasoningMode: 'off'`) suppression
+// matrix, OpenRouter explicit `effort: 'none'` disablement signal.
 //
 //  Adapter contract: each adapter's formatRequest accepts an optional 6th
 //  `requestOptions` argument. When BOTH `reasoningEnabled === true` AND
@@ -11,10 +11,12 @@
 //  specific reasoning param. Any other combination MUST NOT emit (the
 //  registry's "yes" gate is authoritative; "no"/"unknown" never sends).
 //
-//  Per-adapter body shapes (BAT-549 baseline + BAT-558 v4 R1/R3):
-//   - claude.js → body.thinking = {type:"enabled", budget_tokens: <clamped>}
-//                  where <clamped> = min(16000, floor(maxTokens*0.5))
-//                  AND maxTokens >= 2048 (smaller turns SKIP thinking entirely)
+//  Per-adapter body shapes (BAT-549 baseline + BAT-558 v4 R3; Claude
+//  updated for BAT-1033 adaptive thinking):
+//   - claude.js → body.thinking = {type:"adaptive"} (no budget_tokens;
+//                  Anthropic removed extended thinking — see BAT-1033).
+//                  maxTokens >= 2048 still required — a retained UX floor
+//                  (MIN_THINKING_TURN); smaller turns SKIP thinking entirely.
 //   - openai.js (api_key) → body.reasoning = {effort:"medium", summary:"auto"}
 //                          + body.include = ["reasoning.encrypted_content"]
 //   - openrouter.js → body.reasoning = {effort:"medium"} OR
@@ -79,13 +81,14 @@ function eq(label, actual, expected) {
 
 console.log('── claude.js: thinking gate ──');
 
-// reasoningEnabled + support===yes + maxTokens=4096 → emit, BAT-558 R1 clamp
-// kicks in: budget = floor(4096*0.5) = 2048 (NOT the pre-558 unconditional 16000)
+// reasoningEnabled + support===yes + big turn → emit adaptive thinking.
+// BAT-1033: Anthropic removed extended thinking (type:'enabled'+budget_tokens);
+// formatRequest now emits {type:'adaptive'} (the model auto-sizes its budget).
 let body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, [], [], [], {
     reasoningEnabled: true, reasoningSupport: 'yes',
 }));
-eq('Claude yes/yes maxTokens=4096: body.thinking emitted with clamped budget (BAT-558 R1)',
-    body.thinking, { type: 'enabled', budget_tokens: 2048 });
+eq('Claude yes/yes maxTokens=4096: body.thinking emitted as adaptive (BAT-1033)',
+    body.thinking, { type: 'adaptive' });
 
 // reasoningEnabled but support===no (Haiku) → DO NOT emit
 body = JSON.parse(claude.formatRequest('claude-haiku-4-5', 4096, [], [], [], {
@@ -443,72 +446,59 @@ ok("Delegate routing target: 'gpt-5.4' under 'openai' api_key is 'yes'",
 ok("Delegate-id robustness: unknown model id under 'openai' stays 'unknown'",
     rsf('openai', 'some-unknown-deepseek-id', 'api_key') === 'unknown');
 
-// ── BAT-558 v4 R1 — Claude budget clamp + small-turn skip ─────────────
-// Pinned per the v4 §R6 acceptance matrix. ai.js calls
-// formatRequest(..., 4096, ...) for normal chat — this 4096 is the
-// real-world value that surfaced the unclamped 16000 budget bug. Each
-// case here is taken from the v4 worked-examples table.
+// ── BAT-1033 — Claude adaptive shape + retained small-turn skip ───────
+// The BAT-558 per-request budget clamp was RETIRED when Anthropic removed
+// extended thinking: with no `budget_tokens` there is no `budget < max`
+// constraint, and formatRequest emits {type:'adaptive'} uniformly. The
+// adaptive / no-budget_tokens contract is hard-guarded across every model
+// in claude-adaptive-thinking.test.js (CI). Here we pin the two behaviors
+// this per-adapter matrix still owns: (a) the RETAINED MIN_THINKING_TURN
+// UX floor — sub-2048 turns emit no thinking (kept so a tiny answer isn't
+// crowded out; no longer an API constraint), and (b) large turns stay
+// adaptive — a regression guard that the budget mechanism never returns here.
 
 console.log();
-console.log('── BAT-558 v4 R1: Claude budget clamp ──');
+console.log('── BAT-1033: Claude adaptive shape + small-turn skip ──');
 
-// maxTokens=2048 → budget = floor(1024) = 1024 (Anthropic floor), answer room 1024.
-body = JSON.parse(claude.formatRequest('claude-opus-4-7', 2048, [], [], [], {
+// Big turn → adaptive, never budget_tokens.
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 4096, [], [], [], {
     reasoningEnabled: true, reasoningSupport: 'yes',
 }));
-eq('Claude maxTokens=2048: budget clamped to floor (1024)',
-    body.thinking, { type: 'enabled', budget_tokens: 1024 });
+eq('Claude maxTokens=4096: adaptive thinking, no budget_tokens',
+    body.thinking, { type: 'adaptive' });
 
-// maxTokens=1536 → SKIP thinking entirely (v3 amendment 1 gap-case Codex called out).
+// maxTokens=1536 → SKIP thinking (retained UX floor MIN_THINKING_TURN=2048).
 body = JSON.parse(claude.formatRequest('claude-opus-4-7', 1536, [], [], [], {
     reasoningEnabled: true, reasoningSupport: 'yes',
 }));
-ok('Claude maxTokens=1536: thinking SKIPPED (BAT-558 R1 small-turn floor)',
+ok('Claude maxTokens=1536: thinking SKIPPED (retained small-turn floor)',
     body.thinking === undefined,
     `actual: ${JSON.stringify(body.thinking)}`);
 
-// maxTokens=1024 → SKIP thinking entirely (below MIN_THINKING_TURN=2048).
+// maxTokens=1024 → SKIP thinking (below MIN_THINKING_TURN=2048).
 body = JSON.parse(claude.formatRequest('claude-opus-4-7', 1024, [], [], [], {
     reasoningEnabled: true, reasoningSupport: 'yes',
 }));
 ok('Claude maxTokens=1024: thinking SKIPPED',
     body.thinking === undefined);
 
-// maxTokens=32000 → DEFAULT_THINKING_BUDGET cap (16000); not floor(32000*0.5)=16000.
-body = JSON.parse(claude.formatRequest('claude-opus-4-7', 32000, [], [], [], {
+// Exact boundary: maxTokens === MIN_THINKING_TURN (2048) → adaptive thinking.
+// claude.js gates with `maxTokens < MIN_THINKING_TURN`, so the floor itself
+// must EMIT. Pins the boundary so a future `<` → `<=` flip can't regress silently.
+body = JSON.parse(claude.formatRequest('claude-opus-4-7', 2048, [], [], [], {
     reasoningEnabled: true, reasoningSupport: 'yes',
 }));
-eq('Claude maxTokens=32000: budget at DEFAULT cap (16000)',
-    body.thinking, { type: 'enabled', budget_tokens: 16000 });
+eq('Claude maxTokens=2048 (exact floor): adaptive thinking, no budget_tokens',
+    body.thinking, { type: 'adaptive' });
 
-// maxTokens=64000 → DEFAULT_THINKING_BUDGET cap (16000); leaves 48000 for answer.
-body = JSON.parse(claude.formatRequest('claude-opus-4-7', 64000, [], [], [], {
-    reasoningEnabled: true, reasoningSupport: 'yes',
-}));
-eq('Claude maxTokens=64000: budget still at DEFAULT cap (16000)',
-    body.thinking, { type: 'enabled', budget_tokens: 16000 });
-
-// Final invariant guard: across the entire matrix above, when emitted,
-// budget_tokens is ALWAYS strictly less than max_tokens (Anthropic's
-// hard requirement). This is the bug class the original 400 surfaced.
-const claudeBudgetCases = [
-    { maxTokens: 2048,  expectEmit: true },
-    { maxTokens: 4096,  expectEmit: true },
-    { maxTokens: 32000, expectEmit: true },
-    { maxTokens: 64000, expectEmit: true },
-];
-for (const c of claudeBudgetCases) {
-    const cb = JSON.parse(claude.formatRequest('claude-opus-4-7', c.maxTokens, [], [], [], {
+// Large turns stay adaptive with NO budget_tokens (guard against the
+// clamp/budget mechanism silently returning on big turns).
+for (const mt of [32000, 64000]) {
+    const cb = JSON.parse(claude.formatRequest('claude-opus-4-7', mt, [], [], [], {
         reasoningEnabled: true, reasoningSupport: 'yes',
     }));
-    if (c.expectEmit) {
-        ok(`Claude maxTokens=${c.maxTokens}: budget < max_tokens (Anthropic invariant)`,
-            cb.thinking && cb.thinking.budget_tokens < c.maxTokens,
-            `budget=${cb.thinking?.budget_tokens}, max=${c.maxTokens}`);
-        ok(`Claude maxTokens=${c.maxTokens}: budget >= ANTHROPIC_MIN_BUDGET (1024)`,
-            cb.thinking && cb.thinking.budget_tokens >= 1024,
-            `budget=${cb.thinking?.budget_tokens}`);
-    }
+    eq(`Claude maxTokens=${mt}: adaptive, no budget_tokens`,
+        cb.thinking, { type: 'adaptive' });
 }
 
 // ── BAT-558 v4 R3 — synthetic-turn marker `reasoningMode: 'off'` ──────

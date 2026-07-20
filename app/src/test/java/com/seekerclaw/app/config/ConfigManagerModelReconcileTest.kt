@@ -37,18 +37,25 @@ class ConfigManagerModelReconcileTest {
             consoleUrl = "https://platform.openai.com",
             keysUrl = "https://platform.openai.com/api-keys",
             freeform = false,
-            defaultModel = "gpt-5.4",
+            defaultModel = "gpt-5.6-sol",
+            // SYNTHETIC fixture — deliberately asymmetric so the auth-switch CLAMP is tested in
+            // both directions. NOT a mirror of the shipped registry: per the BAT-1151 re-sweep
+            // (2026-07-17) the real openai registry has no per-auth split. The clamp must keep
+            // working for any future split, so the fixture keeps one model on each side.
             models = listOf(
+                ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
+                ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
+                ModelInfo("gpt-5.6-luna", "GPT-5.6 Luna", "yes"), // fixture-only: absent from the oauth override
                 ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                 ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
             ),
             modelsByAuth = mapOf(
                 "oauth" to listOf(
+                    ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
+                    ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
                     ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                     ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"),
-                    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
+                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"), // fixture-only: absent from `models`
                 ),
             ),
         ),
@@ -216,9 +223,9 @@ class ConfigManagerModelReconcileTest {
     @Test
     fun `provider switch revalidates prefs model against new provider`() {
         // /provider openai while prefs.model is a claude ID → clamp to the
-        // new provider's default.
+        // new provider's default (BAT-1151: openai default is gpt-5.6-sol).
         assertEquals(
-            "gpt-5.4",
+            "gpt-5.6-sol",
             ConfigManager.resolveModelForReconcile(
                 providerChanged = true,
                 authChanged = false,
@@ -232,9 +239,9 @@ class ConfigManagerModelReconcileTest {
 
     @Test
     fun `auth switch clamps oauth-only model`() {
-        // openai oauth→api_key with gpt-5.4-mini (oauth-only) → must clamp.
+        // openai oauth→api_key with gpt-5.4-mini (oauth-only) → must clamp to default.
         assertEquals(
-            "gpt-5.4",
+            "gpt-5.6-sol",
             ConfigManager.resolveModelForReconcile(
                 providerChanged = false,
                 authChanged = true,
@@ -247,11 +254,32 @@ class ConfigManagerModelReconcileTest {
     }
 
     @Test
+    fun `auth switch clamps api_key-only model`() {
+        // The REVERSE direction of the clamp, against the synthetic fixture above:
+        // api_key→oauth with a model absent from the oauth override must clamp to the
+        // default gpt-5.6-sol. (The fixture uses gpt-5.6-luna for this; note the SHIPPED
+        // registry no longer excludes luna from oauth — the 2026-07-17 re-sweep showed it
+        // answers 200 on both paths. This test pins the clamp MECHANISM, not that roster.)
+        assertEquals(
+            "gpt-5.6-sol",
+            ConfigManager.resolveModelForReconcile(
+                providerChanged = false,
+                authChanged = true,
+                newModel = null,
+                prefsModel = "gpt-5.6-luna",
+                effectiveProvider = "openai",
+                effectiveAuth = "oauth",
+            ),
+        )
+    }
+
+    @Test
     fun `equality gate does not apply when provider changed`() {
         // overlay==prefs but the provider changed in the same overlay —
-        // the custom ID belongs to the OLD provider; validation applies.
+        // the custom ID belongs to the OLD provider; validation applies and
+        // clamps to the new provider's default (BAT-1151: openai → gpt-5.6-sol).
         assertEquals(
-            "gpt-5.4",
+            "gpt-5.6-sol",
             ConfigManager.resolveModelForReconcile(
                 providerChanged = true,
                 authChanged = false,

@@ -57,18 +57,28 @@ class ModelRegistryTest {
             consoleUrl = "https://platform.openai.com",
             keysUrl = "https://platform.openai.com/api-keys",
             freeform = false,
-            defaultModel = "gpt-5.4",
+            defaultModel = "gpt-5.6-sol",
+            // SYNTHETIC fixture — deliberately asymmetric to exercise `modelsByAuth` in BOTH
+            // directions (a model only in `models`, and one only in the oauth override). It is
+            // NOT a mirror of the shipped registry: as of the BAT-1151 re-sweep (2026-07-17) the
+            // real openai registry has NO per-auth split at all (every listed model answers on
+            // both paths, so it ships no `modelsByAuth`). Keep this fixture asymmetric anyway —
+            // the mechanism must stay tested even when no provider currently uses it, and the
+            // test must not depend on whichever models happen to be listed in prod.
             models = listOf(
+                ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
+                ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
+                ModelInfo("gpt-5.6-luna", "GPT-5.6 Luna", "yes"), // fixture-only: absent from the oauth override below
                 ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                 ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
             ),
             modelsByAuth = mapOf(
                 "oauth" to listOf(
+                    ModelInfo("gpt-5.6-sol", "GPT-5.6 Sol", "yes"),
+                    ModelInfo("gpt-5.6-terra", "GPT-5.6 Terra", "yes"),
                     ModelInfo("gpt-5.5", "GPT-5.5", "yes"),
                     ModelInfo("gpt-5.4", "GPT-5.4", "yes"),
-                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"),
-                    ModelInfo("gpt-5.3-codex", "GPT-5.3 Codex", "yes"),
+                    ModelInfo("gpt-5.4-mini", "GPT-5.4 Mini", "yes"), // fixture-only: absent from `models` above
                 ),
             ),
         ),
@@ -163,10 +173,11 @@ class ModelRegistryTest {
     @Test
     fun `no duplicate model ids within each provider's lists`() {
         // BAT-517 R1 Copilot: the previous version of this test asserted
-        // uniqueness across the UNION of `models` + `modelsByAuth.values`,
-        // which is incompatible with the live OpenAI shape — `modelsByAuth.oauth`
-        // is a SUPERSET of `models` (same api_key ids + extras like
-        // `gpt-5.4-mini`), so the union always has duplicates by design.
+        // uniqueness across the UNION of `models` + `modelsByAuth.values`, which
+        // is wrong whenever a provider carries an override — the two lists share
+        // ids by design, so the union legitimately repeats them. That holds for
+        // ANY asymmetric override (see the synthetic fixture above); it does not
+        // depend on which models the shipped registry happens to list.
         // The actual invariant is: no duplicates WITHIN any single list.
         for (provider in productionProviders) {
             assertEquals(
@@ -206,16 +217,16 @@ class ModelRegistryTest {
     // ---- Resolution rules -----------------------------------------------
 
     @Test
-    fun `modelsForProvider openai api_key returns 3-model list`() {
+    fun `modelsForProvider openai api_key returns the 5-model list incl api_key-only luna`() {
         val list = ModelRegistry.modelsForProvider("openai", "api_key")
-        assertEquals(listOf("gpt-5.5", "gpt-5.4", "gpt-5.3-codex"), list.map { it.id })
+        assertEquals(listOf("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"), list.map { it.id })
     }
 
     @Test
-    fun `modelsForProvider openai oauth returns 4-model list with mini`() {
+    fun `modelsForProvider openai oauth returns the 5-model list with mini but NOT luna`() {
         val list = ModelRegistry.modelsForProvider("openai", "oauth")
         assertEquals(
-            listOf("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+            listOf("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"),
             list.map { it.id },
         )
     }
@@ -253,8 +264,8 @@ class ModelRegistryTest {
 
     @Test
     fun `defaultModelForProvider returns explicit registry value`() {
-        assertEquals("gpt-5.4", ModelRegistry.defaultModelForProvider("openai", "api_key"))
-        assertEquals("gpt-5.4", ModelRegistry.defaultModelForProvider("openai", "oauth"))
+        assertEquals("gpt-5.6-sol", ModelRegistry.defaultModelForProvider("openai", "api_key"))
+        assertEquals("gpt-5.6-sol", ModelRegistry.defaultModelForProvider("openai", "oauth"))
         assertEquals("claude-opus-4-8", ModelRegistry.defaultModelForProvider("claude", "api_key"))
         assertEquals("anthropic/claude-sonnet-4-6", ModelRegistry.defaultModelForProvider("openrouter", "api_key"))
         assertEquals("", ModelRegistry.defaultModelForProvider("custom", "api_key"))
@@ -455,7 +466,10 @@ class ModelRegistryTest {
         assertEquals("yes", ModelRegistry.reasoningSupportFor("claude", "claude-sonnet-4-6", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.5", "api_key"))
         assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.4", "api_key"))
-        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.3-codex", "api_key"))
+        // BAT-1151: the new gpt-5.6 family (sol/terra default set, luna api_key-only)
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.6-sol", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.6-terra", "api_key"))
+        assertEquals("yes", ModelRegistry.reasoningSupportFor("openai", "gpt-5.6-luna", "api_key"))
     }
 
     @Test

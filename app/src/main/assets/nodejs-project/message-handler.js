@@ -551,10 +551,13 @@ function resolveActiveProviderState() {
     // e.g. "oauth selected with a blank token" gets written to
     // config.json as authType=api_key so Node's strict validation
     // doesn't crash on startup. If we honored overlay.authType here,
-    // /model would display + validate against the oauth allowlist
-    // (includes gpt-5.4-mini) while Node is actually running api_key
-    // mode (doesn't) — users could /model gpt-5.4-mini, see it
-    // accepted, and then every chat request would 422.
+    // /model would display + validate against the WRONG allowlist for
+    // the mode Node is actually running — a user could /model an id the
+    // other auth path allows, see it accepted, then have every chat
+    // request 422. (BAT-1151 re-sweep 2026-07-17: openai's api_key and
+    // oauth lists are currently IDENTICAL, so no such id exists right
+    // now — but this guard is what keeps that from mattering if a
+    // per-auth split ever returns via `modelsByAuth`.)
     //
     // Return the runtime startupAuth instead. Matches what Node
     // actually sends to the provider API.

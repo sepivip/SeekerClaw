@@ -5,6 +5,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- New OpenAI models in the picker: the GPT-5.6 family — Sol (the new default for the OpenAI provider), Terra, and Luna. All three work on both an OpenAI API key and a ChatGPT sign-in, alongside GPT-5.5, GPT-5.4, and GPT-5.4 Mini. The retired GPT-5.3 Codex entry was removed from the picker (it is superseded, and was never usable on a ChatGPT sign-in); GPT-5.5 and GPT-5.4 remain available, and anyone already using GPT-5.3 Codex keeps working.
+
 ### Fixed
 
 - Fixed a condition where the agent could stop responding — showing a misleading "out of extra usage" error — on a Pro/Max sign-in even with usage remaining. An automatically-generated internal note summarizing routine background check-ins could contain a phrase the AI service rejected; because that note was included in every request, it blocked all replies until it aged out. These trivial check-in notes are no longer generated, any left over from a previous version are filtered out, and the agent now automatically retries once without recent-activity context if a request is unexpectedly rejected — so a single bad note can no longer stall it. The background check-in (heartbeat) mechanism itself is unchanged.

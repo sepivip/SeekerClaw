@@ -2219,11 +2219,14 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-sonnet-4-6':   200000,
     'claude-sonnet-4-5':   200000,
     'claude-haiku-4-5':    200000,
+    'gpt-5.6-sol':         200000, // BAT-1151: gpt-5.6 family real window 272k → 200000 mobile cap (consistent with the caps above)
+    'gpt-5.6-terra':       200000,
+    'gpt-5.6-luna':        200000,
     'gpt-5.5':             200000,
     'gpt-5.4':             200000,
     'gpt-5.4-mini':        200000,
     'gpt-5.2':             200000, // kept for existing users with 5.2 still selected (removed from UI dropdown)
-    'gpt-5.3-codex':       200000,
+    'gpt-5.3-codex':       200000, // BAT-1151: dropped from registry; kept for existing users still on it
     // BAT-1124: xAI Grok context windows. grok-4.x is ~256k+ actual (grok-4.5 ~500k) →
     // 200000 mobile cap (consistent with the claude/gpt caps above). Registry ships
     // only grok-4.3 + grok-4.5; anything else is a user-typed Custom model.
