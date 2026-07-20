@@ -364,7 +364,7 @@ class MCPClient {
         const initResult = await this._sendRequest('initialize', {
             protocolVersion: MCP_PROTOCOL_VERSION,
             capabilities: {},
-            clientInfo: { name: 'SeekerClaw', version: '1.2.0' },
+            clientInfo: { name: 'SeekerClaw', version: '2.2.0' },
         }, CONNECT_TIMEOUT_MS);
 
         if (initResult.error) {
