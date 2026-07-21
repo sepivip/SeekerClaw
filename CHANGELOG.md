@@ -7,16 +7,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [2.2.0] - 2026-07-20
 
-> **Sign in with your Grok subscription, the newest OpenAI models, and a
-> security & logging hardening pass.** Adds xAI Grok as a full provider with
-> subscription sign-in, brings in the GPT-5.6 model family, and tightens
+> **Sign in with your SuperGrok or X Premium subscription, the newest OpenAI
+> models, and a security & logging hardening pass.** Adds xAI Grok as a full
+> provider with subscription sign-in, brings in the GPT-5.6 family, and tightens
 > credential handling in logs and `web_fetch`. Fully backward-compatible —
 > existing provider setups, agent memory, and settings are unchanged.
 
 ### Added
 
-- **Sign in with Grok (xAI)** — a new AI provider. Sign in with a Grok or X
-  subscription instead of an API key, or use an xAI API key if you prefer.
+- **Sign in with Grok (xAI)** — a new AI provider. Sign in with a SuperGrok or
+  X Premium subscription instead of an API key, or use an xAI API key instead.
   Browser-based OAuth, Keystore-encrypted token storage, automatic refresh, and
   the Grok model family (Grok 4.5 by default) in the model picker. Available
   from first-run Setup and Settings → AI Provider. Built to survive
