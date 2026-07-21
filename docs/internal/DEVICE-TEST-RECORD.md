@@ -10,6 +10,7 @@
 
 | Date | Change | Build / commit | What was exercised | Result |
 |------|--------|----------------|--------------------|--------|
+| 2026-07-21 | **v2.2.0 RC acceptance** | `v2.2.0-rc1` (release artifact) | RC device test on the signed release build — maintainer-reported PASS. Covers the pre-tag gate for the 2.2.0 release. | PASS |
 | 2026-07-20 | **BAT-1151** GPT-5.6 family (#442) | `f5b30c58` | Model picker propagation UI → agent (prefs / `agent_settings.json` / `runtime_state.json` all agreed); end-to-end on `gpt-5.6-sol` incl. multi-iteration turns, skills, `agent_pay` x402 (full 64-tool stack) | PASS |
 | 2026-07-17 → 07-20 | **Soak: whole v2.2.0 tree** | `f5b30c58` (tree `418f5dbe`, identical to release tip `1d124574`) | ~2.5–3 days continuous real use: 1 boot, 0 crashes, 0 uncaught/FATAL, model held on `gpt-5.6-sol`, 0 logging faults (no redaction-error / drain error / rotation gap / forward error). Transient OpenAI 401/500/503 all self-healed via refresh/retry. | PASS |
 | 2026-07-17 | **BAT-1161 P1A** logging substrate (#445) | `ff7a166f` | SESSION banner + `LEVEL\|epochMs\|message` wire format; event-time forwarding (node↔mirror lag 0); 37,101 retained legacy no-epoch lines coexisting (upgrade path); no secret leakage in mirror or Share; rotation state correct. Forced deep Doze (`deviceidle force-idle`) held 12.2 min: forward lag 1–2 coarse-clock ticks. | PASS |

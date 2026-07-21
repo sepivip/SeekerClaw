@@ -15,28 +15,84 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- **Sign in with Grok (xAI)** — a new AI provider. Sign in with a Grok or X subscription instead of an API key, or use an xAI API key if you prefer. Browser-based OAuth flow, Keystore-encrypted token storage, and automatic token refresh; the Grok model family (Grok 4.5 by default) appears in the model picker. Available from first-run Setup and from Settings → AI Provider. The sign-in is built to survive interruption: token refresh is fenced across the app and agent processes, so a rotation interrupted by a restart, force-stop, or reboot cannot invalidate the session and leave the agent unable to reconnect. (BAT-1124, BAT-1155, #434)
-- **GPT-5.6 model family** — Sol (the new default for the OpenAI provider), Terra, and Luna. All three work on both an OpenAI API key and a ChatGPT sign-in, alongside GPT-5.5, GPT-5.4, and GPT-5.4 Mini. The retired GPT-5.3 Codex entry was removed from the picker (superseded, and never usable on a ChatGPT sign-in even while it was listed). A model you chose explicitly is preserved when you update. One exception worth knowing: if you selected GPT-5.3 Codex from Telegram while the app was closed, after updating the picker may show GPT-5.6 Sol while the agent continues to use Codex — re-pick your model in Settings, or send `/model`, to bring them back in sync. (BAT-1151, #442)
+- **Sign in with Grok (xAI)** — a new AI provider. Sign in with a Grok or X
+  subscription instead of an API key, or use an xAI API key if you prefer.
+  Browser-based OAuth, Keystore-encrypted token storage, automatic refresh, and
+  the Grok model family (Grok 4.5 by default) in the model picker. Available
+  from first-run Setup and Settings → AI Provider. Built to survive
+  interruption: token refresh is fenced across the app and agent processes, so
+  a rotation cut short by a restart, force-stop, or reboot can't invalidate the
+  session and leave the agent unable to reconnect. (BAT-1124, BAT-1155, #434)
+- **GPT-5.6 model family** — Sol (the new OpenAI default), Terra, and Luna. All
+  three work on both an OpenAI API key and a ChatGPT sign-in, alongside
+  GPT-5.5, GPT-5.4, and GPT-5.4 Mini. The retired GPT-5.3 Codex entry was
+  removed from the picker — superseded, and never usable on a ChatGPT sign-in
+  even while it was listed. A model you chose explicitly is preserved when you
+  update. One exception: if you picked GPT-5.3 Codex from Telegram while the
+  app was closed, the picker may show GPT-5.6 Sol after updating while the
+  agent keeps using Codex — re-pick in Settings, or send `/model`, to resync.
+  (BAT-1151, #442)
 
 ### Fixed
 
-- Fixed a condition where the agent could stop responding — showing a misleading "out of extra usage" error — on a Pro/Max sign-in even with usage remaining. An automatically-generated internal note summarizing routine background check-ins could contain a phrase the AI service rejected; because that note was included in every request, it blocked all replies until it aged out. These trivial check-in notes are no longer generated, any left over from a previous version are filtered out, and the agent now automatically retries once without recent-activity context if a request is unexpectedly rejected — so a single bad note can no longer stall it. The background check-in (heartbeat) mechanism itself is unchanged. (BAT-1130)
-- Clearer authentication-error message: it no longer suggests "API key might be wrong" for Pro/Max sign-in users, who have no API key. (BAT-1130)
-- Grok (xAI) error messages now show the provider's real reason instead of a fabricated "your subscription tier doesn't include API access — add an xAI API key" notice. This applies to both chat replies and the Settings "Test connection" check, and Grok users signed in with a subscription are no longer wrongly told to add an API key. Debug logs also now record the real error code and message. (BAT-1172)
+- **Agent no longer stalls on a false "out of extra usage" error** — on a
+  Pro/Max sign-in with usage remaining, an auto-generated note summarizing
+  routine background check-ins could contain a phrase the AI service rejected.
+  Because that note rode along in every request, it blocked all replies until
+  it aged out. Those trivial notes are no longer generated, leftovers from
+  earlier versions are filtered out, and the agent now retries once without
+  recent-activity context if a request is unexpectedly rejected. The background
+  check-in (heartbeat) mechanism itself is unchanged. (BAT-1130)
+- **Clearer authentication errors** — no longer suggests "API key might be
+  wrong" to Pro/Max sign-in users, who have no API key. (BAT-1130)
+- **Real Grok (xAI) error messages** — shows the provider's actual reason
+  instead of a fabricated "your subscription tier doesn't include API access —
+  add an xAI API key" notice. Applies to both chat replies and the Settings
+  "Test connection" check, so subscription users are no longer wrongly told to
+  add a key. Debug logs now record the real error code and message. (BAT-1172)
 
 ### Changed
 
-- The agent's system prompt now caches more effectively across background check-ins by keeping frequently-changing recent-activity context out of the cached section, lowering token usage per turn. (BAT-1130)
-- Refreshed the Claude Code client version reported on Pro/Max sign-in requests to the current stable, keeping the integration up to date. (BAT-1123)
-- Diagnostic logs are now timestamped per line and kept to a bounded size. Every log line carries the time the event actually happened (previously the Logs screen showed the time the line was received, which drifted under load), and the debug log now rotates continuously at roughly 5 MB instead of only being trimmed at startup — so a long-running session can no longer grow it without limit. The previous generation is retained alongside the current one; in the rare case where that rotation cannot rename the file, the current log is reset rather than archived so it always stays bounded, and the failure is recorded in the log itself. (BAT-1161)
-- The Logs screen's "Clear logs" action is now called **Clear console**, which is what it actually does — it clears the on-screen console, not the agent's debug log on disk. (BAT-1161)
+- **Lower token usage per turn** — the system prompt now caches more
+  effectively across background check-ins by keeping frequently-changing
+  recent-activity context out of the cached section. (BAT-1130)
+- **Refreshed Claude Code client version** reported on Pro/Max sign-in
+  requests, keeping the integration current. (BAT-1123)
+- **Timestamped, size-bounded diagnostic logs** — every line now carries the
+  time the event actually happened, not the time it was received (which drifted
+  under load), and the debug log rotates continuously at roughly 5 MB instead
+  of only being trimmed at startup, so a long session can't grow it without
+  limit. The previous generation is kept alongside the current one; if that
+  rotation can't rename the file, the current log is reset rather than archived
+  so it always stays bounded, and the failure is recorded in the log itself.
+  (BAT-1161)
+- **"Clear logs" is now "Clear console"** — which is what it actually does: it
+  clears the on-screen console, not the agent's debug log on disk. (BAT-1161)
 
 ### Security
 
-- Secrets are now stripped from the Logs screen and from anything shared out of it. API keys and tokens are masked as log lines are collected, as they are forwarded from the agent, as older entries are re-loaded on startup, and in the one-tap Share/export output — previously redaction ran only on the Node side, leaving lines written directly by the app unmasked on screen and in Share. This covers everything shown, forwarded, restored, or shared. It does not rewrite log files already written to disk by an earlier version — those keep their original contents until normal log rotation ages them out. (BAT-1161)
-- Hardened `web_fetch` against credential exfiltration on cross-origin redirects: caller-supplied headers (API keys, bearer tokens) are now dropped when a request redirects to a different origin, and a cross-origin `307`/`308` can no longer forward the request body to the new host. Same-origin flows are unchanged. (BAT-1086)
-- API-key values stored in `agent_settings.json` are now masked before they reach the AI model. The agent can still read its settings and save keys, but raw key values are never exposed to the model or the chat — the read tool returns them masked, and the `js_eval`/`shell_exec` paths are blocked for that file. Protects provider billing keys even against prompt injection. This is model-facing output masking; the file on disk and the save flow are unchanged. (BAT-1087)
-- Strengthened `web_fetch`'s SSRF guard to block private/loopback/link-local addresses across all IPv4 and IPv6 encodings — including IPv6 loopback, IPv4-mapped, ULA, link-local, zone-identifier, and decimal/hex/octal literal forms — and applied the same guard to the file-download path. Only requests to internal addresses are affected. (BAT-1088)
+- **Secrets stripped from the Logs screen and anything shared out of it** — API
+  keys and tokens are masked as lines are collected, as they're forwarded from
+  the agent, as older entries are reloaded on startup, and in the one-tap
+  Share/export output. Previously redaction ran only on the Node side, leaving
+  lines written directly by the app unmasked on screen and in Share. Note this
+  does not rewrite log files already on disk from an earlier version — those
+  keep their original contents until rotation ages them out. (BAT-1161)
+- **`web_fetch` cross-origin redirect hardening** — caller-supplied headers
+  (API keys, bearer tokens) are dropped when a request redirects to a different
+  origin, and a cross-origin `307`/`308` can no longer forward the request body
+  to the new host. Same-origin flows are unchanged. (BAT-1086)
+- **API keys masked before reaching the AI model** — the agent can still read
+  its settings and save keys, but raw values in `agent_settings.json` are never
+  exposed to the model or the chat: the read tool returns them masked, and the
+  `js_eval` / shell paths are blocked for that file. Protects provider billing
+  keys even against prompt injection. This is model-facing output masking; the
+  file on disk and the save flow are unchanged. (BAT-1087)
+- **Stronger SSRF guard on `web_fetch`** — blocks private, loopback, and
+  link-local addresses across all IPv4 and IPv6 encodings, including IPv6
+  loopback, IPv4-mapped, ULA, link-local, zone-identifier, and decimal / hex /
+  octal literal forms, with the same guard applied to the file-download path.
+  Only requests to internal addresses are affected. (BAT-1088)
 
 ## [2.1.1] - 2026-07-03
 
