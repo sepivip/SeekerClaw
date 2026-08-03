@@ -58,6 +58,8 @@ const BUNDLE = path.join(REPO_ROOT, 'app', 'src', 'main', 'assets', 'nodejs-proj
 //   - load native/WASM modules
 const LOAD_TARGETS = [
     'silent-reply.js',
+    // BAT-1186: pure anchor-preserving history-trim primitives — no deps, no IO.
+    'history-trim.js',
     'loop-detector.js',
     'model-catalog.js',
     'telegram-commands.js',

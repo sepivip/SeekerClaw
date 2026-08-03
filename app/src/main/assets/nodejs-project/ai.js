@@ -48,6 +48,11 @@ const {
 const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbDirty, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
 const { saveCheckpoint, cleanupChatCheckpoints } = require('./task-store');
+// BAT-1186: pure anchor-preserving history-trim primitives (testable, no deps).
+const {
+    trimHistoryPreservingAnchor, _groupSizeAt, createWarnLimiter, warnOnce,
+    anchorGuardRepair, buildCheckpointSlicePreservingAnchor,
+} = require('./history-trim');
 const loopDetector = require('./loop-detector');
 // BAT-1039: deterministic rendering of burner-policy SECURITY rejects (pure).
 const { buildSecurityRejectBlock } = require('./security-reject-block');
@@ -411,7 +416,7 @@ function getConversation(chatId) {
 // approach is safer + more explicit about intent.
 const _ADD_TO_CONV_ALLOWED_EXTRAS = ['reasoningBlocks'];
 
-function addToConversation(chatId, role, content, extra = null) {
+function addToConversation(chatId, role, content, extra = null, anchor = null) {
     const conv = getConversation(chatId);
     // BAT-549 R2 thread 5: allow optional extra fields (e.g.
     // reasoningBlocks) to be persisted on assistant messages added at the
@@ -428,10 +433,41 @@ function addToConversation(chatId, role, content, extra = null) {
         }
     }
     conv.push(entry);
-    // Keep last N messages
-    while (conv.length > MAX_HISTORY) {
-        conv.shift();
+    // BAT-1186: route the cap through the shared anchor-preserving primitive so
+    // (a) the in-flight turn's anchor survives the end-of-turn assistant append
+    //     (previously: anchor at index 0 + len===MAX_HISTORY → this push made 36
+    //     and the bare shift() dropped the anchor from the NEXT turn's history),
+    // (b) tool_use/tool_result groups are never orphaned (the PR #407 R2 hazard).
+    //     Existing callers pass <=4 args ⇒ anchor===null ⇒ same cap, now group-atomic.
+    _trimHistoryLogged(conv, MAX_HISTORY, anchor, null, 'addToConversation');
+}
+
+// ============================================================================
+// BAT-1186: ANCHOR-PRESERVING HISTORY TRIM (ai.js logging wrapper)
+// The pure array surgery lives in ./history-trim.js (trimHistoryPreservingAnchor,
+// _groupSizeAt) so it is testable without mocking ai.js's dependency graph. This
+// wrapper adds ai.js's cross-cutting concerns: the [History] log line, the WARN
+// rate-limit, and the belt-and-braces sanitizeConversation on the new index-1
+// eviction path.
+// ============================================================================
+
+// [History] WARN rate-limit state (Codex R1 amendment C). ai.js owns the
+// instance + the log() call; the pure predicate lives in ./history-trim.js.
+const _historyWarn = createWarnLimiter();
+
+// Pure trim + [History] log + belt-and-braces sanitize on the index-1 path.
+function _trimHistoryLogged(messages, cap, anchor, turnId, site) {
+    const r = trimHistoryPreservingAnchor(messages, cap, anchor);
+    if (r.removed > 0) {
+        const level = warnOnce(_historyWarn, turnId, site, r.skipped) ? 'WARN' : 'DEBUG';
+        log(`[History] ${JSON.stringify({
+            turnId: turnId || null, site, removed: r.removed,
+            anchorSkipped: r.skipped, anchorExempt: r.anchorExempt ? 1 : 0,
+            nonAnchorLen: r.nonAnchorLen, len: messages.length, cap,
+        })}`, level);
     }
+    if (r.skipped) sanitizeConversation(messages, turnId);
+    return r;
 }
 
 function clearConversation(chatId) {
@@ -2058,6 +2094,11 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 // BAT-246: Diagnostic counters for sanitizer health tracking
 const sanitizerStats = { invocations: 0, totalStripped: 0 };
 
+// BAT-1186 Layer B: any non-zero `repairs` is a defect in a trimming path
+// upstream, never normal operation — the structural fix should always keep the
+// anchor present. Asserted === 0 on healthy long-turn runs by the regression test.
+const anchorGuardStats = { checks: 0, repairs: 0 };
+
 // BAT-315: Fix orphaned tool calls/results in both NEUTRAL and CLAUDE-NATIVE formats.
 // Neutral: assistant.toolCalls[] + role:'tool' messages (OpenAI adapter)
 // Claude-native: assistant.content[tool_use] + user.content[tool_result] (legacy checkpoints)
@@ -2324,10 +2365,11 @@ function checkContextUsage(systemBlocks, messages, tools, model, turnId, cache) 
  * @param {string} turnId - For logging
  * @returns {number} Number of messages trimmed
  */
-function adaptiveTrim(messages, usage, turnId) {
+function adaptiveTrim(messages, usage, turnId, anchor = null) {
     if (usage < CONTEXT_DANGER_THRESHOLD) return 0;
 
     let trimmed = 0;
+    let skippedAnchor = false;
 
     // At 90%+ usage, keep only the most recent messages.
     // Target: reduce to ~70% by trimming from front.
@@ -2336,29 +2378,32 @@ function adaptiveTrim(messages, usage, turnId) {
     const trimTarget = Math.max(1, Math.floor(messages.length * targetTrimFraction));
 
     while (trimmed < trimTarget && messages.length > MIN_PRESERVED_MESSAGES) {
-        const first = messages[0];
+        // BAT-1186: MIN_PRESERVED_MESSAGES is a TAIL floor only — it never
+        // protected the head, so this 90%-context path could evict the anchor
+        // exactly like the round-count cap did. SKIP past it (index 1) rather
+        // than break, so this valve still relieves context pressure on the long
+        // turns this bug lives on instead of going inert with the anchor pinned.
+        const idx = (anchor && messages[0] === anchor) ? 1 : 0;
+        if (idx >= messages.length) break;
+        if (idx === 1) skippedAnchor = true;
+        const first = messages[idx];
 
-        // Atomic group removal: if this is an assistant with tool calls,
-        // count how many tool results follow it so we can remove them all or none.
+        // Atomic group removal (neutral assistant+toolCalls) via the shared helper.
         if (first.role === 'assistant' && first.toolCalls && first.toolCalls.length) {
-            const ids = new Set(first.toolCalls.map(tc => tc.id));
-            let groupSize = 1; // the assistant message itself
-            while (groupSize < messages.length && messages[groupSize].role === 'tool' &&
-                   ids.has(messages[groupSize].toolCallId)) {
-                groupSize++;
-            }
+            const groupSize = _groupSizeAt(messages, idx);
             // Only remove the group if we'd still have MIN_MESSAGES left
             if (messages.length - groupSize < MIN_PRESERVED_MESSAGES) break;
-            messages.splice(0, groupSize);
+            messages.splice(idx, groupSize);
             trimmed += groupSize;
         } else {
-            messages.shift();
+            messages.splice(idx, 1);
             trimmed++;
         }
     }
 
     if (trimmed > 0) {
-        log(`[Context] Adaptive trim: removed ${trimmed} old messages to reduce context usage | turnId=${turnId || 'n/a'}`, 'WARN');
+        log(`[Context] Adaptive trim: removed ${trimmed} old messages to reduce context usage`
+            + `${skippedAnchor ? ' (turn anchor preserved)' : ''} | turnId=${turnId || 'n/a'}`, 'WARN');
     }
     return trimmed;
 }
@@ -2379,14 +2424,27 @@ const _summarizedThisTurn = new Set();
  * Replaces N oldest messages with a single summary message, preserving context.
  * Only fires once per turn to avoid cascading API calls.
  */
-async function summarizeOldMessages(messages, chatId, turnId, modelOverride) {
+async function summarizeOldMessages(messages, chatId, turnId, modelOverride, anchor = null) {
     if (_summarizedThisTurn.has(chatId)) return false;
     if (messages.length <= MIN_PRESERVED_MESSAGES + 4) return false; // Not enough to summarize
 
     // Collect oldest messages for summarization (up to 10), respecting atomic tool groups.
     // Never split an assistant+toolCalls from its tool results.
     let summarizeCount = 0;
-    const maxToSummarize = Math.min(10, messages.length - MIN_PRESERVED_MESSAGES);
+    // BAT-1186: never fold THIS turn's anchor into the synthetic
+    // `[Summary of earlier conversation]` message. Clamp the window to end
+    // BEFORE the anchor's index — only messages older than the anchor are
+    // eligible. Returns before _summarizedThisTurn.add() below, so a
+    // clamped-to-zero call does not burn the once-per-turn budget. indexOf is
+    // O(n<=36). With the anchor at the head (idx 0) there is nothing older to
+    // summarize, so this correctly no-ops rather than paraphrasing the question.
+    const _anchorIdx = anchor ? messages.indexOf(anchor) : -1;
+    const maxToSummarize = Math.min(
+        10,
+        messages.length - MIN_PRESERVED_MESSAGES,
+        _anchorIdx >= 0 ? _anchorIdx : messages.length,
+    );
+    if (maxToSummarize <= 0) return false;
     while (summarizeCount < maxToSummarize) {
         const msg = messages[summarizeCount];
         if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length) {
@@ -2688,6 +2746,19 @@ async function chat(chatId, userMessage, options = {}) {
     // (prevents 400 errors from Claude API due to mismatched pairs)
     sanitizeConversation(messages, turnId);
 
+    // BAT-1186 (A5): identity handle on THIS turn's user message — the entry
+    // addToConversation pushed at :2694 (always the tail: it push()es, then trims
+    // from the FRONT). Captured AFTER sanitizeConversation so it cannot be a stale
+    // reference. IDENTITY, not index: several paths splice this live array mid-turn,
+    // so an index is invalid after the first one. `let` because _applyRecovery
+    // replaces the array wholesale — see the rebind there. Fail-open: a non-user
+    // tail leaves _turnAnchor === null and every guard is inert (identical to today).
+    let _turnAnchor = null;
+    {
+        const _tail = messages[messages.length - 1];
+        if (_tail && _tail.role === 'user') _turnAnchor = _tail;
+    }
+
     // Call Claude API with tool use loop
     let response;
     let stepCount = 0;
@@ -2749,7 +2820,7 @@ async function chat(chatId, userMessage, options = {}) {
             // Reuse ctx for both summarization check and trim check to avoid duplicate logging.
             let ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
             if (ctx.usage >= CONTEXT_SUMMARIZE_THRESHOLD && !_summarizedThisTurn.has(chatId)) {
-                const summarized = await summarizeOldMessages(messages, chatId, turnId, activeModel);
+                const summarized = await summarizeOldMessages(messages, chatId, turnId, activeModel, _turnAnchor);
                 if (summarized) {
                     // Messages changed — recompute context usage
                     ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
@@ -2758,7 +2829,11 @@ async function chat(chatId, userMessage, options = {}) {
             // Trim-recheck loop: keep trimming until safe or we hit the message floor
             let trimPasses = 0;
             while (ctx.usage >= CONTEXT_DANGER_THRESHOLD && messages.length > MIN_PRESERVED_MESSAGES && trimPasses < 3) {
-                adaptiveTrim(messages, ctx.usage, turnId);
+                // BAT-1186: bail on a zero-removal pass. With the anchor skip-cursor
+                // and the MIN_PRESERVED floor, adaptiveTrim can legitimately remove
+                // nothing; re-running it only pays for more full-payload
+                // JSON.stringify walks in checkContextUsage.
+                if (adaptiveTrim(messages, ctx.usage, turnId, _turnAnchor) === 0) break;
                 ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
                 trimPasses++;
             }
@@ -2913,6 +2988,23 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-549 Commit 3c: pass `requestOptions` as 3rd arg so the
             // Custom adapter can read `customEchoOverride` (replaces the
             // hardcoded `false` from Commit 1). Other adapters ignore it.
+            // BAT-1186 Layer B (defense in depth): the LAST line before the payload
+            // leaves the process. Structurally covers adaptiveTrim,
+            // summarizeOldMessages, the recovery splice, AND any future trimmer. If
+            // the anchor went missing, re-insert the SAME reference at the head
+            // (index 0 cannot split a group, and it guarantees messages[0] is the
+            // user turn). Healthy builds never repair — the regression test pins
+            // repairs===0 on synthetic long turns.
+            anchorGuardStats.checks++;
+            if (anchorGuardRepair(messages, _turnAnchor)) {
+                anchorGuardStats.repairs++;
+                log(`[AnchorGuard] ${JSON.stringify({
+                    turnId, taskId, step: stepCount,
+                    adapter: (adapter && adapter.id) || activeModel,
+                    event: 'anchor_missing_repaired', len: messages.length,
+                    cumulative: anchorGuardStats.repairs,
+                })}`, anchorGuardStats.repairs <= 3 ? 'ERROR' : 'DEBUG');
+            }
             const apiMessages = adapter.toApiMessages(messages, activeModel, requestOptions);
             const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools, requestOptions);
 
@@ -3059,6 +3151,14 @@ async function chat(chatId, userMessage, options = {}) {
                         && _userMessageEq(last.content, userMessage);
                     if (!lastIsCurrentUser) {
                         messages.push({ role: 'user', content: userMessage });
+                    }
+                    // BAT-1186 (A7): recovery replaced the array wholesale, so the
+                    // old anchor reference may be gone and the push above created a
+                    // NEW object. Rebind, or every trim guard goes silently inert
+                    // for the rest of this (already-failed-once) turn.
+                    {
+                        const _tail = messages[messages.length - 1];
+                        _turnAnchor = (_tail && _tail.role === 'user') ? _tail : null;
                     }
                     // result.systemNote intentionally not injected — it's
                     // recovery metadata for potential user-facing surfaces
@@ -3416,7 +3516,7 @@ async function chat(chatId, userMessage, options = {}) {
             // also covers every downstream exit path (budget / silent / normal /
             // exception), which a post-final-text hook would miss.
             if (securityRejectPending) {
-                return _finalizeSecurityReject(chatId, taskId, turnId, securityRejectPending);
+                return _finalizeSecurityReject(chatId, taskId, turnId, securityRejectPending, _turnAnchor); // BAT-1186 (A9)
             }
 
             // DeerFlow P1: If loop was warned, inject guidance as user message
@@ -3442,19 +3542,12 @@ async function chat(chatId, userMessage, options = {}) {
                 _loopBroken = false;
             }
 
-            // Enforce MAX_HISTORY cap after tool round — trim from the front but never
-            // orphan a tool-call/result pair (skip past assistant+tool groups)
-            while (messages.length > MAX_HISTORY) {
-                const first = messages[0];
-                messages.shift();
-                // If we removed an assistant with toolCalls, also remove its tool results
-                if (first.role === 'assistant' && first.toolCalls && first.toolCalls.length) {
-                    const ids = new Set(first.toolCalls.map(tc => tc.id));
-                    while (messages.length && messages[0].role === 'tool' && ids.has(messages[0].toolCallId)) {
-                        messages.shift();
-                    }
-                }
-            }
+            // BAT-1186 (A8, THE BUG SITE): enforce the MAX_HISTORY cap after the
+            // tool round — group-atomic, additive-exempt, never evicting THIS turn's
+            // anchor. The old role-blind shift() here evicted the user's own
+            // instruction after ~6-18 rounds, making the model confabulate ("I
+            // didn't receive any text") while Telegram still quoted the message.
+            _trimHistoryLogged(messages, MAX_HISTORY, _turnAnchor, turnId, 'toolRound');
 
             // Status reaction: back to thinking before next Claude API call
             if (options.statusReaction) options.statusReaction.setThinking();
@@ -3470,7 +3563,7 @@ async function chat(chatId, userMessage, options = {}) {
                 complete: false,
                 reason: null,
                 originalGoal,
-                conversationSlice: messages.slice(-8),
+                conversationSlice: buildCheckpointSlicePreservingAnchor(messages, _turnAnchor, 8), // BAT-1186 (R1-A)
             });
             if (cpDuration >= 0) {
                 log(`[Trace] ${JSON.stringify({ turnId, taskId, checkpoint: 'saved', stepCount, durationMs: cpDuration })}`, 'DEBUG');
@@ -3496,7 +3589,7 @@ async function chat(chatId, userMessage, options = {}) {
             // Add fallback to conversation BEFORE saving checkpoint so the
             // checkpoint slice ends with an assistant message. This ensures
             // valid role alternation on restore (assistant → user: "continue").
-            addToConversation(chatId, 'assistant', fallback);
+            addToConversation(chatId, 'assistant', fallback, null, _turnAnchor); // BAT-1186 (A9)
 
             // P2.2: Save checkpoint with budget_exhausted reason (survives crash)
             saveCheckpoint(taskId, {
@@ -3509,7 +3602,7 @@ async function chat(chatId, userMessage, options = {}) {
                 complete: false,
                 reason: 'budget_exhausted',
                 originalGoal,
-                conversationSlice: messages.slice(-8),
+                conversationSlice: buildCheckpointSlicePreservingAnchor(messages, _turnAnchor, 8), // BAT-1186 (R1-A)
             });
 
             // Session summary tracking
@@ -3587,7 +3680,7 @@ async function chat(chatId, userMessage, options = {}) {
                 const fallback = `Done — took ${stepCount} step${stepCount !== 1 ? 's' : ''} (${toolNames.join(', ') || 'various'}).`;
                 clearActiveTask(chatId);
                 cleanupChatCheckpoints(chatId);
-                addToConversation(chatId, 'assistant', fallback);
+                addToConversation(chatId, 'assistant', fallback, null, _turnAnchor); // BAT-1186 (A9)
                 return fallback;
             }
         }
@@ -3599,7 +3692,7 @@ async function chat(chatId, userMessage, options = {}) {
             // Only clean up checkpoints if tools were used (task progressed).
             // A text-only response (e.g. failed resume attempt) should not wipe checkpoints.
             if (stepCount > 0) cleanupChatCheckpoints(chatId);
-            addToConversation(chatId, 'assistant', '[No response generated]');
+            addToConversation(chatId, 'assistant', '[No response generated]', null, _turnAnchor); // BAT-1186 (A9)
             log(`No text content in response (no tools used), returning ${SILENT_REPLY_TOKEN}`, 'DEBUG');
             return SILENT_REPLY_TOKEN;
         }
@@ -3622,7 +3715,7 @@ async function chat(chatId, userMessage, options = {}) {
         // mid-loop messages.push at line ~2410 already does this for
         // tool-use rounds; this matches that contract.
         addToConversation(chatId, 'assistant', assistantMessage,
-            { reasoningBlocks: lastParsedReasoningBlocks });
+            { reasoningBlocks: lastParsedReasoningBlocks }, _turnAnchor); // BAT-1186 (A9)
 
         // Session summary tracking (BAT-57)
         {
@@ -3667,9 +3760,9 @@ async function chat(chatId, userMessage, options = {}) {
 // tool_result was already redacted to its code + class in the loop, so the raw
 // reason survives only in this deterministic block, shown to the user). The
 // forensic log carries reasonLen ONLY — the raw reason is never logged.
-function _finalizeSecurityReject(chatId, taskId, turnId, pending) {
+function _finalizeSecurityReject(chatId, taskId, turnId, pending, turnAnchor = null) {
     const block = buildSecurityRejectBlock(pending.rejectCode, pending.rejectReason);
-    addToConversation(chatId, 'assistant', block);
+    addToConversation(chatId, 'assistant', block, null, turnAnchor); // BAT-1186 (A9)
     // PR #407 R2: addToConversation's MAX_HISTORY trim shifts one message at a
     // time and can orphan a tool_use/tool_result group at the front — and this
     // path runs right after a tool round. Run the same sanitizer the next turn
@@ -3781,6 +3874,8 @@ module.exports = {
     },
     // Sanitizer diagnostics (BAT-246)
     sanitizerStats,
+    // BAT-1186 Layer B: anchor-guard health (repairs must stay 0 on healthy runs)
+    anchorGuardStats,
     // Task tracking (P2.4)
     getActiveTask, clearActiveTask,
     // Injection
