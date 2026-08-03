@@ -259,6 +259,22 @@ for (const k of [1, 2, 3, 5]) {
     const s4 = buildCheckpointSlicePreservingAnchor(many, a3, 2);
     ok(s4.length <= 2, `ckpt max=2: <= 2 (got ${s4.length})`);
     ok(s4.includes(a3), 'ckpt max=2: anchor preserved');
+
+    // early-return path must ALSO strip a leading orphan tool_result (CodeRabbit #446):
+    // a window that starts mid-group, with anchor null (or already inside).
+    const om = [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'g1' }, { id: 'g2' }] },
+        { role: 'tool', toolCallId: 'g1', content: 'x' },
+        { role: 'tool', toolCallId: 'g2', content: 'x' },
+        { role: 'assistant', content: 'done' },
+    ];
+    const s5 = buildCheckpointSlicePreservingAnchor(om, null, 3); // slice(-3) leads with orphan tool
+    ok(!(s5[0] && s5[0].role === 'tool'), 'ckpt early-return: leading orphan tool_result stripped (no-anchor path)');
+    const a6 = makeAnchor();
+    const om2 = [a6, ...om]; // anchor present but outside a mid-group window
+    const s6 = buildCheckpointSlicePreservingAnchor(om2, a6, 3);
+    ok(!(s6[1] && s6[1].role === 'tool'), 'ckpt: no leading orphan right after the anchor');
+    ok(s6.includes(a6), 'ckpt: anchor still preserved after orphan cleanup');
 }
 
 console.log(`\n✓ history-anchor-trim.test.js — ${pass} assertions passed`);

@@ -2820,6 +2820,12 @@ async function chat(chatId, userMessage, options = {}) {
             if (ctx.usage >= CONTEXT_SUMMARIZE_THRESHOLD && !_summarizedThisTurn.has(chatId)) {
                 const summarized = await summarizeOldMessages(messages, chatId, turnId, activeModel, _turnAnchor);
                 if (summarized) {
+                    // BAT-1186 (Copilot #446): summarize splice(0,n)+unshift(summary)
+                    // can leave a leading orphan tool_result if the summarized segment
+                    // ended mid-group (its group-count is neutral-only). Sanitize now
+                    // so no orphan reaches the payload — the trim-recheck loop below
+                    // only sanitizes when it actually trims.
+                    sanitizeConversation(messages, turnId);
                     // Messages changed — recompute context usage
                     ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
                 }

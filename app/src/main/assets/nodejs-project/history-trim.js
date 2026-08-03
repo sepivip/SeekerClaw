@@ -123,18 +123,28 @@ function _isLeadingToolResult(m) {
 //     tail is stripped of leading orphan tool/tool_result blocks so the restored
 //     slice starts on a valid group boundary (never [anchor, orphan-result, ...]).
 // Identity-based (includes/indexOf). Bounded: result.length <= max.
+// Drop leading orphan tool_result(s) so a restored slice starts on a valid group
+// boundary (a slice must never begin with a tool_result whose tool_use is gone).
+function _dropLeadingOrphans(arr) {
+    let i = 0;
+    while (i < arr.length && _isLeadingToolResult(arr[i])) i++;
+    return i === 0 ? arr : arr.slice(i);
+}
+
 function buildCheckpointSlicePreservingAnchor(messages, anchor, max = 8) {
     if (max <= 0) return [];
     const normal = messages.slice(-max);
-    if (!anchor || normal.includes(anchor)) return normal;
+    // BOTH return paths strip leading orphans (CodeRabbit #446): the early-return
+    // path could otherwise hand back a raw tail slice that begins with an orphan
+    // tool_result when the anchor is null or already inside the window. The anchor
+    // is a user instruction (never a tool_result), so _dropLeadingOrphans never
+    // strips it.
+    if (!anchor || normal.includes(anchor)) return _dropLeadingOrphans(normal);
     // Guard max===1: max-1 is 0, and slice(-0) === slice(0) returns the WHOLE
     // array — which would make [anchor, ...tail] blow past `max`. With one slot
     // the anchor takes it and the tail is empty. Keeps result.length <= max.
     const tailCount = max - 1;
-    let tail = tailCount > 0 ? messages.slice(-tailCount) : [];
-    let i = 0;
-    while (i < tail.length && _isLeadingToolResult(tail[i])) i++;
-    tail = tail.slice(i);
+    const tail = _dropLeadingOrphans(tailCount > 0 ? messages.slice(-tailCount) : []);
     return [anchor, ...tail];
 }
 
