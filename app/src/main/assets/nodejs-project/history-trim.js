@@ -127,7 +127,11 @@ function buildCheckpointSlicePreservingAnchor(messages, anchor, max = 8) {
     if (max <= 0) return [];
     const normal = messages.slice(-max);
     if (!anchor || normal.includes(anchor)) return normal;
-    let tail = messages.slice(-(max - 1));
+    // Guard max===1: max-1 is 0, and slice(-0) === slice(0) returns the WHOLE
+    // array — which would make [anchor, ...tail] blow past `max`. With one slot
+    // the anchor takes it and the tail is empty. Keeps result.length <= max.
+    const tailCount = max - 1;
+    let tail = tailCount > 0 ? messages.slice(-tailCount) : [];
     let i = 0;
     while (i < tail.length && _isLeadingToolResult(tail[i])) i++;
     tail = tail.slice(i);

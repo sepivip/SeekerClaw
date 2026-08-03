@@ -248,6 +248,17 @@ for (const k of [1, 2, 3, 5]) {
     const plain = [];
     for (let i = 0; i < 20; i++) pushRound(plain, 1);
     ok(buildCheckpointSlicePreservingAnchor(plain, null, 8).length <= 8, 'ckpt no-anchor: <= 8');
+
+    // max===1 edge (Copilot/CodeRabbit #446): slice(-(1-1)) === slice(-0) === slice(0)
+    // must NOT return the whole array. With one slot the anchor takes it.
+    const a3 = makeAnchor();
+    const many = [a3];
+    for (let i = 0; i < 10; i++) pushRound(many, 1); // anchor far outside the window
+    const s3 = buildCheckpointSlicePreservingAnchor(many, a3, 1);
+    ok(s3.length === 1 && s3[0] === a3, `ckpt max=1: returns exactly [anchor], not the whole array (got len ${s3.length})`);
+    const s4 = buildCheckpointSlicePreservingAnchor(many, a3, 2);
+    ok(s4.length <= 2, `ckpt max=2: <= 2 (got ${s4.length})`);
+    ok(s4.includes(a3), 'ckpt max=2: anchor preserved');
 }
 
 console.log(`\n✓ history-anchor-trim.test.js — ${pass} assertions passed`);

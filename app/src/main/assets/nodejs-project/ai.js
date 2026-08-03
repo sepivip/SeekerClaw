@@ -2386,19 +2386,17 @@ function adaptiveTrim(messages, usage, turnId, anchor = null) {
         const idx = (anchor && messages[0] === anchor) ? 1 : 0;
         if (idx >= messages.length) break;
         if (idx === 1) skippedAnchor = true;
-        const first = messages[idx];
 
-        // Atomic group removal (neutral assistant+toolCalls) via the shared helper.
-        if (first.role === 'assistant' && first.toolCalls && first.toolCalls.length) {
-            const groupSize = _groupSizeAt(messages, idx);
-            // Only remove the group if we'd still have MIN_MESSAGES left
-            if (messages.length - groupSize < MIN_PRESERVED_MESSAGES) break;
-            messages.splice(idx, groupSize);
-            trimmed += groupSize;
-        } else {
-            messages.splice(idx, 1);
-            trimmed++;
-        }
+        // Group-atomic via the shared helper for BOTH neutral (assistant.toolCalls
+        // + role:'tool') AND Claude-native (assistant.content[tool_use] +
+        // user.content[tool_result]) groups — so we never splice an assistant
+        // alone and leave its tool_result as a leading orphan (Copilot #446). Plain
+        // messages report size 1, matching the old single-shift behavior.
+        const groupSize = _groupSizeAt(messages, idx);
+        // Only remove the group if we'd still have MIN_MESSAGES left
+        if (messages.length - groupSize < MIN_PRESERVED_MESSAGES) break;
+        messages.splice(idx, groupSize);
+        trimmed += groupSize;
     }
 
     if (trimmed > 0) {
