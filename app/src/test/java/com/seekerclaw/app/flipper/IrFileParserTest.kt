@@ -6,16 +6,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Tokenisation fixtures for the `.ir` parser.
+ * Fixtures for the `.ir` parser, derived from `flipper_format_stream.c`, `flipper_format.c`,
+ * `infrared_signal.c` and `infrared_remote.c` at firmware 8622f1a2 — not from what the format
+ * looks like it ought to do.
  *
- * Every expectation here is derived from `lib/flipper_format/flipper_format_stream.c` at firmware
- * 8622f1a2, not from what the format looks like it ought to do. A mismatch between our parse and
- * the firmware's means `strcmp` fails, the press emits nothing, and the RPC still reports success
- * — the exact silent failure BAT-1201 §6 G4 exists to prevent.
+ * A mismatch produces a **wrong button list**: buttons we offer that the device cannot press, or
+ * buttons it has that we never show. (An unresolvable name is *not* a silent success — the RPC
+ * returns `ERROR_APP_CMD_ERROR`. The silent-OK mode exists only for index-addressed presses, which
+ * we never emit.)
  */
 class IrFileParserTest {
 
-    private fun parse(s: String) = IrFileParser.parseButtonNames(s.toByteArray(Charsets.UTF_8))
+    /** Every real file has one. Enumeration cannot begin until the header is consumed. */
+    private val HEADER = "Filetype: IR signals file\nVersion: 1\n"
+
+    private fun parse(body: String) = IrFileParser.parseButtonNames((HEADER + body).toByteArray(Charsets.UTF_8))
+
+    /** For cases that deliberately supply their own (or no) header. */
+    private fun raw(whole: String) = IrFileParser.parseButtonNames(whole.toByteArray(Charsets.UTF_8))
 
     // ------------------------------------------------------- the +2 seek rule
 
@@ -24,8 +32,8 @@ class IrFileParserTest {
     }
 
     @Test fun `no space after the colon eats the first character of the value`() {
-        // seek_to_key seeks +2 from the ':' unconditionally — it does not look for a space. A
-        // client that split on ':' and trimmed would produce "Power" and never match.
+        // seek_to_key seeks +2 unconditionally; it does not look for a space. A client that split
+        // on ':' and trimmed would produce "Power" and never match.
         assertEquals(listOf("ower"), parse("name:Power\n"))
     }
 
@@ -36,8 +44,8 @@ class IrFileParserTest {
     // -------------------------------------------------------- whitespace rules
 
     @Test fun `inner spaces are preserved`() {
-        // read_string uses read_line, not read_value. read_value would stop at the first space
-        // and yield "Vol" — the distinction decides whether multi-word names work at all.
+        // read_string uses read_line, not read_value — the latter stops at the first space and
+        // would yield "Vol".
         assertEquals(listOf("Vol Up"), parse("name: Vol Up\n"))
     }
 
@@ -50,7 +58,6 @@ class IrFileParserTest {
     }
 
     @Test fun `carriage returns are dropped everywhere`() {
-        // CRLF files are ordinary; a parser that keeps '\r' fails every strcmp.
         assertEquals(listOf("Power"), parse("name: Power\r\n"))
         assertEquals(listOf("Power"), parse("na\rme: Power\r\n"))
     }
@@ -62,7 +69,6 @@ class IrFileParserTest {
     }
 
     @Test fun `a hash mid-line is an ordinary character`() {
-        // Only '#' at the start of a line begins a comment.
         assertEquals(listOf("Pow#er"), parse("name: Pow#er\n"))
     }
 
@@ -71,7 +77,6 @@ class IrFileParserTest {
     }
 
     @Test fun `leading whitespace makes the key not match`() {
-        // read_valid_key accumulates spaces into the key, so " name" != "name".
         assertEquals(emptyList<String>(), parse(" name: Power\n"))
     }
 
@@ -83,31 +88,117 @@ class IrFileParserTest {
         assertEquals(listOf("Power"), parse("name: Power"))
     }
 
-    @Test fun `empty value parses as empty rather than being skipped`() {
-        // Surfacing it lets the caller reject it; silently dropping would hide a malformed file.
-        assertEquals(listOf(""), parse("name:\n"))
+    @Test fun `high bytes survive as latin1 without utf8 substitution`() {
+        // Decoding invalid UTF-8 wholesale substitutes U+FFFD, manufacturing collisions and
+        // breaking a legitimately approved button.
+        val bytes = (HEADER + "name: ").toByteArray() +
+            byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "\n".toByteArray()
+        val names = IrFileParser.parseButtonNames(bytes)
+        assertEquals(1, names.size)
+        assertEquals(2, names[0].length)
+        assertEquals(0xFF, names[0][0].code)
+        assertEquals(0xFE, names[0][1].code)
+    }
+
+    // ------------------------------ D1: an empty value ends the enumeration
+
+    @Test fun `empty name value truncates the list exactly as the firmware does`() {
+        // read_line reports failure on a zero-length result, which breaks infrared_remote_load's
+        // loop. Listing Vol_up here would advertise a button the device cannot press.
+        assertEquals(listOf("Power"), parse("name: Power\nname: \nname: Vol_up\n"))
+    }
+
+    @Test fun `empty name value with CRLF also truncates`() {
+        assertEquals(listOf("Power"), parse("name: Power\nname: \r\nname: Vol_up\n"))
+    }
+
+    @Test fun `two spaces after the colon is not an empty value and does not truncate`() {
+        // The +2 eats one space, leaving " " — non-empty, so the loop continues.
+        assertEquals(listOf("Power", " ", "Vol_up"), parse("name: Power\nname:  \nname: Vol_up\n"))
+    }
+
+    @Test fun `colon as the final byte yields nothing rather than an empty name`() {
+        assertEquals(emptyList<String>(), parse("name:"))
+    }
+
+    @Test fun `bare empty name yields nothing`() {
+        assertEquals(emptyList<String>(), parse("name:\n"))
+    }
+
+    // ------------------- D2: the +2 seek applies only to the matched key
+
+    @Test fun `a non-matching key with an empty value does not swallow the next line`() {
+        // On a non-match the stream stays ON the ':'. A flat sweep applying +2 here would step
+        // over the newline and consume "name: Vol_up" as command's value.
+        assertEquals(listOf("Power", "Vol_up"), parse("name: Power\ncommand:\nname: Vol_up\n"))
+    }
+
+    @Test fun `a non-matching key with a normal value is unaffected`() {
+        assertEquals(listOf("Power", "Vol_up"), parse("name: Power\ncommand: 08\nname: Vol_up\n"))
+    }
+
+    @Test fun `a non-matching key ending CRLF is unaffected`() {
+        assertEquals(listOf("Power", "Vol_up"), parse("name: Power\ncommand:\r\nname: Vol_up\n"))
+    }
+
+    // ------------------ D3: names above the header read head are invisible
+
+    @Test fun `a name before the Version line is behind the read head`() {
+        // read_header is Filetype then Version, sequential with no rewind, so Ghost is consumed
+        // while scanning for Version and can never be enumerated.
+        val f = "Filetype: IR signals file\nname: Ghost\nVersion: 1\nname: Power\n"
+        assertEquals(listOf("Power"), raw(f))
+    }
+
+    // ------------------------------------- D4: the Version gate is real
+
+    @Test fun `version two does not load`() {
+        assertEquals(emptyList<String>(), raw("Filetype: IR signals file\nVersion: 2\nname: Power\n"))
+    }
+
+    @Test fun `version without a space does not load`() {
+        // The +2 lands on the newline; read_value meets end-of-line before any data and fails.
+        assertEquals(emptyList<String>(), raw("Filetype: IR signals file\nVersion:1\nname: Power\n"))
+    }
+
+    @Test fun `missing version does not load`() {
+        assertEquals(emptyList<String>(), raw("Filetype: IR signals file\nname: Power\n"))
+    }
+
+    @Test fun `non-numeric version does not load`() {
+        assertEquals(emptyList<String>(), raw("Filetype: IR signals file\nVersion: abc\nname: Power\n"))
+    }
+
+    @Test fun `version with trailing junk is accepted`() {
+        // read_value stops at the first space after data, so "1 extra" parses as 1. Do not
+        // over-reject: the firmware loads this file.
+        assertEquals(listOf("Power"), raw("Filetype: IR signals file\nVersion: 1 extra\nname: Power\n"))
+    }
+
+    @Test fun `wrong filetype does not load`() {
+        assertEquals(emptyList<String>(), raw("Filetype: IR library file\nVersion: 1\nname: Power\n"))
+    }
+
+    @Test fun `missing filetype does not load`() {
+        assertEquals(emptyList<String>(), raw("Version: 1\nname: Power\n"))
+    }
+
+    @Test fun `filetype after version does not load`() {
+        // Order matters — read_header seeks Filetype from offset 0 and finds it, but then seeks
+        // Version forward from there and runs off the end.
+        assertEquals(emptyList<String>(), raw("Version: 1\nFiletype: IR signals file\nname: Power\n"))
     }
 
     // ------------------------------------------------------ ordering and dedupe
 
     @Test fun `names are returned in file order`() {
-        val f = """
-            name: Power
-            name: Vol_up
-            name: Vol_dn
-        """.trimIndent()
-        assertEquals(listOf("Power", "Vol_up", "Vol_dn"), parse(f))
+        assertEquals(listOf("Power", "Vol_up", "Vol_dn"), parse("name: Power\nname: Vol_up\nname: Vol_dn\n"))
     }
 
     @Test fun `duplicate names dedupe to first occurrence`() {
         // Ordinary in IRDB and universal packs. The firmware strcmp's first-match-wins, so our
         // list must agree or the allowlist points at a different signal than the one that fires.
-        val f = """
-            name: POWER
-            name: MUTE
-            name: POWER
-        """.trimIndent()
-        assertEquals(listOf("POWER", "MUTE"), parse(f))
+        assertEquals(listOf("POWER", "MUTE"), parse("name: POWER\nname: MUTE\nname: POWER\n"))
     }
 
     // ------------------------------------------------------------- realistic file
@@ -131,58 +222,50 @@ class IrFileParserTest {
     """.trimIndent()
 
     @Test fun `realistic remote yields only the button names`() {
-        assertEquals(listOf("Power", "Vol_up"), parse(realisticRemote))
+        assertEquals(listOf("Power", "Vol_up"), raw(realisticRemote))
     }
 
-    @Test fun `other keys are parsed but not confused for names`() {
-        val entries = IrFileParser.parse(realisticRemote.toByteArray())
-        assertTrue(entries.any { it.key == "Filetype" && it.value == "IR signals file" })
-        assertTrue(entries.any { it.key == "protocol" && it.value == "NECext" })
-        assertTrue(entries.any { it.key == "command" && it.value == "08 00 00 00" })
-    }
-
-    @Test fun `remote file is recognised by its Filetype`() {
+    @Test fun `realistic remote is recognised as loadable`() {
         assertTrue(IrFileParser.isRemoteFile(realisticRemote.toByteArray()))
     }
 
-    @Test fun `library file is rejected by Filetype`() {
-        // These live under /ext/infrared/assets and parse fine, but infrared_remote_load rejects
-        // them with WrongFileType — so they must not reach the allowlist at all.
-        val library = "Filetype: IR library file\nVersion: 1\nname: Power\n"
-        assertFalse(IrFileParser.isRemoteFile(library.toByteArray()))
+    @Test fun `library file is rejected`() {
+        // Parses fine, but infrared_remote_load rejects it with WrongFileType — so it must never
+        // reach the allowlist, or it would enumerate and then fail forever at press time.
+        assertFalse(IrFileParser.isRemoteFile("Filetype: IR library file\nVersion: 1\nname: Power\n".toByteArray()))
     }
 
-    @Test fun `file with no Filetype is not a remote`() {
+    @Test fun `file with no header is not a remote`() {
         assertFalse(IrFileParser.isRemoteFile("name: Power\n".toByteArray()))
+    }
+
+    @Test fun `version two is not a loadable remote`() {
+        assertFalse(IrFileParser.isRemoteFile("Filetype: IR signals file\nVersion: 2\n".toByteArray()))
     }
 
     // ------------------------------------------------------------- robustness
 
     @Test fun `empty file yields nothing`() {
-        assertEquals(emptyList<String>(), parse(""))
+        assertEquals(emptyList<String>(), raw(""))
         assertFalse(IrFileParser.isRemoteFile(ByteArray(0)))
     }
 
     @Test fun `file of only comments yields nothing`() {
-        assertEquals(emptyList<String>(), parse("#\n# comment\n#\n"))
+        assertEquals(emptyList<String>(), raw("#\n# comment\n#\n"))
     }
 
     @Test fun `truncated final key without a colon is ignored`() {
         assertEquals(listOf("Power"), parse("name: Power\nnam"))
     }
 
-    @Test fun `colon at end of input yields an empty value rather than throwing`() {
-        assertEquals(listOf(""), parse("name:"))
-    }
+    // ------------------------------------------------- diagnostic dump is not authoritative
 
-    @Test fun `high bytes survive as latin1 without utf8 substitution`() {
-        // Decoding invalid UTF-8 wholesale substitutes U+FFFD, which both manufactures collisions
-        // and breaks a legitimately approved button. Bytes map 1:1 instead.
-        val bytes = "name: ".toByteArray() + byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "\n".toByteArray()
-        val names = IrFileParser.parseButtonNames(bytes)
-        assertEquals(1, names.size)
-        assertEquals(2, names[0].length)
-        assertEquals(0xFF, names[0][0].code)
-        assertEquals(0xFE, names[0][1].code)
+    @Test fun `parse is a flat dump and is documented as non-authoritative`() {
+        // Kept for logging only. It applies +2 to every delimiter, so it disagrees with the
+        // device on the D2 shape — asserted here so nobody mistakes it for the real path.
+        val f = "Filetype: IR signals file\nVersion: 1\nname: Power\ncommand:\nname: Vol_up\n"
+        val flat = IrFileParser.parse(f.toByteArray()).filter { it.key == "name" }.map { it.value }
+        assertEquals(listOf("Power"), flat)
+        assertEquals("the authoritative path disagrees", listOf("Power", "Vol_up"), raw(f))
     }
 }
