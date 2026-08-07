@@ -81,6 +81,25 @@ data class FlipperEnrollment(
         enabled &&
             device?.isUsable == true &&
             allowed.any { it.matches(remotePath, button) }
+
+    /**
+     * Resolves what the model asked for into a stored entry.
+     *
+     * The model only ever names a **label** and a **button** — it never supplies a path, because a
+     * path from the model is a path we would have to validate rather than one we chose (§8). The
+     * path comes out of the stored entry, so an unrecognised label simply resolves to nothing.
+     *
+     * Matching is byte-exact on both. Labels are unique within the allowlist by construction: the
+     * enrollment UI disambiguates before storing, so a resolution here is unambiguous.
+     */
+    fun resolve(remoteLabel: String, button: String): AllowedButton? {
+        if (!enabled || device?.isUsable != true) return null
+        return allowed.firstOrNull { it.remoteLabel == remoteLabel && it.button == button }
+    }
+
+    /** Labels the model may name, for the listing tool. Never exposes paths. */
+    fun visibleRemotes(): Map<String, List<String>> =
+        allowed.groupBy({ it.remoteLabel }, { it.button })
 }
 
 /**
