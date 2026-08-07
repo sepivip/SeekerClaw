@@ -78,6 +78,14 @@ class ProtoWriter {
         writeVarint(value.toLong())
     }
 
+    /** 64-bit varint field, for timestamps. Negative values are not expected and not supported. */
+    fun writeInt64(fieldNumber: Int, value: Long) {
+        if (value == 0L) return
+        require(value > 0L) { "negative int64 not supported (field $fieldNumber, value $value)" }
+        writeTag(fieldNumber, WireType.VARINT)
+        writeVarint(value)
+    }
+
     fun writeBool(fieldNumber: Int, value: Boolean) {
         if (!value) return
         writeTag(fieldNumber, WireType.VARINT)
