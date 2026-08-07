@@ -53,7 +53,7 @@ class FlipperTransportException(val kind: Kind, message: String) : Exception(mes
 class FlipperRpcClient(
     private val context: Context,
     private val onUnsolicited: (RpcFrame) -> Unit = {},
-) {
+) : RpcTransport {
     private companion object {
         const val TAG = "FlipperRpc"
 
@@ -87,8 +87,21 @@ class FlipperRpcClient(
     private var descriptorSignal: CompletableDeferred<Unit>? = null
     private var writeSignal: CompletableDeferred<Unit>? = null
 
-    /** The reply we are waiting for, keyed by the command id we sent. */
-    private var pending: Pair<Int, CompletableDeferred<RpcFrame>>? = null
+    /**
+     * The reply we are waiting for.
+     *
+     * A response may arrive as several frames: the firmware sets `has_next` on every frame but the
+     * last, and `Storage.List` and `Storage.Read` both use it routinely. Completing on the first
+     * frame would return a truncated answer and strand the remainder — so frames accumulate here
+     * and the deferred completes only when `has_next` is finally false.
+     */
+    private class Pending(
+        val commandId: Int,
+        val frames: MutableList<RpcFrame> = mutableListOf(),
+        val done: CompletableDeferred<List<RpcFrame>> = CompletableDeferred(),
+    )
+
+    private var pending: Pending? = null
 
     @Volatile private var connected = false
 
@@ -198,14 +211,18 @@ class FlipperRpcClient(
     // --------------------------------------------------------------------- send
 
     /**
-     * Sends one command and waits for its reply.
+     * Sends one command and waits for the complete reply.
+     *
+     * Returns **every** frame of the response, in arrival order — usually one, but `Storage.List`
+     * and `Storage.Read` chunk with `has_next` and callers must see all of them. Use
+     * [sendSingle] when exactly one frame is expected.
      *
      * Correlation is on command id **and** content type: an unsolicited `AppStateResponse` carries
      * uninitialised heap in `command_id`, `command_status` and `has_next`, so letting it resolve a
      * pending call would return garbage as a success (§5 R3).
      */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    suspend fun send(request: RpcRequest, timeoutMs: Long = DEFAULT_COMMAND_TIMEOUT_MS): RpcFrame =
+    override suspend fun send(request: RpcRequest, timeoutMs: Long): List<RpcFrame> =
         commandLock.withLock {
             if (!connected) {
                 throw FlipperTransportException(FlipperTransportException.Kind.NOT_CONNECTED, "link is down")
@@ -222,11 +239,11 @@ class FlipperRpcClient(
                 )
             }
 
-            val reply = CompletableDeferred<RpcFrame>()
-            pending = id to reply
+            val p = Pending(id)
+            pending = p
             try {
                 for (chunk in chunkForMtu(frame, negotiatedMtu)) writeChunk(chunk)
-                return@withLock await(reply, timeoutMs, "reply to command $id")
+                return@withLock await(p.done, timeoutMs, "reply to command $id")
             } finally {
                 pending = null
             }
@@ -273,7 +290,7 @@ class FlipperRpcClient(
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun close() {
         connected = false
-        pending?.second?.completeExceptionally(
+        pending?.done?.completeExceptionally(
             FlipperTransportException(FlipperTransportException.Kind.LINK_LOST, "client closed"),
         )
         pending = null
@@ -310,7 +327,7 @@ class FlipperRpcClient(
                         FlipperTransportException.Kind.LINK_LOST, "disconnected (status=$status)",
                     )
                     connectSignal?.completeExceptionally(err)
-                    pending?.second?.completeExceptionally(err)
+                    pending?.done?.completeExceptionally(err)
                     pending = null
                     // Any link drop invalidates all session state (§4).
                     assembler.reset()
@@ -427,15 +444,23 @@ class FlipperRpcClient(
         }
 
         val p = pending
-        if (p != null && p.first == frame.commandId) {
-            p.second.complete(frame)
-        } else {
+        if (p == null || p.commandId != frame.commandId) {
             Log.w(TAG, "[Flipper] unmatched frame id=${frame.commandId} content=${frame.content::class.simpleName}")
+            return
+        }
+
+        p.frames += frame
+
+        // `has_next` marks every frame but the last. Completing early truncates Storage.List and
+        // Storage.Read; never completing would hang, so a non-OK status also ends the sequence —
+        // the firmware stops sending after an error.
+        if (!frame.hasNext || frame.status != CommandStatus.OK) {
+            p.done.complete(p.frames.toList())
         }
     }
 
     private fun failPending(kind: FlipperTransportException.Kind, message: String) {
-        pending?.second?.completeExceptionally(FlipperTransportException(kind, message))
+        pending?.done?.completeExceptionally(FlipperTransportException(kind, message))
         pending = null
     }
 }
