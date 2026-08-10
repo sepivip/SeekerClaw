@@ -153,6 +153,7 @@ const SKIP_REASONS = {
     'providers/xai.js': 'requires config.js (BAT-1124 xAI Grok adapter)',
     'tools/index.js': 'requires main.js + handlers',
     'tools/android.js': 'requires bridge.js',
+    'tools/flipper.js': 'requires bridge.js (BAT-1202 Flipper IR control)',
     'tools/cron.js': 'requires cron.js',
     'tools/env.js': 'requires config.js (USER_ENV_KEYS)',
     'tools/file.js': 'requires main.js globals',

@@ -25,12 +25,15 @@ import androidx.core.content.ContextCompat
 import com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints
 import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.bridge.flipper.FlipperBridgeEndpoints
 import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.Analytics
+import com.seekerclaw.app.flipper.InvocationContext
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -77,12 +80,19 @@ class AndroidBridge(
     // burner — no point eager-initializing.
     private val burnerEndpoints by lazy { BurnerBridgeEndpoints(context) }
 
+    // BAT-1202: same lazy treatment as the burner endpoints — most installs have
+    // no Flipper enrolled, so there is no reason to build the enrollment store
+    // and its controller until a real /flipper request lands.
+    private val flipperEndpoints by lazy { FlipperBridgeEndpoints(context) }
+
     // Per-endpoint rate limiting (thread-safe for NanoHTTPD's thread pool)
     private val rateLimiter = ConcurrentHashMap<String, MutableList<Long>>()
     private val rateLimits = mapOf(
         "/sms" to Pair(5, 60_000L),
         "/call" to Pair(3, 60_000L),
         "/camera/capture" to Pair(10, 60_000L),
+        "/flipper/press" to Pair(20, 60_000L),
+        "/flipper/remotes" to Pair(30, 60_000L),
         "/contacts/search" to Pair(20, 60_000L),
         "/contacts/add" to Pair(10, 60_000L),
         "/location" to Pair(10, 60_000L),
@@ -216,6 +226,8 @@ class AndroidBridge(
                 "/location" -> handleLocation()
                 "/tts" -> handleTts(params)
                 "/camera/capture" -> handleCameraCapture(params)
+                "/flipper/remotes" -> jsonResponse(200, flipperEndpoints.remotes())
+                "/flipper/press" -> handleFlipperPress(params)
                 "/apps/list" -> handleAppsList()
                 "/apps/launch" -> handleAppsLaunch(params)
                 "/stats/message" -> handleStatsMessage()
@@ -747,6 +759,31 @@ class AndroidBridge(
         }
 
         return jsonResponse(408, mapOf("error" to "Camera capture timed out"))
+    }
+
+    // ==================== Flipper Zero (BAT-1202) ====================
+
+    /**
+     * Fires one allowlisted IR button.
+     *
+     * The invocation context is decided HERE, not read from [params]. Anything in the request body
+     * is model-influenced — `shell_exec` can run curl and `js_eval` has `require('http')` — so a
+     * field claiming "this came from a user message" would be a field the agent could set itself.
+     *
+     * Known gap (contract §4b, amendment filed on BAT-1201): Kotlin has no message pipeline to read
+     * the real context from. Telegram polling, cron and the heartbeat all live in Node, so this
+     * side cannot distinguish a user-driven turn from a scheduled one. Until that is resolved the
+     * context is passed through from Node as defence in depth, and the enforceable protections —
+     * the allowlist and the rolling-hour ceiling in FlipperIrController — carry the actual weight.
+     */
+    private fun handleFlipperPress(params: JSONObject): Response {
+        val invocation = when (params.optString("invocation", "")) {
+            "user_message" -> InvocationContext.USER_MESSAGE
+            else -> InvocationContext.AUTOMATED // fail closed on absent or unrecognised
+        }
+        val result = runBlocking { flipperEndpoints.press(params, invocation) }
+        val status = if (result.containsKey("error")) 400 else 200
+        return jsonResponse(status, result)
     }
 
     // ==================== Apps ====================
