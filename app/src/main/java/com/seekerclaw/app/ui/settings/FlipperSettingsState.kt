@@ -73,7 +73,6 @@ class FlipperSettingsState(private val context: Context) {
     /** Re-reads permission state and the stored enrollment. Cheap; safe to call on every resume. */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun refresh() {
-        val e = store.current
         val granted = devices.hasConnectPermission()
         var bonded = emptyList<BondedDevice>()
         var bondedError: BluetoothUnavailable? = null
@@ -86,14 +85,32 @@ class FlipperSettingsState(private val context: Context) {
             hasPermission = granted,
             bonded = bonded,
             bondedError = bondedError,
+        )
+        reconcileWithStore()
+    }
+
+    /**
+     * Re-derives every store-backed field of [_ui] from the authoritative record.
+     *
+     * Used after a failed write, in preference to restoring a snapshot captured before the attempt.
+     * A snapshot is the wrong thing to restore: with several mutations in flight, an earlier failure
+     * would roll the screen back over a *later* change that did land — the same overwrite-a-newer-
+     * value defect the store itself was hardened against. Reconciling against `store.current`
+     * cannot do that, because it shows what is actually on disk.
+     *
+     * The remote list itself is left alone — that comes from the last scan, not from the record.
+     * Only the selection is re-derived, so the checkboxes can never drift from the enforced
+     * allowlist.
+     */
+    private fun reconcileWithStore() {
+        val e = store.current
+        _ui.value = _ui.value.copy(
             enrolledAddress = e.device?.address,
             enrolledLabel = e.device?.label ?: "",
             securityClass = e.device?.securityClass ?: SecurityClass.OK,
             securityAcknowledged = (e.device?.acknowledgedAt ?: 0L) > 0L,
             firmwareVersion = e.device?.firmwareVersion ?: "",
             enabled = e.enabled,
-            // Rebuild the selection view from what is actually stored, so the checkboxes can never
-            // drift from the allowlist that is enforced.
             remotes = _ui.value.remotes.map { r ->
                 r.copy(selected = e.allowed.filter { it.remotePath == r.path }.map { it.button }.toSet())
             },
@@ -114,8 +131,8 @@ class FlipperSettingsState(private val context: Context) {
     suspend fun setEnabled(enabled: Boolean) {
         _ui.value = _ui.value.copy(enabled = enabled, error = null)
         if (store.setEnabled(enabled).await()) return
+        reconcileWithStore()
         _ui.value = _ui.value.copy(
-            enabled = !enabled,
             error = if (enabled) {
                 "Could not save that change — Flipper control is still off."
             } else {
@@ -134,10 +151,8 @@ class FlipperSettingsState(private val context: Context) {
     suspend fun acknowledgeSecurity() {
         _ui.value = _ui.value.copy(securityAcknowledged = true, error = null)
         if (store.acknowledgeSecurity(System.currentTimeMillis()).await()) return
-        _ui.value = _ui.value.copy(
-            securityAcknowledged = false,
-            error = "Could not save that. Try again.",
-        )
+        reconcileWithStore()
+        _ui.value = _ui.value.copy(error = "Could not save that. Try again.")
     }
 
     /**
@@ -151,7 +166,11 @@ class FlipperSettingsState(private val context: Context) {
         val previous = _ui.value
         _ui.value = FlipperUiState(hasPermission = previous.hasPermission, bonded = previous.bonded)
         if (store.clear().await()) return
-        _ui.value = previous.copy(
+        // Put the scanned remote list back before reconciling — the clear wiped it from the view,
+        // and it is scan output rather than stored state, so nothing else would restore it.
+        _ui.value = _ui.value.copy(remotes = previous.remotes)
+        reconcileWithStore()
+        _ui.value = _ui.value.copy(
             error = "Could not forget that Flipper — it is still enrolled. Try again.",
         )
     }
@@ -306,8 +325,7 @@ class FlipperSettingsState(private val context: Context) {
      * save sends them to the agent wondering why it will not press a button they can see enabled.
      */
     suspend fun toggleButton(remote: RemoteChoice, button: String, on: Boolean) {
-        val previous = _ui.value.remotes
-        val updated = previous.map { r ->
+        val updated = _ui.value.remotes.map { r ->
             if (r.path != remote.path) r
             else r.copy(selected = if (on) r.selected + button else r.selected - button)
         }
@@ -318,8 +336,8 @@ class FlipperSettingsState(private val context: Context) {
             },
         ).await()
         if (saved) return
+        reconcileWithStore()
         _ui.value = _ui.value.copy(
-            remotes = previous,
             error = if (on) {
                 "Could not enable \"$button\" — it is still off."
             } else {
