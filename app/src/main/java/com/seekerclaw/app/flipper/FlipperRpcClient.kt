@@ -64,6 +64,10 @@ class FlipperRpcClient(
         const val DISCOVER_TIMEOUT_MS = 10_000L
         const val SUBSCRIBE_TIMEOUT_MS = 5_000L
         const val DEFAULT_COMMAND_TIMEOUT_MS = 10_000L
+
+        /** Standard SIG services, read directly rather than over RPC. */
+        val DEVICE_INFO_SERVICE: java.util.UUID = java.util.UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
+        val SOFTWARE_REVISION: java.util.UUID = java.util.UUID.fromString("00002a28-0000-1000-8000-00805f9b34fb")
     }
 
     private var gatt: BluetoothGatt? = null
@@ -86,6 +90,7 @@ class FlipperRpcClient(
     private var discoverSignal: CompletableDeferred<Unit>? = null
     private var descriptorSignal: CompletableDeferred<Unit>? = null
     private var writeSignal: CompletableDeferred<Unit>? = null
+    private var readSignal: CompletableDeferred<String?>? = null
 
     /**
      * The reply we are waiting for.
@@ -278,6 +283,36 @@ class FlipperRpcClient(
     /** command_id 0 is proto3's default and would not be serialised, so ids start at 1. */
     private fun nextCommandId(): Int = commandIds.updateAndGet { if (it >= Int.MAX_VALUE - 1) 1 else it + 1 }
 
+    // ------------------------------------------------------- device information
+
+    /**
+     * Reads `0x2A28` (Software Revision) from the standard Device Information service.
+     *
+     * A plain GATT characteristic read, not an RPC call — so it works before the Infrared app is
+     * involved and never touches the encoder allowlist. Used once at enrollment to classify the
+     * BLE security posture; never exposed to the agent.
+     *
+     * Returns null when the service, the characteristic, or the read is unavailable. The caller
+     * treats that as unclassifiable, which fails closed.
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    @SuppressLint("MissingPermission")
+    suspend fun readSoftwareRevision(): String? {
+        val g = gatt ?: return null
+        val service = g.getService(DEVICE_INFO_SERVICE) ?: return null
+        val ch = service.getCharacteristic(SOFTWARE_REVISION) ?: return null
+
+        return gattLock.withLock {
+            readSignal = CompletableDeferred()
+            if (!g.readCharacteristic(ch)) return@withLock null
+            try {
+                await(readSignal!!, SUBSCRIBE_TIMEOUT_MS, "read 0x2A28")
+            } catch (e: FlipperTransportException) {
+                null
+            }
+        }
+    }
+
     // -------------------------------------------------------------------- close
 
     /**
@@ -363,6 +398,24 @@ class FlipperRpcClient(
                     FlipperTransportException(FlipperTransportException.Kind.SUBSCRIBE_FAILED, "descriptor write failed ($status)"),
                 )
             }
+        }
+
+        @Deprecated("Superseded by the value-carrying overload on API 33+")
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            val value = if (status == BluetoothGatt.GATT_SUCCESS) c.value else null
+            readSignal?.complete(value?.toString(Charsets.UTF_8))
+        }
+
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            c: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int,
+        ) {
+            readSignal?.complete(
+                if (status == BluetoothGatt.GATT_SUCCESS) value.toString(Charsets.UTF_8) else null,
+            )
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
