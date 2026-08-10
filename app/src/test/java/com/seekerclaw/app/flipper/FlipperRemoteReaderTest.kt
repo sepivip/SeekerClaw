@@ -60,6 +60,17 @@ class FlipperRemoteReaderTest {
         throw AssertionError("expected FlipperTransportException, none thrown")
     }
 
+    /** Same, but pins the kind — which decides whether the caller may skip the file or must abort. */
+    private inline fun assertFlipperThrows(kind: FlipperTransportException.Kind, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: FlipperTransportException) {
+            assertEquals(kind, e.kind)
+            return
+        }
+        throw AssertionError("expected FlipperTransportException, none thrown")
+    }
+
     // ---------------------------------------------------------------- listing
 
     @Test fun `only dot-ir files are listed`() = runTest {
@@ -196,5 +207,37 @@ class FlipperRemoteReaderTest {
         val b = "Filetype: IR signals file\nVersion: 1\nname: Power\ncommand: 09 00 00 00\n".toByteArray()
         assertEquals("both files must be the same length for this to be a fair test", a.size, b.size)
         assertFalse(sha256(a) == sha256(b))
+    }
+
+    // ------------------------------------------------------- failure classing
+
+    @Test fun `a non-OK status is a command failure, not a decode failure`() {
+        // The distinction is load-bearing twice over. It decides the user-facing copy — reporting
+        // "Could not talk to the Flipper (DECODE_FAILED)" to someone whose Flipper answered
+        // perfectly and simply said no sends them debugging a protocol bug that does not exist —
+        // and it decides whether the enrollment scan may skip this file or must abort the session.
+        val t = FakeTransport(listOf(readFrame(ByteArray(0), status = CommandStatus.ERROR_STORAGE_NOT_EXIST)))
+        assertFlipperThrows(FlipperTransportException.Kind.COMMAND_FAILED) {
+            runTest { FlipperRemoteReader(t).readRemote(tvRef) }
+        }
+    }
+
+    @Test fun `a command failure carries the status it failed with`() {
+        // Settings maps the storage cases to specific copy ("SD card is not ready"), so losing the
+        // status would collapse every refusal into one unhelpful message.
+        val t = FakeTransport(listOf(readFrame(ByteArray(0), status = CommandStatus.ERROR_STORAGE_NOT_READY)))
+        try {
+            runTest { FlipperRemoteReader(t).readRemote(tvRef) }
+            throw AssertionError("expected FlipperTransportException, none thrown")
+        } catch (e: FlipperTransportException) {
+            assertEquals(CommandStatus.ERROR_STORAGE_NOT_READY, e.status)
+        }
+    }
+
+    @Test fun `a listing failure is also a command failure`() {
+        val t = FakeTransport(listOf(listFrame(emptyList(), status = CommandStatus.ERROR_STORAGE_NOT_EXIST)))
+        assertFlipperThrows(FlipperTransportException.Kind.COMMAND_FAILED) {
+            runTest { FlipperRemoteReader(t).listRemotes() }
+        }
     }
 }

@@ -19,8 +19,18 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Every failure mode the transport can produce, so nothing surfaces as a bare exception. */
-class FlipperTransportException(val kind: Kind, message: String) : Exception(message) {
+/**
+ * Every failure mode the transport can produce, so nothing surfaces as a bare exception.
+ *
+ * [status] is set only for [Kind.COMMAND_FAILED], where the Flipper answered and the answer was a
+ * refusal — that is the one case where the device told us *why*, and callers should say so rather
+ * than reporting a generic transport problem.
+ */
+class FlipperTransportException(
+    val kind: Kind,
+    message: String,
+    val status: CommandStatus? = null,
+) : Exception(message) {
     enum class Kind {
         CONNECT_FAILED,
         SERVICE_NOT_FOUND,
@@ -31,7 +41,20 @@ class FlipperTransportException(val kind: Kind, message: String) : Exception(mes
         TIMEOUT,
         LINK_LOST,
         NOT_CONNECTED,
+
+        /** The bytes on the wire did not parse. A genuine protocol fault on our side or theirs. */
         DECODE_FAILED,
+
+        /**
+         * The Flipper answered with a non-OK `command_status`.
+         *
+         * Distinct from [DECODE_FAILED] because it is not a decoding problem at all — the frame
+         * parsed perfectly and carried a refusal. Conflating them put "Could not talk to the Flipper
+         * (DECODE_FAILED)" in front of users whose Flipper was talking fine and simply said no, and
+         * sent anyone debugging it looking for a protocol bug that does not exist.
+         */
+        COMMAND_FAILED,
+
         NO_CREDIT,
     }
 }

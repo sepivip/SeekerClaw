@@ -3,14 +3,21 @@ package com.seekerclaw.app.flipper
 import android.content.Context
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import java.util.Collections
 
 /**
  * The on-disk envelope. Holds the Base64 blob produced by [FlipperEnrollmentCodec].
@@ -49,6 +56,9 @@ class FlipperEnrollmentStore(context: Context) {
 
     private companion object {
         const val FILE_NAME = "flipper_enrollment.json"
+
+        /** Upper bound on how long disposal waits for in-flight writes. */
+        const val CLOSE_DRAIN_TIMEOUT_MS = 2_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -86,6 +96,24 @@ class FlipperEnrollmentStore(context: Context) {
         get() = FlipperEnrollmentCodec.decode(cps.state.value.blob)
 
     /**
+     * Serialises the durable writes.
+     *
+     * [CrossProcessStore.update] is individually atomic, but two coroutines launched on this scope
+     * have **no ordering guarantee** between them — so `setEnabled(true)` followed by
+     * `setEnabled(false)` could land in the opposite order and leave the kill switch on. A fair
+     * `Mutex` held across the whole `update` restores submission order.
+     */
+    private val writeOrder = Mutex()
+
+    /**
+     * Durable writes still in flight, so [close] can drain them.
+     *
+     * Tracked explicitly rather than joining `scope`'s children: the collector started in [init]
+     * never completes, so joining everything would block until the timeout on every disposal.
+     */
+    private val pendingWrites = Collections.synchronizedSet(mutableSetOf<Job>())
+
+    /**
      * Applies [transform] to the record and publishes the result.
      *
      * ### Every mutation is a transform, never a pre-computed record
@@ -109,13 +137,18 @@ class FlipperEnrollmentStore(context: Context) {
      * permission decision reads [current], never this — an optimistic value must never authorise a
      * press.
      */
-    private fun persist(transform: (FlipperEnrollment) -> FlipperEnrollment) {
+    private fun persist(transform: (FlipperEnrollment) -> FlipperEnrollment): Job {
         _state.value = transform(_state.value)
-        scope.launch {
-            cps.update { record ->
-                FlipperRecord(FlipperEnrollmentCodec.encode(transform(FlipperEnrollmentCodec.decode(record.blob))))
+        val job = scope.launch {
+            writeOrder.withLock {
+                cps.update { record ->
+                    FlipperRecord(FlipperEnrollmentCodec.encode(transform(FlipperEnrollmentCodec.decode(record.blob))))
+                }
             }
         }
+        pendingWrites += job
+        job.invokeOnCompletion { pendingWrites -= job }
+        return job
     }
 
     /**
@@ -173,8 +206,21 @@ class FlipperEnrollmentStore(context: Context) {
      * Each instance registers OS-level observers, and the Settings UI builds one per composition of
      * the Flipper section — so without this, every visit to Settings leaves another observer
      * waking the process for a record nobody reads.
+     *
+     * **Outstanding writes are joined first.** `scope.cancel()` would otherwise kill a durable write
+     * that had not yet reached disk, and the write most likely to be in flight is the one made
+     * immediately before leaving the screen — a `setEnabled(false)`. Losing that means the user
+     * switched Flipper control off, watched the toggle move, navigated away, and left it on.
+     *
+     * The join runs on the caller's thread via `runBlocking` because disposal has no scope of its
+     * own to suspend in. It is bounded twice over: the queue is at most a handful of small file
+     * writes, and a timeout caps the wait so a wedged write can never make Settings undismissable.
      */
     fun close() {
+        val outstanding = pendingWrites.toList()
+        if (outstanding.isNotEmpty()) {
+            runBlocking { withTimeoutOrNull(CLOSE_DRAIN_TIMEOUT_MS) { outstanding.joinAll() } }
+        }
         cps.close()
         scope.cancel()
     }

@@ -26,7 +26,7 @@
 
 > **The low delta pre-fix is a new-capability gap, not regression drift.** Everything the agent knew
 > about the Flipper lived in the two tool descriptions — accurate, but absent from the system prompt
-> and with **zero** diagnostic coverage for twenty distinct error codes. Both are fixed in this PR
+> and with **zero** diagnostic coverage for the twenty distinct error codes the two tools can return (19 from `FlipperIrController`, plus `invalid_request` from the bridge endpoint). Both are fixed in this PR
 > per the same-PR rule. Negative-knowledge boundaries unchanged (6/6). No constants went stale:
 > `MAX_HISTORY = 35` and `SHELL_ALLOWLIST` verified current, and the prompt makes no tool-count
 > claim, so 64 → 66 introduced no staleness.
@@ -56,7 +56,7 @@
 
 ## Section B — Diagnostics (delta) — 0/21 pre, 21/21 post
 
-DIAGNOSTICS.md had **zero** Flipper content pre-fix (`grep -i flipper DIAGNOSTICS.md` → no matches) against **20 distinct error codes** the tools can return. Every one would have been undiagnosable. Grouped into seven failure modes:
+DIAGNOSTICS.md had **zero** Flipper content pre-fix (`grep -i flipper DIAGNOSTICS.md` → no matches) against the **20 distinct error codes** the two tools can return — 19 from `FlipperIrController` plus `invalid_request` from `FlipperBridgeEndpoints`. Every one would have been undiagnosable. Grouped into failure modes:
 
 | Failure mode | Codes | Pre | Post |
 |--------------|-------|-----|------|
@@ -67,10 +67,11 @@ DIAGNOSTICS.md had **zero** Flipper content pre-fix (`grep -i flipper DIAGNOSTIC
 | Link failure | `transport_error`, `bond_lost`, `not_a_flipper`, `bluetooth_unavailable` | ❌ | ✅ — per-code cause, and `transport_error` flagged as **the ambiguous one**: may or may not have transmitted, say so, do not retry |
 | Contention | `busy_local` | ❌ | ✅ — single firmware command slot; a Settings scan really does block a press across processes; nothing was sent so retry is safe |
 | Rate ceiling | `rate_limited` | ❌ | ✅ — counts attempts not successes, by design; and that an *unexpected* rate-limit is a signal to advise switching Flipper control off |
-| Automation refusal | `automation_not_allowed` | ❌ | ✅ — working as designed; do not work around it by rescheduling |
+| Automation refusal | `automation_not_allowed` | ❌ | ✅ — working as designed; do not work around it by rescheduling. **Qualified**: fail-closed defence in depth, not proof of origin — the context comes from Node, so the section forbids telling the user a press is impossible without their message |
+| Malformed call | `invalid_request` | ❌ | ✅ — blank or over-64-char name; call `flipper_remotes` and pass names verbatim |
 | Firmware capability | `unsupported_protocol`, `ir_app_missing`, `ir_app_not_found`, `device_busy` | ❌ | ✅ — per-code cause and device-side fix order |
 
-(Nine rows, scored as the seven curated groups above plus automation-refusal and firmware-capability folded into their nearest group; the score reflects seven × 3.)
+(Ten rows above; scored as seven curated groups, with automation-refusal, malformed-call and firmware-capability folded into their nearest group, so the score reflects seven × 3.)
 
 The new section leads with the two rules that override the rest of it — IR is one-way, and never auto-retry — because both are safety properties rather than troubleshooting steps, and an agent that skims to the matching error code must not miss them.
 
@@ -104,7 +105,7 @@ Fixed probes ("Web search is broken", "Agent won't respond") unaffected by this 
   wording to use and avoid, the no-auto-retry rule with its toggle rationale, allowlist-is-Settings,
   surface the `reason`, and the DIAGNOSTICS door incl. the not-in-node_debug.log caveat.
 - **DIAGNOSTICS.md — new "Flipper Zero — infrared appliance control (BAT-1202)" section** covering
-  all 20 error codes across nine grouped failure modes, led by the two safety rules.
+  all 20 error codes across ten grouped failure modes, led by the two safety rules.
 
 ## Code Issues Found
 

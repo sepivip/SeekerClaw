@@ -85,8 +85,9 @@ internal object FlipperLinkLock {
         val lock = try {
             handle.channel.tryLock()
         } catch (e: OverlappingFileLockException) {
-            // Another thread in THIS process already holds it — a caller skipped `mutex`.
-            Log.w(TAG, "[Flipper] link lock already held in-process; caller did not take the mutex")
+            // Another thread in THIS process already holds it — a caller skipped `mutex`. The
+            // exception type IS the diagnosis, so it is named rather than rethrown.
+            Log.w(TAG, "[Flipper] link lock already held in-process (${e.javaClass.simpleName}); caller did not take the mutex")
             null
         } catch (e: Exception) {
             Log.w(TAG, "[Flipper] link lock failed: ${e.message}")

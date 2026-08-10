@@ -323,8 +323,8 @@ class FlipperIrController(
 
             val pressed = client.send(RpcRequest.PressRelease(entry.button), PRESS_DEADLINE_MS)
             pressed.firstOrNull { it.status != CommandStatus.OK }?.let {
-                return err("unknown_button", "The Flipper did not recognise that button on this remote.") to
-                    "failed:${it.status}"
+                Log.w(TAG, "[Flipper] press rejected with ${it.status}")
+                return fail("unknown_button", "The Flipper did not recognise that button on this remote.")
             }
 
             return mapOf(
@@ -336,7 +336,8 @@ class FlipperIrController(
                 "note" to "IR is one-way — this confirms the signal was transmitted, not that the appliance reacted.",
             ) to "sent"
         } catch (e: FlipperTransportException) {
-            return transportError(e) to "error:${e.kind}"
+            Log.w(TAG, "[Flipper] press failed: ${e.kind}: ${e.message}")
+            return transportError(e).let { it to "failed:${it["error"]}" }
         } finally {
             // R1a + R1b. Exiting without ownership closes the user's own app; exiting with a
             // command outstanding crashes the device. Dropping the link is always safe.

@@ -119,8 +119,9 @@ class FlipperRemoteReader(private val client: RpcTransport) {
     private fun requireOk(frames: List<RpcFrame>, what: String) {
         val bad = frames.firstOrNull { it.status != CommandStatus.OK } ?: return
         throw FlipperTransportException(
-            FlipperTransportException.Kind.DECODE_FAILED,
+            FlipperTransportException.Kind.COMMAND_FAILED,
             "$what failed with ${bad.status} (code ${bad.status.code})",
+            status = bad.status,
         )
     }
 }

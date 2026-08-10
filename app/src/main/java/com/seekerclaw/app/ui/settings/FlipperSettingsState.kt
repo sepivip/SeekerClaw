@@ -7,6 +7,7 @@ import com.seekerclaw.app.flipper.AllowedButton
 import com.seekerclaw.app.flipper.BluetoothUnavailable
 import com.seekerclaw.app.flipper.BluetoothUnavailableException
 import com.seekerclaw.app.flipper.BondedDevice
+import com.seekerclaw.app.flipper.CommandStatus
 import com.seekerclaw.app.flipper.EnrolledFlipper
 import com.seekerclaw.app.flipper.FlipperAuditLog
 import com.seekerclaw.app.flipper.FlipperDeviceManager
@@ -175,9 +176,20 @@ class FlipperSettingsState(private val context: Context) {
             val choices = mutableListOf<RemoteChoice>()
             var unreadable = 0
             for (ref in listing.remotes) {
+                // Only a per-file refusal may be skipped. COMMAND_FAILED means the Flipper answered
+                // about *this* path — missing, denied, not a readable file — so counting it as
+                // unreadable and moving on is right.
+                //
+                // Every other kind is session-level: a LINK_LOST or TIMEOUT partway through means
+                // the remaining files were never actually examined. Swallowing those turned a lost
+                // link into a scan that looked complete, and the commit below would then replace the
+                // enrollment with a truncated allowlist — on a *different* device, wiping the
+                // working one. Re-throwing lands in the catch below, which reports the error and
+                // leaves the previous enrollment untouched.
                 val detail: RemoteDetail? = try {
                     reader.readRemote(ref)
                 } catch (e: FlipperTransportException) {
+                    if (e.kind != FlipperTransportException.Kind.COMMAND_FAILED) throw e
                     null
                 }
                 if (detail == null) { unreadable++; continue }
@@ -304,6 +316,17 @@ class FlipperSettingsState(private val context: Context) {
             "The Flipper did not respond. Check it is switched on and nearby."
         FlipperTransportException.Kind.LINK_LOST, FlipperTransportException.Kind.CONNECT_FAILED ->
             "Could not connect. Check the Flipper is on, in range, and not connected to another app."
+        // The Flipper answered and refused. Naming the storage cases specifically is worth it: they
+        // are by far the most common, and "could not talk to it" would send the user looking at
+        // Bluetooth when the actual problem is an SD card.
+        FlipperTransportException.Kind.COMMAND_FAILED -> when (e.status) {
+            CommandStatus.ERROR_STORAGE_NOT_READY ->
+                "The Flipper's SD card is not ready. Check it is inserted, then try again."
+            CommandStatus.ERROR_STORAGE_NOT_EXIST ->
+                "The Flipper has no /ext/infrared folder yet — save a remote on it first."
+            else ->
+                "The Flipper refused the request (${e.status ?: "unknown"})."
+        }
         else -> "Could not talk to the Flipper (${e.kind})."
     }
 }

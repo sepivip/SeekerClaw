@@ -498,10 +498,23 @@ to switch Flipper control off in Settings while they work out what.
 
 ### `automation_not_allowed` — a scheduled or background trigger
 **Symptoms:** A cron job or heartbeat turn tries to press and is refused.
-**Diagnosis:** Working as designed. Flipper presses run only from a message the user actually sent.
-An appliance actuating from a schedule with nobody present is exactly what this prevents.
+**Diagnosis:** Working as designed — an appliance actuating from a schedule with nobody present is
+exactly what this prevents. The check is **fail-closed**: anything not positively identified as a
+user message is treated as automation and refused.
+**Be precise about what this does and does not guarantee.** It is defence in depth, *not* a proof of
+origin. The invocation context is supplied by the Node side, which the model can influence, so this
+stops an honest mistake rather than a determined prompt injection. What actually bounds the damage
+is the allowlist, the master switch, and the rolling-hour ceiling — all enforced in Kotlin. **Do not
+tell the user that a press is impossible without their message**; say that scheduled and background
+triggers are refused.
 **Fix:** Tell the user this is not supported; do not try to work around it by rephrasing or by
 scheduling it differently.
+
+### `invalid_request` — the call itself was malformed
+**Symptoms:** `flipper_press` returns `invalid_request` before anything reaches the Flipper.
+**Diagnosis:** Either `remote` or `button` was blank, or one of them exceeded 64 characters. This is
+a fault in the call, not in the device — real names come from a `.ir` file and are far shorter.
+**Fix:** Call `flipper_remotes` and pass the names it returns verbatim. Never synthesise a name.
 
 ### `unsupported_protocol` / `ir_app_missing` / `ir_app_not_found` / `device_busy`
 **Symptoms:** The link came up but the Infrared app would not start.
@@ -510,8 +523,13 @@ scheduling it differently.
 - `ir_app_not_found` — the Infrared app is not installed on the Flipper.
 - `ir_app_missing` — it could not start; an absent or unreadable SD card is the usual cause.
 - `device_busy` — the Flipper is sitting in another app right now.
-**Fix:** In order: for `device_busy`, ask them to back out to the Flipper's main menu. For the SD-card
-and firmware cases, the fix is on the device — update firmware or reseat the SD card, then try again.
+**Fix:** Per code:
+- `device_busy` — ask them to back out to the Flipper's main menu, then try again.
+- `ir_app_not_found` — the Infrared app is missing entirely. It ships with stock firmware, so this
+  usually means a custom firmware without it, or a wiped SD card. Tell them to re-install it from
+  the Flipper mobile app / qFlipper (Apps → Infrared), or re-flash stock firmware.
+- `ir_app_missing` — the app exists but would not launch; reseat the SD card and retry.
+- `unsupported_protocol` — update the Flipper's firmware, then re-enroll in SeekerClaw settings.
 
 ---
 

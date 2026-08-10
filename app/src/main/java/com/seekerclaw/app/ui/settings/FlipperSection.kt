@@ -162,8 +162,12 @@ fun FlipperSection() {
                         shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
                         border = BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
                     ) {
+                        // Not "enable anyway": this records the acknowledgement and nothing else.
+                        // The master switch above stays exactly as the user left it, so promising
+                        // "enable" would have the button appear to do nothing on a device whose
+                        // switch is off.
                         Text(
-                            "I understand — enable anyway",
+                            "I understand — continue",
                             fontFamily = RethinkSans,
                             fontSize = 13.sp,
                         )
