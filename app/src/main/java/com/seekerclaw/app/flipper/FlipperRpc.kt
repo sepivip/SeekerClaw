@@ -182,7 +182,23 @@ sealed class RpcRequest {
             }
         }
         override val tag = OutTag.APP_BUTTON_PRESS_RELEASE
-        override fun encodeBody() = ProtoWriter().apply { writeString(1, button) }.toByteArray()
+
+        /**
+         * Encoded **Latin-1, not UTF-8**.
+         *
+         * [IrFileParser] maps each file byte to one char deliberately, so a `.ir` byte of `0xFF`
+         * becomes `U+00FF`. Re-encoding that as UTF-8 emits two bytes, and the firmware's `strcmp`
+         * — which compares against the single byte it read from the same file — never matches.
+         * The result is a permanent `unknown_button` on any remote whose name contains a byte
+         * above 0x7F, with nothing in the logs to explain it.
+         *
+         * ISO-8859-1 is the exact inverse of the parser's byte-to-char mapping, so the bytes we
+         * send are the bytes the firmware parsed. This is what §6 G4's "one parse, zero subsequent
+         * transforms" means at the wire.
+         */
+        override fun encodeBody() = ProtoWriter().apply {
+            writeBytes(1, button.toByteArray(Charsets.ISO_8859_1))
+        }.toByteArray()
     }
 
     /**

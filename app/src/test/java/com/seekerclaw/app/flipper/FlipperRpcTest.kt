@@ -101,6 +101,40 @@ class FlipperRpcTest {
         assertEquals(awkward, r.readString())
     }
 
+    @Test fun `high bytes are sent latin1 not utf8`() {
+        // Regression. IrFileParser maps each file byte to one char, so a 0xFF byte in a .ir
+        // becomes U+00FF. Encoding that as UTF-8 emits TWO bytes and the firmware's strcmp —
+        // comparing against the single byte it read from the same file — never matches, giving a
+        // permanent unknown_button with nothing in the logs to explain it.
+        val name = "ÿþ"
+        val body = RpcRequest.PressRelease(name).encodeBody()
+        val r = ProtoReader(body)
+        r.readTag()
+        val onWire = r.readBytes()
+        assertEquals("must be one byte per char", 2, onWire.size)
+        assertEquals(0xFF, onWire[0].toInt() and 0xFF)
+        assertEquals(0xFE, onWire[1].toInt() and 0xFF)
+    }
+
+    @Test fun `ascii names are unaffected by the latin1 encoding`() {
+        val body = RpcRequest.PressRelease("Power").encodeBody()
+        val r = ProtoReader(body)
+        r.readTag()
+        assertArrayEquals("Power".toByteArray(Charsets.US_ASCII), r.readBytes())
+    }
+
+    @Test fun `a parsed name round-trips from file bytes to the wire`() {
+        // End-to-end on the byte path: what the parser produces from a .ir file must be exactly
+        // what leaves on the wire, for any byte value.
+        val header = "Filetype: IR signals file\nVersion: 1\nname: ".toByteArray(Charsets.US_ASCII)
+        val fileBytes = header + byteArrayOf(0x80.toByte(), 0x41, 0xFE.toByte()) + byteArrayOf(0x0A)
+        val parsed = IrFileParser.parseButtonNames(fileBytes).single()
+        val body = RpcRequest.PressRelease(parsed).encodeBody()
+        val r = ProtoReader(body)
+        r.readTag()
+        assertArrayEquals(byteArrayOf(0x80.toByte(), 0x41, 0xFE.toByte()), r.readBytes())
+    }
+
     // ------------------------------------------------------------ path scoping
 
     @Test fun `storage access outside the infrared directory is rejected`() {

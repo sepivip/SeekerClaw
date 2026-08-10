@@ -16,12 +16,18 @@
 
 const { androidBridgeCall } = require('../bridge');
 
-// The Kotlin press budget is 25s (§4a). This must exceed it, or a press that
-// SUCCEEDED reports as a bridge timeout — and since IR power codes are almost
-// all toggles, a retry would turn the appliance back off. The default 10s in
-// bridge.js is far too short for a cold connect + app start + transmit.
-const PRESS_TIMEOUT_MS = 30000;
-const LIST_TIMEOUT_MS = 20000;
+// This MUST exceed the Kotlin path's worst case, or a press that actually
+// SUCCEEDED comes back as `Android Bridge timeout` — and since IR power codes
+// are almost all toggles, a retry would turn the appliance back off. That is the
+// exact hazard §4a exists to prevent.
+//
+// The Kotlin worst case is the sum of its per-step deadlines, not the 25s press
+// budget alone: connect (15s) + MTU (5s) + discover (10s) + 3 CCCD writes (15s)
+// + version (5s) + App.Start (8s) + APP_STARTED grace (3s) + LoadFile (15s)
+// + PressRelease (25s) + Exit (3s) ~= 104s. An earlier 30s value here was below
+// that and would have produced the very failure the comment claimed to prevent.
+const PRESS_TIMEOUT_MS = 120000;
+const LIST_TIMEOUT_MS = 60000;
 
 // Turn origin, using the convention already in the codebase: cron sessions run
 // under a `cron:<jobId>` chatId (main.js:1042), which ai.js:646 keys off for its
@@ -35,7 +41,11 @@ const LIST_TIMEOUT_MS = 20000;
 // the Kotlin allowlist and the rolling-hour ceiling — carry the real weight.
 // Contract §4b amendment filed on BAT-1201.
 function invocationFor(chatId) {
-    if (typeof chatId !== 'string' || chatId.startsWith('cron:')) return 'automated';
+    if (typeof chatId !== 'string') return 'automated';
+    // Same set tools/index.js:365 uses for confirmation-gated tools: cron sessions
+    // AND heartbeat probes. Checking only `cron:` left autonomous heartbeat turns
+    // classified as user-driven, so they could fire IR.
+    if (chatId.startsWith('cron:') || chatId === '__heartbeat__') return 'automated';
     return 'user_message';
 }
 

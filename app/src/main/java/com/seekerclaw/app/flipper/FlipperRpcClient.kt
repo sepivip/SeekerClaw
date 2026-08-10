@@ -469,7 +469,11 @@ class FlipperRpcClient(
                 val frames = try {
                     assembler.append(value)
                 } catch (e: ProtoDecodeException) {
-                    Log.e(TAG, "[Flipper] reassembly failed: ${e.message}")
+                    // Reset before returning. Without this the corrupt bytes stay buffered and
+                    // every subsequent indication re-throws, wedging a link that still reports
+                    // connected == true — so the next press fails with no route to recovery.
+                    Log.e(TAG, "[Flipper] reassembly failed, resetting buffer: ${e.message}")
+                    assembler.reset()
                     failPending(FlipperTransportException.Kind.DECODE_FAILED, e.message ?: "reassembly failed")
                     return
                 }
@@ -484,7 +488,10 @@ class FlipperRpcClient(
         } catch (e: ProtoDecodeException) {
             // ERROR_DECODE from our side is a client framing bug and always precedes a
             // firmware-initiated disconnect. Log loudly; it is never expected traffic.
-            Log.e(TAG, "[Flipper] frame decode failed: ${e.message}")
+            // Reset for the same reason as above — a desynchronised stream cannot be recovered
+            // by re-parsing the same bytes.
+            Log.e(TAG, "[Flipper] frame decode failed, resetting buffer: ${e.message}")
+            assembler.reset()
             failPending(FlipperTransportException.Kind.DECODE_FAILED, e.message ?: "decode failed")
             return
         }

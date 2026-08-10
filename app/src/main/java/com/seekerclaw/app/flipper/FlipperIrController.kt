@@ -4,8 +4,10 @@ import android.Manifest
 import android.content.Context
 import android.util.Log
 import androidx.annotation.RequiresPermission
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Typed outcomes. Every one carries a `reason` so nothing surfaces as a bare code (§10). */
 data class FlipperError(val error: String, val reason: String)
@@ -95,6 +97,9 @@ class FlipperIrController(
          */
         const val MAX_PRESSES_PER_HOUR = 60
         const val RATE_WINDOW_MS = 3_600_000L
+
+        /** How long to wait for the unsolicited APP_STARTED after App.Start's own response. */
+        const val APP_STARTED_GRACE_MS = 3_000L
     }
 
     /** Timestamps of recent accepted presses, for [MAX_PRESSES_PER_HOUR]. */
@@ -110,16 +115,7 @@ class FlipperIrController(
         return true
     }
 
-    /**
-     * One process-wide lock owning the GATT link.
-     *
-     * Deliberately not scoped to an instance: the Settings screen and the bridge share one link
-     * with one firmware-side pending-command slot, so a per-instance lock would let enrollment and
-     * a remote press collide.
-     */
-    private object LinkLock {
-        val mutex = Mutex()
-    }
+
 
     /** What the model may name. Labels and buttons only — never a path (§8). */
     fun listRemotes(): Map<String, Any?> {
@@ -190,12 +186,20 @@ class FlipperIrController(
 
         // Serialised: one link, one firmware pending-command slot. Never queued — telling an agent
         // to wait trains it to retry immediately against a 6-10 second sequence.
-        if (!LinkLock.mutex.tryLock()) {
+        if (!FlipperLinkLock.mutex.tryLock()) {
             return err("busy_local", "Another Flipper operation is already in progress. This one was not sent.")
         }
 
-        val client = FlipperRpcClient(context)
-        var ownsApp = false
+        // R1b needs the unsolicited APP_STARTED, which arrives outside the command/response
+        // correlation. The default no-op callback silently discarded it, so ownership was being
+        // inferred from App.Start's status alone — weaker than the contract states.
+        var sawAppStarted = false
+        val client = FlipperRpcClient(context) { frame ->
+            val state = (frame.content as? RpcContent.AppStateChanged)?.state
+            if (state == AppState.APP_STARTED) sawAppStarted = true
+            if (state == AppState.APP_CLOSED) sawAppStarted = false
+        }
+        var startOk = false
         try {
             client.connect(device)
 
@@ -211,8 +215,47 @@ class FlipperIrController(
 
             val started = client.send(RpcRequest.StartInfraredRpc, 8_000L)
             startError(started)?.let { return it }
-            // R1b: ownership is only established once App.Start actually succeeded.
-            ownsApp = true
+            startOk = true
+
+            // §5 step 5: App.Start's response and the unsolicited APP_STARTED may arrive in either
+            // order, so wait briefly for the latter if it has not landed yet.
+            if (!sawAppStarted) {
+                withTimeoutOrNull(APP_STARTED_GRACE_MS) {
+                    while (!sawAppStarted) delay(50)
+                }
+            }
+            if (!sawAppStarted) {
+                return err(
+                    "transport_error",
+                    "The Flipper accepted the request but never reported its Infrared app as running.",
+                )
+            }
+
+            // §8 staleness check. The fingerprint was stored when the user approved this entry;
+            // without comparing it, it is dead data and a swapped .ir file with a same-named
+            // button actuates a different appliance under an approval the user never gave.
+            //
+            // Read before LoadFile rather than after: LoadFile is one-per-session (§5 R2), so a
+            // mismatch discovered afterwards could not be undone without tearing the session down.
+            val readFrames = client.send(RpcRequest.StorageRead(entry.remotePath), 15_000L)
+            readFrames.firstOrNull { it.status != CommandStatus.OK }?.let {
+                return err(
+                    "remote_missing",
+                    "That remote is no longer on the Flipper. Re-scan in SeekerClaw settings.",
+                )
+            }
+            val bytes = readFrames
+                .mapNotNull { (it.content as? RpcContent.StorageRead)?.file?.data }
+                .fold(ByteArray(0)) { acc, chunk -> acc + chunk }
+            val actual = sha256(bytes)
+            if (actual != entry.remoteSha256) {
+                audit.record(remoteLabel, button, "rejected:remote_changed", invocation)
+                return err(
+                    "remote_changed",
+                    "The \"$remoteLabel\" remote has changed on the Flipper since you approved it. " +
+                        "Nothing was sent. Re-scan and re-approve it in SeekerClaw settings.",
+                )
+            }
 
             client.send(RpcRequest.LoadFile(entry.remotePath), 15_000L).let { frames ->
                 frames.firstOrNull { it.status != CommandStatus.OK }?.let {
@@ -242,18 +285,36 @@ class FlipperIrController(
             // R1a + R1b. Exiting without ownership closes the user's own app; exiting with a
             // command outstanding crashes the device. Dropping the link is always safe.
             try {
-                if (ownsApp && client.isConnected) client.send(RpcRequest.Exit, 3_000L)
+                // R1b: both halves. App.Start succeeded AND we observed APP_STARTED in this
+                // session. Without ownership, App.Exit closes whatever app the user had open.
+                if (startOk && sawAppStarted && client.isConnected) client.send(RpcRequest.Exit, 3_000L)
             } catch (e: Exception) {
                 Log.w(TAG, "[Flipper] exit failed, dropping link: ${e.message}")
             }
             client.close()
-            LinkLock.mutex.unlock()
+            FlipperLinkLock.mutex.unlock()
         }
     }
 
     /** Distinguishes "you never allowed this" from "you allowed it, but not that button". */
     private fun notAllowedReason(remoteLabel: String, button: String): Map<String, Any?> {
-        val known = store.current.visibleRemotes()
+        val e = store.current
+        // Check the device-level gates first. visibleRemotes() ignores them, so an unacknowledged
+        // security posture would otherwise produce "'Power' is not an enabled button on 'TV'.
+        // Enabled: Power." — which is both wrong and impossible to act on.
+        if (e.device == null) {
+            return err("not_enrolled", "No Flipper is enrolled. Open SeekerClaw settings to set one up.")
+        }
+        if (!e.enabled) {
+            return err("disabled_by_user", "Flipper control is switched off in settings.")
+        }
+        if (e.device.securityClass.needsAcknowledgement && e.device.acknowledgedAt == 0L) {
+            return err(
+                "legacy_security",
+                "The Flipper's firmware security notice has not been acknowledged yet. Open SeekerClaw settings.",
+            )
+        }
+        val known = e.visibleRemotes()
         return when {
             known.isEmpty() ->
                 err("none_allowlisted", "No remotes have been enabled for the agent. Choose them in SeekerClaw settings.")

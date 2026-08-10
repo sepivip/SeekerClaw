@@ -176,11 +176,25 @@ class FlipperSettingsState(private val context: Context) {
                 if (unreadable > 0) add("$unreadable file(s) were not usable remotes")
             }
 
+            val found = disambiguate(choices)
+
+            // Intersect the stored allowlist with what this scan actually found. Without this,
+            // entries for remotes the user deleted stay allowlisted and advertised to the agent
+            // while disappearing from the UI — approved, invisible, and impossible to revoke.
+            // A changed fingerprint drops the entry too: the approval was for those bytes.
+            val stillValid = store.current.allowed.filter { a ->
+                found.any { it.path == a.remotePath && it.sha256 == a.remoteSha256 && a.button in it.buttons }
+            }
+            val dropped = store.current.allowed.size - stillValid.size
+            if (dropped > 0) store.setAllowed(stillValid)
+
             _ui.value = _ui.value.copy(
                 busy = false,
                 status = null,
-                remotes = disambiguate(choices),
-                scanNote = notes.takeIf { it.isNotEmpty() }?.joinToString("; "),
+                remotes = found,
+                scanNote = (notes + listOfNotNull(
+                    if (dropped > 0) "$dropped previously enabled button(s) no longer exist and were removed" else null,
+                )).takeIf { it.isNotEmpty() }?.joinToString("; "),
             )
             refresh()
         } catch (e: FlipperTransportException) {

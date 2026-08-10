@@ -19,6 +19,11 @@ import org.json.JSONObject
  */
 class FlipperBridgeEndpoints(context: Context) {
 
+    private companion object {
+        /** Generous next to any real `.ir` button name; the point is a bound, not a tight fit. */
+        const val MAX_NAME_CHARS = 64
+    }
+
     private val store = FlipperEnrollmentStore(context)
     private val controller = FlipperIrController(context, store)
 
@@ -40,6 +45,16 @@ class FlipperBridgeEndpoints(context: Context) {
             return mapOf(
                 "error" to "invalid_request",
                 "reason" to "Both 'remote' and 'button' are required.",
+            )
+        }
+        // Bounded before anything downstream sees them. Both are model-supplied, and a rejected
+        // attempt is still written to the audit log — which is decoded and re-encoded on every
+        // subsequent operation, so an unbounded string would be paid for repeatedly. Real names
+        // come from a .ir file and are far shorter than this.
+        if (remote.length > MAX_NAME_CHARS || button.length > MAX_NAME_CHARS) {
+            return mapOf(
+                "error" to "invalid_request",
+                "reason" to "Remote and button names must be $MAX_NAME_CHARS characters or fewer.",
             )
         }
         return controller.press(remote, button, invocation)

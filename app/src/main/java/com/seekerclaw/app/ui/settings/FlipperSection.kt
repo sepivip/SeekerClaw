@@ -221,6 +221,30 @@ fun FlipperSection() {
                 }
             }
 
+            // Recent activity. The audit log exists so a user can check what the agent actually
+            // did — which requires it to be visible. It was previously written and never rendered.
+            val audit = state.auditEntries()
+            if (audit.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Recent activity",
+                    fontFamily = RethinkSans,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SeekerClawColors.TextSecondary,
+                )
+                Spacer(Modifier.height(4.dp))
+                for (entry in audit.take(10)) {
+                    Text(
+                        "${entry.formattedTime()}  ${entry.remoteLabel} / ${entry.button}  ${entry.outcome}",
+                        fontFamily = RethinkSans,
+                        fontSize = 10.sp,
+                        color = SeekerClawColors.TextDim,
+                        modifier = Modifier.padding(vertical = 1.dp),
+                    )
+                }
+            }
+
             Spacer(Modifier.height(14.dp))
             OutlinedButton(
                 onClick = { state.unenroll() },

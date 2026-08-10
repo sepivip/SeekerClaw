@@ -1,6 +1,12 @@
 package com.seekerclaw.app.flipper
 
 import android.content.Context
+import com.seekerclaw.app.util.CrossProcessStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -104,23 +110,46 @@ object FlipperAuditCodec {
  * Never records raw BLE payloads, prompt content, or the `.ir` file's signal data — only what was
  * asked for and what happened.
  */
+/** On-disk envelope, holding the Base64 blob from [FlipperAuditCodec]. */
+@Serializable
+internal data class FlipperAuditRecord(val blob: String = "")
+
 class FlipperAuditLog(context: Context) {
 
     private companion object {
-        const val PREFS_NAME = "flipper_audit"
-        const val KEY_ENTRIES = "entries"
+        const val FILE_NAME = "flipper_audit.json"
 
         /**
          * Kept small on purpose. This exists so a user can check what the agent did recently, not
-         * to be a forensic archive, and an unbounded list in preferences would grow without limit.
+         * to be a forensic archive, and an unbounded list would grow without limit.
          */
         const val MAX_ENTRIES = 200
+
+        /**
+         * Defensive caps on what a single entry may carry.
+         *
+         * Both fields originate in model-supplied tool input. They are already rejected by the
+         * allowlist before a press happens, but a *rejected* attempt is recorded too — so without
+         * a cap, a long label would be decoded and re-encoded on every subsequent operation.
+         */
+        const val MAX_FIELD_CHARS = 64
     }
 
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Written by the controller in `:node`, read by Settings in the main process — so this has the
+    // same cross-process requirement as the enrollment store, and for the same reason:
+    // SharedPreferences would leave the UI showing a log that never gained the newest entries.
+    private val cps = CrossProcessStore(
+        context = context.applicationContext,
+        fileName = FILE_NAME,
+        serializer = FlipperAuditRecord.serializer(),
+        initial = FlipperAuditRecord(),
+        parentScope = scope,
+    )
 
     /** Newest first. */
-    fun entries(): List<AuditEntry> = FlipperAuditCodec.decode(prefs.getString(KEY_ENTRIES, null))
+    fun entries(): List<AuditEntry> = FlipperAuditCodec.decode(cps.state.value.blob)
 
     fun record(
         remoteLabel: String,
@@ -129,10 +158,19 @@ class FlipperAuditLog(context: Context) {
         invocation: InvocationContext,
         atMillis: Long = System.currentTimeMillis(),
     ) {
-        val next = (listOf(AuditEntry(atMillis, remoteLabel, button, outcome, invocation)) + entries())
-            .take(MAX_ENTRIES)
-        prefs.edit().putString(KEY_ENTRIES, FlipperAuditCodec.encode(next)).apply()
+        val entry = AuditEntry(
+            timestampMillis = atMillis,
+            remoteLabel = remoteLabel.take(MAX_FIELD_CHARS),
+            button = button.take(MAX_FIELD_CHARS),
+            outcome = outcome,
+            invocation = invocation,
+        )
+        val next = (listOf(entry) + entries()).take(MAX_ENTRIES)
+        val blob = FlipperAuditCodec.encode(next)
+        scope.launch { cps.update { FlipperAuditRecord(blob) } }
     }
 
-    fun clear() = prefs.edit().remove(KEY_ENTRIES).apply()
+    fun clear() {
+        scope.launch { cps.update { FlipperAuditRecord() } }
+    }
 }
