@@ -407,6 +407,114 @@ grep -i "bridge\|ECONNREFUSED\|8765" node_debug.log | tail -10
 
 ---
 
+## Flipper Zero — infrared appliance control (BAT-1202)
+
+`flipper_remotes` lists the remotes and buttons the user enabled; `flipper_press` transmits one of
+them. Both go through the Android bridge, so **everything below is enforced in Kotlin** — you cannot
+change any of it, and asking the user to change a setting is often the entire fix.
+
+**Two rules that override everything else in this section:**
+
+1. **IR is one-way.** A `sent: true` result means the signal was transmitted, never that the
+   appliance reacted. Never report "turned the TV on" — report that you sent the command.
+2. **Never auto-retry a failed or uncertain press.** Most power codes are *toggles*, so a retry is
+   as likely to undo the action as to complete it. On an ambiguous failure, say the state is unknown
+   and ask the user to look at the device.
+
+**Where to look:** these errors come from the Kotlin side (`TAG = "FlipperIr"`), so they land in the
+Logs screen / `service_logs`, **not** `node_debug.log` — grepping the agent log for them finds
+nothing. What you *can* see is the tool result itself, and every one carries a `reason` written for
+the user. Prefer surfacing that `reason` over paraphrasing.
+
+### Setup state — `not_enrolled`, `disabled_by_user`, `none_allowlisted`
+**Symptoms:** `flipper_remotes` or `flipper_press` returns one of these three immediately.
+**Diagnosis:** Not a fault. They are the three ordered gates before anything can fire:
+- `not_enrolled` — no Flipper has been set up yet.
+- `disabled_by_user` — the master switch in Settings is off. This is the kill switch; it is
+  authoritative and takes effect immediately in both processes.
+- `none_allowlisted` — a Flipper is enrolled and enabled, but no buttons were ticked.
+**Fix:** Point the user at **Settings → Flipper Zero**. Enrollment requires the Flipper to already
+be paired in **Android** Bluetooth settings first (it shows a passkey on its own screen; SeekerClaw
+cannot pair for them — Android has no public API to submit a BLE passkey). Do not offer to enable
+anything yourself: there is deliberately no endpoint that lets you change what you are allowed to do.
+
+### `legacy_security` — firmware notice not acknowledged
+**Symptoms:** Everything is set up, but every call returns `legacy_security`.
+**Diagnosis:** The Flipper's firmware predates the per-device BLE root-key fix (or its version could
+not be identified), and the user has not yet acknowledged the notice in Settings. This is a property
+of the Flipper, not of SeekerClaw — a Flipper on affected firmware is exposed to any app that
+connects to it. It is informational, but IR control stays off until acknowledged.
+**Fix:** Tell them to open **Settings → Flipper Zero** and read the notice. If they want to clear it
+properly rather than accept it, the remediation order matters and the reboot is **not** optional:
+update firmware → on the Flipper, *Settings → Bluetooth → Unpair All Devices* → **restart the
+Flipper** → pair with the phone again. Skipping the restart leaves the old keys in place with no
+error and no signal.
+
+### `not_allowed` — the name is not on the allowlist
+**Symptoms:** `flipper_press` returns `not_allowed`; the `reason` lists what *is* enabled.
+**Diagnosis:** Matching is byte-exact on both the remote label and the button, including case. The
+usual cause is a guessed name, not a broken allowlist.
+**Fix:** Call `flipper_remotes` and use the names it returns verbatim. If what the user wants genuinely
+is not listed, say so plainly and point them at Settings — never guess a nearby button, and never
+imply you could enable it.
+
+### `remote_changed` / `remote_missing` / `unknown_button` — the file moved on
+**Symptoms:** A press that used to work now fails with one of these.
+**Diagnosis:** Each approval is bound to the *bytes* of that `.ir` file (a sha256 taken when the user
+ticked it). Re-recording a remote, editing it on the Flipper, or renaming the file all invalidate it.
+`remote_changed` specifically means the file is still there but its contents differ — nothing was
+sent, deliberately, because a same-named button in a changed file can drive a different appliance.
+**Fix:** Tell the user to re-scan in **Settings → Flipper Zero** and re-tick the buttons. Their
+approval was for the old contents; re-approving is the point, not a formality.
+
+### `transport_error` / `bond_lost` / `not_a_flipper` / `bluetooth_unavailable`
+**Symptoms:** The link failed at some stage.
+**Diagnosis:**
+- `bluetooth_unavailable` — SeekerClaw lacks `BLUETOOTH_CONNECT`, or Bluetooth is off.
+- `bond_lost` — the Flipper is no longer paired with this phone (unpaired, or factory reset).
+- `not_a_flipper` — the paired device does not expose the Flipper serial service.
+- `transport_error` — connected, then lost contact or timed out mid-sequence.
+**Fix:** For `transport_error`, **this is the ambiguous case**: the command may or may not have gone
+out. Say exactly that, ask the user to check the appliance, and do **not** retry on your own. For the
+others, the fix is in Android settings (grant permission / re-pair), then re-enroll in SeekerClaw.
+
+### `busy_local` — something else holds the Flipper
+**Symptoms:** `busy_local`, and nothing was sent.
+**Diagnosis:** Only one operation may hold the link at a time — the firmware has a single
+pending-command slot. Either another press is in flight, or the user has **Settings → Flipper Zero**
+open and is scanning remotes right now. The lock spans both processes, so a Settings scan really does
+block a press (and vice versa).
+**Fix:** Nothing was transmitted, so this one is safe to try again — wait a few seconds. If it
+persists, ask whether they have the Flipper section of Settings open.
+
+### `rate_limited` — hourly ceiling
+**Symptoms:** `rate_limited` after a burst of presses.
+**Diagnosis:** A rolling-hour ceiling on press attempts, enforced in Kotlin. It exists to bound a
+runaway loop or a poisoned schedule, so it counts *attempts*, not successes. Normal use does not
+reach it — channel entry and repeated volume presses are expected and still fit.
+**Fix:** Tell the user nothing was sent and that the hourly limit was hit. **If they did not expect
+it, treat that as a signal**: something drove presses they did not ask for, and the honest advice is
+to switch Flipper control off in Settings while they work out what.
+
+### `automation_not_allowed` — a scheduled or background trigger
+**Symptoms:** A cron job or heartbeat turn tries to press and is refused.
+**Diagnosis:** Working as designed. Flipper presses run only from a message the user actually sent.
+An appliance actuating from a schedule with nobody present is exactly what this prevents.
+**Fix:** Tell the user this is not supported; do not try to work around it by rephrasing or by
+scheduling it differently.
+
+### `unsupported_protocol` / `ir_app_missing` / `ir_app_not_found` / `device_busy`
+**Symptoms:** The link came up but the Infrared app would not start.
+**Diagnosis:**
+- `unsupported_protocol` — firmware too old for one-shot button presses (needs RPC ≥ 0.25).
+- `ir_app_not_found` — the Infrared app is not installed on the Flipper.
+- `ir_app_missing` — it could not start; an absent or unreadable SD card is the usual cause.
+- `device_busy` — the Flipper is sitting in another app right now.
+**Fix:** In order: for `device_busy`, ask them to back out to the Flipper's main menu. For the SD-card
+and firmware cases, the fix is on the device — update firmware or reseat the SD card, then try again.
+
+---
+
 ## MCP (Model Context Protocol)
 
 ### Server Unreachable
