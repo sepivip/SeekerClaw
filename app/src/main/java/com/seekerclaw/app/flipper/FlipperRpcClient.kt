@@ -373,10 +373,9 @@ class FlipperRpcClient(
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun close() {
         connected = false
-        pending?.done?.completeExceptionally(
-            FlipperTransportException(FlipperTransportException.Kind.LINK_LOST, "client closed"),
-        )
-        pending = null
+        // Same reasoning as the disconnect path: a caller that closes while a handshake step is
+        // outstanding should not then wait out that step's deadline.
+        failEverything(FlipperTransportException.Kind.LINK_LOST, "client closed")
         try {
             gatt?.disconnect()
             gatt?.close()
@@ -406,12 +405,9 @@ class FlipperRpcClient(
 
                 newState == BluetoothProfile.STATE_DISCONNECTED -> {
                     connected = false
-                    val err = FlipperTransportException(
+                    failEverything(
                         FlipperTransportException.Kind.LINK_LOST, "disconnected (status=$status)",
                     )
-                    connectSignal?.completeExceptionally(err)
-                    pending?.done?.completeExceptionally(err)
-                    pending = null
                     // Any link drop invalidates all session state (§4).
                     assembler.reset()
                 }
@@ -570,5 +566,28 @@ class FlipperRpcClient(
     private fun failPending(kind: FlipperTransportException.Kind, message: String) {
         pending?.done?.completeExceptionally(FlipperTransportException(kind, message))
         pending = null
+    }
+
+    /**
+     * Fails the in-flight command **and** every outstanding handshake step.
+     *
+     * A link drop used to fail only `connectSignal` and `pending`, leaving `requestMtu`,
+     * `discoverServices`, the CCCD writes and a `0x2A28` read to sit until their own deadlines —
+     * up to ten seconds of waiting for an answer that provably cannot arrive, with the enrollment
+     * screen still saying "Reading remotes…". The information is available the moment the link
+     * drops, so the failure should be too.
+     *
+     * `completeExceptionally` on an already-completed deferred is a no-op, so calling this on a
+     * step that finished normally is harmless.
+     */
+    private fun failEverything(kind: FlipperTransportException.Kind, message: String) {
+        val err = FlipperTransportException(kind, message)
+        connectSignal?.completeExceptionally(err)
+        mtuSignal?.completeExceptionally(err)
+        discoverSignal?.completeExceptionally(err)
+        descriptorSignal?.completeExceptionally(err)
+        writeSignal?.completeExceptionally(err)
+        readSignal?.completeExceptionally(err)
+        failPending(kind, message)
     }
 }
