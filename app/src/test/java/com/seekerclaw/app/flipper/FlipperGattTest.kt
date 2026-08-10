@@ -169,6 +169,60 @@ class FlipperGattTest {
         assertEquals(0, asm.pending)
     }
 
+    @Test fun `a long session of partial indications reuses the buffer correctly`() {
+        // Guards the growable-buffer rewrite. The assembler keeps capacity separate from content
+        // and compacts the unparsed tail in place, so an off-by-one in the compaction would corrupt
+        // a later frame rather than fail immediately — and only after enough traffic to wrap. Each
+        // frame here is deliberately cut so a tail is always left pending across the boundary.
+        val asm = FrameAssembler()
+        val received = mutableListOf<ByteArray>()
+        val expected = mutableListOf<ByteArray>()
+
+        var carry = ByteArray(0)
+        for (i in 0 until 200) {
+            val body = ByteArray(37 + (i % 23)) { ((i + it) % 251).toByte() }
+            expected += body
+            val stream = carry + frame(body)
+            // Withhold the last 3 bytes so the next iteration completes them.
+            val cut = stream.size - 3
+            received += asm.append(stream.copyOfRange(0, cut))
+            carry = stream.copyOfRange(cut, stream.size)
+        }
+        received += asm.append(carry)
+
+        assertEquals(expected.size, received.size)
+        for (i in expected.indices) {
+            assertArrayEquals("frame $i must survive compaction intact", expected[i], received[i])
+        }
+        assertEquals(0, asm.pending)
+    }
+
+    @Test fun `growth is refused past the cap and the buffer is dropped`() {
+        // Refusing before allocating is the point: a corrupt length prefix must not be able to make
+        // us reserve the memory it claims.
+        val asm = FrameAssembler(maxBuffered = 256)
+        try {
+            asm.append(ByteArray(300))
+            throw AssertionError("expected ProtoDecodeException")
+        } catch (e: ProtoDecodeException) {
+            assertEquals("the session is unrecoverable, so nothing is retained", 0, asm.pending)
+        }
+    }
+
+    @Test fun `reset drops capacity so one huge frame cannot pin memory`() {
+        val asm = FrameAssembler()
+        // A length prefix claiming far more than follows, so everything stays buffered. A bare
+        // ByteArray would not: a leading 0 byte is a valid zero-length frame and drains instantly.
+        val header = ProtoWriter().apply { writeVarint(100_000) }.toByteArray()
+        asm.append(header + ByteArray(64_000) { 1 })
+        assertTrue(asm.pending > 0)
+        asm.reset()
+        assertEquals(0, asm.pending)
+        // Still usable afterwards, at the small capacity.
+        val body = byteArrayOf(4, 5, 6)
+        assertArrayEquals(body, asm.append(frame(body))[0])
+    }
+
     @Test fun `incomplete frame emits nothing and does not throw`() {
         val asm = FrameAssembler()
         assertEquals(0, asm.append(byteArrayOf(0x80.toByte())).size) // partial length varint

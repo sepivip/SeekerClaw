@@ -226,7 +226,11 @@ class AndroidBridge(
                 "/location" -> handleLocation()
                 "/tts" -> handleTts(params)
                 "/camera/capture" -> handleCameraCapture(params)
-                "/flipper/remotes" -> jsonResponse(200, flipperEndpoints.remotes())
+                // Status mirrors handleFlipperPress: an `error` key is a 400, so a proxy or a log
+                // can tell success from failure without parsing the body.
+                "/flipper/remotes" -> flipperEndpoints.remotes().let {
+                    jsonResponse(if (it.containsKey("error")) 400 else 200, it)
+                }
                 "/flipper/press" -> handleFlipperPress(params)
                 "/apps/list" -> handleAppsList()
                 "/apps/launch" -> handleAppsLaunch(params)

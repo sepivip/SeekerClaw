@@ -24,7 +24,7 @@ class FlipperBridgeEndpoints(context: Context) {
         const val MAX_NAME_CHARS = 64
     }
 
-    private val store = FlipperEnrollmentStore(context)
+    private val store = FlipperEnrollmentStore.get(context)
     private val controller = FlipperIrController(context, store)
 
     /** `GET`-shaped: the remotes and buttons the user enabled. Never returns a filesystem path. */

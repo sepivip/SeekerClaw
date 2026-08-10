@@ -61,21 +61,9 @@ data class FlipperUiState(
  */
 class FlipperSettingsState(private val context: Context) {
 
-    private val store = FlipperEnrollmentStore(context)
+    private val store = FlipperEnrollmentStore.get(context)
     private val devices = FlipperDeviceManager(context)
-    private val auditLog = FlipperAuditLog(context)
-
-    /**
-     * Releases both cross-process stores. Call from the composable's `onDispose`.
-     *
-     * Each store registers a `FileObserver` and a broadcast receiver, and this class is constructed
-     * once per composition of the Flipper section — so without disposal, every visit to Settings
-     * leaves another pair of OS-level observers running for the life of the process.
-     */
-    fun close() {
-        store.close()
-        auditLog.close()
-    }
+    private val auditLog = FlipperAuditLog.get(context)
 
     private val _ui = MutableStateFlow(FlipperUiState())
     val ui: StateFlow<FlipperUiState> = _ui.asStateFlow()
@@ -112,9 +100,28 @@ class FlipperSettingsState(private val context: Context) {
         )
     }
 
-    fun setEnabled(enabled: Boolean) {
-        store.setEnabled(enabled)
-        _ui.value = _ui.value.copy(enabled = enabled)
+    /**
+     * Flips the master switch, and only confirms it once the change is on disk.
+     *
+     * The **off** direction is why this suspends. The record is what the enforcing process reads,
+     * so until the write lands the switch showing off means nothing — and if the write fails, a
+     * user who believes they have stopped the agent has not. On failure the switch springs back and
+     * says so, which is the honest state, rather than leaving a control that lies about the device.
+     *
+     * The optimistic update still happens first so the toggle animates immediately; it is only the
+     * *confirmation* that waits.
+     */
+    suspend fun setEnabled(enabled: Boolean) {
+        _ui.value = _ui.value.copy(enabled = enabled, error = null)
+        if (store.setEnabled(enabled).await()) return
+        _ui.value = _ui.value.copy(
+            enabled = !enabled,
+            error = if (enabled) {
+                "Could not save that change — Flipper control is still off."
+            } else {
+                "Could not save that change — Flipper control is still ON. Try again."
+            },
+        )
     }
 
     fun acknowledgeSecurity() {

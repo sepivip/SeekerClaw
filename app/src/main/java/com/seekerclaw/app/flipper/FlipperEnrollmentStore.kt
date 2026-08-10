@@ -2,22 +2,18 @@ package com.seekerclaw.app.flipper
 
 import android.content.Context
 import com.seekerclaw.app.util.CrossProcessStore
+import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
-import java.util.Collections
 
 /**
  * The on-disk envelope. Holds the Base64 blob produced by [FlipperEnrollmentCodec].
@@ -52,13 +48,36 @@ internal data class FlipperRecord(val blob: String = "")
  * `tools/file.js` can reach, and is still never mirrored into `agent_settings.json` or the
  * reconcile path. B3's requirements are met; only the mechanism changed.
  */
-class FlipperEnrollmentStore(context: Context) {
+class FlipperEnrollmentStore private constructor(context: Context) {
 
-    private companion object {
-        const val FILE_NAME = "flipper_enrollment.json"
+    companion object {
+        private const val TAG = "FlipperIr"
+        private const val FILE_NAME = "flipper_enrollment.json"
 
-        /** Upper bound on how long disposal waits for in-flight writes. */
-        const val CLOSE_DRAIN_TIMEOUT_MS = 2_000L
+        @Volatile private var instance: FlipperEnrollmentStore? = null
+
+        /**
+         * The one store for this process.
+         *
+         * ### Why a singleton and not one per caller
+         *
+         * [CrossProcessStore] registers a `FileObserver` **on the parent directory** plus a
+         * broadcast receiver, and filters events by basename. So every instance is another observer
+         * on `filesDir`, and the repo's rule is one FileObserver per directory per process. The
+         * Settings UI previously built a store per composition of the Flipper section, so each
+         * visit added a pair — and the disposal path that tried to fix that could cancel a durable
+         * write still in flight, which for a `setEnabled(false)` meant the user switched Flipper
+         * control off, watched the toggle move, and left it on.
+         *
+         * A process-scoped instance removes both problems rather than balancing them, and matches
+         * every other `CrossProcessStore` consumer in the app (`AgentPreferencesStore`,
+         * `RuntimeStateStore`, `McpServersStore`). Both processes construct their own: the UI in
+         * `main`, enforcement in `:node`.
+         */
+        fun get(context: Context): FlipperEnrollmentStore =
+            instance ?: synchronized(this) {
+                instance ?: FlipperEnrollmentStore(context.applicationContext).also { instance = it }
+            }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -84,6 +103,25 @@ class FlipperEnrollmentStore(context: Context) {
                 _state.value = FlipperEnrollmentCodec.decode(record.blob)
             }
         }
+        // The single consumer. Sequential by construction, so a failed write cannot stall the
+        // queue behind it — each one reports its own outcome and the next proceeds.
+        scope.launch {
+            for (w in writes) {
+                val ok = try {
+                    cps.update { record ->
+                        FlipperRecord(
+                            FlipperEnrollmentCodec.encode(
+                                w.transform(FlipperEnrollmentCodec.decode(record.blob)),
+                            ),
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[Flipper] enrollment write failed: ${e.message}")
+                    false
+                }
+                w.done.complete(ok)
+            }
+        }
     }
 
     /**
@@ -95,23 +133,27 @@ class FlipperEnrollmentStore(context: Context) {
     val current: FlipperEnrollment
         get() = FlipperEnrollmentCodec.decode(cps.state.value.blob)
 
-    /**
-     * Serialises the durable writes.
-     *
-     * [CrossProcessStore.update] is individually atomic, but two coroutines launched on this scope
-     * have **no ordering guarantee** between them — so `setEnabled(true)` followed by
-     * `setEnabled(false)` could land in the opposite order and leave the kill switch on. A fair
-     * `Mutex` held across the whole `update` restores submission order.
-     */
-    private val writeOrder = Mutex()
+    /** One queued mutation and the handle that reports whether it reached disk. */
+    private class Write(
+        val transform: (FlipperEnrollment) -> FlipperEnrollment,
+        val done: CompletableDeferred<Boolean>,
+    )
 
     /**
-     * Durable writes still in flight, so [close] can drain them.
+     * Durable writes, applied strictly in the order they were requested.
      *
-     * Tracked explicitly rather than joining `scope`'s children: the collector started in [init]
-     * never completes, so joining everything would block until the timeout on every disposal.
+     * ### Why a queue and not a `Mutex`
+     *
+     * The first attempt guarded `cps.update` with a `Mutex`, which does not do the job. `Mutex` is
+     * FIFO among *acquirers*, but a coroutine only becomes an acquirer once it has been dispatched
+     * and has run as far as the lock — so two `scope.launch` calls can reach it in either order.
+     * `setEnabled(true)` followed by `setEnabled(false)` could therefore persist `false` and then
+     * `true`, leaving the kill switch on after the user turned it off.
+     *
+     * Enqueueing establishes the order at **call** time, on the caller's thread, before any
+     * dispatch happens. One consumer drains it, so submission order is execution order.
      */
-    private val pendingWrites = Collections.synchronizedSet(mutableSetOf<Job>())
+    private val writes = Channel<Write>(Channel.UNLIMITED)
 
     /**
      * Applies [transform] to the record and publishes the result.
@@ -131,24 +173,22 @@ class FlipperEnrollmentStore(context: Context) {
      * unenrolled Flipper. A transform sees one snapshot by construction, so the `?: return it`
      * guards below cannot be raced.
      *
-     * [_state] is still set synchronously, so the UI reflects a toggle on the next frame instead of
+     * [_state] is set synchronously so the UI can reflect a toggle on the next frame instead of
      * after a disk round-trip. It is chained off its own previous value rather than off [current],
-     * so a second mutation dispatched before the first write lands still composes correctly. The
+     * so a second mutation requested before the first write lands still composes correctly. The
      * permission decision reads [current], never this — an optimistic value must never authorise a
      * press.
+     *
+     * @return completes with `true` once the change is durable, `false` if the write failed. A
+     * caller revoking access should await it before telling the user it took effect.
      */
-    private fun persist(transform: (FlipperEnrollment) -> FlipperEnrollment): Job {
+    private fun persist(transform: (FlipperEnrollment) -> FlipperEnrollment): Deferred<Boolean> {
         _state.value = transform(_state.value)
-        val job = scope.launch {
-            writeOrder.withLock {
-                cps.update { record ->
-                    FlipperRecord(FlipperEnrollmentCodec.encode(transform(FlipperEnrollmentCodec.decode(record.blob))))
-                }
-            }
-        }
-        pendingWrites += job
-        job.invokeOnCompletion { pendingWrites -= job }
-        return job
+        val done = CompletableDeferred<Boolean>()
+        // UNLIMITED never suspends and never rejects, so this cannot drop a revocation. The
+        // isSuccess guard covers only the post-close case, where reporting failure is correct.
+        if (!writes.trySend(Write(transform, done)).isSuccess) done.complete(false)
+        return done
     }
 
     /**
@@ -188,8 +228,15 @@ class FlipperEnrollmentStore(context: Context) {
         )
     }
 
-    /** The master switch. Off disables every press regardless of the allowlist. */
-    fun setEnabled(enabled: Boolean) = persist { it.copy(enabled = enabled) }
+    /**
+     * The master switch. Off disables every press regardless of the allowlist.
+     *
+     * The returned handle matters for the **off** direction: the UI must not tell the user Flipper
+     * control is off until the change is actually on disk, because that is the file the enforcing
+     * process reads. Await it and report a failure rather than leaving a switch that looks off and
+     * a Flipper that still fires.
+     */
+    fun setEnabled(enabled: Boolean): Deferred<Boolean> = persist { it.copy(enabled = enabled) }
 
     /**
      * Replaces the allowlist wholesale with what the user selected.
@@ -199,29 +246,4 @@ class FlipperEnrollmentStore(context: Context) {
      * just unticked.
      */
     fun setAllowed(allowed: List<AllowedButton>) = persist { it.copy(allowed = allowed) }
-
-    /**
-     * Releases the store's FileObserver, broadcast receiver and drain coroutine.
-     *
-     * Each instance registers OS-level observers, and the Settings UI builds one per composition of
-     * the Flipper section — so without this, every visit to Settings leaves another observer
-     * waking the process for a record nobody reads.
-     *
-     * **Outstanding writes are joined first.** `scope.cancel()` would otherwise kill a durable write
-     * that had not yet reached disk, and the write most likely to be in flight is the one made
-     * immediately before leaving the screen — a `setEnabled(false)`. Losing that means the user
-     * switched Flipper control off, watched the toggle move, navigated away, and left it on.
-     *
-     * The join runs on the caller's thread via `runBlocking` because disposal has no scope of its
-     * own to suspend in. It is bounded twice over: the queue is at most a handful of small file
-     * writes, and a timeout caps the wait so a wedged write can never make Settings undismissable.
-     */
-    fun close() {
-        val outstanding = pendingWrites.toList()
-        if (outstanding.isNotEmpty()) {
-            runBlocking { withTimeoutOrNull(CLOSE_DRAIN_TIMEOUT_MS) { outstanding.joinAll() } }
-        }
-        cps.close()
-        scope.cancel()
-    }
 }

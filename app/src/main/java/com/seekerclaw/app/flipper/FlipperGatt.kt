@@ -133,41 +133,72 @@ class FlowControl(initial: Int = FlipperGattConfig.INITIAL_CREDIT) {
  * why nothing here blocks.
  */
 class FrameAssembler(private val maxBuffered: Int = 1 shl 20) {
-    private var buf = ByteArray(0)
+
+    private companion object {
+        /** Comfortably over one indication at the negotiated MTU, so the common case never grows. */
+        const val INITIAL_CAPACITY = 1024
+    }
+
+    private var buf = ByteArray(INITIAL_CAPACITY)
+
+    /** Bytes currently held in [buf]. The array is capacity, not content. */
+    private var size = 0
 
     /**
      * Appends [chunk] and returns every frame that is now complete, in arrival order.
      *
      * Returning a list rather than one frame matters: a single indication can complete more than
      * one frame, and dropping the extras would strand a reply forever.
+     *
+     * ### Amortised growth, not reallocate-per-indication
+     *
+     * The original `buf = buf + chunk` reallocated and recopied the whole accumulation on **every**
+     * indication, which is quadratic in the frame's size — and this runs on the GATT callback
+     * thread for each of the ~40 indications a chunked `Storage.Read` arrives in. Keeping capacity
+     * separate from content makes appending a single `arraycopy` into spare room, and the leftover
+     * after a parse is compacted in place rather than into a fresh array.
      */
     fun append(chunk: ByteArray): List<ByteArray> {
-        buf = if (buf.isEmpty()) chunk.copyOf() else buf + chunk
-        if (buf.size > maxBuffered) {
-            // A frame this large means a corrupt length prefix or a desynchronised stream.
-            // Reset rather than grow without bound; the session is not recoverable anyway.
-            buf = ByteArray(0)
+        if (size + chunk.size > maxBuffered) {
+            // A frame this large means a corrupt length prefix or a desynchronised stream. Refuse
+            // before allocating for it; the session is not recoverable anyway.
+            reset()
             throw ProtoDecodeException("reassembly buffer exceeded $maxBuffered bytes")
         }
+        ensureCapacity(size + chunk.size)
+        chunk.copyInto(buf, size)
+        size += chunk.size
 
         val out = mutableListOf<ByteArray>()
         var offset = 0
         while (true) {
-            val slice = readDelimitedFrame(buf, offset, buf.size) ?: break
+            val slice = readDelimitedFrame(buf, offset, size) ?: break
             out += buf.copyOfRange(slice.start, slice.end)
             offset = slice.nextOffset
         }
         if (offset > 0) {
-            buf = if (offset >= buf.size) ByteArray(0) else buf.copyOfRange(offset, buf.size)
+            // Shift the unparsed tail to the front. Overlapping ranges are safe — this delegates to
+            // System.arraycopy, which is specified to behave as if via a temporary copy.
+            if (offset < size) buf.copyInto(buf, 0, offset, size)
+            size -= offset
         }
         return out
     }
 
-    /** Bytes held pending more data. Exposed for diagnostics and tests, not for control flow. */
-    val pending: Int get() = buf.size
+    private fun ensureCapacity(needed: Int) {
+        if (needed <= buf.size) return
+        var next = buf.size
+        while (next < needed) next *= 2
+        buf = buf.copyOf(next.coerceAtMost(maxBuffered))
+    }
 
+    /** Bytes held pending more data. Exposed for diagnostics and tests, not for control flow. */
+    val pending: Int get() = size
+
+    /** Drops everything buffered, and the capacity with it so one huge frame cannot pin memory. */
     fun reset() {
-        buf = ByteArray(0)
+        size = 0
+        if (buf.size > INITIAL_CAPACITY) buf = ByteArray(INITIAL_CAPACITY)
     }
 }
 

@@ -3,7 +3,6 @@ package com.seekerclaw.app.flipper
 import android.content.Context
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -115,16 +114,31 @@ object FlipperAuditCodec {
 @Serializable
 internal data class FlipperAuditRecord(val blob: String = "")
 
-class FlipperAuditLog(context: Context) {
+class FlipperAuditLog private constructor(context: Context) {
 
-    private companion object {
-        const val FILE_NAME = "flipper_audit.json"
+    companion object {
+        private const val FILE_NAME = "flipper_audit.json"
+
+        @Volatile private var instance: FlipperAuditLog? = null
+
+        /**
+         * The one audit log for this process.
+         *
+         * Process-scoped for the same reason as [FlipperEnrollmentStore.get]: every
+         * [CrossProcessStore] registers a `FileObserver` on `filesDir` plus a broadcast receiver,
+         * and the log must outlive any one screen — the controller in `:node` writes to it whether
+         * or not Settings is open.
+         */
+        fun get(context: Context): FlipperAuditLog =
+            instance ?: synchronized(this) {
+                instance ?: FlipperAuditLog(context.applicationContext).also { instance = it }
+            }
 
         /**
          * Kept small on purpose. This exists so a user can check what the agent did recently, not
          * to be a forensic archive, and an unbounded list would grow without limit.
          */
-        const val MAX_ENTRIES = 200
+        private const val MAX_ENTRIES = 200
 
         /**
          * Defensive caps on what a single entry may carry.
@@ -133,7 +147,7 @@ class FlipperAuditLog(context: Context) {
          * allowlist before a press happens, but a *rejected* attempt is recorded too — so without
          * a cap, a long label would be decoded and re-encoded on every subsequent operation.
          */
-        const val MAX_FIELD_CHARS = 64
+        private const val MAX_FIELD_CHARS = 64
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -193,16 +207,5 @@ class FlipperAuditLog(context: Context) {
 
     fun clear() {
         scope.launch { cps.update { FlipperAuditRecord() } }
-    }
-
-    /**
-     * Releases the store's FileObserver, broadcast receiver and drain coroutine.
-     *
-     * Every instance registers OS-level observers, so one that outlives its owner keeps waking the
-     * process for a log nobody is reading.
-     */
-    fun close() {
-        cps.close()
-        scope.cancel()
     }
 }

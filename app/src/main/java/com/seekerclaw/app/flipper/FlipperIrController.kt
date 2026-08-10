@@ -70,7 +70,7 @@ class FlipperIrController(
     private val context: Context,
     private val store: FlipperEnrollmentStore,
     private val devices: FlipperDeviceManager = FlipperDeviceManager(context),
-    private val audit: FlipperAuditLog = FlipperAuditLog(context),
+    private val audit: FlipperAuditLog = FlipperAuditLog.get(context),
 ) {
     private companion object {
         const val TAG = "FlipperIr"
