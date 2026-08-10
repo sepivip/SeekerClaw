@@ -152,7 +152,7 @@ fun FlipperSection() {
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
-                        onClick = { state.acknowledgeSecurity() },
+                        onClick = { scope.launch { state.acknowledgeSecurity() } },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
                         border = BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
@@ -201,14 +201,16 @@ fun FlipperSection() {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    state.toggleButton(remote, button, button !in remote.selected)
+                                    scope.launch {
+                                        state.toggleButton(remote, button, button !in remote.selected)
+                                    }
                                 }
                                 .padding(vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Checkbox(
                                 checked = button in remote.selected,
-                                onCheckedChange = { state.toggleButton(remote, button, it) },
+                                onCheckedChange = { scope.launch { state.toggleButton(remote, button, it) } },
                                 colors = CheckboxDefaults.colors(
                                     checkedColor = SeekerClawColors.TextPrimary,
                                     uncheckedColor = SeekerClawColors.TextDim,
@@ -251,7 +253,7 @@ fun FlipperSection() {
 
             Spacer(Modifier.height(14.dp))
             OutlinedButton(
-                onClick = { state.unenroll() },
+                onClick = { scope.launch { state.unenroll() } },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
                 border = BorderStroke(1.dp, SeekerClawColors.BorderSubtle),

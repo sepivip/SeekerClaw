@@ -124,14 +124,36 @@ class FlipperSettingsState(private val context: Context) {
         )
     }
 
-    fun acknowledgeSecurity() {
-        store.acknowledgeSecurity(System.currentTimeMillis())
-        _ui.value = _ui.value.copy(securityAcknowledged = true)
+    /**
+     * Records the acknowledgement. Awaited so the UI does not claim a state it does not have.
+     *
+     * This one fails *safe* rather than unsafe — a lost acknowledgement leaves the agent blocked,
+     * not loosed — but a screen that says "acknowledged" while every press keeps returning
+     * `legacy_security` is its own kind of broken, and the user has no way to tell why.
+     */
+    suspend fun acknowledgeSecurity() {
+        _ui.value = _ui.value.copy(securityAcknowledged = true, error = null)
+        if (store.acknowledgeSecurity(System.currentTimeMillis()).await()) return
+        _ui.value = _ui.value.copy(
+            securityAcknowledged = false,
+            error = "Could not save that. Try again.",
+        )
     }
 
-    fun unenroll() {
-        store.clear()
-        _ui.value = FlipperUiState(hasPermission = _ui.value.hasPermission, bonded = _ui.value.bonded)
+    /**
+     * Forgets the enrolled Flipper — the strongest revocation here, so it awaits durability.
+     *
+     * The stored record is what `:node` enforces against. If the write fails and the UI has already
+     * reset, the user is told the Flipper is forgotten while the agent can still resolve and fire
+     * every button on it. On failure the previous screen state is restored and the failure is named.
+     */
+    suspend fun unenroll() {
+        val previous = _ui.value
+        _ui.value = FlipperUiState(hasPermission = previous.hasPermission, bonded = previous.bonded)
+        if (store.clear().await()) return
+        _ui.value = previous.copy(
+            error = "Could not forget that Flipper — it is still enrolled. Try again.",
+        )
     }
 
     /**
@@ -275,16 +297,33 @@ class FlipperSettingsState(private val context: Context) {
         }
     }
 
-    /** Toggles one button and writes the whole allowlist, so the stored set always matches the UI. */
-    fun toggleButton(remote: RemoteChoice, button: String, on: Boolean) {
-        val updated = _ui.value.remotes.map { r ->
+    /**
+     * Toggles one button and writes the whole allowlist, so the stored set always matches the UI.
+     *
+     * Awaited in both directions. Unticking is a revocation — a checkbox that clears while the
+     * stored allowlist keeps the entry tells the user they have withdrawn permission they still
+     * grant. Ticking is awaited too, for the plainer reason that a checkbox which silently fails to
+     * save sends them to the agent wondering why it will not press a button they can see enabled.
+     */
+    suspend fun toggleButton(remote: RemoteChoice, button: String, on: Boolean) {
+        val previous = _ui.value.remotes
+        val updated = previous.map { r ->
             if (r.path != remote.path) r
             else r.copy(selected = if (on) r.selected + button else r.selected - button)
         }
-        _ui.value = _ui.value.copy(remotes = updated)
-        store.setAllowed(
+        _ui.value = _ui.value.copy(remotes = updated, error = null)
+        val saved = store.setAllowed(
             updated.flatMap { r ->
                 r.selected.map { AllowedButton(r.path, r.label, r.sha256, it) }
+            },
+        ).await()
+        if (saved) return
+        _ui.value = _ui.value.copy(
+            remotes = previous,
+            error = if (on) {
+                "Could not enable \"$button\" — it is still off."
+            } else {
+                "Could not disable \"$button\" — it is still ENABLED. Try again."
             },
         )
     }
