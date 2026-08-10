@@ -229,7 +229,7 @@ fun FlipperSection() {
 
             // Recent activity. The audit log exists so a user can check what the agent actually
             // did — which requires it to be visible. It was previously written and never rendered.
-            val audit = state.auditEntries()
+            val audit by state.auditEntries.collectAsState()
             if (audit.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
                 Text(

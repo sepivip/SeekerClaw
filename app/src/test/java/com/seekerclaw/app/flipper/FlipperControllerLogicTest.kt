@@ -114,4 +114,39 @@ class FlipperControllerLogicTest {
         assertTrue(AuditEntry(1_700_000_000_000L, "tv", "Power", "sent", InvocationContext.USER_MESSAGE)
             .formattedTime().startsWith("20"))
     }
+
+    // ------------------------------------------------------------ eviction
+
+    private fun at(ms: Long) = AuditEntry(ms, "tv", "Power", "sent", InvocationContext.USER_MESSAGE)
+
+    @Test fun `the cap evicts the oldest entry, not the newest`() {
+        // Regression: the merge used to prepend then truncate, which assumes the stored list is
+        // already newest-first. Independent write coroutines do not guarantee that, so a list
+        // holding an out-of-order tail would drop a NEWER entry and keep an older one —
+        // permanently, on a log whose whole purpose is showing recent activity.
+        val existing = listOf(at(500), at(100), at(400))  // deliberately not sorted
+        val merged = FlipperAuditCodec.merge(at(300), existing, 3)
+
+        assertEquals(3, merged.size)
+        assertEquals(listOf(500L, 400L, 300L), merged.map { it.timestampMillis })
+        assertTrue("the oldest entry is the one evicted", merged.none { it.timestampMillis == 100L })
+    }
+
+    @Test fun `a new entry older than everything stored is itself evicted`() {
+        // The honest consequence of ordering by time: a late-arriving stale record does not push
+        // out a newer one just because it was written last.
+        val existing = listOf(at(900), at(800))
+        val merged = FlipperAuditCodec.merge(at(1), existing, 2)
+
+        assertEquals(listOf(900L, 800L), merged.map { it.timestampMillis })
+    }
+
+    @Test fun `merge returns newest first below the cap`() {
+        val merged = FlipperAuditCodec.merge(at(200), listOf(at(100), at(300)), 10)
+        assertEquals(listOf(300L, 200L, 100L), merged.map { it.timestampMillis })
+    }
+
+    @Test fun `merge into an empty log keeps the entry`() {
+        assertEquals(listOf(700L), FlipperAuditCodec.merge(at(700), emptyList(), 200).map { it.timestampMillis })
+    }
 }

@@ -5,6 +5,9 @@ import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat
@@ -58,6 +61,19 @@ object FlipperAuditCodec {
         }
         return java.util.Base64.getEncoder().encodeToString(w.toByteArray())
     }
+
+    /**
+     * Adds [entry] to [existing] and evicts down to [max], newest kept.
+     *
+     * Pure and separate from the store because the eviction rule is easy to get silently wrong:
+     * prepend-then-truncate assumes the stored list is already newest-first, which independent
+     * write coroutines do not guarantee, so it can discard a NEWER entry and keep an older one on a
+     * log that exists to show recent activity. Sorting first makes the oldest the one that goes.
+     */
+    fun merge(entry: AuditEntry, existing: List<AuditEntry>, max: Int): List<AuditEntry> =
+        (listOf(entry) + existing)
+            .sortedByDescending { it.timestampMillis }
+            .take(max)
 
     fun decode(encoded: String?): List<AuditEntry> {
         if (encoded.isNullOrBlank()) return emptyList()
@@ -163,17 +179,35 @@ class FlipperAuditLog private constructor(context: Context) {
         parentScope = scope,
     )
 
+    private val _entries = MutableStateFlow(newestFirst(cps.state.value.blob))
+
     /**
-     * Newest first.
+     * Newest first, and **observable**.
      *
-     * Sorted on read rather than trusting insertion order. Each [record] is atomic against the
-     * others, so no entry is lost — but the writes are independent coroutines, so two presses
-     * landing close together can be *stored* in the opposite order to the one they happened in.
-     * The timestamps are always right, so ordering by them is both cheap and authoritative, and it
+     * A flow rather than a one-shot read because the writer is the other process: the controller in
+     * `:node` records a press while Settings is open in `main`. A snapshot taken during composition
+     * shows whatever was on disk at that instant and never updates, so the user watching the screen
+     * as they message the agent sees nothing happen. It also moved the decode and sort onto the
+     * recomposition path, which is the wrong thread for it.
+     */
+    val entries: StateFlow<List<AuditEntry>> = _entries.asStateFlow()
+
+    init {
+        scope.launch {
+            cps.state.collect { record -> _entries.value = newestFirst(record.blob) }
+        }
+    }
+
+    /**
+     * Decodes newest-first.
+     *
+     * Sorted rather than trusting insertion order: the writes are independent coroutines, so two
+     * presses landing close together can be *stored* in the opposite order to the one they happened
+     * in. The timestamps are always right, so ordering by them is cheap and authoritative, and it
      * avoids an audit log that quietly misrepresents the sequence of physical actions.
      */
-    fun entries(): List<AuditEntry> =
-        FlipperAuditCodec.decode(cps.state.value.blob).sortedByDescending { it.timestampMillis }
+    private fun newestFirst(blob: String): List<AuditEntry> =
+        FlipperAuditCodec.decode(blob).sortedByDescending { it.timestampMillis }
 
     /**
      * Appends one entry.
@@ -191,6 +225,14 @@ class FlipperAuditLog private constructor(context: Context) {
      * Doing the decode, prepend, cap and encode inside the lambda makes each append atomic against
      * every other mutation of this store. The cost is decoding on the IO thread instead of the
      * caller's, which is where it belonged anyway.
+     *
+     * ### Order before cap, not after
+     *
+     * The cap is applied to a **sorted** list. Prepending and truncating assumes the stored list is
+     * already newest-first, which is exactly what independent write coroutines do not guarantee —
+     * so `take(MAX_ENTRIES)` could discard a newer entry while keeping an older one, permanently,
+     * on a log whose entire purpose is showing recent activity. Sorting first makes the eviction
+     * deterministic: the oldest entry is the one that goes.
      */
     fun record(
         remoteLabel: String,
@@ -208,7 +250,9 @@ class FlipperAuditLog private constructor(context: Context) {
         )
         scope.launch {
             cps.update { record ->
-                val next = (listOf(entry) + FlipperAuditCodec.decode(record.blob)).take(MAX_ENTRIES)
+                val next = FlipperAuditCodec.merge(
+                    entry, FlipperAuditCodec.decode(record.blob), MAX_ENTRIES,
+                )
                 FlipperAuditRecord(FlipperAuditCodec.encode(next))
             }
         }

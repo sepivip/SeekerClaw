@@ -68,7 +68,14 @@ class FlipperSettingsState(private val context: Context) {
     private val _ui = MutableStateFlow(FlipperUiState())
     val ui: StateFlow<FlipperUiState> = _ui.asStateFlow()
 
-    fun auditEntries() = auditLog.entries()
+    /**
+     * The audit log, observable.
+     *
+     * Exposed as the flow rather than a snapshot because the writer is the other process — the
+     * controller in `:node` records a press while this screen is open, and a value read once during
+     * composition would never show it.
+     */
+    val auditEntries = auditLog.entries
 
     /** Re-reads permission state and the stored enrollment. Cheap; safe to call on every resume. */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
