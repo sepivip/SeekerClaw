@@ -187,9 +187,12 @@ class FrameAssembler(private val maxBuffered: Int = 1 shl 20) {
 
     private fun ensureCapacity(needed: Int) {
         if (needed <= buf.size) return
+        // Clamp inside the loop, not after it. `next *= 2` against a large [maxBuffered] would
+        // otherwise overflow Int to a negative value and spin forever. Callers have already
+        // rejected anything above the cap, so `needed` always fits.
         var next = buf.size
-        while (next < needed) next *= 2
-        buf = buf.copyOf(next.coerceAtMost(maxBuffered))
+        while (next < needed) next = (next * 2).coerceAtMost(maxBuffered)
+        buf = buf.copyOf(next)
     }
 
     /** Bytes held pending more data. Exposed for diagnostics and tests, not for control flow. */

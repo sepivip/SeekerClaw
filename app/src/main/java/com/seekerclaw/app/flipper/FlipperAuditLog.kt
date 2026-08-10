@@ -163,8 +163,17 @@ class FlipperAuditLog private constructor(context: Context) {
         parentScope = scope,
     )
 
-    /** Newest first. */
-    fun entries(): List<AuditEntry> = FlipperAuditCodec.decode(cps.state.value.blob)
+    /**
+     * Newest first.
+     *
+     * Sorted on read rather than trusting insertion order. Each [record] is atomic against the
+     * others, so no entry is lost — but the writes are independent coroutines, so two presses
+     * landing close together can be *stored* in the opposite order to the one they happened in.
+     * The timestamps are always right, so ordering by them is both cheap and authoritative, and it
+     * avoids an audit log that quietly misrepresents the sequence of physical actions.
+     */
+    fun entries(): List<AuditEntry> =
+        FlipperAuditCodec.decode(cps.state.value.blob).sortedByDescending { it.timestampMillis }
 
     /**
      * Appends one entry.

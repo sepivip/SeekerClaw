@@ -12,8 +12,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The on-disk envelope. Holds the Base64 blob produced by [FlipperEnrollmentCodec].
@@ -119,6 +121,19 @@ class FlipperEnrollmentStore private constructor(context: Context) {
                     Log.w(TAG, "[Flipper] enrollment write failed: ${e.message}")
                     false
                 }
+                val remaining = queued.decrementAndGet()
+                // A failed write leaves [_state] holding an optimistic value that never happened.
+                // Left alone, Settings would show Flipper control as off while the persisted record
+                // — the one `:node` enforces against — still says enabled.
+                //
+                // Resynced only once the queue has drained, and only after a failure. Doing it
+                // immediately would clobber the optimistic values of transforms still queued behind
+                // this one, replacing a stale view with an equally wrong older one. If a later write
+                // succeeds instead, the `cps.state` collector above republishes from disk anyway, so
+                // this path exists for the case where the failure is the last word.
+                if (!ok && remaining == 0) {
+                    _state.value = FlipperEnrollmentCodec.decode(cps.state.value.blob)
+                }
                 w.done.complete(ok)
             }
         }
@@ -155,6 +170,9 @@ class FlipperEnrollmentStore private constructor(context: Context) {
      */
     private val writes = Channel<Write>(Channel.UNLIMITED)
 
+    /** Outstanding queue depth, so the worker knows when its failure is the final state. */
+    private val queued = AtomicInteger(0)
+
     /**
      * Applies [transform] to the record and publishes the result.
      *
@@ -183,11 +201,20 @@ class FlipperEnrollmentStore private constructor(context: Context) {
      * caller revoking access should await it before telling the user it took effect.
      */
     private fun persist(transform: (FlipperEnrollment) -> FlipperEnrollment): Deferred<Boolean> {
-        _state.value = transform(_state.value)
+        // `update` and not `_state.value = transform(_state.value)`: the latter is a
+        // read-modify-write, so two callers racing here lose one of the two optimistic values —
+        // the same defect this whole class has been hardened against on the durable side. `update`
+        // is a CAS loop, so the transforms compose.
+        _state.update(transform)
         val done = CompletableDeferred<Boolean>()
-        // UNLIMITED never suspends and never rejects, so this cannot drop a revocation. The
-        // isSuccess guard covers only the post-close case, where reporting failure is correct.
-        if (!writes.trySend(Write(transform, done)).isSuccess) done.complete(false)
+        // Counted before the send so the worker can tell "I am the last one" without racing a
+        // producer. UNLIMITED never suspends and never rejects, so this cannot drop a revocation;
+        // the isSuccess guard covers only the post-close case, where reporting failure is correct.
+        queued.incrementAndGet()
+        if (!writes.trySend(Write(transform, done)).isSuccess) {
+            queued.decrementAndGet()
+            done.complete(false)
+        }
         return done
     }
 
