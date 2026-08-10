@@ -37,13 +37,20 @@ object FlipperFirmwareGate {
     )
 
     /**
-     * Official releases known to ship the hardcoded root keys.
+     * The release that introduced per-device keys, as a numeric `(major, minor)` bound.
      *
-     * Listing them separately lets the UI say *"your firmware predates the fix"* rather than the
-     * vaguer *"we could not identify your firmware"*, which sends users looking for the wrong
-     * problem. Anything not in either set is [SecurityClass.UNKNOWN].
+     * Anything numerically below it is an official release known to ship the hardcoded root keys,
+     * which lets the UI say *"your firmware predates the fix"* rather than the vaguer *"we could
+     * not identify your firmware"* — the latter sends users looking for the wrong problem.
+     *
+     * **Compared numerically, never by string prefix.** A prefix list (`"1.0"`, `"1.1"`, …) reads
+     * as if it means "the 1.1 line", but `"1.10.0".startsWith("1.1")` is also true, so the first
+     * release after 1.9 would be branded LEGACY and its owner told to update firmware that is in
+     * fact newer than anything on this list. Only [SECURE_VERSIONS] is exhaustive; this bound is
+     * directional, and everything at or above it that is not known-good is [SecurityClass.UNKNOWN].
      */
-    private val KNOWN_LEGACY_PREFIXES = listOf("0.", "1.0", "1.1", "1.2", "1.3")
+    private const val FIX_MAJOR = 1
+    private const val FIX_MINOR = 4
 
     /**
      * Classifies a raw `0x2A28` value.
@@ -57,11 +64,25 @@ object FlipperFirmwareGate {
     fun classify(softwareRevision: String?): SecurityClass {
         val version = extractVersion(softwareRevision) ?: return SecurityClass.UNKNOWN
         if (version in SECURE_VERSIONS) return SecurityClass.OK
-        if (KNOWN_LEGACY_PREFIXES.any { version == it || version.startsWith("$it.") || version.startsWith(it) }) {
-            return SecurityClass.LEGACY
-        }
+        val (major, minor) = majorMinor(version) ?: return SecurityClass.UNKNOWN
+        if (major < FIX_MAJOR || (major == FIX_MAJOR && minor < FIX_MINOR)) return SecurityClass.LEGACY
         // A newer official release we have not classified yet, a fork, or something unparseable.
         return SecurityClass.UNKNOWN
+    }
+
+    /**
+     * Numeric `major.minor`, or null when either component is missing or non-numeric.
+     *
+     * Both components are required: a bare `"1"` gives no evidence about the minor version, and
+     * guessing zero for it would classify an unknown build as LEGACY on an assumption. Trailing
+     * prerelease text is dropped per component, so `"1.4.0-rc"` reads as `(1, 4)` and `"1.3-rc"`
+     * as `(1, 3)`.
+     */
+    private fun majorMinor(version: String): Pair<Int, Int>? {
+        val parts = version.split(".")
+        val major = parts.getOrNull(0)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: return null
+        val minor = parts.getOrNull(1)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: return null
+        return major to minor
     }
 
     /**

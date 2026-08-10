@@ -100,6 +100,38 @@ data class FlipperEnrollment(
     /** Labels the model may name, for the listing tool. Never exposes paths. */
     fun visibleRemotes(): Map<String, List<String>> =
         allowed.groupBy({ it.remoteLabel }, { it.button })
+
+    /**
+     * The record that results from enrolling [device] on top of this one.
+     *
+     * Pure, and separate from the store, because two of its three rules are easy to get wrong in a
+     * way nothing visibly fails on:
+     *
+     * - **A different Flipper clears the allowlist and the master switch.** The entries name paths
+     *   and fingerprints on the previous device and mean nothing on this one.
+     * - **An acknowledgement survives a re-scan of the same device at the same posture.** Callers
+     *   re-enroll for reasons unrelated to security: re-scanning to pick up a newly added remote
+     *   runs the identical sequence. Taking [device]'s `acknowledgedAt` at face value would revoke
+     *   an acknowledgement the user already gave, and since both `press()` and `listRemotes()`
+     *   refuse on an unacknowledged LEGACY/UNKNOWN device, the agent would go dead after every
+     *   re-scan with no visible cause.
+     * - **Any change of posture drops it.** Same rule as `FlipperEnrollmentStore.updateSecurity`:
+     *   an acknowledgement is a statement about a posture, so a firmware change that re-classifies
+     *   the device invalidates it — the user accepted something that no longer describes what is in
+     *   front of them. This holds in both directions; a LEGACY → OK move needs no acknowledgement
+     *   at all, so dropping it costs nothing.
+     */
+    fun withEnrolled(device: EnrolledFlipper): FlipperEnrollment {
+        val sameDevice = this.device?.address == device.address
+        val keepAck = sameDevice && this.device?.securityClass == device.securityClass
+        return FlipperEnrollment(
+            device = device.copy(
+                acknowledgedAt = if (keepAck) this.device?.acknowledgedAt ?: 0L else 0L,
+            ),
+            allowed = if (sameDevice) allowed else emptyList(),
+            enabled = if (sameDevice) enabled else false,
+        )
+    }
 }
 
 /**

@@ -274,6 +274,29 @@ data class RpcFrame(
     val isUnsolicited: Boolean get() = content is RpcContent.AppStateChanged
 }
 
+/**
+ * Joins a chunked `Storage.Read` response into the file's bytes.
+ *
+ * `Storage.Read` splits a file across frames with `has_next`, so the bytes must be joined before
+ * anything reads them: both the `.ir` parser and the fingerprint see a `name:` line straddling a
+ * chunk boundary otherwise (§5 step 3).
+ *
+ * Sizes the destination once and copies each chunk in. The obvious `fold(ByteArray(0)) { acc, c ->
+ * acc + c }` reallocates and recopies the whole accumulator per chunk — quadratic in file size,
+ * which matters here because chunk count scales with it: a remote arriving in 40 frames copies
+ * ~40× more than it needs to, on the timed path between `Storage.Read` and the press deadline.
+ */
+fun List<RpcFrame>.storageReadBytes(): ByteArray {
+    val chunks = mapNotNull { (it.content as? RpcContent.StorageRead)?.file?.data }
+    val out = ByteArray(chunks.sumOf { it.size })
+    var at = 0
+    for (c in chunks) {
+        c.copyInto(out, at)
+        at += c.size
+    }
+    return out
+}
+
 // ----------------------------------------------------------------------- codec
 
 object FlipperRpc {

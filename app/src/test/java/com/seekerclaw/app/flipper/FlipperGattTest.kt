@@ -80,6 +80,39 @@ class FlipperGattTest {
         assertEquals(FlipperGattConfig.INITIAL_CREDIT, fc.available)
     }
 
+    @Test fun `releasing returns credit reserved for bytes that never went out`() {
+        // onCreditNotified is absolute, so a reservation lost to a failed write is not recovered by
+        // the next notification's arithmetic — it stays missing until the device happens to refill.
+        // Repeated write failures would then surface as NO_CREDIT on commands the device had room for.
+        val fc = FlowControl(initial = 1000)
+        assertTrue(fc.tryConsume(400))
+        assertEquals(600, fc.available)
+
+        fc.release(400)
+        assertEquals(1000, fc.available)
+    }
+
+    @Test fun `releasing cannot invent credit beyond the buffer size`() {
+        // A double-release, or a release racing a fresh absolute notification, must not leave the
+        // client believing it has more room than the firmware's buffer physically holds.
+        val fc = FlowControl()
+        fc.tryConsume(100)
+        fc.release(100)
+        fc.release(100)
+        assertEquals(FlipperGattConfig.INITIAL_CREDIT, fc.available)
+    }
+
+    @Test fun `a partial write returns only the unsent remainder`() {
+        // What `send` does on a mid-frame failure: bytes the device received are its to account
+        // for, so returning the whole frame would over-credit and risk the overrun this prevents.
+        val fc = FlowControl(initial = 1000)
+        val frame = 300
+        val written = 120
+        assertTrue(fc.tryConsume(frame))
+        fc.release(frame - written)
+        assertEquals("only the 180 B that never reached the wire come back", 880, fc.available)
+    }
+
     // --------------------------------------------------------------- reassembly
 
     private fun frame(body: ByteArray): ByteArray =

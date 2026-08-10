@@ -8,6 +8,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Typed outcomes. Every one carries a `reason` so nothing surfaces as a bare code (§10). */
 data class FlipperError(val error: String, val reason: String)
@@ -102,7 +103,20 @@ class FlipperIrController(
         const val APP_STARTED_GRACE_MS = 3_000L
     }
 
-    /** Timestamps of recent accepted presses, for [MAX_PRESSES_PER_HOUR]. */
+    /**
+     * Timestamps of recent press **attempts**, for [MAX_PRESSES_PER_HOUR].
+     *
+     * Charged at the last point before the radio is touched — after the allowlist, the permission
+     * and bond checks and the local mutex, but before `connect` — and never refunded once the press
+     * has been attempted. Both halves of that are deliberate:
+     *
+     * - A failed attempt still drives the radio and still costs a 6–10 second session, so a
+     *   runaway loop that fails every time is exactly what this ceiling exists to bound. Charging
+     *   only successes would leave it uncapped.
+     * - "Failed" is not knowable anyway. IR is one-way, and a press that times out mid-sequence
+     *   may well have transmitted (§9) — so a refund would sometimes hand back a press that
+     *   physically happened.
+     */
     private val recentPresses = ArrayDeque<Long>()
 
     @Synchronized
@@ -140,6 +154,12 @@ class FlipperIrController(
      * Returns `sent` — never `on`, `off` or `succeeded`. `OK` on tag 75 means the signal loaded and
      * the transmit call returned; IR is one-way with no return path, so whether the appliance
      * reacted is unknowable and must never be claimed (§9).
+     *
+     * Every terminal outcome is audited exactly once, here rather than at the ~16 return sites
+     * inside [runPress]. Sprinkled `audit.record` calls had already drifted from that intent — the
+     * local-mutex rejection wrote nothing, so a press dropped during a Settings scan left the user
+     * with an appliance that did not react and a log that did not say why. Pairing the outcome with
+     * the result makes the compiler, not a reviewer, the thing that notices an unaudited path.
      */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     suspend fun press(
@@ -147,85 +167,127 @@ class FlipperIrController(
         button: String,
         invocation: InvocationContext,
     ): Map<String, Any?> {
+        val (result, outcome) = runPress(remoteLabel, button, invocation)
+        audit.record(remoteLabel, button, outcome, invocation)
+        return result
+    }
+
+    /** We refused before touching the hardware. */
+    private fun reject(code: String, reason: String) = err(code, reason) to "rejected:$code"
+
+    /** We tried and it did not complete. Says nothing about whether the appliance reacted (§9). */
+    private fun fail(code: String, reason: String) = err(code, reason) to "failed:$code"
+
+    /**
+     * The press sequence. Returns the caller-facing result paired with its audit outcome.
+     *
+     * The pair return is the point: a bare `Map` let a return site forget to log itself, which is
+     * precisely the bug this shape removes.
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private suspend fun runPress(
+        remoteLabel: String,
+        button: String,
+        invocation: InvocationContext,
+    ): Pair<Map<String, Any?>, String> {
         // Rejected before anything else so a poisoned turn cannot reach the hardware at all.
         // cron_create already exists, so without this one bad turn could install a schedule that
         // actuates hardware indefinitely with no user present.
         if (invocation != InvocationContext.USER_MESSAGE) {
-            audit.record(remoteLabel, button, "rejected:automated", invocation)
-            return err(
+            return reject(
                 "automation_not_allowed",
                 "Flipper control only runs from a message you send. Scheduled and background triggers are not permitted.",
             )
         }
 
         val entry = store.current.resolve(remoteLabel, button)
-            ?: run {
-                audit.record(remoteLabel, button, "rejected:not_allowed", invocation)
-                return notAllowedReason(remoteLabel, button)
-            }
-
-        // Enforced in Kotlin, so it holds whatever the caller claims about its own origin.
-        if (!withinRateLimit(System.currentTimeMillis())) {
-            audit.record(remoteLabel, button, "rejected:rate_limited", invocation)
-            return err(
-                "rate_limited",
-                "Too many Flipper commands in the last hour. Nothing was sent. If you did not expect this, turn Flipper control off in SeekerClaw settings.",
-            )
-        }
+            ?: return notAllowedReason(remoteLabel, button).let { it to "rejected:${it["error"]}" }
 
         if (!devices.hasConnectPermission()) {
-            return err("bluetooth_unavailable", "SeekerClaw does not have Bluetooth permission. Grant it in settings.")
+            return reject("bluetooth_unavailable", "SeekerClaw does not have Bluetooth permission. Grant it in settings.")
         }
         val address = store.current.device?.address
-            ?: return err("not_enrolled", "No Flipper is enrolled.")
+            ?: return reject("not_enrolled", "No Flipper is enrolled.")
         if (!devices.isStillBonded(address)) {
-            return err("bond_lost", "The Flipper is no longer paired with this phone. Pair it again in Android settings, then re-enroll.")
+            return reject("bond_lost", "The Flipper is no longer paired with this phone. Pair it again in Android settings, then re-enroll.")
         }
         val device = devices.deviceFor(address)
-            ?: return err("bond_lost", "The enrolled Flipper could not be resolved. Re-enroll it in settings.")
+            ?: return reject("bond_lost", "The enrolled Flipper could not be resolved. Re-enroll it in settings.")
 
         // Serialised: one link, one firmware pending-command slot. Never queued — telling an agent
         // to wait trains it to retry immediately against a 6-10 second sequence.
         if (!FlipperLinkLock.mutex.tryLock()) {
-            return err("busy_local", "Another Flipper operation is already in progress. This one was not sent.")
+            return reject("busy_local", "Another Flipper operation is already in progress. This one was not sent.")
+        }
+        // …and again across processes. The mutex above only covers `:node`; the Settings scan runs
+        // in the main process and can be underway right now, because a Telegram message can arrive
+        // while the user has Settings open.
+        val lease = FlipperLinkLock.tryAcquire(context)
+        if (lease == null) {
+            FlipperLinkLock.mutex.unlock()
+            return reject(
+                "busy_local",
+                "SeekerClaw settings is using the Flipper right now. Nothing was sent — try again in a moment.",
+            )
         }
 
         // R1b needs the unsolicited APP_STARTED, which arrives outside the command/response
         // correlation. The default no-op callback silently discarded it, so ownership was being
         // inferred from App.Start's status alone — weaker than the contract states.
-        var sawAppStarted = false
+        //
+        // AtomicBoolean rather than a captured `var`: the lambda runs on the BLE binder thread while
+        // the grace-period loop and the App.Exit ownership check below read it from a coroutine
+        // thread. A plain capture has no happens-before edge between the two, so the observation
+        // could be missed — failing a press that did start, or worse, leaving the R1b gate reading
+        // stale `true` and exiting an app we do not own.
+        val sawAppStarted = AtomicBoolean(false)
         val client = FlipperRpcClient(context) { frame ->
-            val state = (frame.content as? RpcContent.AppStateChanged)?.state
-            if (state == AppState.APP_STARTED) sawAppStarted = true
-            if (state == AppState.APP_CLOSED) sawAppStarted = false
+            when ((frame.content as? RpcContent.AppStateChanged)?.state) {
+                AppState.APP_STARTED -> sawAppStarted.set(true)
+                AppState.APP_CLOSED -> sawAppStarted.set(false)
+                else -> Unit
+            }
         }
         var startOk = false
         try {
+            // Charged here, at the last point before the radio is touched. Everything above returns
+            // without transmitting, and charging those would let a Flipper that is out of range or
+            // unbonded burn the whole hourly budget on failures — after which a genuine press is
+            // refused with "Too many Flipper commands in the last hour." The ceiling still counts
+            // attempts rather than successes (see [recentPresses]); it just no longer counts
+            // attempts that never became one.
+            if (!withinRateLimit(System.currentTimeMillis())) {
+                return reject(
+                    "rate_limited",
+                    "Too many Flipper commands in the last hour. Nothing was sent. If you did not expect this, turn Flipper control off in SeekerClaw settings.",
+                )
+            }
+
             client.connect(device)
 
             val version = client.send(RpcRequest.ProtobufVersion, 5_000L)
                 .firstNotNullOfOrNull { it.content as? RpcContent.ProtobufVersion }
-                ?: return err("unsupported_protocol", "The Flipper did not report its RPC version.")
+                ?: return fail("unsupported_protocol", "The Flipper did not report its RPC version.")
             if (!version.atLeast(MIN_PROTOBUF_MAJOR, MIN_PROTOBUF_MINOR)) {
-                return err(
+                return fail(
                     "unsupported_protocol",
                     "This Flipper's firmware is too old for one-shot button presses. Update it to use SeekerClaw.",
                 )
             }
 
             val started = client.send(RpcRequest.StartInfraredRpc, 8_000L)
-            startError(started)?.let { return it }
+            startError(started)?.let { return it to "failed:${it["error"]}" }
             startOk = true
 
             // §5 step 5: App.Start's response and the unsolicited APP_STARTED may arrive in either
             // order, so wait briefly for the latter if it has not landed yet.
-            if (!sawAppStarted) {
+            if (!sawAppStarted.get()) {
                 withTimeoutOrNull(APP_STARTED_GRACE_MS) {
-                    while (!sawAppStarted) delay(50)
+                    while (!sawAppStarted.get()) delay(50)
                 }
             }
-            if (!sawAppStarted) {
-                return err(
+            if (!sawAppStarted.get()) {
+                return fail(
                     "transport_error",
                     "The Flipper accepted the request but never reported its Infrared app as running.",
                 )
@@ -239,18 +301,14 @@ class FlipperIrController(
             // mismatch discovered afterwards could not be undone without tearing the session down.
             val readFrames = client.send(RpcRequest.StorageRead(entry.remotePath), 15_000L)
             readFrames.firstOrNull { it.status != CommandStatus.OK }?.let {
-                return err(
+                return fail(
                     "remote_missing",
                     "That remote is no longer on the Flipper. Re-scan in SeekerClaw settings.",
                 )
             }
-            val bytes = readFrames
-                .mapNotNull { (it.content as? RpcContent.StorageRead)?.file?.data }
-                .fold(ByteArray(0)) { acc, chunk -> acc + chunk }
-            val actual = sha256(bytes)
+            val actual = sha256(readFrames.storageReadBytes())
             if (actual != entry.remoteSha256) {
-                audit.record(remoteLabel, button, "rejected:remote_changed", invocation)
-                return err(
+                return reject(
                     "remote_changed",
                     "The \"$remoteLabel\" remote has changed on the Flipper since you approved it. " +
                         "Nothing was sent. Re-scan and re-approve it in SeekerClaw settings.",
@@ -259,17 +317,16 @@ class FlipperIrController(
 
             client.send(RpcRequest.LoadFile(entry.remotePath), 15_000L).let { frames ->
                 frames.firstOrNull { it.status != CommandStatus.OK }?.let {
-                    return err("remote_missing", "The remote file could not be loaded from the Flipper. It may have been moved or deleted.")
+                    return fail("remote_missing", "The remote file could not be loaded from the Flipper. It may have been moved or deleted.")
                 }
             }
 
             val pressed = client.send(RpcRequest.PressRelease(entry.button), PRESS_DEADLINE_MS)
             pressed.firstOrNull { it.status != CommandStatus.OK }?.let {
-                audit.record(remoteLabel, button, "failed:${it.status}", invocation)
-                return err("unknown_button", "The Flipper did not recognise that button on this remote.")
+                return err("unknown_button", "The Flipper did not recognise that button on this remote.") to
+                    "failed:${it.status}"
             }
 
-            audit.record(remoteLabel, button, "sent", invocation)
             return mapOf(
                 "sent" to true,
                 "remote" to remoteLabel,
@@ -277,21 +334,21 @@ class FlipperIrController(
                 // Ships in-band so it survives into the model's context rather than living only in
                 // a tool description it may have forgotten by round 30.
                 "note" to "IR is one-way — this confirms the signal was transmitted, not that the appliance reacted.",
-            )
+            ) to "sent"
         } catch (e: FlipperTransportException) {
-            audit.record(remoteLabel, button, "error:${e.kind}", invocation)
-            return transportError(e)
+            return transportError(e) to "error:${e.kind}"
         } finally {
             // R1a + R1b. Exiting without ownership closes the user's own app; exiting with a
             // command outstanding crashes the device. Dropping the link is always safe.
             try {
                 // R1b: both halves. App.Start succeeded AND we observed APP_STARTED in this
                 // session. Without ownership, App.Exit closes whatever app the user had open.
-                if (startOk && sawAppStarted && client.isConnected) client.send(RpcRequest.Exit, 3_000L)
+                if (startOk && sawAppStarted.get() && client.isConnected) client.send(RpcRequest.Exit, 3_000L)
             } catch (e: Exception) {
                 Log.w(TAG, "[Flipper] exit failed, dropping link: ${e.message}")
             }
             client.close()
+            lease.close()
             FlipperLinkLock.mutex.unlock()
         }
     }

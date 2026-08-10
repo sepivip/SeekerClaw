@@ -21,6 +21,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,6 +58,10 @@ fun FlipperSection() {
     val state = remember { FlipperSettingsState(context) }
     val ui by state.ui.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // The state object owns two CrossProcessStores, each with a FileObserver and a broadcast
+    // receiver. Leaving Settings must release them, or every visit adds another set.
+    DisposableEffect(state) { onDispose { state.close() } }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),

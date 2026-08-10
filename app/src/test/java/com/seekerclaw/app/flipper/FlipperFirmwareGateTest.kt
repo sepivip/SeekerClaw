@@ -57,6 +57,39 @@ class FlipperFirmwareGateTest {
         }
     }
 
+    @Test fun `a two-digit minor is not mistaken for a legacy line`() {
+        // Regression: the legacy set used to be string prefixes ("1.0", "1.1", …) matched with
+        // startsWith, so "1.10.0" matched "1.1" and the first release after 1.9 would be branded
+        // LEGACY — telling its owner to update firmware newer than anything on the list. The
+        // comparison is numeric on (major, minor), so 10 > 4 and this is merely unclassified.
+        for (v in listOf("1.10.0", "1.11.2", "1.40.0")) {
+            assertEquals("$v must be unknown", SecurityClass.UNKNOWN, FlipperFirmwareGate.classify(rev(v)))
+        }
+    }
+
+    @Test fun `releases after the fix are unknown rather than legacy`() {
+        // Fails closed either way — both postures demand acknowledgement — but the copy differs,
+        // and "we could not identify it" is the honest one for a version we have never seen.
+        for (v in listOf("1.4", "1.5.0", "1.9.9", "2.0.0", "10.0.0")) {
+            assertEquals("$v must be unknown", SecurityClass.UNKNOWN, FlipperFirmwareGate.classify(rev(v)))
+        }
+    }
+
+    @Test fun `a version with no minor component is unknown`() {
+        // Defaulting the missing minor to 0 would read "1" as (1, 0) and classify it LEGACY on an
+        // assumption. A bare major carries no evidence about what is in the build.
+        for (v in listOf("1", "0", "2")) {
+            assertEquals("$v must be unknown", SecurityClass.UNKNOWN, FlipperFirmwareGate.classify(rev(v)))
+        }
+    }
+
+    @Test fun `a prerelease suffix does not defeat the numeric bound`() {
+        // Trailing text is dropped per component, so an unreleased 1.3 candidate still reads as
+        // legacy rather than falling through to UNKNOWN.
+        assertEquals(SecurityClass.LEGACY, FlipperFirmwareGate.classify(rev("1.3.4-rc")))
+        assertEquals(SecurityClass.LEGACY, FlipperFirmwareGate.classify(rev("1.3-rc")))
+    }
+
     @Test fun `legacy and unknown are distinguishable in copy`() {
         // The user should hear "your firmware predates the fix", not the vaguer "we could not
         // identify it" — they send someone looking for different problems.
@@ -130,10 +163,17 @@ class FlipperFirmwareGateTest {
         // leaves the old root keys in place with no error and no signal. Skipping the reboot makes
         // the whole remediation a no-op.
         val steps = FlipperFirmwareGate.REMEDIATION
-        assertTrue(steps.any { it.contains("Restart", ignoreCase = true) })
         val unpairAt = steps.indexOfFirst { it.contains("Unpair", ignoreCase = true) }
         val rebootAt = steps.indexOfFirst { it.contains("Restart", ignoreCase = true) }
         val pairAt = steps.indexOfFirst { it.contains("Pair it", ignoreCase = true) }
+
+        // Assert presence before order. `indexOfFirst` returns -1 when nothing matches, and -1 is
+        // less than every valid index — so deleting the unpair step would leave "unpair must come
+        // before reboot" passing on a list that no longer clears the old root keys at all.
+        assertTrue("remediation must name the unpair step", unpairAt >= 0)
+        assertTrue("remediation must name the reboot step", rebootAt >= 0)
+        assertTrue("remediation must name the re-pair step", pairAt >= 0)
+
         assertTrue("unpair must come before reboot", unpairAt < rebootAt)
         assertTrue("reboot must come before re-pairing", rebootAt < pairAt)
     }

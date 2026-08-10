@@ -70,9 +70,9 @@ class FlipperRpcClient(
         val SOFTWARE_REVISION: java.util.UUID = java.util.UUID.fromString("00002a28-0000-1000-8000-00805f9b34fb")
     }
 
-    private var gatt: BluetoothGatt? = null
-    private var rxChar: BluetoothGattCharacteristic? = null
-    private var negotiatedMtu: Int = 23 // BLE default until onMtuChanged says otherwise
+    @Volatile private var gatt: BluetoothGatt? = null
+    @Volatile private var rxChar: BluetoothGattCharacteristic? = null
+    @Volatile private var negotiatedMtu: Int = 23 // BLE default until onMtuChanged says otherwise
 
     private val assembler = FrameAssembler()
     private val flowControl = FlowControl()
@@ -85,12 +85,19 @@ class FlipperRpcClient(
     private val commandLock = Mutex()
 
     // Handshake steps, each completed from its callback.
-    private var connectSignal: CompletableDeferred<Unit>? = null
-    private var mtuSignal: CompletableDeferred<Int>? = null
-    private var discoverSignal: CompletableDeferred<Unit>? = null
-    private var descriptorSignal: CompletableDeferred<Unit>? = null
-    private var writeSignal: CompletableDeferred<Unit>? = null
-    private var readSignal: CompletableDeferred<String?>? = null
+    //
+    // Every field below is written by one thread and read by another with no lock spanning the two:
+    // the Android BLE stack delivers all callbacks on a binder thread, while `connect` and `send`
+    // run on coroutine threads. `CompletableDeferred` is itself thread-safe, but the *reference* to
+    // it still needs safe publication — without it a callback can observe a stale (or null) slot and
+    // complete nothing, leaving the handshake to time out for no visible reason. `@Volatile` is the
+    // cheapest correct fix here; these are single-writer fields, so no read-modify-write is at risk.
+    @Volatile private var connectSignal: CompletableDeferred<Unit>? = null
+    @Volatile private var mtuSignal: CompletableDeferred<Int>? = null
+    @Volatile private var discoverSignal: CompletableDeferred<Unit>? = null
+    @Volatile private var descriptorSignal: CompletableDeferred<Unit>? = null
+    @Volatile private var writeSignal: CompletableDeferred<Unit>? = null
+    @Volatile private var readSignal: CompletableDeferred<String?>? = null
 
     /**
      * The reply we are waiting for.
@@ -106,7 +113,10 @@ class FlipperRpcClient(
         val done: CompletableDeferred<List<RpcFrame>> = CompletableDeferred(),
     )
 
-    private var pending: Pending? = null
+    // Written by `send` on a coroutine thread, read and mutated by `dispatch`/`failPending` on
+    // the BLE binder thread. Volatile so a reply is never appended to a slot that has already been
+    // cleared, and so `failPending` cannot miss a call that is genuinely outstanding.
+    @Volatile private var pending: Pending? = null
 
     @Volatile private var connected = false
 
@@ -246,11 +256,26 @@ class FlipperRpcClient(
 
             val p = Pending(id)
             pending = p
+            var written = 0
             try {
-                for (chunk in chunkForMtu(frame, negotiatedMtu)) writeChunk(chunk)
+                for (chunk in chunkForMtu(frame, negotiatedMtu)) {
+                    writeChunk(chunk)
+                    written += chunk.size
+                }
                 return@withLock await(p.done, timeoutMs, "reply to command $id")
             } finally {
                 pending = null
+                // Hand back only what never reached the wire. The reservation above is taken before
+                // the first write, and `onCreditNotified` is ABSOLUTE — so credit spent on a frame
+                // that failed mid-write is not recovered by the next notification's arithmetic, it
+                // simply stays missing until the device happens to send a refill. Repeated write
+                // failures then surface as NO_CREDIT on commands the device had room for.
+                //
+                // Bytes that DID go out are deliberately not returned, including on a timeout: the
+                // device received them and its own accounting is the truth. Over-crediting there
+                // would write past the buffer this reservation exists to protect.
+                val unsent = frame.size - written
+                if (unsent > 0) flowControl.release(unsent)
             }
         }
 

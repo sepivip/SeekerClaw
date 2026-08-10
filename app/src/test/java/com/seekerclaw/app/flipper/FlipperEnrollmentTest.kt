@@ -198,4 +198,63 @@ class FlipperEnrollmentTest {
         val back = FlipperEnrollmentCodec.decode(FlipperEnrollmentCodec.encode(e))
         assertEquals("abc123", back.allowed[0].remoteSha256)
     }
+
+    // --------------------------------------------------------- re-enrollment
+
+    private fun legacyDevice(address: String = "80:E1:26:12:B7:E1", ack: Long = 0L) =
+        EnrolledFlipper(address, "Flipper Oytia", SecurityClass.LEGACY, ack, "1.3.4")
+
+    @Test fun `re-scanning the same device keeps its acknowledgement`() {
+        // Regression: enrollAndScan passes acknowledgedAt = 0L every time, because it has no reason
+        // to know better. Taking that at face value meant re-scanning to pick up a newly added
+        // remote silently revoked the security acknowledgement — and since press() and listRemotes()
+        // both refuse on an unacknowledged LEGACY device, the agent went dead with no visible cause.
+        val before = FlipperEnrollment(legacyDevice(ack = 1_700_000_000_000L), listOf(tv), enabled = true)
+        val after = before.withEnrolled(legacyDevice(ack = 0L))
+
+        assertEquals(1_700_000_000_000L, after.device?.acknowledgedAt)
+        assertTrue("the device stays usable across a re-scan", after.device?.isUsable == true)
+        assertTrue(after.permits("/ext/infrared/tv.ir", "Power"))
+    }
+
+    @Test fun `re-scanning the same device keeps its allowlist and master switch`() {
+        val before = FlipperEnrollment(okDevice(), listOf(tv, garage), enabled = true)
+        val after = before.withEnrolled(okDevice())
+
+        assertEquals(listOf(tv, garage), after.allowed)
+        assertTrue(after.enabled)
+    }
+
+    @Test fun `a changed security posture drops the acknowledgement`() {
+        // The user accepted a posture that no longer describes the device, so they must see the new
+        // one. Firmware can move in either direction between scans.
+        val before = FlipperEnrollment(okDevice(ack = 1_700_000_000_000L), listOf(tv), enabled = true)
+        val after = before.withEnrolled(legacyDevice())
+
+        assertEquals(0L, after.device?.acknowledgedAt)
+        assertFalse("an unacknowledged legacy device fires nothing", after.permits("/ext/infrared/tv.ir", "Power"))
+        // The allowlist is about the device, not the posture, so it survives — the gate above is
+        // what holds the line until the user acknowledges.
+        assertEquals(listOf(tv), after.allowed)
+    }
+
+    @Test fun `enrolling a different device clears everything`() {
+        // The stored entries name paths and fingerprints on the previous Flipper. Carrying them
+        // over would advertise remotes that do not exist here, or worse, resolve to a same-named
+        // file holding a different signal.
+        val before = FlipperEnrollment(okDevice(ack = 1_700_000_000_000L), listOf(tv, garage), enabled = true)
+        val after = before.withEnrolled(okDevice().copy(address = "11:22:33:44:55:66"))
+
+        assertTrue(after.allowed.isEmpty())
+        assertFalse("the master switch defaults off for a device the user has not configured", after.enabled)
+        assertEquals(0L, after.device?.acknowledgedAt)
+    }
+
+    @Test fun `first enrollment starts from allow-nothing`() {
+        val after = FlipperEnrollment().withEnrolled(okDevice(ack = 1_700_000_000_000L))
+
+        assertTrue(after.allowed.isEmpty())
+        assertFalse(after.enabled)
+        assertEquals("nothing to carry over from, so nothing is carried", 0L, after.device?.acknowledgedAt)
+    }
 }

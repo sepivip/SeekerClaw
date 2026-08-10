@@ -3,6 +3,7 @@ package com.seekerclaw.app.flipper
 import android.content.Context
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -151,6 +152,23 @@ class FlipperAuditLog(context: Context) {
     /** Newest first. */
     fun entries(): List<AuditEntry> = FlipperAuditCodec.decode(cps.state.value.blob)
 
+    /**
+     * Appends one entry.
+     *
+     * ### The whole read-modify-write happens inside the transform
+     *
+     * The obvious shape — decode the current list here, prepend, encode, then hand the finished
+     * blob to `update { }` — loses entries. [CrossProcessStore.update] applies its transform to the
+     * state it re-reads under its own write lock; a transform that ignores that input and returns a
+     * blob captured earlier overwrites whatever landed in between. Two overlapping presses would
+     * both read the same base list and the second write would erase the first entry, so a press
+     * that physically happened would have no record. `clear()` racing a `record()` could likewise
+     * resurrect a cleared log.
+     *
+     * Doing the decode, prepend, cap and encode inside the lambda makes each append atomic against
+     * every other mutation of this store. The cost is decoding on the IO thread instead of the
+     * caller's, which is where it belonged anyway.
+     */
     fun record(
         remoteLabel: String,
         button: String,
@@ -165,12 +183,26 @@ class FlipperAuditLog(context: Context) {
             outcome = outcome,
             invocation = invocation,
         )
-        val next = (listOf(entry) + entries()).take(MAX_ENTRIES)
-        val blob = FlipperAuditCodec.encode(next)
-        scope.launch { cps.update { FlipperAuditRecord(blob) } }
+        scope.launch {
+            cps.update { record ->
+                val next = (listOf(entry) + FlipperAuditCodec.decode(record.blob)).take(MAX_ENTRIES)
+                FlipperAuditRecord(FlipperAuditCodec.encode(next))
+            }
+        }
     }
 
     fun clear() {
         scope.launch { cps.update { FlipperAuditRecord() } }
+    }
+
+    /**
+     * Releases the store's FileObserver, broadcast receiver and drain coroutine.
+     *
+     * Every instance registers OS-level observers, so one that outlives its owner keeps waking the
+     * process for a log nobody is reading.
+     */
+    fun close() {
+        cps.close()
+        scope.cancel()
     }
 }

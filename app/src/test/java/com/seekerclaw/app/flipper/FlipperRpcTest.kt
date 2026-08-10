@@ -323,4 +323,51 @@ class FlipperRpcTest {
         assertEquals(11, frame.commandId)
         assertEquals(RpcContent.Empty, frame.content)
     }
+
+    // ------------------------------------------------- chunked Storage.Read
+
+    private fun readFrame(data: ByteArray, hasNext: Boolean = false) =
+        RpcFrame(1, CommandStatus.OK, hasNext, RpcContent.StorageRead(StorageFile(false, "tv.ir", data.size, data)))
+
+    @Test fun `chunked Storage_Read frames join in order`() {
+        // The join is what makes a `name:` line straddling a chunk boundary parseable, and it also
+        // feeds the fingerprint — a reordered or dropped chunk silently changes the sha256 and would
+        // reject a remote the user did approve.
+        val frames = listOf(
+            readFrame("Filetype: IR sig".toByteArray(), hasNext = true),
+            readFrame("nals file\nVersi".toByteArray(), hasNext = true),
+            readFrame("on: 1\n".toByteArray()),
+        )
+        assertEquals("Filetype: IR signals file\nVersion: 1\n", String(frames.storageReadBytes()))
+    }
+
+    @Test fun `a single-frame read joins to itself`() {
+        val only = "name: Power\n".toByteArray()
+        assertTrue(only.contentEquals(listOf(readFrame(only)).storageReadBytes()))
+    }
+
+    @Test fun `frames carrying no Storage_Read content contribute nothing`() {
+        // Status-only and unsolicited frames can share a response list; treating their absent
+        // payload as an empty chunk is correct, treating it as a failure is not.
+        val frames = listOf(
+            RpcFrame(1, CommandStatus.OK, true, RpcContent.Empty),
+            readFrame("abc".toByteArray()),
+            RpcFrame(0, CommandStatus.OK, false, RpcContent.AppStateChanged(AppState.APP_STARTED)),
+        )
+        assertEquals("abc", String(frames.storageReadBytes()))
+    }
+
+    @Test fun `an empty read joins to an empty array`() {
+        assertEquals(0, emptyList<RpcFrame>().storageReadBytes().size)
+        assertEquals(0, listOf(readFrame(ByteArray(0))).storageReadBytes().size)
+    }
+
+    @Test fun `many chunks join without loss`() {
+        // Guards the sized-once copy: an off-by-one in the running offset would truncate or
+        // interleave, and only shows up once the chunk count is non-trivial.
+        val chunks = (0 until 64).map { "chunk$it;".toByteArray() }
+        val joined = chunks.map { readFrame(it, hasNext = true) }.storageReadBytes()
+        assertEquals(chunks.sumOf { it.size }, joined.size)
+        assertEquals((0 until 64).joinToString("") { "chunk$it;" }, String(joined))
+    }
 }

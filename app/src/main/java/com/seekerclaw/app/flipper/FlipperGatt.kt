@@ -68,11 +68,27 @@ object FlipperGattConfig {
  * Hence [onCreditNotified] assigns rather than accumulates.
  */
 class FlowControl(initial: Int = FlipperGattConfig.INITIAL_CREDIT) {
-    @Volatile private var credit: Int = initial
+    private var credit: Int = initial
 
-    val available: Int get() = credit
+    /**
+     * Every accessor takes the instance monitor, including the two that only read.
+     *
+     * The writers are genuinely different threads by construction: the FLOW_CONTROL indication is
+     * delivered on the GATT callback thread, while [tryConsume] runs on whichever thread is driving
+     * the write. `@Volatile` alone was not enough — it publishes a write but does not make
+     * `credit -= n` atomic against a concurrent assignment, so one of the two updates is lost, and
+     * both loss directions hurt:
+     *
+     * - **The refill is lost.** Credit stays at the post-consume value and the link stalls earlier
+     *   than the firmware's buffer actually requires.
+     * - **The consumption is lost.** Credit stays at the notified value after bytes were already
+     *   written, so we write past what `RPC_BUFFER_SIZE` has room for — the firmware buffer overrun
+     *   this class exists to prevent.
+     */
+    val available: Int @Synchronized get() = credit
 
     /** The firmware told us how much room is left. Absolute — set, never add. */
+    @Synchronized
     fun onCreditNotified(remaining: Int) {
         credit = remaining.coerceAtLeast(0)
     }
@@ -83,6 +99,19 @@ class FlowControl(initial: Int = FlipperGattConfig.INITIAL_CREDIT) {
         if (n > credit) return false
         credit -= n
         return true
+    }
+
+    /**
+     * Hands [n] bytes back after a write that never happened.
+     *
+     * Needed because [onCreditNotified] is absolute: a reservation dropped on a failed write is not
+     * recovered by the next notification's arithmetic, it simply stays missing until the firmware
+     * happens to send a refill. Repeated failures otherwise surface as `NO_CREDIT` on commands the
+     * device had room for. Capped at the buffer size so a double-release cannot invent credit.
+     */
+    @Synchronized
+    fun release(n: Int) {
+        credit = (credit + n).coerceAtMost(FlipperGattConfig.INITIAL_CREDIT)
     }
 
     /** A fresh session starts with a full buffer. */

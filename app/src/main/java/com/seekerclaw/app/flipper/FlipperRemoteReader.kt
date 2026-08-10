@@ -104,17 +104,7 @@ class FlipperRemoteReader(private val client: RpcTransport) {
         val frames = client.send(RpcRequest.StorageRead(ref.path), READ_TIMEOUT_MS)
         requireOk(frames, "Storage.Read")
 
-        // Storage.Read chunks with has_next; the bytes must be joined before parsing, because a
-        // `name:` line will straddle a chunk boundary (§5 step 3).
-        val bytes = frames
-            .mapNotNull { (it.content as? RpcContent.StorageRead)?.file?.data }
-            .let { chunks ->
-                val total = chunks.sumOf { it.size }
-                val out = ByteArray(total)
-                var at = 0
-                for (c in chunks) { c.copyInto(out, at); at += c.size }
-                out
-            }
+        val bytes = frames.storageReadBytes()
 
         if (!IrFileParser.isRemoteFile(bytes)) return null
 

@@ -766,15 +766,23 @@ class AndroidBridge(
     /**
      * Fires one allowlisted IR button.
      *
-     * The invocation context is decided HERE, not read from [params]. Anything in the request body
-     * is model-influenced — `shell_exec` can run curl and `js_eval` has `require('http')` — so a
-     * field claiming "this came from a user message" would be a field the agent could set itself.
+     * ### The invocation context is NOT a trust boundary
      *
-     * Known gap (contract §4b, amendment filed on BAT-1201): Kotlin has no message pipeline to read
-     * the real context from. Telegram polling, cron and the heartbeat all live in Node, so this
-     * side cannot distinguish a user-driven turn from a scheduled one. Until that is resolved the
-     * context is passed through from Node as defence in depth, and the enforceable protections —
-     * the allowlist and the rolling-hour ceiling in FlipperIrController — carry the actual weight.
+     * Contract §4b asks for it to be one: Kotlin should decide the context itself, so that a field
+     * in the request body claiming "this came from a user message" is not something the agent can
+     * set. **That is not implementable here, and this code does not implement it** — the value is
+     * read out of [params], which is model-influenced (`shell_exec` can run curl, `js_eval` has
+     * `require('http')`).
+     *
+     * The reason is structural: Kotlin has no message pipeline to read the real context from.
+     * Telegram polling, cron and the heartbeat all live in Node, so this side sees only an
+     * authenticated HTTP call and cannot tell a user-driven turn from a scheduled one. Node is the
+     * only layer that knows, and Node is the layer §4b distrusts.
+     *
+     * So it is **defence in depth, not a boundary** — it stops an honest mistake, not an injected
+     * agent, and the fail-closed default below is the useful half. What genuinely is enforceable on
+     * this side carries the actual weight: the allowlist, the master switch, and the rolling-hour
+     * ceiling in FlipperIrController. Amendment filed on BAT-1201; see [InvocationContext].
      */
     private fun handleFlipperPress(params: JSONObject): Response {
         val invocation = when (params.optString("invocation", "")) {

@@ -12,6 +12,7 @@ import com.seekerclaw.app.flipper.FlipperAuditLog
 import com.seekerclaw.app.flipper.FlipperDeviceManager
 import com.seekerclaw.app.flipper.FlipperEnrollmentStore
 import com.seekerclaw.app.flipper.FlipperFirmwareGate
+import com.seekerclaw.app.flipper.FlipperLinkLock
 import com.seekerclaw.app.flipper.FlipperRemoteReader
 import com.seekerclaw.app.flipper.FlipperRpcClient
 import com.seekerclaw.app.flipper.FlipperTransportException
@@ -62,6 +63,18 @@ class FlipperSettingsState(private val context: Context) {
     private val store = FlipperEnrollmentStore(context)
     private val devices = FlipperDeviceManager(context)
     private val auditLog = FlipperAuditLog(context)
+
+    /**
+     * Releases both cross-process stores. Call from the composable's `onDispose`.
+     *
+     * Each store registers a `FileObserver` and a broadcast receiver, and this class is constructed
+     * once per composition of the Flipper section — so without disposal, every visit to Settings
+     * leaves another pair of OS-level observers running for the life of the process.
+     */
+    fun close() {
+        store.close()
+        auditLog.close()
+    }
 
     private val _ui = MutableStateFlow(FlipperUiState())
     val ui: StateFlow<FlipperUiState> = _ui.asStateFlow()
@@ -129,6 +142,24 @@ class FlipperSettingsState(private val context: Context) {
             return
         }
 
+        // Both locks, in that order — see FlipperLinkLock. This path previously took neither, so a
+        // press arriving from Telegram while the user was scanning put two RPC streams on one
+        // firmware command slot. The agent's press path holds the same pair, so whichever starts
+        // second is cleanly refused rather than interleaved.
+        if (!FlipperLinkLock.mutex.tryLock()) {
+            _ui.value = _ui.value.copy(busy = false, error = "Another Flipper operation is already in progress.")
+            return
+        }
+        val lease = FlipperLinkLock.tryAcquire(context)
+        if (lease == null) {
+            FlipperLinkLock.mutex.unlock()
+            _ui.value = _ui.value.copy(
+                busy = false,
+                error = "The agent is using the Flipper right now. Try again in a moment.",
+            )
+            return
+        }
+
         val client = FlipperRpcClient(context)
         try {
             client.connect(handle)
@@ -136,16 +167,6 @@ class FlipperSettingsState(private val context: Context) {
             _ui.value = _ui.value.copy(status = "Checking firmware…")
             val firmware = readFirmwareVersion(client)
             val securityClass = FlipperFirmwareGate.classify(firmware)
-
-            store.enroll(
-                EnrolledFlipper(
-                    address = device.address,
-                    label = device.name.ifBlank { device.address },
-                    securityClass = securityClass,
-                    acknowledgedAt = 0L,
-                    firmwareVersion = firmware,
-                ),
-            )
 
             _ui.value = _ui.value.copy(status = "Reading remotes…")
             val reader = FlipperRemoteReader(client)
@@ -178,14 +199,41 @@ class FlipperSettingsState(private val context: Context) {
 
             val found = disambiguate(choices)
 
+            // ── Commit ────────────────────────────────────────────────────────
+            // Nothing above this line touches the store. Enrolling before the scan meant any
+            // failure after it — a LINK_LOST partway through reading remotes is the ordinary case —
+            // left the record on disk anyway, contradicting the invariant in this method's KDoc.
+            // Worse, enrolling a *different* Flipper clears the allowlist as part of the write, so
+            // trying a second device and losing the link mid-scan destroyed the working allowlist
+            // of the first and left an unscannable device enrolled in its place.
+            //
+            // `acknowledgedAt` is not ours to set: the store keeps an existing acknowledgement when
+            // the device and its security class are both unchanged, so re-scanning for new remotes
+            // does not silently revoke agent access. See FlipperEnrollmentStore.enroll.
+            store.enroll(
+                EnrolledFlipper(
+                    address = device.address,
+                    label = device.name.ifBlank { device.address },
+                    securityClass = securityClass,
+                    acknowledgedAt = 0L,
+                    firmwareVersion = firmware,
+                ),
+            )
+
             // Intersect the stored allowlist with what this scan actually found. Without this,
             // entries for remotes the user deleted stay allowlisted and advertised to the agent
             // while disappearing from the UI — approved, invisible, and impossible to revoke.
             // A changed fingerprint drops the entry too: the approval was for those bytes.
-            val stillValid = store.current.allowed.filter { a ->
+            //
+            // Read through `state` rather than `current`: the enroll above publishes to the flow
+            // synchronously but its durable write is dispatched, so `current` can still return the
+            // pre-enroll record here — and for a different device that is the OLD Flipper's
+            // allowlist, which this filter would then write back over the cleared one.
+            val allowedNow = store.state.value.allowed
+            val stillValid = allowedNow.filter { a ->
                 found.any { it.path == a.remotePath && it.sha256 == a.remoteSha256 && a.button in it.buttons }
             }
-            val dropped = store.current.allowed.size - stillValid.size
+            val dropped = allowedNow.size - stillValid.size
             if (dropped > 0) store.setAllowed(stillValid)
 
             _ui.value = _ui.value.copy(
@@ -203,6 +251,8 @@ class FlipperSettingsState(private val context: Context) {
             _ui.value = _ui.value.copy(busy = false, status = null, error = e.message ?: "Something went wrong.")
         } finally {
             client.close()
+            lease.close()
+            FlipperLinkLock.mutex.unlock()
         }
     }
 

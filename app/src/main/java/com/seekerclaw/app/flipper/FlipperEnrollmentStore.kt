@@ -3,6 +3,7 @@ package com.seekerclaw.app.flipper
 import android.content.Context
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -85,42 +86,54 @@ class FlipperEnrollmentStore(context: Context) {
         get() = FlipperEnrollmentCodec.decode(cps.state.value.blob)
 
     /**
-     * Writes the record and publishes it.
+     * Applies [transform] to the record and publishes the result.
      *
-     * [_state] is set synchronously so the UI reflects a toggle immediately; the durable write is
-     * dispatched to the store's own scope. The permission decision reads through [current] rather
-     * than this flow, so a press can never be authorised against the optimistic value — it always
-     * sees what actually landed on disk.
+     * ### Every mutation is a transform, never a pre-computed record
+     *
+     * Taking a finished `FlipperEnrollment` looks simpler and is wrong. [CrossProcessStore.update]
+     * applies its lambda to the state it re-reads under its own write lock; passing a value
+     * computed earlier discards whatever landed in between, so two mutations that overlap lose one
+     * of the two. That matters more here than in most stores because the losable field can be the
+     * master switch or the allowlist — a `setEnabled(false)` silently reverted by a concurrent
+     * `setAllowed` is a kill switch that did not kill anything.
+     *
+     * It also removes a sharper failure: reading `current` to build the next value and reading it
+     * again inside the same method gave two different snapshots. Unenrolling between those reads
+     * let `acknowledgeSecurity` write the old device back over a cleared record, resurrecting an
+     * unenrolled Flipper. A transform sees one snapshot by construction, so the `?: return it`
+     * guards below cannot be raced.
+     *
+     * [_state] is still set synchronously, so the UI reflects a toggle on the next frame instead of
+     * after a disk round-trip. It is chained off its own previous value rather than off [current],
+     * so a second mutation dispatched before the first write lands still composes correctly. The
+     * permission decision reads [current], never this — an optimistic value must never authorise a
+     * press.
      */
-    private fun persist(next: FlipperEnrollment) {
-        val blob = FlipperEnrollmentCodec.encode(next)
-        _state.value = next
-        scope.launch { cps.update { FlipperRecord(blob) } }
+    private fun persist(transform: (FlipperEnrollment) -> FlipperEnrollment) {
+        _state.value = transform(_state.value)
+        scope.launch {
+            cps.update { record ->
+                FlipperRecord(FlipperEnrollmentCodec.encode(transform(FlipperEnrollmentCodec.decode(record.blob))))
+            }
+        }
     }
 
     /**
-     * Records the chosen device. Enrolling a **different** device clears the allowlist — the
-     * entries name paths and fingerprints on the previous Flipper and mean nothing on this one.
+     * Records the chosen device.
+     *
+     * The rules — a different Flipper clears the allowlist, an acknowledgement survives a re-scan
+     * at an unchanged posture — live in [FlipperEnrollment.withEnrolled], which is pure and
+     * therefore directly testable. This method is only the read-modify-write around them.
      */
-    fun enroll(device: EnrolledFlipper) {
-        val prev = current
-        val sameDevice = prev.device?.address == device.address
-        persist(
-            FlipperEnrollment(
-                device = device,
-                allowed = if (sameDevice) prev.allowed else emptyList(),
-                enabled = if (sameDevice) prev.enabled else false,
-            ),
-        )
-    }
+    fun enroll(device: EnrolledFlipper) = persist { it.withEnrolled(device) }
 
     /** Forgets everything. Used when the user unenrolls or picks a different Flipper. */
-    fun clear() = persist(FlipperEnrollment())
+    fun clear() = persist { FlipperEnrollment() }
 
     /** Records that the user saw and accepted a non-OK security posture. */
-    fun acknowledgeSecurity(atMillis: Long) {
-        val d = current.device ?: return
-        persist(current.copy(device = d.copy(acknowledgedAt = atMillis)))
+    fun acknowledgeSecurity(atMillis: Long) = persist {
+        val d = it.device ?: return@persist it
+        it.copy(device = d.copy(acknowledgedAt = atMillis))
     }
 
     /**
@@ -130,22 +143,20 @@ class FlipperEnrollmentStore(context: Context) {
      * A move in the other direction — or to UNKNOWN — invalidates a previous acknowledgement,
      * because the user accepted a posture that no longer describes the device.
      */
-    fun updateSecurity(securityClass: SecurityClass, firmwareVersion: String) {
-        val d = current.device ?: return
+    fun updateSecurity(securityClass: SecurityClass, firmwareVersion: String) = persist {
+        val d = it.device ?: return@persist it
         val keepAck = securityClass == d.securityClass
-        persist(
-            current.copy(
-                device = d.copy(
-                    securityClass = securityClass,
-                    firmwareVersion = firmwareVersion,
-                    acknowledgedAt = if (keepAck) d.acknowledgedAt else 0L,
-                ),
+        it.copy(
+            device = d.copy(
+                securityClass = securityClass,
+                firmwareVersion = firmwareVersion,
+                acknowledgedAt = if (keepAck) d.acknowledgedAt else 0L,
             ),
         )
     }
 
     /** The master switch. Off disables every press regardless of the allowlist. */
-    fun setEnabled(enabled: Boolean) = persist(current.copy(enabled = enabled))
+    fun setEnabled(enabled: Boolean) = persist { it.copy(enabled = enabled) }
 
     /**
      * Replaces the allowlist wholesale with what the user selected.
@@ -154,5 +165,17 @@ class FlipperEnrollmentStore(context: Context) {
      * stored — an incremental API invites a partial write that leaves a button enabled the user
      * just unticked.
      */
-    fun setAllowed(allowed: List<AllowedButton>) = persist(current.copy(allowed = allowed))
+    fun setAllowed(allowed: List<AllowedButton>) = persist { it.copy(allowed = allowed) }
+
+    /**
+     * Releases the store's FileObserver, broadcast receiver and drain coroutine.
+     *
+     * Each instance registers OS-level observers, and the Settings UI builds one per composition of
+     * the Flipper section — so without this, every visit to Settings leaves another observer
+     * waking the process for a record nobody reads.
+     */
+    fun close() {
+        cps.close()
+        scope.cancel()
+    }
 }

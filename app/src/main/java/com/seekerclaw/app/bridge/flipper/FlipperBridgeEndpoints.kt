@@ -33,10 +33,11 @@ class FlipperBridgeEndpoints(context: Context) {
     /**
      * Fires one allowlisted button.
      *
-     * [invocation] is set by the caller from the message pipeline, **not** taken from [params].
-     * Anything the request body carries is model-influenced: `shell_exec` can run curl and
-     * `js_eval` has `require('http')`, so a field in the JSON would be a field the agent could set
-     * itself. The trust boundary is the Kotlin side of the bridge (§4b).
+     * [invocation] is a parameter rather than a field this reads out of [params], so that the one
+     * place deciding it is visible. That is a code-organisation point, **not** a security one: its
+     * only caller derives it from the request body, which is model-influenced. See
+     * `AndroidBridge.handleFlipperPress` and [InvocationContext] for why §4b's trust boundary is
+     * not implementable on this side, and which controls carry the weight instead.
      */
     suspend fun press(params: JSONObject, invocation: InvocationContext): Map<String, Any?> {
         val remote = params.optString("remote", "")
