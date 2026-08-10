@@ -140,10 +140,18 @@ class FlipperEnrollmentStore private constructor(context: Context) {
     }
 
     /**
-     * The authoritative record for a permission decision.
+     * The record a permission decision is made against.
      *
-     * Reads through the store rather than the cached flow: a press must never be authorised
-     * against a snapshot that predates a revocation the user just made in another process.
+     * Reads [CrossProcessStore.state] rather than [_state]. That is the important distinction, and
+     * it is not the one an earlier version of this comment claimed: `_state` carries **optimistic**
+     * values, set before the durable write and possibly never persisted at all, so authorising a
+     * press against it could fire on a permission that only ever existed in the UI.
+     *
+     * It is **not** a synchronous disk read, and does not pretend to be. `cps.state` is an
+     * in-memory view refreshed from disk by a `FileObserver` and a broadcast, so a revocation made
+     * in the *other* process becomes visible here after that propagates — quickly, but not
+     * instantly. The mid-press re-check in `FlipperIrController` exists because of that window;
+     * this property is the freshest value available without blocking, not a guarantee of currency.
      */
     val current: FlipperEnrollment
         get() = FlipperEnrollmentCodec.decode(cps.state.value.blob)

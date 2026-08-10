@@ -321,6 +321,25 @@ class FlipperIrController(
                 }
             }
 
+            // §3 re-check, immediately before the only step that actuates anything.
+            //
+            // `entry` was resolved 6-10 seconds ago — that is how long this sequence takes — and the
+            // master switch is cross-process, so the user can turn Flipper control off, or untick
+            // this button, while it runs. Deciding once at the top made the kill switch a promise
+            // about the *start* of a press rather than about the press, which contradicts what the
+            // Settings copy and DIAGNOSTICS both tell the user ("takes effect immediately").
+            //
+            // Everything above this line is reversible: connecting, reading a file, loading it into
+            // the Infrared app. Nothing has left the device. So this is the last point where failing
+            // closed still costs nothing, and the first point where being stale actually matters.
+            //
+            // Compared as a whole entry, so a re-scan that changed the fingerprint mid-press is
+            // caught too — the sha256 check above ran against the record as it was.
+            val stillPermitted = store.current.resolve(remoteLabel, button)
+            if (stillPermitted != entry) {
+                return notAllowedReason(remoteLabel, button).let { it to "rejected:${it["error"]}" }
+            }
+
             val pressed = client.send(RpcRequest.PressRelease(entry.button), PRESS_DEADLINE_MS)
             pressed.firstOrNull { it.status != CommandStatus.OK }?.let {
                 Log.w(TAG, "[Flipper] press rejected with ${it.status}")

@@ -100,8 +100,17 @@ class ProtoWriter {
     }
 
     /**
-     * Strings go out as UTF-8. Note the Flipper compares button names with `strcmp` over bytes it
-     * tokenised itself, so callers must hand us the exact parsed bytes — see BAT-1201 §6 G4.
+     * Strings go out as **UTF-8**.
+     *
+     * ### Not for `.ir` button names
+     *
+     * The Flipper compares button names with `strcmp` over bytes it tokenised itself, and our
+     * parser maps those bytes to chars one-for-one (ISO-8859-1). Any char above `0x7F` therefore
+     * leaves here as two UTF-8 bytes and no longer matches what the device holds — a button named
+     * `Volumen +` or `Grün` would fail to press with a confusing "not recognised" error.
+     *
+     * [RpcRequest.PressRelease] deliberately encodes with `Charsets.ISO_8859_1` instead. Use this
+     * only for values the firmware treats as text it produced, such as file paths (BAT-1201 §6 G4).
      */
     fun writeString(fieldNumber: Int, value: String) {
         if (value.isEmpty()) return

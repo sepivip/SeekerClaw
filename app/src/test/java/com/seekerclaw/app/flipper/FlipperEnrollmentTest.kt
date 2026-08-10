@@ -2,6 +2,7 @@ package com.seekerclaw.app.flipper
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -248,6 +249,41 @@ class FlipperEnrollmentTest {
         assertTrue(after.allowed.isEmpty())
         assertFalse("the master switch defaults off for a device the user has not configured", after.enabled)
         assertEquals(0L, after.device?.acknowledgedAt)
+    }
+
+    // ------------------------------------------------- revocation mid-press
+
+    @Test fun `flipping the master switch off makes a resolved entry unresolvable`() {
+        // The invariant `FlipperIrController`'s pre-transmit re-check depends on. A press takes
+        // 6-10 seconds, and the switch is cross-process, so the user can revoke while it runs —
+        // the controller re-resolves immediately before transmitting and fails closed on any
+        // change. If `resolve` kept returning the entry after the switch went off, that re-check
+        // would silently pass and the kill switch would only govern the START of a press.
+        val on = FlipperEnrollment(okDevice(), listOf(tv), enabled = true)
+        assertEquals(tv, on.resolve("tv", "Power"))
+
+        val off = on.copy(enabled = false)
+        assertNull("a revoked switch must make the entry unresolvable", off.resolve("tv", "Power"))
+    }
+
+    @Test fun `unticking the button makes it unresolvable while others still resolve`() {
+        val before = FlipperEnrollment(okDevice(), listOf(tv, garage), enabled = true)
+        assertEquals(tv, before.resolve("tv", "Power"))
+
+        val after = before.copy(allowed = listOf(garage))
+        assertNull(after.resolve("tv", "Power"))
+        assertEquals("revoking one entry must not disturb the others", garage, after.resolve("garage", "Open"))
+    }
+
+    @Test fun `a re-approved entry with a new fingerprint is not equal to the old one`() {
+        // The re-check compares the whole entry, not just presence, so a re-scan that changed the
+        // file mid-press is caught even though the label and button still resolve.
+        val before = FlipperEnrollment(okDevice(), listOf(tv), enabled = true)
+        val rescanned = before.copy(allowed = listOf(tv.copy(remoteSha256 = "different")))
+
+        val resolved = rescanned.resolve("tv", "Power")
+        assertNotNull(resolved)
+        assertTrue("the fingerprint change must make it a different entry", resolved != tv)
     }
 
     @Test fun `first enrollment starts from allow-nothing`() {
