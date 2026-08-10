@@ -251,6 +251,20 @@ class FlipperEnrollmentTest {
         assertEquals(0L, after.device?.acknowledgedAt)
     }
 
+    @Test fun `a whitespace-only button name is a real name and resolves`() {
+        // The firmware's tokeniser preserves whitespace and `seek_to_key` seeks +2 unconditionally,
+        // so a `.ir` line reading `name:  ` produces a button literally named " " — see
+        // IrFileParserTest, "two spaces after the colon is not an empty value". It scans, shows,
+        // ticks and stores like any other, so the allowlist must resolve it. The bridge used to
+        // reject it as blank before enforcement ran, making an approved button unpressable.
+        val odd = AllowedButton("/ext/infrared/tv.ir", "tv", "abc123", " ")
+        val e = FlipperEnrollment(okDevice(), listOf(odd), enabled = true)
+
+        assertEquals(odd, e.resolve("tv", " "))
+        assertTrue(e.permits("/ext/infrared/tv.ir", " "))
+        assertNull("still byte-exact — a different whitespace is a different button", e.resolve("tv", "  "))
+    }
+
     // ------------------------------------------------- revocation mid-press
 
     @Test fun `flipping the master switch off makes a resolved entry unresolvable`() {

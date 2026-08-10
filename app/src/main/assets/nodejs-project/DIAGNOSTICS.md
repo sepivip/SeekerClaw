@@ -438,6 +438,13 @@ be paired in **Android** Bluetooth settings first (it shows a passkey on its own
 cannot pair for them — Android has no public API to submit a BLE passkey). Do not offer to enable
 anything yourself: there is deliberately no endpoint that lets you change what you are allowed to do.
 
+> **These can also arrive mid-press.** Permission is re-checked immediately before the signal is
+> transmitted, so if the user switches Flipper control off — or unticks the button — while a press
+> is already underway, it is refused at that point with the same code. A press takes several
+> seconds, so this is a real window, not a theoretical one. If a user says "I turned it off and it
+> still went" for an *earlier* press, that is expected: the refusal applies to presses not yet
+> transmitted, and IR that already left the device cannot be recalled.
+
 ### `legacy_security` — firmware notice not acknowledged
 **Symptoms:** Everything is set up, but every call returns `legacy_security`.
 **Diagnosis:** The Flipper's firmware predates the per-device BLE root-key fix (or its version could

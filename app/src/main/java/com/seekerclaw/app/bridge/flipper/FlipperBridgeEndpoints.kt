@@ -42,7 +42,16 @@ class FlipperBridgeEndpoints(context: Context) {
     suspend fun press(params: JSONObject, invocation: InvocationContext): Map<String, Any?> {
         val remote = params.optString("remote", "")
         val button = params.optString("button", "")
-        if (remote.isBlank() || button.isBlank()) {
+        // `isEmpty`, deliberately not `isBlank`. The firmware's tokeniser preserves whitespace, and
+        // `seek_to_key`'s unconditional +2 means a `.ir` line reading `name:  ` yields a button
+        // literally named " " — see IrFileParserTest, "two spaces after the colon is not an empty
+        // value". That name can be scanned, shown, ticked and stored, so rejecting it here made an
+        // allowlisted button permanently unpressable, refused before enforcement ever ran.
+        //
+        // Absence is the only thing this check is for. Whether a whitespace name is *permitted* is
+        // the allowlist's decision, and it matches byte-exactly, so only a button the user actually
+        // ticked can get through.
+        if (remote.isEmpty() || button.isEmpty()) {
             return mapOf(
                 "error" to "invalid_request",
                 "reason" to "Both 'remote' and 'button' are required.",
