@@ -88,6 +88,7 @@ jobs:
             burner-policy-carveout \
             tools-solana-routing \
             solana-send-guard \
+            flipper-invocation \
             solana-dca-routing \
             tx-parser \
             public-rpc-shaper \

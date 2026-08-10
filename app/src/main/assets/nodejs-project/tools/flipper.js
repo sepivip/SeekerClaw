@@ -15,6 +15,10 @@
 // entry on the Kotlin side and is never accepted from here.
 
 const { androidBridgeCall } = require('../bridge');
+// Split out so it can be unit-tested: this file cannot be required by a test
+// (bridge.js's load chain calls process.exit outside the device), and the rule
+// it encodes decides whether hardware is allowed to actuate.
+const { invocationFor } = require('./flipper-invocation');
 
 // This MUST exceed the Kotlin path's worst case, or a press that actually
 // SUCCEEDED comes back as `Android Bridge timeout` — and since IR power codes
@@ -28,26 +32,6 @@ const { androidBridgeCall } = require('../bridge');
 // that and would have produced the very failure the comment claimed to prevent.
 const PRESS_TIMEOUT_MS = 120000;
 const LIST_TIMEOUT_MS = 60000;
-
-// Turn origin, using the convention already in the codebase: cron sessions run
-// under a `cron:<jobId>` chatId (main.js:1042), which ai.js:646 keys off for its
-// own cron-session handling. The model cannot set this — chatId is supplied by
-// the framework, not by tool input.
-//
-// This is defence in depth, NOT a boundary: `shell_exec` can curl the bridge
-// directly and `js_eval` has `require('http')`, so a sufficiently injected agent
-// can bypass this file entirely and claim whatever it likes. The bridge defaults
-// to "automated" when the field is absent, and the enforceable protections —
-// the Kotlin allowlist and the rolling-hour ceiling — carry the real weight.
-// Contract §4b amendment filed on BAT-1201.
-function invocationFor(chatId) {
-    if (typeof chatId !== 'string') return 'automated';
-    // Same set tools/index.js:365 uses for confirmation-gated tools: cron sessions
-    // AND heartbeat probes. Checking only `cron:` left autonomous heartbeat turns
-    // classified as user-driven, so they could fire IR.
-    if (chatId.startsWith('cron:') || chatId === '__heartbeat__') return 'automated';
-    return 'user_message';
-}
 
 const tools = [
     {
