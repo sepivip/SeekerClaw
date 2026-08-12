@@ -114,6 +114,7 @@ jobs:
             quiesce \
             shutdown-flush-durability-only \
             logging-substrate \
+            history-anchor-trim \
             ci-coverage-manifest
           do
             echo "── $t ──"

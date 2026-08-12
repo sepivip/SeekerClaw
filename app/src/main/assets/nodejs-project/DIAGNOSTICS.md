@@ -143,6 +143,20 @@ grep -i "400\|context.*length\|too many tokens" node_debug.log | tail -5
 2. If a specific tool result was too large, note that tool results are auto-truncated at ~50K characters (HARD_MAX_TOOL_RESULT_CHARS) but the conversation can still accumulate
 3. MAX_HISTORY (35 messages) should prevent this in normal use — if it happens, it's likely a single very large message or tool result
 
+### Agent Loses the Task Mid-Turn / Confabulates on a Long Turn (BAT-1186)
+**Symptoms:** During a long single turn (many tool rounds), the agent suddenly acts as if it never got the request — says things like "I didn't receive any text", treats the triggering input as an "unexplained leftover file", or abandons a multi-step task partway and invents a reason. The message *was* received (it shows in the reply), and there's no crash, timeout, or 4xx.
+**Check:**
+```
+grep -E "\[History\]|\[AnchorGuard\]" node_debug.log | tail -20
+```
+**Diagnosis:** The conversation is trimmed to `MAX_HISTORY` (35) each tool round. The current turn's user instruction (the "anchor") is now **exempt** from that trim (additive-exempt — `nonAnchorLen <= 35`, so preserving it never costs a findings slot). The two log lines report on this:
+- `[History] {... anchorSkipped:1, anchorExempt:1, nonAnchorLen, len ...}` — the anchor-preserving trim engaged and skipped over the instruction instead of deleting it. On a long turn this is **normal and expected** — it's the fix working. First skip per turn+site logs `WARN`, later same-turn skips `DEBUG`.
+- `[AnchorGuard] {... event:"anchor_missing_repaired" ...}` at **ERROR** — a last-resort net just before the request found the anchor missing and re-inserted it. In a healthy build this should **never** fire. If it does, some trimming path is not anchor-aware — capture the log and file a bug (it means a regression slipped past the structural fix).
+**Fix:**
+1. Normal `[History]` WARN/DEBUG on long turns → nothing to do; the instruction is being preserved.
+2. Any `[AnchorGuard]` ERROR → not self-inflicted; report it (a code defect). As a stopgap, `/new` resets the conversation; keeping single turns shorter avoids it.
+3. Historic note: builds before this fix (≤ v2.2.0) deleted the instruction after ~6–18 rounds with **no** log line — silent. If you see the symptom with no `[History]` lines at all, you're on an unpatched build.
+
 ### Pro/Max Sign-in: "You're out of extra usage" (400, often misleading)
 **Symptoms:** On a Pro/Max sign-in (setup_token), API calls return `400` with "You're out of extra usage. Add more at claude.ai/settings/usage" — sometimes on every turn, even when the subscription still has usage left.
 **Check:**
