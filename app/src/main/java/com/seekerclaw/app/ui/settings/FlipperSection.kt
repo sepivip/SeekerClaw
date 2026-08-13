@@ -170,17 +170,33 @@ fun FlipperSection() {
                 }
             }
 
+            // Resolved once: the button's action, its enabled state and the hint below must all
+            // agree about whether the enrolled device is still reachable.
+            val enrolledStillBonded = ui.bonded.firstOrNull { it.address == ui.enrolledAddress }
+
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
                 onClick = {
-                    ui.bonded.firstOrNull { it.address == ui.enrolledAddress }
-                        ?.let { d -> scope.launch { state.enrollAndScan(d) } }
+                    enrolledStillBonded?.let { d -> scope.launch { state.enrollAndScan(d) } }
                 },
-                enabled = !ui.busy,
+                // Disabled rather than a silent no-op. The `?.let` above simply does nothing when
+                // the enrolled Flipper is no longer in the bonded list — unpaired in Android
+                // settings, or factory reset — so the button looked live, did nothing on tap, and
+                // explained nothing. Re-scanning is also the fix we point users at for a
+                // `remote_changed` refusal, which makes a dead button there actively misleading.
+                enabled = !ui.busy && enrolledStillBonded != null,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(SeekerClawColors.CornerRadius),
                 border = BorderStroke(1.dp, SeekerClawColors.BorderSubtle),
             ) { Text("Read remotes from Flipper", fontFamily = RethinkSans, fontSize = 13.sp) }
+
+            if (enrolledStillBonded == null) {
+                Spacer(Modifier.height(6.dp))
+                Hint(
+                    "This Flipper is no longer paired with the phone. Pair it again in Android " +
+                        "Bluetooth settings, then re-read its remotes.",
+                )
+            }
 
             // ── Allowlist ─────────────────────────────────────────────────────
             if (ui.remotes.isNotEmpty()) {
@@ -200,7 +216,14 @@ fun FlipperSection() {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
+                                // Not tickable mid-scan. `enrollAndScan` commits its own
+                                // `setAllowed` at the end — the intersection of the stored list
+                                // with what the scan found — so a toggle made while it runs is
+                                // either overwritten by that commit or applied on top of a remote
+                                // list that is about to be replaced. The writes are ordered, so
+                                // nothing corrupts; what the user sees is simply not what they
+                                // chose, which is worse in a screen granting hardware access.
+                                .clickable(enabled = !ui.busy) {
                                     scope.launch {
                                         state.toggleButton(remote, button, button !in remote.selected)
                                     }
@@ -210,6 +233,7 @@ fun FlipperSection() {
                         ) {
                             Checkbox(
                                 checked = button in remote.selected,
+                                enabled = !ui.busy,
                                 onCheckedChange = { scope.launch { state.toggleButton(remote, button, it) } },
                                 colors = CheckboxDefaults.colors(
                                     checkedColor = SeekerClawColors.TextPrimary,
