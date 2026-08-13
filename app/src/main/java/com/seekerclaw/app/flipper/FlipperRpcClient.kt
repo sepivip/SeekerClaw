@@ -88,6 +88,12 @@ class FlipperRpcClient(
         const val SUBSCRIBE_TIMEOUT_MS = 5_000L
         const val DEFAULT_COMMAND_TIMEOUT_MS = 10_000L
 
+        /**
+         * Ceiling on frames in one response, so a device that never clears `has_next` cannot grow
+         * the pending list without bound. Generous next to real traffic — see the dispatch site.
+         */
+        const val MAX_RESPONSE_FRAMES = 1024
+
         /** Standard SIG services, read directly rather than over RPC. */
         val DEVICE_INFO_SERVICE: java.util.UUID = java.util.UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
         val SOFTWARE_REVISION: java.util.UUID = java.util.UUID.fromString("00002a28-0000-1000-8000-00805f9b34fb")
@@ -554,6 +560,22 @@ class FlipperRpcClient(
         }
 
         p.frames += frame
+
+        // The device decides when a response ends, so it also decides how much we accumulate. A
+        // Flipper that never clears `has_next` — buggy, or hostile on a link the contract tells us
+        // to distrust — grows this list until the command deadline. The byte buffer in
+        // `FrameAssembler` is bounded because that size is ours to choose; this list was not,
+        // because the count is the device's. Same asymmetry, so same treatment.
+        //
+        // The cap is far above any real response: a `.ir` file is a few KB, so a Storage.Read is
+        // tens of frames at the negotiated MTU, and a 500-file Storage.List is under a hundred.
+        if (p.frames.size > MAX_RESPONSE_FRAMES) {
+            failPending(
+                FlipperTransportException.Kind.DECODE_FAILED,
+                "response exceeded $MAX_RESPONSE_FRAMES frames without ending",
+            )
+            return
+        }
 
         // `has_next` marks every frame but the last. Completing early truncates Storage.List and
         // Storage.Read; never completing would hang, so a non-OK status also ends the sequence —
