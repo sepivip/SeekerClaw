@@ -149,4 +149,41 @@ class FlipperControllerLogicTest {
     @Test fun `merge into an empty log keeps the entry`() {
         assertEquals(listOf(700L), FlipperAuditCodec.merge(at(700), emptyList(), 200).map { it.timestampMillis })
     }
+
+    // ------------------------------------------------- App.Exit safety (§5 R1)
+
+    @Test fun `App_Exit is refused after a transport failure`() {
+        // The regression. A timeout says WE stopped waiting, not that the Flipper stopped working —
+        // and the link is still up, so ownership and liveness both still look fine. The old inline
+        // gate checked only those and would have sent App.Exit into a possibly-busy device, which
+        // double-confirms into a furi_check and reboots the user's Flipper.
+        assertFalse(
+            "a command may still be running on the device",
+            canSafelyExitApp(startedApp = true, sawAppStarted = true, linkUp = true, mayBeOutstanding = true),
+        )
+    }
+
+    @Test fun `App_Exit is sent only when we own the app and nothing is in flight`() {
+        assertTrue(
+            canSafelyExitApp(startedApp = true, sawAppStarted = true, linkUp = true, mayBeOutstanding = false),
+        )
+    }
+
+    @Test fun `App_Exit needs both halves of ownership`() {
+        // R1b: without it, Exit closes whatever app the user had open on the device.
+        assertFalse(
+            "App.Start never succeeded",
+            canSafelyExitApp(startedApp = false, sawAppStarted = true, linkUp = true, mayBeOutstanding = false),
+        )
+        assertFalse(
+            "APP_STARTED never observed in this session",
+            canSafelyExitApp(startedApp = true, sawAppStarted = false, linkUp = true, mayBeOutstanding = false),
+        )
+    }
+
+    @Test fun `App_Exit is not attempted on a dead link`() {
+        assertFalse(
+            canSafelyExitApp(startedApp = true, sawAppStarted = true, linkUp = false, mayBeOutstanding = false),
+        )
+    }
 }

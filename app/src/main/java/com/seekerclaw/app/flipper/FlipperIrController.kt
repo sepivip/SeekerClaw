@@ -43,6 +43,27 @@ enum class InvocationContext {
 }
 
 /**
+ * Whether `App.Exit` may be sent as a session is torn down — contract §5 R1.
+ *
+ * Pure and separate because getting it wrong has a physical consequence on the user's hardware,
+ * and the inline version of this expression was wrong in a way nothing could catch: it read
+ * ownership and liveness only, so a timed-out command fell through to `App.Exit` and could
+ * double-confirm into a `furi_check` reboot.
+ *
+ * @param startedApp      R1b — our `App.Start` returned OK.
+ * @param sawAppStarted   R1b — the unsolicited `APP_STARTED` was observed in THIS session.
+ * @param linkUp          the GATT link is still usable.
+ * @param mayBeOutstanding R1a — a transport failure occurred, so a command may still be running on
+ *                        the device. There is no way to ask, so this is treated as certain.
+ */
+internal fun canSafelyExitApp(
+    startedApp: Boolean,
+    sawAppStarted: Boolean,
+    linkUp: Boolean,
+    mayBeOutstanding: Boolean,
+): Boolean = startedApp && sawAppStarted && linkUp && !mayBeOutstanding
+
+/**
  * Owns the Flipper session and enforces every rule that stands between a chat message and an
  * appliance actually changing state.
  *
@@ -262,6 +283,9 @@ class FlipperIrController(
             }
         }
         var startOk = false
+        // R1a: set on any transport failure, because after one we cannot know whether a
+        // command is still running on the device. Read by the finally block below.
+        var commandMayBeOutstanding = false
         try {
             // Charged here, at the last point before the radio is touched. Everything above returns
             // without transmitting, and charging those would let a Flipper that is out of range or
@@ -369,14 +393,40 @@ class FlipperIrController(
             ) to "sent"
         } catch (e: FlipperTransportException) {
             Log.w(TAG, "[Flipper] press failed: ${e.kind}: ${e.message}")
+            // R1a. A transport failure means a command may still be running ON THE DEVICE — a
+            // timeout in particular only says we stopped waiting, not that the Flipper stopped
+            // working. See the finally block.
+            commandMayBeOutstanding = true
             return transportError(e).let { it to "failed:${it["error"]}" }
         } finally {
             // R1a + R1b. Exiting without ownership closes the user's own app; exiting with a
             // command outstanding crashes the device. Dropping the link is always safe.
             try {
-                // R1b: both halves. App.Start succeeded AND we observed APP_STARTED in this
-                // session. Without ownership, App.Exit closes whatever app the user had open.
-                if (startOk && sawAppStarted.get() && client.isConnected) client.send(RpcRequest.Exit, 3_000L)
+                // **R1a** — no `App.*` command outstanding.
+                //
+                // This gate was documented above and then not implemented: the condition checked
+                // ownership and liveness, neither of which says anything about whether a command is
+                // still in flight. `client.isConnected` is still true after a timeout, because the
+                // link is fine — we simply gave up waiting. So a `PressRelease` that timed out
+                // would fall straight through to `App.Exit` while the firmware was potentially
+                // still handling it, which is the exact double-confirm that trips a `furi_check`
+                // and reboots the user's Flipper.
+                //
+                // There is no way to ask the device whether it is busy, so the only sound answer is
+                // to not send anything after a transport failure. Dropping the link is always safe:
+                // the firmware tears the session down on disconnect by itself.
+                //
+                // **R1b** — ownership. App.Start succeeded AND we observed APP_STARTED in this
+                // session; without it, App.Exit closes whatever app the user had open.
+                if (canSafelyExitApp(
+                        startedApp = startOk,
+                        sawAppStarted = sawAppStarted.get(),
+                        linkUp = client.isConnected,
+                        mayBeOutstanding = commandMayBeOutstanding,
+                    )
+                ) {
+                    client.send(RpcRequest.Exit, 3_000L)
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "[Flipper] exit failed, dropping link: ${e.message}")
             }
