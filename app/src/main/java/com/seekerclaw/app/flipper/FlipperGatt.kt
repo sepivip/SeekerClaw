@@ -87,10 +87,22 @@ class FlowControl(initial: Int = FlipperGattConfig.INITIAL_CREDIT) {
      */
     val available: Int @Synchronized get() = credit
 
-    /** The firmware told us how much room is left. Absolute — set, never add. */
+    /**
+     * The firmware told us how much room is left. Absolute — set, never add.
+     *
+     * Clamped at **both** ends. This value arrives off the BLE link, and the contract's rule is
+     * that anything parsed off that link is untrusted regardless of key hygiene — a mis-decoded
+     * width or endianness, or a corrupt frame, produces a number with no relation to the device's
+     * actual buffer. Only the floor was clamped before, which guarded the direction that cannot
+     * hurt: too little credit merely stalls. Too much lets [tryConsume] authorise writes past
+     * `RPC_BUFFER_SIZE`, which is the firmware buffer overrun this whole class exists to prevent.
+     *
+     * The device can never legitimately have more room than its buffer holds, so capping at
+     * [FlipperGattConfig.INITIAL_CREDIT] cannot discard a real refill.
+     */
     @Synchronized
     fun onCreditNotified(remaining: Int) {
-        credit = remaining.coerceAtLeast(0)
+        credit = remaining.coerceIn(0, FlipperGattConfig.INITIAL_CREDIT)
     }
 
     /** Reserve [n] bytes for a write we are about to make. Returns false if there is no room. */

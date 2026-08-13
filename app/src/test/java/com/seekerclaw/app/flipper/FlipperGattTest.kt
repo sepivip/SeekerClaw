@@ -73,6 +73,28 @@ class FlipperGattTest {
         assertEquals(0, fc.available)
     }
 
+    @Test fun `a notified credit above the buffer size is clamped down`() {
+        // The dangerous direction, and the one that was unguarded. This value comes off the BLE
+        // link, which the contract treats as untrusted: a mis-decoded width or a corrupt frame can
+        // report more room than the device physically has, and tryConsume would then authorise
+        // writes past RPC_BUFFER_SIZE — the overrun this class exists to prevent. Too LITTLE credit
+        // merely stalls, which is why only the floor being clamped looked sufficient.
+        val fc = FlowControl()
+        fc.onCreditNotified(Int.MAX_VALUE)
+        assertEquals(FlipperGattConfig.INITIAL_CREDIT, fc.available)
+
+        fc.onCreditNotified(65_535) // a plausible width mis-decode
+        assertEquals(FlipperGattConfig.INITIAL_CREDIT, fc.available)
+    }
+
+    @Test fun `a clamped credit cannot authorise a write past the buffer`() {
+        // The consequence, stated as behaviour rather than as a number.
+        val fc = FlowControl()
+        fc.onCreditNotified(Int.MAX_VALUE)
+        assertTrue(fc.tryConsume(FlipperGattConfig.INITIAL_CREDIT))
+        assertFalse("not one byte past the firmware buffer", fc.tryConsume(1))
+    }
+
     @Test fun `reset restores a full buffer for a new session`() {
         val fc = FlowControl()
         fc.tryConsume(1000)
