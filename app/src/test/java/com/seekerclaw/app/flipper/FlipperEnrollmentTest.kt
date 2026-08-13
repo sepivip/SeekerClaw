@@ -265,6 +265,28 @@ class FlipperEnrollmentTest {
         assertNull("still byte-exact — a different whitespace is a different button", e.resolve("tv", "  "))
     }
 
+    @Test fun `the name cap is one shared constant, not a private copy per layer`() {
+        // Two bugs came from the bridge validating names against a cap the enrollment scan could
+        // not see: a whitespace-only name and an over-long one could both be ticked in Settings and
+        // then refused forever with `invalid_request`. The value matters less than the fact that
+        // exactly one definition exists — a second copy is how they drift back apart.
+        assertEquals(64, FlipperLimits.MAX_NAME_CHARS)
+        assertTrue("a real .ir button name fits comfortably", "Vol_up".length < FlipperLimits.MAX_NAME_CHARS)
+    }
+
+    @Test fun `a name at the cap is allowed and one past it is not`() {
+        // Pins the boundary itself: the scan filters with <=, the bridge rejects with >, so an
+        // off-by-one between them would resurrect exactly the bug this shares a constant to avoid.
+        val atCap = "b".repeat(FlipperLimits.MAX_NAME_CHARS)
+        val overCap = "b".repeat(FlipperLimits.MAX_NAME_CHARS + 1)
+
+        val entry = AllowedButton("/ext/infrared/tv.ir", "tv", "abc123", atCap)
+        val e = FlipperEnrollment(okDevice(), listOf(entry), enabled = true)
+        assertEquals("a name exactly at the cap is pressable", entry, e.resolve("tv", atCap))
+        assertTrue(atCap.length <= FlipperLimits.MAX_NAME_CHARS)
+        assertFalse(overCap.length <= FlipperLimits.MAX_NAME_CHARS)
+    }
+
     // ------------------------------------------------- revocation mid-press
 
     @Test fun `flipping the master switch off makes a resolved entry unresolvable`() {

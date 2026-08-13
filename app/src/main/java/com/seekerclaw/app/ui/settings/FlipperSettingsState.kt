@@ -13,6 +13,7 @@ import com.seekerclaw.app.flipper.FlipperAuditLog
 import com.seekerclaw.app.flipper.FlipperDeviceManager
 import com.seekerclaw.app.flipper.FlipperEnrollmentStore
 import com.seekerclaw.app.flipper.FlipperFirmwareGate
+import com.seekerclaw.app.flipper.FlipperLimits
 import com.seekerclaw.app.flipper.FlipperLinkLock
 import com.seekerclaw.app.flipper.FlipperRemoteReader
 import com.seekerclaw.app.flipper.FlipperRpcClient
@@ -230,6 +231,7 @@ class FlipperSettingsState(private val context: Context) {
 
             val choices = mutableListOf<RemoteChoice>()
             var unreadable = 0
+            var overlong = 0
             for (ref in listing.remotes) {
                 // Only a per-file refusal may be skipped. COMMAND_FAILED means the Flipper answered
                 // about *this* path — missing, denied, not a readable file — so counting it as
@@ -249,11 +251,23 @@ class FlipperSettingsState(private val context: Context) {
                 }
                 if (detail == null) { unreadable++; continue }
                 if (detail.isEmpty) continue
+
+                // Never offer what the bridge would refuse. The press endpoint bounds both names at
+                // FlipperLimits.MAX_NAME_CHARS, so a longer one could be scanned, shown, ticked and
+                // stored — and then failed every time with `invalid_request`, before enforcement
+                // ran. An approved button that can never be pressed is worse than one that was
+                // never offered, so the entry is dropped here and the count is surfaced below
+                // rather than being silently trimmed to fit.
+                if (ref.displayName.length > FlipperLimits.MAX_NAME_CHARS) { overlong++; continue }
+                val usable = detail.buttons.filter { it.length <= FlipperLimits.MAX_NAME_CHARS }
+                overlong += detail.buttons.size - usable.size
+                if (usable.isEmpty()) continue
+
                 choices += RemoteChoice(
                     label = ref.displayName,
                     path = ref.path,
                     sha256 = detail.sha256,
-                    buttons = detail.buttons,
+                    buttons = usable,
                     selected = emptySet(),
                 )
             }
@@ -262,6 +276,9 @@ class FlipperSettingsState(private val context: Context) {
                 if (listing.skipped > 0) add("${listing.skipped} file(s) with non-ASCII names were skipped")
                 if (listing.capped) add("only the first ${FlipperRemoteReader.MAX_FILES} files were read")
                 if (unreadable > 0) add("$unreadable file(s) were not usable remotes")
+                if (overlong > 0) {
+                    add("$overlong name(s) longer than ${FlipperLimits.MAX_NAME_CHARS} characters were skipped")
+                }
             }
 
             val found = disambiguate(choices)

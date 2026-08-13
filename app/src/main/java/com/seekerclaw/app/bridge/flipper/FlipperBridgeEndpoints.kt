@@ -2,6 +2,7 @@ package com.seekerclaw.app.bridge.flipper
 
 import android.content.Context
 import com.seekerclaw.app.flipper.FlipperEnrollmentStore
+import com.seekerclaw.app.flipper.FlipperLimits
 import com.seekerclaw.app.flipper.FlipperIrController
 import com.seekerclaw.app.flipper.InvocationContext
 import org.json.JSONObject
@@ -18,11 +19,6 @@ import org.json.JSONObject
  * *incapable* of exceeding the allowlist, not merely instructed not to.
  */
 class FlipperBridgeEndpoints(context: Context) {
-
-    private companion object {
-        /** Generous next to any real `.ir` button name; the point is a bound, not a tight fit. */
-        const val MAX_NAME_CHARS = 64
-    }
 
     private val store = FlipperEnrollmentStore.get(context)
     private val controller = FlipperIrController(context, store)
@@ -61,10 +57,10 @@ class FlipperBridgeEndpoints(context: Context) {
         // attempt is still written to the audit log — which is decoded and re-encoded on every
         // subsequent operation, so an unbounded string would be paid for repeatedly. Real names
         // come from a .ir file and are far shorter than this.
-        if (remote.length > MAX_NAME_CHARS || button.length > MAX_NAME_CHARS) {
+        if (remote.length > FlipperLimits.MAX_NAME_CHARS || button.length > FlipperLimits.MAX_NAME_CHARS) {
             return mapOf(
                 "error" to "invalid_request",
-                "reason" to "Remote and button names must be $MAX_NAME_CHARS characters or fewer.",
+                "reason" to "Remote and button names must be ${FlipperLimits.MAX_NAME_CHARS} characters or fewer.",
             )
         }
         return controller.press(remote, button, invocation)

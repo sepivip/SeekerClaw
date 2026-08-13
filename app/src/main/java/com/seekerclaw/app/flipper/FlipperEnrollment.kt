@@ -43,6 +43,20 @@ data class EnrolledFlipper(
 }
 
 /**
+ * Bounds shared by the two sides that must agree about them.
+ *
+ * The cap used to live privately in `FlipperBridgeEndpoints`, so the enrollment scan could not see
+ * it — and offered entries the bridge would then refuse. That produced two bugs of the same shape
+ * (a whitespace-only name, and an over-long one): a button the user ticked in Settings that could
+ * never be pressed, failing with `invalid_request` before enforcement ever ran. One constant, so
+ * the validator and the thing that populates it cannot drift again.
+ */
+object FlipperLimits {
+    /** Generous next to any real `.ir` name; the point is a bound, not a tight fit. */
+    const val MAX_NAME_CHARS = 64
+}
+
+/**
  * One `(remote, button)` pair the agent may fire.
  *
  * The tuple is matched **as a unit**. Two independent membership checks would let
