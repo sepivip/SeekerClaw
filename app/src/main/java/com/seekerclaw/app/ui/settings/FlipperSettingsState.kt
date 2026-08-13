@@ -310,7 +310,12 @@ class FlipperSettingsState(private val context: Context) {
             // `acknowledgedAt` is not ours to set: the store keeps an existing acknowledgement when
             // the device and its security class are both unchanged, so re-scanning for new remotes
             // does not silently revoke agent access. See FlipperEnrollmentStore.enroll.
-            store.enroll(
+            //
+            // Awaited, and the scan aborts if it fails. This is the commit point for the whole
+            // sequence, so a silent failure here would leave the user looking at a completed scan
+            // with a remote list on screen and nothing persisted — and the pruning below would then
+            // write an allowlist for a device that is not enrolled.
+            val enrolled = store.enroll(
                 EnrolledFlipper(
                     address = device.address,
                     label = device.name.ifBlank { device.address },
@@ -318,7 +323,15 @@ class FlipperSettingsState(private val context: Context) {
                     acknowledgedAt = 0L,
                     firmwareVersion = firmware,
                 ),
-            )
+            ).await()
+            if (!enrolled) {
+                _ui.value = _ui.value.copy(
+                    busy = false,
+                    status = null,
+                    error = "Could not save the enrollment. Nothing was changed — try again.",
+                )
+                return
+            }
 
             // Intersect the stored allowlist with what this scan actually found. Without this,
             // entries for remotes the user deleted stay allowlisted and advertised to the agent
@@ -334,14 +347,25 @@ class FlipperSettingsState(private val context: Context) {
                 found.any { it.path == a.remotePath && it.sha256 == a.remoteSha256 && a.button in it.buttons }
             }
             val dropped = allowedNow.size - stillValid.size
-            if (dropped > 0) store.setAllowed(stillValid)
+            // Awaited, like every other revocation on this screen. Pruning stale entries IS a
+            // revocation — it withdraws buttons the agent could otherwise still fire — so claiming
+            // it before the write lands would tell the user permission was removed while the
+            // record `:node` enforces against still granted it. This was the one `setAllowed` call
+            // that had not been brought under that rule.
+            val prunePersisted = if (dropped > 0) store.setAllowed(stillValid).await() else true
 
             _ui.value = _ui.value.copy(
                 busy = false,
                 status = null,
                 remotes = found,
+                // The wording follows what actually happened, never what was intended.
                 scanNote = (notes + listOfNotNull(
-                    if (dropped > 0) "$dropped previously enabled button(s) no longer exist and were removed" else null,
+                    when {
+                        dropped == 0 -> null
+                        prunePersisted -> "$dropped previously enabled button(s) no longer exist and were removed"
+                        else -> "$dropped previously enabled button(s) no longer exist but could NOT be removed — " +
+                            "they are still enabled. Try re-reading the remotes."
+                    },
                 )).takeIf { it.isNotEmpty() }?.joinToString("; "),
             )
             refresh()
