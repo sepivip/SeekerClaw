@@ -80,9 +80,22 @@ class FlipperIrController(
         const val MIN_PROTOBUF_MINOR = 25
 
         /**
-         * Total budget for a press. Must stay strictly under the timeout `tools/flipper.js` passes
-         * to the bridge, or a press that succeeded reports as a transport error and the model may
-         * retry — firing a toggle-coded appliance back off (§4a).
+         * Deadline for the **transmit step alone** — the `PressRelease` command, nothing else.
+         *
+         * It is not the budget for a press, and calling it that (as this comment used to) hid a
+         * real problem: the end-to-end worst case is the SUM of every per-step deadline on the
+         * path, and `tools/flipper.js` has to exceed that sum, not this number.
+         *
+         *   connect 15 + MTU 5 + discover 10 + CCCD 3x5 = 45s   (FlipperRpcClient.connect)
+         *   version 5 + App.Start 8 + grace 3 + Storage.Read 15
+         *     + LoadFile 15 + PressRelease 25 + App.Exit 3      = 74s   (runPress)
+         *   -------------------------------------------------------------
+         *   worst case                                          119s
+         *
+         * If the Node-side timeout is below that, a press that actually SUCCEEDED comes back as a
+         * bridge timeout, and since IR power codes are almost all toggles a retry turns the
+         * appliance back off — the §4a hazard. Changing any deadline here means rechecking
+         * `PRESS_TIMEOUT_MS` there.
          */
         const val PRESS_DEADLINE_MS = 25_000L
 

@@ -157,13 +157,16 @@ class FlipperAuditLog private constructor(context: Context) {
         private const val MAX_ENTRIES = 200
 
         /**
-         * Defensive caps on what a single entry may carry.
+         * Defensive cap on what a single entry may carry — the same bound the bridge enforces.
          *
          * Both fields originate in model-supplied tool input. They are already rejected by the
-         * allowlist before a press happens, but a *rejected* attempt is recorded too — so without
-         * a cap, a long label would be decoded and re-encoded on every subsequent operation.
+         * allowlist before a press happens, but a *rejected* attempt is recorded too, so without a
+         * cap a long label would be decoded and re-encoded on every subsequent operation.
+         *
+         * Deliberately [FlipperLimits.MAX_NAME_CHARS] and not a private 64: a third independent
+         * copy of the same number is precisely the drift `FlipperLimits` was introduced to end.
          */
-        private const val MAX_FIELD_CHARS = 64
+        private const val MAX_FIELD_CHARS = FlipperLimits.MAX_NAME_CHARS
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

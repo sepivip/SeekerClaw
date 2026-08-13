@@ -25,12 +25,25 @@ const { invocationFor } = require('./flipper-invocation');
 // are almost all toggles, a retry would turn the appliance back off. That is the
 // exact hazard §4a exists to prevent.
 //
-// The Kotlin worst case is the sum of its per-step deadlines, not the 25s press
-// budget alone: connect (15s) + MTU (5s) + discover (10s) + 3 CCCD writes (15s)
-// + version (5s) + App.Start (8s) + APP_STARTED grace (3s) + LoadFile (15s)
-// + PressRelease (25s) + Exit (3s) ~= 104s. An earlier 30s value here was below
-// that and would have produced the very failure the comment claimed to prevent.
-const PRESS_TIMEOUT_MS = 120000;
+// The Kotlin worst case is the sum of its per-step deadlines, not the 25s
+// PressRelease deadline alone:
+//
+//   connect 15 + MTU 5 + discover 10 + CCCD 3x5             =  45s
+//   version 5 + App.Start 8 + APP_STARTED grace 3
+//     + Storage.Read 15 + LoadFile 15 + PressRelease 25
+//     + App.Exit 3                                          =  74s
+//   ----------------------------------------------------------------
+//   worst case                                                 119s
+//
+// The previous arithmetic here omitted Storage.Read and landed on ~104s, which
+// made 120000 look like a 16s margin. It was 1s. Any bridge, HTTP or GC overhead
+// crossed it, and the failure it produces is silent and physical: the appliance
+// changed state, the agent was told the command timed out.
+//
+// 180s restores a real margin (~61s). The cost of it being generous is bounded —
+// Kotlin returns by 119s on its own, so this only governs the case where the
+// bridge itself is wedged, which is a different failure with its own handling.
+const PRESS_TIMEOUT_MS = 180000;
 const LIST_TIMEOUT_MS = 60000;
 
 const tools = [
