@@ -32,12 +32,22 @@ fun signingProp(localKey: String, envKey: String): String? =
 
 android {
     namespace = "com.seekerclaw.app"
-    compileSdk = 35
+    compileSdk = 36
+
+    // BAT-1187: pin the NDK explicitly. Previously unpinned, so the build rode
+    // whatever NDK the installed AGP happened to default to — a silent
+    // reproducibility hazard (the toolchain could change under us on any
+    // machine or CI image). r27 does NOT emit 16 KB-aligned ELF segments by
+    // default (r28+ does), which is why the 16 KB link flags below are
+    // explicit rather than implied by the toolchain.
+    // FOLLOW-UP (autumn 16 KB ticket): re-evaluate this pin when libnode.so is
+    // rebuilt/replaced — moving to r28+ would make the flags redundant.
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 23
         versionName = "2.2.0"
 
@@ -265,13 +275,20 @@ dependencies {
     // Solana Mobile Wallet Adapter
     // Bumped 2.0.3 → 2.0.4 (BAT-697 commit 1). 2.0.4 ships the security fix
     // ("Address Security Alerts 58, 63-66" — solana-mobile/mobile-wallet-adapter#791)
-    // without bumping androidx.core transitively past 1.16.x. Going to 2.0.5+
-    // (or 2.1.0) pulls androidx.core:1.17.0 which requires compileSdk 36 — out
-    // of scope for this BAT (we're on compileSdk 35; bumping it cascades to AGP /
-    // target-SDK migration work). Tracked as a follow-up.
-    // Must device-test existing solana_send / solana_swap flows BEFORE adding
-    // any V2 trigger code (per Codex round-2: stage MWA bump as its own commit,
-    // regression-check first).
+    // without bumping androidx.core transitively past 1.16.x.
+    //
+    // BAT-1187 CORRECTION: an earlier version of this comment claimed that
+    // bumping compileSdk "cascades to AGP / target-SDK migration work", and that
+    // claim deferred the Android 16 migration for months. It had the dependency
+    // arrow BACKWARDS. androidx.core 1.17.0 *requires* compileSdk 36 — compileSdk
+    // 36 does NOT require androidx.core 1.17.0. Verified by experiment: this
+    // project compiles green at compileSdk/targetSdk 36 with the dependency set
+    // completely unchanged, MWA still pinned at 2.0.4.
+    //
+    // What remains true: moving MWA to 2.0.5+/2.1.0 pulls androidx.core 1.17.0,
+    // and any MWA bump must device-regression-test solana_send / solana_swap as
+    // its own commit (Codex round-2 on BAT-697). That is a separate decision from
+    // the target-SDK level and is NOT required by it.
     implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.4")
 
     // Solana transaction building (pure Kotlin)
