@@ -1,6 +1,7 @@
 package com.seekerclaw.app.ui.settings
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import androidx.annotation.RequiresPermission
 import com.seekerclaw.app.flipper.AllowedButton
@@ -78,13 +79,28 @@ class FlipperSettingsState(private val context: Context) {
      */
     val auditEntries = auditLog.entries
 
-    /** Re-reads permission state and the stored enrollment. Cheap; safe to call on every resume. */
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    /**
+     * Re-reads permission state and the stored enrollment. Cheap; safe to call on every resume.
+     *
+     * **Deliberately not `@RequiresPermission`.** This is the one entry point that must work
+     * *without* `BLUETOOTH_CONNECT` — the Flipper section calls it on first composition, before the
+     * user has been asked, precisely so it can discover that the permission is missing and render
+     * the grant prompt. Annotating it stated the opposite contract and made lint flag the call that
+     * the design depends on.
+     *
+     * The permission is still required for the enumeration itself; that is why the
+     * `bondedDevices()` call sits behind the runtime check, with the suppression scoped to it
+     * rather than to this whole function.
+     */
     fun refresh() {
         val granted = devices.hasConnectPermission()
         var bonded = emptyList<BondedDevice>()
         var bondedError: BluetoothUnavailable? = null
         if (granted) {
+            // Guarded by `granted` immediately above — the runtime check IS the permission check,
+            // which lint cannot see through. Scoped to this call so the enclosing function keeps
+            // no permission contract it does not have.
+            @SuppressLint("MissingPermission")
             devices.bondedDevices()
                 .onSuccess { bonded = it }
                 .onFailure { bondedError = (it as? BluetoothUnavailableException)?.reason }
