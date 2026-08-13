@@ -187,7 +187,15 @@ object FlipperEnrollmentCodec {
     private const val A_SHA = 3
     private const val A_BUTTON = 4
 
-    /** Base64 so the result fits a `SharedPreferences` string. `java.util.Base64` works in tests. */
+    /**
+     * Base64 so the protobuf bytes survive a JSON string field — [FlipperRecord.blob], written by
+     * `CrossProcessStore`. `java.util.Base64` rather than `android.util.Base64` because this codec
+     * decides whether a physical action is permitted and must be round-trip testable off-device.
+     *
+     * (This said "so the result fits a `SharedPreferences` string" until now — true of the original
+     * design, and stale since the store moved to `CrossProcessStore` in review. The encoding is
+     * still needed, just for a different container.)
+     */
     fun encode(e: FlipperEnrollment): String {
         val root = ProtoWriter().apply {
             writeUint32(F_VERSION, CURRENT_VERSION)
