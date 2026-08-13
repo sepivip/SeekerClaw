@@ -38,8 +38,9 @@ android {
     // whatever NDK the installed AGP happened to default to — a silent
     // reproducibility hazard (the toolchain could change under us on any
     // machine or CI image). r27 does NOT emit 16 KB-aligned ELF segments by
-    // default (r28+ does), which is why the 16 KB link flags below are
-    // explicit rather than implied by the toolchain.
+    // default (r28+ does), which is why the 16 KB link flags in
+    // src/main/cpp/CMakeLists.txt (target_link_options) are explicit rather
+    // than implied by the toolchain.
     // FOLLOW-UP (autumn 16 KB ticket): re-evaluate this pin when libnode.so is
     // rebuilt/replaced — moving to r28+ would make the flags redundant.
     ndkVersion = "27.0.12077973"
