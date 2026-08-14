@@ -430,8 +430,13 @@ class FlipperIrController(
             } catch (e: Exception) {
                 Log.w(TAG, "[Flipper] exit failed, dropping link: ${e.message}")
             }
-            client.close()
-            lease.close()
+            // Independent, for the same reason as the enrollment path: a throw from `close()`
+            // used to skip the lease release and the unlock, leaving the cross-process lock held
+            // and every later press refused with `busy_local` until the process restarted.
+            runCatching { client.close() }
+                .onFailure { Log.w(TAG, "[Flipper] client close failed: ${it.message}") }
+            runCatching { lease.close() }
+                .onFailure { Log.w(TAG, "[Flipper] lease release failed: ${it.message}") }
             FlipperLinkLock.mutex.unlock()
         }
     }

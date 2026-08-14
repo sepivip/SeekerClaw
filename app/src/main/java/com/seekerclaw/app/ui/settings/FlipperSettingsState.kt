@@ -3,6 +3,7 @@ package com.seekerclaw.app.ui.settings
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.util.Log
 import androidx.annotation.RequiresPermission
 import com.seekerclaw.app.flipper.AllowedButton
 import com.seekerclaw.app.flipper.BluetoothUnavailable
@@ -21,6 +22,7 @@ import com.seekerclaw.app.flipper.FlipperRpcClient
 import com.seekerclaw.app.flipper.FlipperTransportException
 import com.seekerclaw.app.flipper.RemoteDetail
 import com.seekerclaw.app.flipper.SecurityClass
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,6 +63,8 @@ data class FlipperUiState(
  * the only place enrollment can happen — Android has no public API to submit a BLE passkey, so the
  * pairing itself belongs to Android Settings and this only ever works with what is already bonded.
  */
+private const val TAG = "FlipperIr"
+
 class FlipperSettingsState(private val context: Context) {
 
     private val store = FlipperEnrollmentStore.get(context)
@@ -233,8 +237,12 @@ class FlipperSettingsState(private val context: Context) {
             return
         }
 
-        val client = FlipperRpcClient(context)
+        // Constructed INSIDE the guarded region. Both locks are already held at this point, so a
+        // failure between acquiring them and entering the `try` would strand them — the device
+        // becomes unusable until the process restarts, since nothing else releases either one.
+        var client: FlipperRpcClient? = null
         try {
+            client = FlipperRpcClient(context)
             client.connect(handle)
 
             _ui.value = _ui.value.copy(status = "Checking firmware…")
@@ -371,11 +379,21 @@ class FlipperSettingsState(private val context: Context) {
             refresh()
         } catch (e: FlipperTransportException) {
             _ui.value = _ui.value.copy(busy = false, status = null, error = describe(e))
+        } catch (e: CancellationException) {
+            // `CancellationException` IS an `Exception`, so the broad catch below would swallow it
+            // and report a cancelled scan to the user as a failure — while also breaking the
+            // structured-concurrency contract that cancellation propagates.
+            throw e
         } catch (e: Exception) {
             _ui.value = _ui.value.copy(busy = false, status = null, error = e.message ?: "Something went wrong.")
         } finally {
-            client.close()
-            lease.close()
+            // Each step is independent. Chaining them meant a throw from `client.close()` skipped
+            // the lease release and the mutex unlock, holding a cross-process lock indefinitely and
+            // blocking every later press and scan. Cleanup must not be able to fail partway.
+            runCatching { client?.close() }
+                .onFailure { Log.w(TAG, "[Flipper] client close failed: ${it.message}") }
+            runCatching { lease.close() }
+                .onFailure { Log.w(TAG, "[Flipper] lease release failed: ${it.message}") }
             FlipperLinkLock.mutex.unlock()
         }
     }

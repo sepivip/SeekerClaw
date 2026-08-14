@@ -41,12 +41,13 @@ class FlipperGattTest {
     @Test fun `credit notification sets the absolute value rather than accumulating`() {
         // The firmware reports remaining room, not a delta. Adding drifts the accounting until
         // writes are refused (or worse, accepted when there is no room).
-        val fc = FlowControl(initial = 1024)
+        val full = FlipperGattConfig.INITIAL_CREDIT
+        val fc = FlowControl(initial = full)
         fc.tryConsume(600)
-        assertEquals(424, fc.available)
+        assertEquals(full - 600, fc.available)
 
-        fc.onCreditNotified(1024) // buffer drained on the device
-        assertEquals("must be set to 1024, not 424 + 1024", 1024, fc.available)
+        fc.onCreditNotified(full) // buffer drained on the device
+        assertEquals("must be set to the notified value, not added to it", full, fc.available)
     }
 
     @Test fun `consuming beyond the credit is refused rather than going negative`() {
@@ -235,7 +236,7 @@ class FlipperGattTest {
         val asm = FrameAssembler()
         // A length prefix claiming far more than follows, so everything stays buffered. A bare
         // ByteArray would not: a leading 0 byte is a valid zero-length frame and drains instantly.
-        val header = ProtoWriter().apply { writeVarint(100_000) }.toByteArray()
+        val header = ProtoWriter().apply { writeVarint(100_000L) }.toByteArray()
         asm.append(header + ByteArray(64_000) { 1 })
         assertTrue(asm.pending > 0)
         asm.reset()
