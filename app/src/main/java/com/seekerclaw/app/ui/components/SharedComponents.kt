@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -469,7 +470,12 @@ fun CardSurface(
 
 /**
  * Label/value row with optional status dot and divider.
- * Monospace font for both label and value. Used in SystemScreen, SettingsScreen, etc.
+ *
+ * BAT-1247 (audit: "Monospace used for plain-English labels"): labels are now
+ * RethinkSans — monospace is reserved for TECHNICAL values (versions, hashes,
+ * sizes, counts, ms), per the design system's own rule. Values default to
+ * monospace; pass [monospaceValue] = false for human-readable values
+ * ("Charging", agent names) so they render in RethinkSans too.
  */
 @Composable
 fun InfoRow(
@@ -477,6 +483,7 @@ fun InfoRow(
     value: String,
     dotColor: Color? = null,
     isLast: Boolean = false,
+    monospaceValue: Boolean = true,
 ) {
     Row(
         modifier = Modifier
@@ -487,20 +494,20 @@ fun InfoRow(
     ) {
         Text(
             text = label,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.bodySmall,
             color = SeekerClawColors.TextSecondary,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = value,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
+                fontFamily = if (monospaceValue) FontFamily.Monospace else RethinkSans,
+                fontSize = TypeScale.bodySmall,
                 fontWeight = FontWeight.Medium,
                 color = SeekerClawColors.TextPrimary,
             )
             if (dotColor != null) {
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(Spacing.sm))
                 Box(
                     modifier = Modifier
                         .size(10.dp)
@@ -1063,4 +1070,219 @@ fun InputWithActionButton(
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BAT-1247 shared primitives — ONE style per pattern, applied app-wide.
+// Audit findings M4 (three competing section-header styles), M5 (add-item
+// affordance drift), search-field divergence, empty-state divergence,
+// color-only status dots, and the four-way interactive-text drift all trace
+// to screens hand-rolling these. New screens MUST use these instead.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Page-level section header — THE one style for sections on any screen
+ * (Home "Status", Settings "Configuration", System "Activity", …): small,
+ * grey, letter-spaced. Replaces both the bold-white [SectionLabel] treatment
+ * and per-screen hand-rolled headers.
+ */
+@Composable
+fun PageSectionHeader(title: String, modifier: Modifier = Modifier) {
+    Text(
+        text = title,
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 1.sp,
+        color = SeekerClawColors.TextSecondary,
+        modifier = modifier,
+    )
+}
+
+/**
+ * In-card field label — ALL-CAPS, grey, small. For labels INSIDE a card
+ * (skill detail "TYPE" / "DESCRIPTION", wallet card field names). Visually
+ * distinct from [PageSectionHeader] so page structure and card fields never
+ * blur (PM: no hierarchy flattening).
+ */
+@Composable
+fun InCardLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text.uppercase(),
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 1.sp,
+        color = SeekerClawColors.TextDim,
+        modifier = modifier,
+    )
+}
+
+/**
+ * THE app search field (audit: Logs and Skills shipped two different search
+ * treatments). Filled Surface, standard corner radius, RethinkSans
+ * placeholder, monospace INPUT only when [monospaceInput] (log queries are
+ * technical; skill names are prose).
+ */
+@Composable
+fun SeekerClawSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    monospaceInput: Boolean = false,
+) {
+    val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(Sizing.buttonSecondaryHeight)
+            .background(SeekerClawColors.Surface, shape)
+            .border(BorderStroke(Sizing.borderThin, SeekerClawColors.CardBorder), shape),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Search,
+            contentDescription = null,
+            tint = SeekerClawColors.TextDim,
+            modifier = Modifier
+                .padding(start = Spacing.lg, end = Spacing.sm)
+                .size(Sizing.iconMd),
+        )
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = TextStyle(
+                color = SeekerClawColors.TextPrimary,
+                fontSize = TypeScale.bodyMedium.value.sp,
+                fontFamily = if (monospaceInput) FontFamily.Monospace else RethinkSans,
+            ),
+            cursorBrush = SolidColor(SeekerClawColors.Primary),
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = Spacing.lg),
+            decorationBox = { innerTextField ->
+                if (value.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        color = SeekerClawColors.TextDim,
+                        fontSize = TypeScale.bodyMedium,
+                        fontFamily = RethinkSans,
+                    )
+                }
+                innerTextField()
+            },
+        )
+    }
+}
+
+/**
+ * THE empty-state template (audit: MCP folded an italic line into its
+ * explainer while Env Vars used a separate headline card). Centered headline
+ * + optional one-line hint + optional primary action + optional secondary
+ * text action, with parallel copy across screens ("No MCP servers yet." /
+ * "No env vars yet.").
+ */
+@Composable
+fun EmptyState(
+    headline: String,
+    modifier: Modifier = Modifier,
+    hint: String? = null,
+    primaryLabel: String? = null,
+    onPrimary: (() -> Unit)? = null,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.lg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = headline,
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = SeekerClawColors.TextPrimary,
+        )
+        if (hint != null) {
+            Spacer(Modifier.height(Spacing.sm))
+            Text(
+                text = hint,
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.bodySmall,
+                color = SeekerClawColors.TextSecondary,
+            )
+        }
+        if (primaryLabel != null && onPrimary != null) {
+            Spacer(Modifier.height(Spacing.lg))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PrimaryButton(
+                    onClick = onPrimary,
+                    label = primaryLabel,
+                    height = Sizing.buttonSecondaryHeight,
+                )
+                if (secondaryLabel != null && onSecondary != null) {
+                    Spacer(Modifier.width(Spacing.lg))
+                    Text(
+                        text = secondaryLabel,
+                        fontFamily = RethinkSans,
+                        fontSize = TypeScale.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = SeekerClawColors.TextSecondary,
+                        modifier = Modifier.clickable(onClick = onSecondary),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Status dot + VISIBLE status word (audit a11y: Home conveyed service health
+ * by hue alone; PM: contentDescription alone is insufficient). Word inherits
+ * the dot color so the pair reads as one unit; state is carried by TEXT, not
+ * only color.
+ */
+@Composable
+fun StatusIndicator(
+    word: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = word,
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = color,
+        )
+        Spacer(Modifier.width(Spacing.sm))
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+    }
+}
+
+/**
+ * Green screen-level text action ("Import", "Export All", header "+ Add").
+ * One of the three sanctioned interactive-text affordances:
+ *   green [ScreenActionLink] (ActionPrimary) = screen-level action,
+ *   white "Edit" (ConfigField/TextInteractive) = row edit,
+ *   grey text + chevron = navigation drill-in.
+ */
+@Composable
+fun ScreenActionLink(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Text(
+        text = label,
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.bodyMedium,
+        fontWeight = FontWeight.Bold,
+        color = SeekerClawColors.ActionPrimary,
+        modifier = modifier.clickable(onClick = onClick),
+    )
 }
