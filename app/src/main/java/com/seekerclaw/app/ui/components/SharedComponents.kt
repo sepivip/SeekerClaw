@@ -582,6 +582,9 @@ fun ConfigField(
     showDivider: Boolean = true,
     info: String? = null,
     isRequired: Boolean = false,
+    // BAT-1247: incomplete/attention states render the value in Warning amber
+    // ("Brave Search (not configured)") instead of masquerading as configured.
+    valueColor: Color = SeekerClawColors.TextPrimary,
 ) {
     var showInfo by remember { mutableStateOf(false) }
 
@@ -642,7 +645,7 @@ fun ConfigField(
             text = value,
             fontFamily = RethinkSans,
             fontSize = 14.sp,
-            color = SeekerClawColors.TextPrimary,
+            color = valueColor,
         )
     }
     if (showDivider) {
