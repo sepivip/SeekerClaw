@@ -89,7 +89,9 @@ import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.ConfigClaimImport
 import com.seekerclaw.app.config.ConfigClaimImporter
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.ModelRegistry
 import com.seekerclaw.app.config.availableModels
+import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.config.searchProviderById
 import com.seekerclaw.app.qr.QrScannerActivity
 import com.seekerclaw.app.service.SeekerClawService
@@ -111,9 +113,11 @@ import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.components.ConfigField
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.InfoRow
+import com.seekerclaw.app.ui.components.PageSectionHeader
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.Sizing
 import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -495,9 +499,23 @@ fun SettingsScreen(
                     .background(SeekerClawColors.Surface, shape)
                     .cornerGlowBorder(),
             ) {
+                // BAT-1247: show the live provider/model/auth summary instead of
+                // the static "Provider, Model, Keys" placeholder. Composed from
+                // config state this screen already loads — display names only,
+                // never key material. Falls back to the old string when config
+                // is absent (fresh install / pre-setup).
                 ConfigField(
                     label = "AI Configuration",
-                    value = "Provider, Model, Keys",
+                    value = config?.let { cfg ->
+                        val providerName = providerById(cfg.provider).displayName
+                        val modelName = ModelRegistry.modelDisplayName(cfg.model)
+                        val aiAuthLabel = when (cfg.provider) {
+                            "claude" -> if (cfg.authType == "setup_token") "Setup token" else "API key"
+                            "openai", "xai" -> if (cfg.authType == "oauth") "OAuth" else "API key"
+                            else -> "API key"
+                        }
+                        "$providerName · $modelName · $aiAuthLabel"
+                    } ?: "Provider, Model, Keys",
                     onClick = onNavigateToAiConfig,
                     info = "Select AI provider, configure model and API credentials.",
                 )
@@ -522,7 +540,11 @@ fun SettingsScreen(
                     value = "Every ${config?.heartbeatIntervalMinutes ?: 30} minutes",
                     onClick = {
                         editField = "heartbeatIntervalMinutes"
-                        editLabel = "Heartbeat Interval (minutes, 5–120)"
+                        // BAT-1247: dialog title becomes "Edit Heartbeat Interval";
+                        // the field itself is labeled "Minutes" with "5–120" as
+                        // supporting text (see the edit dialog below) so title and
+                        // field label no longer repeat word-for-word.
+                        editLabel = "Heartbeat Interval"
                         editValue = (config?.heartbeatIntervalMinutes ?: 30).toString()
                     },
                     info = SettingsHelpTexts.HEARTBEAT_INTERVAL,
@@ -537,13 +559,17 @@ fun SettingsScreen(
                     },
                     info = SettingsHelpTexts.MAX_STEPS_PER_TURN,
                 )
+                // BAT-1247: a not-configured provider renders its value in
+                // Warning amber instead of masquerading as configured.
+                val searchConfigured = (config?.activeSearchApiKey ?: "").isNotBlank()
                 ConfigField(
                     label = "Search Provider",
                     value = searchProviderById(config?.searchProvider ?: "brave").displayName +
-                        if ((config?.activeSearchApiKey ?: "").isBlank()) " (not configured)" else "",
+                        if (!searchConfigured) " (not configured)" else "",
                     onClick = onNavigateToSearchConfig,
                     info = SettingsHelpTexts.SEARCH_PROVIDER,
                     showDivider = true,
+                    valueColor = if (searchConfigured) SeekerClawColors.TextPrimary else SeekerClawColors.Warning,
                 )
                 ConfigField(
                     label = "MCP Servers",
@@ -552,10 +578,15 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.MCP_SERVERS,
                     showDivider = true,
                 )
+                // BAT-1247: standard info dialog like the sibling rows. The info
+                // icon also equalizes the label-row height with the MCP row above
+                // (the IconButton's touch target set the two rows' label-to-value
+                // spacing apart when only one row had it).
                 ConfigField(
                     label = "Env Vars",
                     value = "$envVarCount var${if (envVarCount != 1) "s" else ""} set",
                     onClick = onNavigateToEnvVars,
+                    info = "Environment variables are injected into the agent's Node.js process at startup — API keys for skills, etc.",
                     showDivider = false,
                 )
             }
@@ -699,7 +730,9 @@ fun SettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedButton(
+                    // BAT-1247 (audit: soft-destructive actions use the red-outline
+                    // variant): Disconnect is reversible-destructive — DangerOutlineButton.
+                    DangerOutlineButton(
                         onClick = {
                             // BAT-1021: clear the process-local MWA auth-token cache in
                             // lockstep with the persisted wallet address so the next
@@ -712,14 +745,8 @@ fun SettingsScreen(
                             walletError = null
                             Analytics.featureUsed("wallet_disconnected")
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = shape,
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = SeekerClawColors.Error,
-                        ),
-                    ) {
-                        Text("Disconnect Wallet", fontFamily = RethinkSans, fontSize = 14.sp)
-                    }
+                        label = "Disconnect Wallet",
+                    )
                 } else {
                     // Not connected — show Connect button
                     if (walletError != null) {
@@ -884,6 +911,8 @@ fun SettingsScreen(
                     },
                     showDivider = true,
                     info = SettingsHelpTexts.JUPITER_API_KEY,
+                    // BAT-1247: inside CardSurface (16dp) — align with siblings.
+                    horizontalPadding = 0.dp,
                 )
 
                 // ── Helius API Key (Solana RPC + NFT holdings — BAT-1000) ─────
@@ -907,6 +936,8 @@ fun SettingsScreen(
                     },
                     showDivider = false,
                     info = SettingsHelpTexts.HELIUS_API_KEY,
+                    // BAT-1247: inside CardSurface (16dp) — align with siblings.
+                    horizontalPadding = 0.dp,
                 )
             }
         }
@@ -1062,7 +1093,14 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         CardSurface {
-            InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            // BAT-1247: value formats kept IDENTICAL to the System screen's
+            // Status card (same buildString incl. the debug-only git SHA) so
+            // the two surfaces never show diverging version strings. InfoRow
+            // renders values monospace by default — matching System.
+            InfoRow("Version", buildString {
+                append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                if (BuildConfig.DEBUG) append(" · ${BuildConfig.GIT_SHA}")
+            })
             InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
             InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
         }
@@ -1077,11 +1115,30 @@ fun SettingsScreen(
                     label = "Reset Config",
                 )
 
+                // BAT-1247: one-line consequence caption under each destructive
+                // action so users can tell each action's blast radius before
+                // tapping. Buttons and dialogs unchanged.
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = "Clears settings — agent memory is kept.",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.bodySmall,
+                    color = SeekerClawColors.TextSecondary,
+                )
+
                 Spacer(modifier = Modifier.height(Spacing.md))
 
                 DangerButton(
                     onClick = { showClearMemoryDialog = true },
                     label = "Wipe Memory",
+                )
+
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = "Permanently erases the agent's memory and personality.",
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.bodySmall,
+                    color = SeekerClawColors.TextSecondary,
                 )
             }
         }
@@ -1112,10 +1169,30 @@ fun SettingsScreen(
                             modifier = Modifier.padding(bottom = 12.dp),
                         )
                     }
+                    // BAT-1247: heartbeat gets a distinct field label ("Minutes")
+                    // plus M3 supportingText for the valid range, instead of
+                    // repeating the dialog title verbatim. Validation unchanged.
+                    val isHeartbeatField = editField == "heartbeatIntervalMinutes"
                     OutlinedTextField(
                         value = editValue,
                         onValueChange = { editValue = it },
-                        label = { Text(editLabel, fontFamily = RethinkSans, fontSize = 12.sp) },
+                        label = {
+                            Text(
+                                if (isHeartbeatField) "Minutes" else editLabel,
+                                fontFamily = RethinkSans,
+                                fontSize = 12.sp,
+                            )
+                        },
+                        supportingText = if (isHeartbeatField) {
+                            {
+                                Text(
+                                    "5–120",
+                                    fontFamily = RethinkSans,
+                                    fontSize = TypeScale.labelSmall,
+                                    color = SeekerClawColors.TextDim,
+                                )
+                            }
+                        } else null,
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(
@@ -1595,14 +1672,11 @@ private fun CollapsibleSection(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            fontFamily = RethinkSans,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = SeekerClawColors.TextSecondary,
-            letterSpacing = 1.sp,
-        )
+        // BAT-1247: hand-rolled header replaced with PageSectionHeader so
+        // collapsible sections match the standalone "System" header (which
+        // goes through SectionLabel → PageSectionHeader) — ONE page-level
+        // section-header style everywhere.
+        PageSectionHeader(title)
         Icon(
             imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
             contentDescription = if (expanded) "Collapse $title" else "Expand $title",
