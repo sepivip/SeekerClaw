@@ -14,17 +14,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,10 +40,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,12 +51,15 @@ import androidx.compose.runtime.collectAsState
 import com.seekerclaw.app.state.McpServer
 import com.seekerclaw.app.state.McpServersStore
 import com.seekerclaw.app.ui.components.CardSurface
-import com.seekerclaw.app.ui.components.SectionLabel
-import com.seekerclaw.app.ui.components.SeekerClawScaffold
+import com.seekerclaw.app.ui.components.EmptyState
+import com.seekerclaw.app.ui.components.ScreenActionLink
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun McpConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -88,7 +92,49 @@ fun McpConfigScreen(onBack: () -> Unit) {
 
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
-    SeekerClawScaffold(title = "MCP Servers", onBack = onBack) { padding ->
+    Scaffold(
+        topBar = {
+            // BAT-1247 M5: SeekerClawScaffold has no actions slot, so this
+            // bar mirrors SeekerClawTopAppBar 1:1 (18.sp bold RethinkSans
+            // title, white back arrow, Background container — the one place
+            // that size is sanctioned) and adds the unified green "+ Add"
+            // screen action.
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "MCP Servers",
+                        fontFamily = RethinkSans,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SeekerClawColors.TextPrimary,
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = SeekerClawColors.TextPrimary,
+                        )
+                    }
+                },
+                actions = {
+                    ScreenActionLink(
+                        label = "+ Add",
+                        onClick = {
+                            editingMcpServer = null
+                            showMcpDialog = true
+                        },
+                        modifier = Modifier.padding(end = Spacing.lg),
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = SeekerClawColors.Background,
+                ),
+            )
+        },
+        containerColor = SeekerClawColors.Background,
+    ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -96,28 +142,32 @@ fun McpConfigScreen(onBack: () -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            SectionLabel("MCP Servers")
-            Spacer(modifier = Modifier.height(10.dp))
-
+            // Explainer card — prose only. M5: the embedded add button and
+            // italic "No servers configured" line are gone; adding lives in
+            // the top bar and the shared EmptyState below.
             CardSurface {
                 Text(
                     text = SettingsHelpTexts.MCP_SERVERS,
                     fontFamily = RethinkSans,
-                    fontSize = 13.sp,
+                    fontSize = TypeScale.bodySmall,
                     color = SeekerClawColors.TextDim,
                 )
+            }
 
-                Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(Spacing.md))
 
-                if (mcpServers.isEmpty()) {
-                    Text(
-                        text = "No servers configured",
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        color = SeekerClawColors.TextDim,
-                        fontStyle = FontStyle.Italic,
-                    )
-                } else {
+            if (mcpServers.isEmpty()) {
+                EmptyState(
+                    headline = "No MCP servers yet.",
+                    hint = "Add a server URL and your agent discovers its tools live.",
+                    primaryLabel = "Add MCP Server",
+                    onPrimary = {
+                        editingMcpServer = null
+                        showMcpDialog = true
+                    },
+                )
+            } else {
+                CardSurface {
                     for (server in mcpServers) {
                         Row(
                             modifier = Modifier
@@ -206,23 +256,6 @@ fun McpConfigScreen(onBack: () -> Unit) {
                             }
                         }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Button(
-                    onClick = {
-                        editingMcpServer = null
-                        showMcpDialog = true
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = shape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SeekerClawColors.ActionPrimary,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    Text("Add MCP Server", fontFamily = RethinkSans, fontSize = 14.sp)
                 }
             }
 
