@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
@@ -585,6 +586,9 @@ fun ConfigField(
     // BAT-1247: incomplete/attention states render the value in Warning amber
     // ("Brave Search (not configured)") instead of masquerading as configured.
     valueColor: Color = SeekerClawColors.TextPrimary,
+    // BAT-1247 (audit: Jupiter/Helius rows double-indented): callers already
+    // inside a padded CardSurface pass 0.dp so the row aligns with siblings.
+    horizontalPadding: androidx.compose.ui.unit.Dp = Spacing.lg,
 ) {
     var showInfo by remember { mutableStateOf(false) }
 
@@ -592,7 +596,7 @@ fun ConfigField(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = horizontalPadding, vertical = 14.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -651,7 +655,7 @@ fun ConfigField(
     if (showDivider) {
         HorizontalDivider(
             color = SeekerClawColors.CardBorder,
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier.padding(horizontal = horizontalPadding),
         )
     }
 
@@ -1161,7 +1165,7 @@ fun SeekerClawSearchField(
             cursorBrush = SolidColor(SeekerClawColors.Primary),
             modifier = Modifier
                 .weight(1f)
-                .padding(end = Spacing.lg),
+                .padding(end = Spacing.sm),
             decorationBox = { innerTextField ->
                 if (value.isEmpty()) {
                     Text(
@@ -1174,6 +1178,19 @@ fun SeekerClawSearchField(
                 innerTextField()
             },
         )
+        // Built-in clear affordance — appears whenever there is a query, on
+        // every search surface (parity with the pre-1247 Skills field).
+        if (value.isNotEmpty()) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "Clear search",
+                tint = SeekerClawColors.TextDim,
+                modifier = Modifier
+                    .padding(end = Spacing.lg)
+                    .size(Sizing.iconMd)
+                    .clickable { onValueChange("") },
+            )
+        }
     }
 }
 
