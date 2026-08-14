@@ -560,18 +560,15 @@ fun SeekerClawTopAppBar(title: String, onBack: () -> Unit) {
 
 /**
  * Section label used across settings, setup, and system screens.
- * RethinkSans, ExtraBold, white. Callers are responsible for adding
- * their own bottom spacing.
+ *
+ * BAT-1247 (M4 — three competing section-header styles): now delegates to
+ * [PageSectionHeader], so every existing call site inherits THE page-level
+ * style (grey, letter-spaced) without per-screen edits. Callers are still
+ * responsible for their own bottom spacing.
  */
 @Composable
 fun SectionLabel(title: String) {
-    Text(
-        text = title,
-        fontFamily = RethinkSans,
-        fontSize = 14.sp,
-        fontWeight = FontWeight.ExtraBold,
-        color = SeekerClawColors.TextPrimary,
-    )
+    PageSectionHeader(title)
 }
 
 /**
