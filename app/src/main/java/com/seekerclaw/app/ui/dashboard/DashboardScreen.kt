@@ -888,10 +888,12 @@ private fun UplinkCard(
             )
         }
 
+        // CodeRabbit #449 R1: pulse only the dot — fading the whole row made
+        // the status word breathe to 40% opacity.
         StatusIndicator(
             word = statusWord,
             color = dotColor,
-            modifier = Modifier.alpha(dotAlpha),
+            dotAlpha = dotAlpha,
         )
     }
 }

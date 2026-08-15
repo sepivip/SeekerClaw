@@ -85,4 +85,36 @@ class LogShareSanitizerTest {
         assertFalse(out.contains("sk-ant-api03"))
         assertFalse(out.contains("my key is"))
     }
+
+    // ── multiline bodies (CodeRabbit #449 R1 regression) ────────────────────
+
+    @Test
+    fun `multiline message body is fully scrubbed, not just the first line`() {
+        val text = listOf(
+            "[11:42:23 PM] [Node] Message: first secret line",
+            "second secret line without prefix",
+            "third secret line",
+            "[11:43:00 PM] [Node] [DB] Loaded existing database",
+        ).joinToString("\n")
+        val out = LogShareSanitizer.sanitize(text)
+        assertFalse(out.contains("first secret line"))
+        assertFalse(out.contains("second secret line"))
+        assertFalse(out.contains("third secret line"))
+        assertTrue("continuation replaced", out.contains("[redacted continuation]"))
+        assertTrue("next entry intact", out.contains("[DB] Loaded existing database"))
+    }
+
+    @Test
+    fun `continuation state resets at the next bracketed entry`() {
+        val text = listOf(
+            "[1:00 AM] [Node] Message: body",
+            "body continues",
+            "[1:01 AM] [Node] [ControlServer] Listening on 127.0.0.1:8766",
+            "[1:02 AM] [Node] [Skills] 35 skills loaded",
+        ).joinToString("\n")
+        val out = LogShareSanitizer.sanitize(text)
+        assertFalse(out.contains("body continues"))
+        assertTrue(out.contains("Listening on 127.0.0.1:8766"))
+        assertTrue(out.contains("35 skills loaded"))
+    }
 }

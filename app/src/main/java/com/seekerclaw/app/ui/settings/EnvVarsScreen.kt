@@ -125,6 +125,10 @@ fun EnvVarsScreen(
             else -> envVars + newVar
         }
         ConfigManager.saveEnvVars(context, updated)
+        // CodeRabbit #449 R1: re-gate writes until the async configVersion
+        // reload lands — a second save built on the stale `envVars` snapshot
+        // could silently drop the first one. The reload effect flips this back.
+        isLoaded = false
         editsThisSession = true
         dialogState = EnvVarDialogState.Hidden
     }
@@ -390,6 +394,7 @@ fun EnvVarsScreen(
                 // Raw editor returns the COMPLETE intended list — replace outright,
                 // not merge. This is how rename/delete/edit-in-place work.
                 ConfigManager.saveEnvVars(context, finalList)
+                isLoaded = false // re-gate until reload (see onSave)
                 editsThisSession = true
                 showRawEditor = false
             },
@@ -428,6 +433,7 @@ fun EnvVarsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     ConfigManager.saveEnvVars(context, envVars.filterNot { it.name == target.name })
+                    isLoaded = false // re-gate until reload (see onSave)
                     editsThisSession = true
                     deleteTarget = null
                 }) {

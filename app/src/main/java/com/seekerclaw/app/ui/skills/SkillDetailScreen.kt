@@ -40,7 +40,7 @@ import com.seekerclaw.app.ui.theme.TypeScale
  */
 private const val MISSING_VERSION_RAW = "missing \"version\""
 private const val MISSING_VERSION_FRIENDLY =
-    "Missing \"version\" in SKILL.md frontmatter — the skill still works; add version: \"1.0.0\" to silence this."
+    "Missing \"version\" in SKILL.md frontmatter — the skill still works; add a version field to silence this."
 
 @Composable
 fun SkillDetailScreen(

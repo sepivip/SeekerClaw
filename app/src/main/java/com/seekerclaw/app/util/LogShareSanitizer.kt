@@ -26,6 +26,12 @@ object LogShareSanitizer {
     // "Message:" mid-sentence is left alone only when it IS the marker.
     private val messageMarker = Regex("""(^|.*?\s)Message: (.*)$""")
 
+    // A console ENTRY starts with a bracketed prefix ("[11:42:23 PM] …",
+    // "[Node] …"). A chat body that itself contained newlines renders as
+    // continuation lines WITHOUT that prefix — those must be scrubbed too
+    // (CodeRabbit #449 R1: single-line scrubbing let multiline bodies leak).
+    private val entryStart = Regex("""^\[""")
+
     /** Sanitize one already-formatted console line for the Share payload. */
     fun sanitizeLine(line: String): String {
         val scrubbed = messageMarker.replace(line) { m ->
@@ -36,7 +42,28 @@ object LogShareSanitizer {
         return LogRedactor.redact(scrubbed)
     }
 
-    /** Sanitize the full multi-line share payload. */
-    fun sanitize(text: String): String =
-        text.lineSequence().joinToString("\n") { sanitizeLine(it) }
+    /**
+     * Sanitize the full multi-line share payload. Stateful: once a line hits
+     * the message marker, every following line that does NOT start a new
+     * console entry is treated as body continuation and fully replaced —
+     * conservative by design (over-scrubbing a stray continuation beats
+     * leaking one line of a user's chat).
+     */
+    fun sanitize(text: String): String {
+        var inMessage = false
+        return text.lineSequence().joinToString("\n") { line ->
+            when {
+                messageMarker.matches(line) -> {
+                    inMessage = true
+                    sanitizeLine(line)
+                }
+                inMessage && !entryStart.containsMatchIn(line) ->
+                    "[redacted continuation]"
+                else -> {
+                    inMessage = false
+                    sanitizeLine(line)
+                }
+            }
+        }
+    }
 }

@@ -25,10 +25,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,9 +61,7 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.LogShareSanitizer
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.Date
 
 @Composable
@@ -78,6 +76,7 @@ fun LogsScreen() {
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     // Filter toggles — rememberSaveable so they survive tab switches and config changes
     var showDebug by rememberSaveable { mutableStateOf(false) }
@@ -199,32 +198,16 @@ fun LogsScreen() {
                     }
                     // BAT-1161 P1A: "Clear console" — this only clears the service_logs mirror +
                     // in-memory ring, NOT Node's node_debug.log (which keeps recording and
-                    // re-forwards). Destructive → Error tint. Undo path: the cleared entries are
-                    // stashed in a local variable (no persistence) and replayed through
-                    // LogCollector.append() — original timestamps preserved via eventTimeMs —
-                    // which restores both the in-memory ring and the service_logs mirror, so the
-                    // 1.5s refreshFromFile loop doesn't wipe the restore.
-                    TextButton(onClick = {
-                        val stash = logs
-                        LogCollector.clear()
-                        scope.launch {
-                            val result = snackbarHostState.showSnackbar(
-                                message = "Console cleared",
-                                actionLabel = "Undo",
-                                duration = SnackbarDuration.Long,
-                            )
-                            if (result == SnackbarResult.ActionPerformed) {
-                                withContext(Dispatchers.IO) {
-                                    stash.forEach { entry ->
-                                        LogCollector.append(entry.message, entry.level, eventTimeMs = entry.timestamp)
-                                    }
-                                }
-                            }
-                        }
-                    }) {
+                    // re-forwards). Destructive → Error tint. CodeRabbit #449 R1: the in-memory
+                    // Undo stash died with the composable (leave screen → Undo gone) and replay
+                    // could reorder entries — per the PM contract's fallback ("otherwise use
+                    // confirmation"), clearing now confirms via dialog instead.
+                    TextButton(onClick = { showClearConfirm = true }) {
                         Icon(
                             Icons.Default.Delete,
-                            contentDescription = "Clear console",
+                            // Visible text right beside this already labels the action —
+                            // a second identical description made TalkBack announce it twice.
+                            contentDescription = null,
                             tint = SeekerClawColors.Error,
                             modifier = Modifier.size(Sizing.iconMd),
                         )
@@ -234,6 +217,49 @@ fun LogsScreen() {
                             fontFamily = RethinkSans,
                             fontSize = TypeScale.bodySmall,
                             color = SeekerClawColors.Error,
+                        )
+                    }
+                    if (showClearConfirm) {
+                        AlertDialog(
+                            onDismissRequest = { showClearConfirm = false },
+                            containerColor = SeekerClawColors.Surface,
+                            shape = shape,
+                            title = {
+                                Text(
+                                    "Clear console?",
+                                    fontFamily = RethinkSans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = TypeScale.titleMedium,
+                                    color = SeekerClawColors.TextPrimary,
+                                )
+                            },
+                            text = {
+                                Text(
+                                    "Clears the on-screen console and its mirror. The full node_debug.log keeps recording.",
+                                    fontFamily = RethinkSans,
+                                    fontSize = TypeScale.bodySmall,
+                                    color = SeekerClawColors.TextSecondary,
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showClearConfirm = false
+                                    LogCollector.clear()
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar(
+                                            message = "Console cleared",
+                                            duration = SnackbarDuration.Short,
+                                        )
+                                    }
+                                }) {
+                                    Text("Clear", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.Error)
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showClearConfirm = false }) {
+                                    Text("Cancel", fontFamily = RethinkSans, color = SeekerClawColors.TextSecondary)
+                                }
+                            },
                         )
                     }
                 }

@@ -1231,23 +1231,29 @@ fun EmptyState(
                 color = SeekerClawColors.TextSecondary,
             )
         }
-        if (primaryLabel != null && onPrimary != null) {
+        // CodeRabbit #449 R1: actions render independently — a secondary-only
+        // caller must still get its action.
+        val hasPrimary = primaryLabel != null && onPrimary != null
+        val hasSecondary = secondaryLabel != null && onSecondary != null
+        if (hasPrimary || hasSecondary) {
             Spacer(Modifier.height(Spacing.lg))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PrimaryButton(
-                    onClick = onPrimary,
-                    label = primaryLabel,
-                    height = Sizing.buttonSecondaryHeight,
-                )
-                if (secondaryLabel != null && onSecondary != null) {
-                    Spacer(Modifier.width(Spacing.lg))
+                if (hasPrimary) {
+                    PrimaryButton(
+                        onClick = onPrimary!!,
+                        label = primaryLabel!!,
+                        height = Sizing.buttonSecondaryHeight,
+                    )
+                }
+                if (hasSecondary) {
+                    if (hasPrimary) Spacer(Modifier.width(Spacing.lg))
                     Text(
-                        text = secondaryLabel,
+                        text = secondaryLabel!!,
                         fontFamily = RethinkSans,
                         fontSize = TypeScale.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = SeekerClawColors.TextSecondary,
-                        modifier = Modifier.clickable(onClick = onSecondary),
+                        modifier = Modifier.clickable(onClick = onSecondary!!),
                     )
                 }
             }
@@ -1266,6 +1272,9 @@ fun StatusIndicator(
     word: String,
     color: Color,
     modifier: Modifier = Modifier,
+    // CodeRabbit #449 R1: pulse animations should breathe the DOT, not the
+    // word — a label fading to 40% is illegible. 1f = static.
+    dotAlpha: Float = 1f,
 ) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -1280,7 +1289,7 @@ fun StatusIndicator(
             modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .background(color),
+                .background(color.copy(alpha = dotAlpha)),
         )
     }
 }

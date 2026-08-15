@@ -305,7 +305,10 @@ fun SystemScreen(onBack: () -> Unit) {
         CardSurface {
             val showLastMessage = status == ServiceStatus.RUNNING && lastActivity > 0L
             InfoRow(
-                label = "Telegram",
+                // CodeRabbit #449 R1: label the configured channel, not a
+                // hardcoded "Telegram" (Discord configs exist — Dashboard
+                // already branches on config?.channel).
+                label = if (config?.channel == "discord") "Discord" else "Telegram",
                 value = if (status == ServiceStatus.RUNNING) "Connected" else "Disconnected",
                 dotColor = if (status == ServiceStatus.RUNNING) SeekerClawColors.Accent else SeekerClawColors.TextDim,
                 isLast = !showLastMessage,
@@ -334,7 +337,10 @@ fun SystemScreen(onBack: () -> Unit) {
                     is ApiUsageData.OAuthUsage ->
                         usage.error == null || usage.fiveHourUtilization > 0f || usage.sevenDayUtilization > 0f
                     is ApiUsageData.ApiKeyUsage ->
-                        usage.error == null || usage.requestsLimit > 0
+                        // CodeRabbit #449 R1: accept token-only partial data —
+                        // a valid tokensLimit must render even when the
+                        // requests side errored.
+                        usage.error == null || usage.requestsLimit > 0 || usage.tokensLimit > 0
                 }
                 // BAT-1247 M1: did the provider actually return quota data?
                 // Zero/absent limit totals must never be turned into a
@@ -701,10 +707,13 @@ private fun MessageActivityHeatmap(dailyActivity: List<DayActivity>) {
         }
     }
 
-    // All-time total across every day the query returned (database.js caps at
-    // 13 months, which comfortably covers SeekerClaw's entire install history).
-    val totalMessages = remember(dailyActivity) {
-        dailyActivity.sumOf { it.count.toLong() }
+    // CodeRabbit #449 R1: the caption says "last N weeks", so the total must
+    // cover exactly the grid window — the query itself can return up to 13
+    // months of rows, which previously inflated the number vs its label.
+    val totalMessages = remember(dateCountMap, gridStart, gridEnd) {
+        dateCountMap.entries.sumOf { (date, count) ->
+            if (!date.isBefore(gridStart) && !date.isAfter(gridEnd)) count.toLong() else 0L
+        }
     }
 
     CardSurface(
