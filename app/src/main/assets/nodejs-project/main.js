@@ -71,6 +71,9 @@ registerRedactedSecret(XAI_OAUTH_REFRESH);
 const { androidBridgeCall, fetchMcpToken } = require('./bridge');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const { telegramCommandMenu, telegramFallbackMenu } = require('./telegram-commands');
+// BAT-1247 (security): length + short hash instead of raw user/message text in
+// logs — same convention as ai.js's `msgLen=`/`msgFp=`.
+const { fingerprint: _fp, byteLen: _byteLen } = require('./reasoning-redact');
 
 // ── MCP (Model Context Protocol) — Remote tool servers (BAT-168, BAT-514) ───
 const { MCPManager } = require('./mcp-client');
@@ -401,8 +404,11 @@ async function autoResumeOnStartup() {
             full.resumeAttempts = attempts + 1;
             saveCheckpoint(cp.taskId, full);
 
-            const goalSnippet = full.originalGoal ? full.originalGoal.slice(0, 80) : null;
-            log(`[AutoResume] RESUMING taskId=${cp.taskId} chatId=${chatId} age=${ageStr} attempt=${full.resumeAttempts}/${AUTO_RESUME_MAX_ATTEMPTS} goal=${goalSnippet ? '"' + goalSnippet + '"' : 'none'}`, 'INFO');
+            // BAT-1247 (security): `originalGoal` is the user's own request text and
+            // carries no `Message: ` marker, so LogShareSanitizer never scrubbed it.
+            // Length + fingerprint still answers what this line is for — is a goal
+            // present, and is it the SAME goal across resume attempts.
+            log(`[AutoResume] RESUMING taskId=${cp.taskId} chatId=${chatId} age=${ageStr} attempt=${full.resumeAttempts}/${AUTO_RESUME_MAX_ATTEMPTS} goalLen=${_byteLen(full.originalGoal)} goalFp=${_fp(full.originalGoal)}`, 'INFO');
 
             // Restore conversation from checkpoint BEFORE notifying user
             // (prevents notification from interfering with conversation state)
@@ -592,6 +598,13 @@ async function poll() {
                                 // Generic callback: inject as synthetic user message
                                 const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
                                 const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
+                                // BAT-1247 (security): `buttonData` is app-generated callback
+                                // data (safe, and the diagnostic that matters), but
+                                // `originalText` is a real message body with no `Message: `
+                                // marker for LogShareSanitizer to key on — a confirmation
+                                // prompt can quote addresses, amounts, or the user's own words.
+                                // Length + fingerprint identifies WHICH message was tapped
+                                // without reproducing it.
                                 log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
                                 enqueueMessage({
                                     chatId: cbChat.id,

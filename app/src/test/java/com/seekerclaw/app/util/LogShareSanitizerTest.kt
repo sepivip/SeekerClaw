@@ -88,12 +88,28 @@ class LogShareSanitizerTest {
 
     // ── multiline bodies (CodeRabbit #449 R1 regression) ────────────────────
 
-    // NOTE ON FIXTURES: multi-line tests below use the REAL emission format from
-    // LogsScreen.kt — `"[${'$'}{entry.level.name}] [${'$'}timeStr] ${'$'}{entry.message}"`, i.e.
-    // "[INFO] [11:42:23 PM] [Node] …". Earlier fixtures omitted the level token
-    // and so exercised a shape the app never produces; since `entryStart` is now
-    // anchored on the real header, fixtures must match production or these tests
-    // prove nothing.
+    // NOTE ON FIXTURES — read this before trusting the tests in this block.
+    //
+    // The HEADER shape below is production-accurate: LogsScreen.kt emits
+    // `"[${'$'}{entry.level.name}] [${'$'}timeStr] ${'$'}{entry.message}"`.
+    //
+    // The CONTINUATION shape (a body line with no header) is NOT something the
+    // current pipeline produces, and an earlier version of this comment wrongly
+    // claimed it was. Node's `log()` splits on '\n' and emits one wire record per
+    // physical line, SeekerClawService forwards each as its own LogEntry, and
+    // LogsScreen headers every one of them — so a multiline chat body arrives as
+    // N fully-headered entries, never as un-prefixed continuations. Believing
+    // otherwise is exactly how a green suite hid a live leak: the sanitizer
+    // stopped scrubbing at line 2 and the rest of the body shipped verbatim.
+    //
+    // That leak is closed in Node (log-safe.js `flattenForLog`, pinned by
+    // tests/nodejs-project/log-safe.test.js) — the body preview is now flattened
+    // to ONE line before `log()` ever sees it, so it stays behind the marker.
+    // See `flattened multiline body …` below for the shape that now reaches here.
+    //
+    // The continuation machinery is kept as DEFENSE IN DEPTH: it costs nothing,
+    // and it covers any future producer that does emit an un-prefixed body line.
+    // The tests immediately below exercise that fallback, not the live path.
 
     @Test
     fun `multiline message body is fully scrubbed, not just the first line`() {
@@ -159,6 +175,42 @@ class LogShareSanitizerTest {
         assertFalse(out.contains("secret-token-abc"))
         assertFalse(out.contains("my private doc"))
         assertTrue(out.contains("[DB] ok"))
+    }
+
+    // ── the LIVE path (BAT-1247): flattened body, one entry ─────────────────
+    // This is what the sanitizer actually receives in production once
+    // message-handler.js runs the chat body through log-safe.js `flattenForLog`.
+    // The whole body — newlines and all — sits behind the `Message: ` marker on
+    // a single line, so the single-line scrub covers it completely and the
+    // stateful continuation logic is never needed.
+    //
+    // The pre-fix version of this exact payload put each body line in its own
+    // headered entry and shipped the credential off-device verbatim.
+
+    @Test
+    fun `flattened multiline body is scrubbed as one entry`() {
+        val text = listOf(
+            "[INFO] [2:00:00 PM] [Node] Message: here is my config ⏎ [database] ⏎ host=admin:hunter2@internal.db",
+            "[INFO] [2:00:01 PM] [Node] [Skills] 29 loaded",
+        ).joinToString("\n")
+        val out = LogShareSanitizer.sanitize(text)
+        assertFalse("credential must not reach the Share payload", out.contains("hunter2"))
+        assertFalse(out.contains("internal.db"))
+        assertFalse(out.contains("[database]"))
+        assertFalse(out.contains("here is my config"))
+        assertTrue("metadata is retained", out.startsWith("[INFO] [2:00:00 PM] [Node] Message: [redacted,"))
+        assertTrue("real next entry survives", out.contains("29 loaded"))
+    }
+
+    @Test
+    fun `flattened body keeps the whole payload on one line`() {
+        // Regression guard for the architectural boundary: if a future change
+        // reintroduces a raw newline into the body preview, this fails HERE
+        // rather than silently leaking on a device.
+        val body = "line one ⏎ line two ⏎ line three"
+        val out = LogShareSanitizer.sanitize("[WARN] [9:00:00 AM] [Node] Message: $body")
+        assertEquals(1, out.lines().size)
+        assertFalse(out.contains("line two"))
     }
 
     @Test

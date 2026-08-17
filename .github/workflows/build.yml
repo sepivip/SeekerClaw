@@ -115,6 +115,7 @@ jobs:
             shutdown-flush-durability-only \
             logging-substrate \
             history-anchor-trim \
+            log-safe \
             ci-coverage-manifest
           do
             echo "── $t ──"

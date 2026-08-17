@@ -59,7 +59,7 @@ const { buildSecurityRejectBlock } = require('./security-reject-block');
 // BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
 const _reasoningRecovery = require('./reasoning-recovery');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
-const { fingerprint: _reasoningFingerprint } = require('./reasoning-redact');
+const { fingerprint: _reasoningFingerprint, byteLen: _byteLen } = require('./reasoning-redact');
 // BAT-582 Phase 4: dynamic confirmation hook + wallet state collector.
 // Replaces the static CONFIRM_REQUIRED set in config.js.
 const { getConfirmationPolicy, normalizePolicy } = require('./confirmation');
@@ -2704,7 +2704,12 @@ async function chat(chatId, userMessage, options = {}) {
             '- Use tools to finish the remaining work\n' +
             '- If you are unsure what was being done, examine the tool_use/tool_result ' +
             'history in the conversation and pick up from there';
-        log(`[Resume] Injected system prompt resume directive for turn ${turnId}${options.originalGoal ? ` goal="${options.originalGoal.slice(0, 80)}"` : ''}`, 'DEBUG');
+        // BAT-1247 (security): `originalGoal` is the user's own request text, logged
+        // with no `Message: ` marker for LogShareSanitizer to key on. Length +
+        // fingerprint preserves what this line is for — confirming a directive was
+        // injected and correlating it with the [Resume]/[AutoResume] lines that
+        // report the same fingerprint — without carrying the text onto the Share path.
+        log(`[Resume] Injected system prompt resume directive for turn ${turnId} goalLen=${_byteLen(options.originalGoal)} goalFp=${_reasoningFingerprint(options.originalGoal)}`, 'DEBUG');
     }
 
     // BAT-315: Provider-agnostic system prompt formatting

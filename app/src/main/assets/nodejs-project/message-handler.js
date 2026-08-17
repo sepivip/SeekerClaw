@@ -8,6 +8,12 @@ const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveMo
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const modelCatalog = require('./model-catalog');
 const { buildHelpLines } = require('./telegram-commands');
+// BAT-1247 (security): length + short hash instead of raw user text in logs.
+// Same convention as ai.js's `msgLen=`/`msgFp=` — enough to correlate two
+// occurrences of the same value and to see how big it was, without carrying the
+// value itself onto the Share path.
+const { fingerprint: _fp, byteLen: _byteLen } = require('./reasoning-redact');
+const { flattenForLog } = require('./log-safe');
 
 let deps = {};
 let initialized = false;
@@ -375,7 +381,13 @@ Platform: \`${platform}\``;
                 deps.log(`[Resume] FAIL: loadCheckpoint returned null for taskId=${cp.taskId}`, 'ERROR');
                 return `Found checkpoint for task ${cp.taskId} but it was corrupt. Please start the task again.`;
             }
-            deps.log(`[Resume] Loaded taskId=${cp.taskId}: conversationSlice=${Array.isArray(full.conversationSlice) ? full.conversationSlice.length : 'missing'} msgs, goal=${full.originalGoal ? '"' + full.originalGoal.slice(0, 60) + '"' : 'none'}`, 'INFO');
+            // BAT-1247 (security): `originalGoal` is the user's own request text
+            // (ai.js _extractOriginalGoal returns the first user message verbatim).
+            // It carries no `Message: ` marker, so LogShareSanitizer never touched
+            // it and it reached the Share payload in full. Length + fingerprint
+            // keeps the diagnostic value — "was a goal restored, and is it the same
+            // one across attempts?" — without the text.
+            deps.log(`[Resume] Loaded taskId=${cp.taskId}: conversationSlice=${Array.isArray(full.conversationSlice) ? full.conversationSlice.length : 'missing'} msgs, goalLen=${_byteLen(full.originalGoal)} goalFp=${_fp(full.originalGoal)}`, 'INFO');
 
             // Restore conversation from checkpoint
             if (Array.isArray(full.conversationSlice) && full.conversationSlice.length > 0) {
@@ -1073,7 +1085,12 @@ async function handleMessage(normalized) {
     // Note: confirmation YES/NO interception is in enqueueMessage() (main.js),
     // not here — must happen BEFORE queuing to prevent deadlock.
 
-    deps.log(`Message: ${combinedText ? combinedText.slice(0, 100) + (combinedText.length > 100 ? '...' : '') : '(no text)'}${media ? ` [${media.type}]` : ''}${replyTo ? ' [reply]' : ''}`, 'INFO');
+    // BAT-1247 (security): the body preview MUST stay on ONE physical line, or
+    // lines 2..N of a multiline chat body reach the Share payload wearing
+    // genuine "[LEVEL] [time] [Node] " headers and escape the sanitizer's
+    // `Message: ` scrub entirely. See log-safe.js for the full chain.
+    const bodyPreview = flattenForLog(combinedText, 100) || '(no text)';
+    deps.log(`Message: ${bodyPreview}${media ? ` [${media.type}]` : ''}${replyTo ? ' [reply]' : ''}`, 'INFO');
 
     // Status reactions — lifecycle emoji on the user's message (OpenClaw parity)
     const statusReaction = deps.createStatusReactionController(chatId, messageId);
