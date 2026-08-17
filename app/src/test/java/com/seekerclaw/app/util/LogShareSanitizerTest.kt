@@ -88,13 +88,20 @@ class LogShareSanitizerTest {
 
     // ── multiline bodies (CodeRabbit #449 R1 regression) ────────────────────
 
+    // NOTE ON FIXTURES: multi-line tests below use the REAL emission format from
+    // LogsScreen.kt — `"[${'$'}{entry.level.name}] [${'$'}timeStr] ${'$'}{entry.message}"`, i.e.
+    // "[INFO] [11:42:23 PM] [Node] …". Earlier fixtures omitted the level token
+    // and so exercised a shape the app never produces; since `entryStart` is now
+    // anchored on the real header, fixtures must match production or these tests
+    // prove nothing.
+
     @Test
     fun `multiline message body is fully scrubbed, not just the first line`() {
         val text = listOf(
-            "[11:42:23 PM] [Node] Message: first secret line",
+            "[INFO] [11:42:23 PM] [Node] Message: first secret line",
             "second secret line without prefix",
             "third secret line",
-            "[11:43:00 PM] [Node] [DB] Loaded existing database",
+            "[DEBUG] [11:43:00 PM] [Node] [DB] Loaded existing database",
         ).joinToString("\n")
         val out = LogShareSanitizer.sanitize(text)
         assertFalse(out.contains("first secret line"))
@@ -107,14 +114,65 @@ class LogShareSanitizerTest {
     @Test
     fun `continuation state resets at the next bracketed entry`() {
         val text = listOf(
-            "[1:00 AM] [Node] Message: body",
+            "[INFO] [1:00 AM] [Node] Message: body",
             "body continues",
-            "[1:01 AM] [Node] [ControlServer] Listening on 127.0.0.1:8766",
-            "[1:02 AM] [Node] [Skills] 35 skills loaded",
+            "[INFO] [1:01 AM] [Node] [ControlServer] Listening on 127.0.0.1:8766",
+            "[INFO] [1:02 AM] [Node] [Skills] 35 skills loaded",
         ).joinToString("\n")
         val out = LogShareSanitizer.sanitize(text)
         assertFalse(out.contains("body continues"))
         assertTrue(out.contains("Listening on 127.0.0.1:8766"))
         assertTrue(out.contains("35 skills loaded"))
+    }
+
+    // ── bracket-prefixed continuation (CodeRabbit #449 R2 — Major) ──────────
+    // A multiline chat body whose continuation line STARTS WITH "[" — a pasted
+    // config section, a markdown link, a bracketed log paste — must not be
+    // mistaken for a new console entry. The old `^\[` rule flipped redaction
+    // OFF there, so every following body line reached the Share payload with
+    // only LogRedactor's static token shapes protecting it. Pasting logs or
+    // config into the agent is precisely when secrets are in the message.
+
+    @Test
+    fun `bracketed continuation line does not end redaction`() {
+        val text = listOf(
+            "[INFO] [2:00 PM] [Node] Message: here is my config",
+            "[database]",
+            "host=admin:hunter2@internal.db",
+            "[INFO] [2:01 PM] [Node] [Skills] 29 loaded",
+        ).joinToString("\n")
+        val out = LogShareSanitizer.sanitize(text)
+        assertFalse("bracketed continuation must not leak", out.contains("[database]"))
+        assertFalse("line AFTER it must not leak", out.contains("hunter2"))
+        assertFalse(out.contains("internal.db"))
+        assertTrue("real next entry still recognised", out.contains("29 loaded"))
+    }
+
+    @Test
+    fun `markdown-link continuation does not end redaction`() {
+        val text = listOf(
+            "[WARN] [3:00 PM] [Node] Message: check this",
+            "[my private doc](https://internal.example.com/secret-token-abc)",
+            "[ERROR] [3:01 PM] [Node] [DB] ok",
+        ).joinToString("\n")
+        val out = LogShareSanitizer.sanitize(text)
+        assertFalse(out.contains("secret-token-abc"))
+        assertFalse(out.contains("my private doc"))
+        assertTrue(out.contains("[DB] ok"))
+    }
+
+    @Test
+    fun `every log level is recognised as an entry header`() {
+        // If a level were missing from the pattern, entries at that level would
+        // be swallowed as "continuation" after any Message: line — silently
+        // destroying diagnostics in the export.
+        for (level in LogLevel.entries) {
+            val text = listOf(
+                "[INFO] [4:00 PM] [Node] Message: body",
+                "[${level.name}] [4:01 PM] [Node] [DB] marker-$level",
+            ).joinToString("\n")
+            val out = LogShareSanitizer.sanitize(text)
+            assertTrue("$level entry must survive", out.contains("marker-$level"))
+        }
     }
 }

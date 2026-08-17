@@ -26,11 +26,31 @@ object LogShareSanitizer {
     // "Message:" mid-sentence is left alone only when it IS the marker.
     private val messageMarker = Regex("""(^|.*?\s)Message: (.*)$""")
 
-    // A console ENTRY starts with a bracketed prefix ("[11:42:23 PM] …",
-    // "[Node] …"). A chat body that itself contained newlines renders as
-    // continuation lines WITHOUT that prefix — those must be scrubbed too
-    // (CodeRabbit #449 R1: single-line scrubbing let multiline bodies leak).
-    private val entryStart = Regex("""^\[""")
+    // A console ENTRY is emitted by LogsScreen as EXACTLY
+    //     "[${'$'}{entry.level.name}] [${'$'}timeStr] ${'$'}{entry.message}"
+    // i.e. a level token from [LogLevel] followed by a bracketed time
+    // ("[INFO] [11:42:23 PM] …" / 24h "[WARN] [23:42:23] …").
+    //
+    // This MUST be strict. An earlier version matched any line starting with
+    // "[", which let a message body leak: a multiline chat message whose
+    // continuation line began with "[" — a pasted config section "[database]",
+    // a markdown link, a bracketed log paste — looked like a new entry, flipped
+    // `inMessage` off, and every following body line escaped the message scrub
+    // with only [LogRedactor.redact] (static token shapes) standing between it
+    // and the Share payload. Pasting logs/config into the agent is exactly when
+    // secrets are in the message, so that was a live leak path
+    // (CodeRabbit #449 R2 — Major).
+    //
+    // Anchored on the real emission format: only a genuine level+time header
+    // ends redaction mode. Anything else is treated as body continuation.
+    //
+    // Built FROM [LogLevel] rather than hardcoding "DEBUG|INFO|WARN|ERROR", so
+    // adding a level can't silently turn its entries into "continuation" and
+    // erase them from the export. Enum names are Kotlin identifiers, so they
+    // cannot contain regex metacharacters — no escaping needed.
+    private val entryStart = Regex(
+        LogLevel.entries.joinToString("|", prefix = """^\[(?:""", postfix = """)] \[""")
+    )
 
     /** Sanitize one already-formatted console line for the Share payload. */
     fun sanitizeLine(line: String): String {
