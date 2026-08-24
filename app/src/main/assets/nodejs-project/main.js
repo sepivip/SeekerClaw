@@ -440,6 +440,17 @@ async function autoResumeOnStartup() {
             }
 
             // Notify user after conversation is restored
+            //
+            // BAT-1247 note: `goalSnippet` is the user's OWN request text echoed
+            // back into THEIR chat via sendMessageSystem — it is NOT a log line,
+            // so the log-redaction pass does not apply to it. An earlier revision
+            // of this fix deleted the declaration while treating it as a log leak,
+            // leaving a dangling read below. `node --check` passes on that and the
+            // smoke test skips main.js, so nothing caught it: auto-resume died with
+            // a generic "Startup scan failed" AFTER silently burning both attempts.
+            // Declared AT the use site so it cannot be mistaken for log input again;
+            // the log line above deliberately uses goalLen=/goalFp= instead.
+            const goalSnippet = full.originalGoal ? full.originalGoal.slice(0, 80) : null;
             const goalHint = goalSnippet ? `\n> ${goalSnippet}${full.originalGoal.length > 80 ? '...' : ''}` : '';
             await sendMessageSystem(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
 
@@ -605,7 +616,7 @@ async function poll() {
                                 // prompt can quote addresses, amounts, or the user's own words.
                                 // Length + fingerprint identifies WHICH message was tapped
                                 // without reproducing it.
-                                log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
+                                log(`[Callback] Button tapped: "${buttonData}" on message: msgLen=${_byteLen(originalText)} msgFp=${_fp(originalText)}`, 'DEBUG');
                                 enqueueMessage({
                                     chatId: cbChat.id,
                                     senderId: String(cb.from.id),

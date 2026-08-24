@@ -65,6 +65,42 @@ test('NEVER emits a newline, for any line-break flavour', () => {
     }
 });
 
+test('strips every character the JVM treats as a line terminator', () => {
+    // The consumer is a Kotlin/JVM regex, so the property that matters is JAVA's
+    // line model, not Node's. Verified on JBR 21 against the exact
+    // LogShareSanitizer patterns, with the body "…config<SEP>host=admin:hunter2@…":
+    //
+    //   plain space    matches=true  find=true  splits=false -> scrubbed
+    //   U+2028 LS      matches=false find=false splits=false -> BODY LEAKED
+    //   U+2029 PS      matches=false find=false splits=false -> BODY LEAKED
+    //   U+0085 NEL     matches=false find=false splits=false -> BODY LEAKED
+    //
+    // `.` does not match a Java line terminator and `$` anchors before one, so
+    // `(.*)$` cannot reach end-of-input and `messageMarker.matches()` fails. Kotlin's
+    // `lines()` splits only on \r\n / \n / \r, so the line is ALSO never split and
+    // never reaches the `[redacted continuation]` fallback — it lands in the `else`
+    // branch and ships verbatim. Stripping \r and \n alone is NOT sufficient.
+    const JVM_TERMINATORS = ['\u2028', '\u2029', '\u0085'];
+    for (const sep of JVM_TERMINATORS) {
+        const out = flattenForLog(`here is my config${sep}host=admin:hunter2@internal.db`, 200);
+        assert.ok(
+            !out.includes(sep),
+            `U+${sep.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')} survived: ${JSON.stringify(out)}`,
+        );
+    }
+});
+
+test('does NOT strip characters the JVM regex handles correctly', () => {
+    // Calibration, so the class above does not creep wider than the threat. VT and
+    // FF are `\s` but are NOT java.util.regex line terminators — the JBR 21 probe
+    // shows matches=true/find=true for both, i.e. already scrubbed. Mangling them
+    // would cost output fidelity for no security gain.
+    for (const ch of ['\u000B', '\u000C']) {
+        const out = flattenForLog(`a${ch}b`, 100);
+        assert.ok(out.includes(ch), `U+000${ch.codePointAt(0).toString(16).toUpperCase()} should be preserved: ${JSON.stringify(out)}`);
+    }
+});
+
 test('the exact production leak case is neutralised', () => {
     // The body that shipped a credential off-device before this fix.
     const body = 'here is my config\n[database]\nhost=admin:hunter2@internal.db';
@@ -160,13 +196,71 @@ test('message-handler builds the chat-body preview through flattenForLog', () =>
     );
 });
 
-test('no log site interpolates a raw goal snippet any more', () => {
+test('no LOG call interpolates raw goal text', () => {
+    // The invariant is about LOG lines specifically. main.js legitimately echoes a
+    // goal snippet back into the USER'S OWN chat via sendMessageSystem — the user's
+    // own text returning to the user, not an export path — so a blanket file-wide ban
+    // on the substring would be wrong, and would have to be weakened the moment
+    // anyone re-added that (correct) user-facing hint.
+    //
+    // NB: the previous version of this guard keyed on the literal spellings `goal=`
+    // and `goalSnippet ? '"'`. Renaming the log field to `goalPreview=` sailed
+    // straight through it, and it also went green against the restored (legitimate)
+    // goalSnippet purely by spelling luck. Assert on the CALL, not on one spelling.
     const fs = require('fs');
     for (const f of ['message-handler.js', 'main.js', 'ai.js']) {
-        const src = fs.readFileSync(path.join(BUNDLE, f), 'utf8');
+        const fsrc = fs.readFileSync(path.join(BUNDLE, f), 'utf8');
+        const logLines = fsrc.split('\n').filter((l) => /\blog\s*\(/.test(l));
+        for (const l of logLines) {
+            // Check each interpolation separately. A whole-line escape hatch would
+            // pass a line carrying BOTH a safe `_byteLen(full.originalGoal)` and a
+            // raw `${full.originalGoal}`; per-expression checking will not.
+            for (const e of l.match(/\$\{[^}]*\}/g) || []) {
+                if (/\boriginalGoal\b/.test(e)) {
+                    // Key on the underlying redaction helpers, not on one file's
+                    // local alias: main.js imports them as `_fp`/`_byteLen` and
+                    // ai.js as `_reasoningFingerprint`/`_byteLen`, but both resolve
+                    // to reasoning-redact's sha256(...).slice(0, 8) and UTF-8 length.
+                    // An alias-keyed allowlist false-flags the safe ai.js call site.
+                    assert.ok(
+                        /(?:byteLen|_fp|[Ff]ingerprint)\s*\(/.test(e),
+                        `${f}: a log call interpolates raw originalGoal:\n    ${l.trim()}`,
+                    );
+                }
+                assert.ok(
+                    !/\bgoalSnippet\b/.test(e),
+                    `${f}: a log call interpolates the goal snippet:\n    ${l.trim()}`,
+                );
+            }
+        }
+    }
+});
+
+test('main.js declares every goal-related local it reads', () => {
+    // Regression guard. A prior revision of this fix deleted `const goalSnippet = ...`
+    // while treating it as a log leak, but left the read at the notify site. Nothing
+    // caught it: `node --check` passes, because an undeclared free variable is a legal
+    // runtime global lookup resolved lazily; and smoke.js SKIPS main.js, because
+    // requiring it boots the whole agent. So on every boot with a live checkpoint,
+    // auto-resume threw ReferenceError, the outer catch swallowed it as a generic
+    // "[AutoResume] Startup scan failed", and both AUTO_RESUME_MAX_ATTEMPTS were
+    // burned BEFORE the throw — permanently abandoning the very checkpoint that
+    // crash-recovery exists to rescue.
+    //
+    // Deliberately narrow: a real unbound-identifier check needs a parser, and adding
+    // a dependency for it is out of scope here. That main.js has no load coverage at
+    // all is the underlying gap, and is tracked separately.
+    const fs = require('fs');
+    const msrc = fs.readFileSync(path.join(BUNDLE, 'main.js'), 'utf8');
+    for (const name of ['goalSnippet', 'goalHint']) {
+        if (!msrc.includes(name)) continue;
+        const declared =
+            msrc.includes('const ' + name + ' =') ||
+            msrc.includes('let ' + name + ' =') ||
+            msrc.includes('var ' + name + ' =');
         assert.ok(
-            !/goal=\$\{|goal="\$\{|goal=\$\{.*slice/.test(src) && !/goalSnippet \? '"'/.test(src),
-            `${f} still interpolates raw goal text into a log line`,
+            declared,
+            'main.js reads `' + name + '` but never declares it — ReferenceError at runtime',
         );
     }
 });

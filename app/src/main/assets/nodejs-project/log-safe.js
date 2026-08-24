@@ -37,8 +37,11 @@ const NEWLINE_GLYPH = ' ⏎ ';
  * user actually typed rather than the substituted glyphs. Returns '' for
  * non-strings and empty input — callers supply their own "(no text)" wording.
  *
- * GUARANTEE: the returned string contains no '\n' and no '\r'. That is the
- * property the Share-path sanitizer depends on; see log-safe.test.js.
+ * GUARANTEE: the returned string contains no character that java.util.regex
+ * treats as a line terminator — \n, \r, U+2028 LINE SEPARATOR, U+2029 PARAGRAPH
+ * SEPARATOR, U+0085 NEL. Stating it as "no \n and no \r" was too weak: the
+ * property the Share-path sanitizer actually needs is about the JVM's line
+ * model, not Node's. See log-safe.test.js.
  *
  * @param {string} text        untrusted input (a chat body, a goal, …)
  * @param {number} [maxChars]  optional cap; an ellipsis is appended if it bites
@@ -53,8 +56,24 @@ function flattenForLog(text, maxChars) {
         truncated = true;
     }
     // One glyph per RUN of line breaks, so a blank line between paragraphs does
-    // not produce a wall of glyphs. Covers \n, \r\n, and lone \r.
-    out = out.replace(/[\r\n]+/g, NEWLINE_GLYPH);
+    // not produce a wall of glyphs.
+    //
+    // The class must match JAVA's line terminators, not Node's. LogShareSanitizer
+    // is a Kotlin/JVM regex: `.` does not match a line terminator and `$` anchors
+    // before one, so a body containing U+2028 makes `(.*)$` unable to reach the end
+    // of input and `messageMarker.matches()` fails outright. Kotlin's `lines()`
+    // splits only on \r\n / \n / \r, so such a line is ALSO never split and never
+    // reaches the `[redacted continuation]` fallback — it lands in the `else`
+    // branch and ships verbatim.
+    //
+    // Verified on JBR 21 against the exact LogShareSanitizer patterns:
+    //   plain space   matches=true  find=true   -> scrubbed
+    //   U+2028/9/0085 matches=false find=false  -> BODY LEAKS   (this fix)
+    //   U+000B/U+000C matches=true  find=true   -> scrubbed     (not line
+    //     terminators to java.util.regex, so `.` matches them; deliberately NOT
+    //     stripped — doing so would mangle output for no security gain)
+    // Precedent for the wider class: ai.js strips U+2028/U+2029 for the same reason.
+    out = out.replace(/[\r\n\u2028\u2029\u0085]+/g, NEWLINE_GLYPH);
     return truncated ? out + '...' : out;
 }
 
