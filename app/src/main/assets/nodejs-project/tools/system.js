@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { flattenForLog } = require('../log-safe');
 
 const {
     workDir, log, config, SECRETS_BLOCKED, SHELL_ALLOWLIST,
@@ -505,7 +506,8 @@ const handlers = {
         } catch (err) {
             clearTimeout(timerId);
             const output = logs.join('\n');
-            log(`js_eval FAIL: ${err.message.slice(0, 100)}`, 'WARN');
+            // BAT-1247 (security): err.message is model-authored text.
+            log(`js_eval FAIL: ${flattenForLog(err.message, 100)}`, 'WARN');
             return {
                 success: false,
                 error: redactSecrets(err.message.slice(0, 5000)),

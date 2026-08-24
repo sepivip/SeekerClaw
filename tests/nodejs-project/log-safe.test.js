@@ -31,12 +31,14 @@ const BUNDLE = path.join(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 
 const { flattenForLog, NEWLINE_GLYPH } = require(path.join(BUNDLE, 'log-safe'));
 
 let passed = 0;
+let failed = 0;
 function test(name, fn) {
     try {
         fn();
         passed++;
         console.log(`  ✓ ${name}`);
     } catch (e) {
+        failed++;
         console.error(`  ✗ ${name}`);
         console.error(`    ${e.message}`);
         process.exitCode = 1;
@@ -265,4 +267,64 @@ test('main.js declares every goal-related local it reads', () => {
     }
 });
 
-console.log(`\nPASS: log-safe.test.js (${passed} assertions)\n`);
+test('every known untrusted-text log site routes through a redaction helper', () => {
+    // Finding #11 generalised. The `[Callback]` redaction shipped with NO coverage —
+    // reverting it left the suite fully green. The same held for every site the
+    // same-class sweep turned up, so pin them as a table rather than one by one.
+    //
+    // My earlier claim "same-class sweep: no additional instances" was WRONG: all of
+    // these were live. Each logs text authored by the model, a remote MCP server, or
+    // the user, with NO `Message: ` marker for LogShareSanitizer to key on.
+    const fs = require('fs');
+    const SITES = [
+        // [file, marker identifying the log line, must-contain, must-NOT-contain]
+        ['main.js', '[Heartbeat] Agent has alert:', 'flattenForLog(', 'cleaned.slice('],
+        ['main.js', '[Callback] Button tapped:', 'msgFp=', 'originalText.slice('],
+        ['cron.js', '[Cron] Created job', 'flattenForLog(', null],
+        ['cron.js', '[Cron] Executing job', 'flattenForLog(', null],
+        ['cron.js', '[Cron] Skipping missed one-shot job', 'flattenForLog(', null],
+        ['mcp-client.js', '[MCP] Connected to', 'flattenForLog(', null],
+        ['tools/system.js', 'js_eval FAIL:', 'flattenForLog(', null],
+    ];
+    for (const [file, marker, must, mustNot] of SITES) {
+        const src = fs.readFileSync(path.join(BUNDLE, file), 'utf8');
+        const line = src.split('\n').find((l) => l.includes(marker));
+        assert.ok(line, `${file}: log site "${marker}" disappeared — re-point this guard`);
+        assert.ok(
+            line.includes(must),
+            `${file}: "${marker}" no longer routes through ${must}`,
+        );
+        if (mustNot) {
+            assert.ok(
+                !line.includes(mustNot),
+                `${file}: "${marker}" is back to raw ${mustNot}`,
+            );
+        }
+    }
+});
+
+test('every file calling flattenForLog actually imports it', () => {
+    // The dangling-goalSnippet class again: `node --check` passes on a call to an
+    // unimported function, and smoke.js cannot load main.js. While wiring the sweep
+    // above I hit exactly this — a script died between editing cron.js call sites and
+    // adding its require, leaving three calls with no import.
+    const fs = require('fs');
+    for (const file of ['main.js', 'cron.js', 'mcp-client.js', 'message-handler.js', 'tools/system.js']) {
+        const src = fs.readFileSync(path.join(BUNDLE, file), 'utf8');
+        if (!src.includes('flattenForLog(')) continue;
+        assert.ok(
+            /require\((?:'|")[./]*log-safe(?:'|")\)/.test(src),
+            `${file} calls flattenForLog but never requires log-safe — ReferenceError at runtime`,
+        );
+    }
+});
+
+// A harness that prints PASS while assertions failed is worse than none:
+// process.exitCode was already set so CI was safe, but a human reading the
+// output saw a ✗ line AND a trailing `PASS:` and could take either as the
+// verdict. Observed for real during this PR.
+if (failed > 0) {
+    console.error(`\nFAIL: log-safe.test.js — ${failed} failed, ${passed} passed\n`);
+} else {
+    console.log(`\nPASS: log-safe.test.js (${passed} assertions)\n`);
+}

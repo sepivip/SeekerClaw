@@ -7,6 +7,7 @@
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
+const { flattenForLog } = require('./log-safe');
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -372,7 +373,10 @@ class MCPClient {
         }
 
         const serverInfo = initResult.result?.serverInfo || {};
-        this.log(`[MCP] Connected to ${serverInfo.name || this.name} v${serverInfo.version || '?'}`, 'INFO');
+        // BAT-1247 (security): serverInfo is the REMOTE server's initialize
+        // response — untrusted, unbounded. Unflattened it can forge extra
+        // console entries in the Share payload.
+        this.log(`[MCP] Connected to ${flattenForLog(serverInfo.name || this.name, 80)} v${flattenForLog(String(serverInfo.version || '?'), 20)}`, 'INFO');
 
         // Step 2: Send initialized notification
         await this._sendNotification('notifications/initialized');

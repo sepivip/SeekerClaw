@@ -74,6 +74,7 @@ const { telegramCommandMenu, telegramFallbackMenu } = require('./telegram-comman
 // BAT-1247 (security): length + short hash instead of raw user/message text in
 // logs — same convention as ai.js's `msgLen=`/`msgFp=`.
 const { fingerprint: _fp, byteLen: _byteLen } = require('./reasoning-redact');
+const { flattenForLog } = require('./log-safe');
 
 // ── MCP (Model Context Protocol) — Remote tool servers (BAT-168, BAT-514) ───
 const { MCPManager } = require('./mcp-client');
@@ -609,8 +610,17 @@ async function poll() {
                                 // Generic callback: inject as synthetic user message
                                 const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
                                 const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
-                                // BAT-1247 (security): `buttonData` is app-generated callback
-                                // data (safe, and the diagnostic that matters), but
+                                // BAT-1247 (security): `buttonData` is MODEL-authored. An earlier
+                                // revision of this comment called it app-generated and therefore
+                                // safe — that is inverted. handleQuickCallback() returns non-null
+                                // only for RECOGNISED quick actions (quick-actions.js sets their
+                                // callback_data itself), so this `else` branch is exactly the path
+                                // for callback_data the AGENT chose via telegram_send's `buttons`
+                                // parameter. It is kept because it is the diagnostic that matters
+                                // and is bounded by construction: Telegram caps callback_data at
+                                // 64 bytes, tools/telegram.js re-validates that cap, and the strip
+                                // above removes the characters that could break the line format.
+                                // `originalText`, by contrast,
                                 // `originalText` is a real message body with no `Message: `
                                 // marker for LogShareSanitizer to key on — a confirmation
                                 // prompt can quote addresses, amounts, or the user's own words.
@@ -1185,7 +1195,14 @@ async function runHeartbeat() {
             if (isAck) {
                 log('[Heartbeat] All clear' + (cleaned ? ` (suppressed ${cleaned.length} chars of ack filler)` : ''), 'DEBUG');
             } else {
-                log('[Heartbeat] Agent has alert: ' + cleaned.slice(0, 80), 'INFO');
+                // BAT-1247 (security): `cleaned` is the raw heartbeat completion — LLM
+                // text that routinely quotes the user's own data (balances, addresses,
+                // failed transfers). It carries NO `Message: ` marker, so
+                // LogShareSanitizer has nothing to key on, and this site is INFO, i.e.
+                // visible in the default Share payload. Unflattened, a newline inside
+                // the first 80 chars splits it into multiple fully-headered records —
+                // the same leak flattenForLog exists to prevent.
+                log('[Heartbeat] Agent has alert: ' + flattenForLog(cleaned, 80), 'INFO');
                 // Inject alert into user conversation so replies thread correctly.
                 // The user sees this alert in Telegram and may reply to it — having
                 // it in conversation history lets the agent connect the dots.
