@@ -15,7 +15,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import com.seekerclaw.app.state.RuntimeStateStore
@@ -36,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,7 +59,10 @@ import com.seekerclaw.app.ui.components.ActionResult
 import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.rememberOpenAIOAuthController
 import com.seekerclaw.app.ui.components.rememberXaiOAuthController
+import com.seekerclaw.app.ui.theme.BrandAlpha
 import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.ModelRegistry
 import com.seekerclaw.app.config.availableModels
@@ -398,8 +408,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             onClick = { showAuthTypePicker = true },
                             info = SettingsHelpTexts.AUTH_TYPE,
                         )
-                        ConfigField(
-                            label = if (config?.authType == "api_key") "API Key (active)" else "API Key",
+                        // BAT-1247: the in-use credential is marked with a green
+                        // "Active" chip — no "(active)" label suffix, no ambiguous
+                        // red required-asterisk on the active row.
+                        CredentialField(
+                            label = "API Key",
                             value = maskKey(config?.anthropicApiKey),
                             onClick = {
                                 editField = "anthropicApiKey"
@@ -407,10 +420,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 editValue = config?.anthropicApiKey ?: ""
                             },
                             info = SettingsHelpTexts.API_KEY,
-                            isRequired = config?.authType == "api_key",
+                            isActive = config?.authType == "api_key",
+                            monospaceValue = !(config?.anthropicApiKey.isNullOrBlank()),
                         )
-                        ConfigField(
-                            label = if (config?.authType == "setup_token") "Setup Token (active)" else "Setup Token",
+                        CredentialField(
+                            label = "Setup Token",
                             value = maskKey(config?.setupToken),
                             onClick = {
                                 editField = "setupToken"
@@ -418,7 +432,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 editValue = config?.setupToken ?: ""
                             },
                             info = SettingsHelpTexts.SETUP_TOKEN,
-                            isRequired = config?.authType == "setup_token",
+                            isActive = config?.authType == "setup_token",
+                            monospaceValue = !(config?.setupToken.isNullOrBlank()),
                             showDivider = false,
                         )
                     }
@@ -453,7 +468,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         val oauthState = oauthController.state
                         val showOAuthSection = openaiAuthType == "oauth" || oauthState.isPolling || oauthState.error != null
                         if (!showOAuthSection) {
-                            ConfigField(
+                            CredentialField(
                                 label = "API Key",
                                 value = maskKey(config?.openaiApiKey),
                                 onClick = {
@@ -463,6 +478,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 },
                                 info = SettingsHelpTexts.OPENAI_API_KEY,
                                 isRequired = true,
+                                monospaceValue = !(config?.openaiApiKey.isNullOrBlank()),
                                 showDivider = false,
                             )
                         } else {
@@ -504,7 +520,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         val xaiOAuthState = xaiOAuthController.state
                         val showXaiOAuthSection = xaiAuthType == "oauth" || xaiOAuthState.isPolling || xaiOAuthState.error != null
                         if (!showXaiOAuthSection) {
-                            ConfigField(
+                            CredentialField(
                                 label = "API Key",
                                 value = maskKey(config?.xaiApiKey),
                                 onClick = {
@@ -514,6 +530,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 },
                                 info = "Get your key at console.x.ai",
                                 isRequired = true,
+                                monospaceValue = !(config?.xaiApiKey.isNullOrBlank()),
                                 showDivider = false,
                             )
                         } else {
@@ -555,7 +572,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             },
                             info = "Auto-switches if primary model is down (e.g. google/gemini-2.5-pro)",
                         )
-                        ConfigField(
+                        CredentialField(
                             label = "API Key",
                             value = maskKey(config?.openrouterApiKey),
                             onClick = {
@@ -565,6 +582,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             },
                             info = "Get your key at openrouter.ai/keys",
                             isRequired = true,
+                            monospaceValue = !(config?.openrouterApiKey.isNullOrBlank()),
                             showDivider = false,
                         )
                     }
@@ -604,12 +622,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             onClick = { editField = "customHeaders"; editLabel = "Extra Headers (JSON)"; editValue = config?.customHeaders ?: "" },
                             info = "Optional JSON object. Example: {\"X-API-Key\":\"...\"}",
                         )
-                        ConfigField(
+                        CredentialField(
                             label = "API Key",
                             value = maskKey(config?.customApiKey),
                             onClick = { editField = "customApiKey"; editLabel = "API Key"; editValue = config?.customApiKey ?: "" },
                             info = "Used as Bearer auth unless Authorization is in Extra Headers.",
                             isRequired = true,
+                            monospaceValue = !(config?.customApiKey.isNullOrBlank()),
                             showDivider = false,
                         )
                     }
@@ -890,7 +909,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 selected = selectedModel == model.id,
                                 onClick = { selectedModel = model.id },
                                 colors = RadioButtonDefaults.colors(
-                                    selectedColor = SeekerClawColors.Primary,
+                                    selectedColor = SeekerClawColors.ActionPrimary,
                                     unselectedColor = SeekerClawColors.TextDim,
                                 ),
                             )
@@ -922,7 +941,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             selected = isCustomSelected || selectedModel == CUSTOM_MODEL_SENTINEL,
                             onClick = { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } },
                             colors = RadioButtonDefaults.colors(
-                                selectedColor = SeekerClawColors.Primary,
+                                selectedColor = SeekerClawColors.ActionPrimary,
                                 unselectedColor = SeekerClawColors.TextDim,
                             ),
                         )
@@ -1034,7 +1053,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 selected = selectedAuth == typeId,
                                 onClick = { selectedAuth = typeId },
                                 colors = RadioButtonDefaults.colors(
-                                    selectedColor = SeekerClawColors.Primary,
+                                    selectedColor = SeekerClawColors.ActionPrimary,
                                     unselectedColor = SeekerClawColors.TextDim,
                                 ),
                             )
@@ -1156,7 +1175,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(selected = selectedFormat == formatId, onClick = { selectedFormat = formatId },
-                                colors = RadioButtonDefaults.colors(selectedColor = SeekerClawColors.Primary, unselectedColor = SeekerClawColors.TextDim))
+                                colors = RadioButtonDefaults.colors(selectedColor = SeekerClawColors.ActionPrimary, unselectedColor = SeekerClawColors.TextDim))
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Text(label, fontFamily = RethinkSans, fontSize = 14.sp, color = SeekerClawColors.TextPrimary)
                                 Text(if (formatId == "responses") "OpenAI Responses API format" else "Standard /v1/chat/completions format",
@@ -1813,4 +1832,122 @@ private fun CustomEchoReasoningRow() {
             },
         )
     }
+}
+
+/**
+ * BAT-1247: credential row for API keys / setup tokens. Mirrors the shared
+ * [ConfigField] layout exactly (row paddings, label/value scale, Edit
+ * affordance, info dialog, divider) with two credential-specific upgrades:
+ *  - masked key/token values render in monospace (technical values), and
+ *  - the credential currently in use is marked with a green [ActiveChip]
+ *    instead of an "(active)" label suffix + ambiguous red asterisk.
+ * [isRequired] keeps ConfigField's red asterisk + a11y semantics for
+ * providers whose single credential is mandatory.
+ */
+@Composable
+private fun CredentialField(
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+    info: String? = null,
+    isActive: Boolean = false,
+    isRequired: Boolean = false,
+    monospaceValue: Boolean = true,
+    showDivider: Boolean = true,
+) {
+    var showInfo by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            // md + xxs = 14dp vertical — matches ConfigField's row padding.
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md + Spacing.xxs),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = if (isRequired) Modifier.semantics(mergeDescendants = true) {
+                    contentDescription = "$label, required"
+                } else Modifier,
+            ) {
+                Text(
+                    text = label,
+                    fontFamily = RethinkSans,
+                    fontSize = TypeScale.labelSmall,
+                    color = SeekerClawColors.TextDim,
+                )
+                if (isRequired) {
+                    Text(
+                        text = " *",
+                        fontSize = TypeScale.labelSmall,
+                        color = SeekerClawColors.Error,
+                    )
+                }
+                if (isActive) {
+                    Spacer(modifier = Modifier.width(Spacing.sm))
+                    ActiveChip()
+                }
+                if (info != null) {
+                    IconButton(onClick = { showInfo = true }) {
+                        Icon(
+                            Icons.Outlined.Info,
+                            contentDescription = "More info about $label",
+                            tint = SeekerClawColors.TextDim,
+                            // md + xxs = 14dp — matches ConfigField's info-icon size.
+                            modifier = Modifier.size(Spacing.md + Spacing.xxs),
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "Edit",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.labelSmall,
+                color = SeekerClawColors.TextInteractive,
+            )
+        }
+        Spacer(modifier = Modifier.height(Spacing.xxs))
+        Text(
+            text = value,
+            fontFamily = if (monospaceValue) FontFamily.Monospace else RethinkSans,
+            fontSize = TypeScale.bodyMedium,
+            color = SeekerClawColors.TextPrimary,
+        )
+    }
+    if (showDivider) {
+        HorizontalDivider(
+            color = SeekerClawColors.CardBorder,
+            modifier = Modifier.padding(horizontal = Spacing.lg),
+        )
+    }
+    if (showInfo && info != null) {
+        InfoDialog(title = label, message = info, onDismiss = { showInfo = false })
+    }
+}
+
+/**
+ * Small green "Active" chip — marks which stored credential the provider
+ * is currently using (Q5: green = the one active-control accent; red is
+ * reserved for destructive/warning emphasis).
+ */
+@Composable
+private fun ActiveChip() {
+    Text(
+        text = "Active",
+        fontFamily = RethinkSans,
+        fontSize = TypeScale.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = SeekerClawColors.ActionPrimary,
+        modifier = Modifier
+            .background(
+                SeekerClawColors.ActionPrimary.copy(alpha = BrandAlpha.errorBackground),
+                RoundedCornerShape(SeekerClawColors.CornerRadius),
+            )
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xxs),
+    )
 }

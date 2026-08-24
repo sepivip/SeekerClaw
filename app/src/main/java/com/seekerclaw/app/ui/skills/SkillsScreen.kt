@@ -4,7 +4,9 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
@@ -48,10 +51,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.navigation.NavHostController
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.EnvVarRegistry
+import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.PageSectionHeader
+import com.seekerclaw.app.ui.components.ScreenActionLink
+import com.seekerclaw.app.ui.components.SeekerClawSearchField
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.navigation.EnvVarsRoute
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.ui.theme.Sizing
+import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
 import com.seekerclaw.app.util.Analytics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -213,32 +223,23 @@ private fun SkillsListContent(
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.TextPrimary,
                     )
-                    Text(
-                        text = "Import",
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = SeekerClawColors.Accent,
-                        modifier = Modifier
-                            .clickable(onClickLabel = "Import skills") {
-                                importSkillsLauncher.launch(arrayOf("application/zip", "text/markdown", "text/plain"))
-                            }
-                            .padding(4.dp),
+                    ScreenActionLink(
+                        label = "Import",
+                        onClick = {
+                            importSkillsLauncher.launch(arrayOf("application/zip", "text/markdown", "text/plain"))
+                        },
                     )
                 }
             }
 
             item {
                 Spacer(Modifier.height(4.dp))
-                SearchField(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    shape = shape,
+                // BAT-1247 (audit: two search-field styles) — the ONE shared field.
+                SeekerClawSearchField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = "Search skills...",
                 )
-            }
-
-            item {
-                MarketplaceTeaserCard(shape = shape)
             }
 
             if (filtered.isEmpty()) {
@@ -275,6 +276,10 @@ private fun SkillsListContent(
                     }
                 }
             }
+
+            item {
+                MarketplaceTeaserCard()
+            }
         }
     }
 }
@@ -288,133 +293,53 @@ private fun SectionHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp, bottom = 4.dp),
+            .padding(top = Spacing.sm, bottom = Spacing.xs),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            fontFamily = RethinkSans,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.TextDim,
-            letterSpacing = 0.5.sp,
-        )
+        PageSectionHeader(title = title)
         if (actionLabel != null && onAction != null) {
-            Text(
-                text = actionLabel,
-                fontFamily = RethinkSans,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.Accent,
-                modifier = Modifier
-                    .clickable(onClickLabel = actionLabel, onClick = onAction)
-                    .padding(4.dp),
-            )
+            ScreenActionLink(label = actionLabel, onClick = onAction)
         }
     }
 }
 
 @Composable
-private fun SearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    shape: RoundedCornerShape,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(SeekerClawColors.Surface, shape)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+private fun MarketplaceTeaserCard() {
+    val chipShape = RoundedCornerShape(Spacing.xs)
+    CardSurface {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Text(
+                text = "Skill Marketplace",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = SeekerClawColors.TextPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "COMING SOON",
+                fontFamily = RethinkSans,
+                fontSize = TypeScale.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = SeekerClawColors.TextSecondary,
+                modifier = Modifier
+                    .background(SeekerClawColors.Surface, chipShape)
+                    .border(BorderStroke(Sizing.borderThin, SeekerClawColors.BorderSubtle), chipShape)
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            )
+        }
+        Spacer(Modifier.height(Spacing.sm))
         Text(
-            text = "⌕",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 18.sp,
+            text = "Discover and install skills created by the community.",
+            fontFamily = RethinkSans,
+            fontSize = TypeScale.bodySmall,
             color = SeekerClawColors.TextDim,
         )
-        Spacer(Modifier.width(10.dp))
-        Box(modifier = Modifier.weight(1f)) {
-            if (query.isEmpty()) {
-                Text(
-                    text = "Search skills...",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                    color = SeekerClawColors.TextDim,
-                )
-            }
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                singleLine = true,
-                cursorBrush = SolidColor(SeekerClawColors.Accent),
-                textStyle = TextStyle(
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                    color = SeekerClawColors.TextPrimary,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        if (query.isNotEmpty()) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "✕",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 14.sp,
-                color = SeekerClawColors.TextDim,
-                modifier = Modifier.clickable(onClickLabel = "Clear search") { onQueryChange("") },
-            )
-        }
-    }
-}
-
-@Composable
-private fun MarketplaceTeaserCard(shape: RoundedCornerShape) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(SeekerClawColors.Surface, shape)
-            .cornerGlowBorder()
-            .padding(20.dp),
-    ) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-            ) {
-                Text(
-                    text = "Skill Marketplace",
-                    fontFamily = RethinkSans,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.TextPrimary,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = "COMING SOON",
-                    fontFamily = RethinkSans,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SeekerClawColors.Primary,
-                    modifier = Modifier
-                        .background(
-                            SeekerClawColors.Primary.copy(alpha = 0.12f),
-                            RoundedCornerShape(4.dp),
-                        )
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "Discover and install skills created by the community.",
-                fontFamily = RethinkSans,
-                fontSize = 13.sp,
-                color = SeekerClawColors.TextDim,
-            )
-        }
     }
 }
 
@@ -545,6 +470,7 @@ private fun SkillCard(
                     fontSize = 13.sp,
                     color = SeekerClawColors.TextDim,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             if (skill.triggers.isNotEmpty()) {

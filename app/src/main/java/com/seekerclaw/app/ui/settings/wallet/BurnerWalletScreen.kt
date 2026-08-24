@@ -42,8 +42,8 @@ import com.seekerclaw.app.ui.components.CardSurface
 import com.seekerclaw.app.ui.components.MorphActionButton
 import com.seekerclaw.app.ui.components.PrimaryButton
 import com.seekerclaw.app.ui.components.SecondaryButton
+import com.seekerclaw.app.ui.components.InCardLabel
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
-import com.seekerclaw.app.ui.components.SectionLabel
 import com.seekerclaw.app.ui.settings.wallet.components.BurnerCaps
 import com.seekerclaw.app.ui.settings.wallet.components.CapsConfigSection
 import com.seekerclaw.app.ui.settings.wallet.components.DangerZoneSection
@@ -336,13 +336,9 @@ private fun EmptyStateSection(
     }
 
     CardSurface {
-        Text(
-            text = "Set up burner",
-            fontFamily = RethinkSans,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.ExtraBold,
-            color = SeekerClawColors.TextPrimary,
-        )
+        // BAT-1247 M4: shared in-card label instead of a hand-rolled
+        // bold-white header.
+        InCardLabel("Set up burner")
         Spacer(Modifier.height(Spacing.sm))
         Text(
             text = "Paste a base58 private key or a Solana CLI JSON byte array. The key is encrypted on this device — Node never sees it.",
@@ -517,7 +513,9 @@ private fun ConfiguredStateSection(
     val fundingContext = LocalContext.current
     val fundingHaptic = LocalHapticFeedback.current
     CardSurface {
-        SectionLabel("Funding")
+        // BAT-1247 M4: label INSIDE a card is InCardLabel, not the
+        // page-level section header.
+        InCardLabel("Funding")
         Spacer(Modifier.height(Spacing.sm))
         Text(
             text = "Send SOL or USDC from your main wallet to the address below. Tap to copy.",

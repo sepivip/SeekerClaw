@@ -1,7 +1,6 @@
 package com.seekerclaw.app.ui.skills
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,8 +25,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.ui.components.CardSurface
+import com.seekerclaw.app.ui.components.InCardLabel
+import com.seekerclaw.app.ui.components.ScreenActionLink
+import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.ui.theme.Spacing
+import com.seekerclaw.app.ui.theme.TypeScale
+
+/**
+ * BAT-1247: the bare `missing "version"` diagnostic from SkillsRepository is
+ * mapped to an actionable one-liner AT RENDER — the repository string (and
+ * every other diagnostic) stays untouched.
+ */
+private const val MISSING_VERSION_RAW = "missing \"version\""
+private const val MISSING_VERSION_FRIENDLY =
+    "Missing \"version\" in SKILL.md frontmatter — the skill still works; add a version field to silence this."
 
 @Composable
 fun SkillDetailScreen(
@@ -36,72 +48,43 @@ fun SkillDetailScreen(
     onBack: () -> Unit,
     onExport: (() -> Unit)? = null,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SeekerClawColors.Background)
-            .verticalScroll(rememberScrollState()),
-    ) {
-        // Top bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "← Skills",
-                fontFamily = RethinkSans,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.Primary,
-                modifier = Modifier.clickable(onClickLabel = "Back to skills list", onClick = onBack),
-            )
-            if (onExport != null) {
-                Text(
-                    text = "Export",
-                    fontFamily = RethinkSans,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SeekerClawColors.Accent,
-                    modifier = Modifier
-                        .clickable(onClickLabel = "Export skill", onClick = onExport)
-                        .padding(4.dp),
-                )
-            }
-        }
-
-        HorizontalDivider(
-            thickness = 1.dp,
-            color = SeekerClawColors.CardBorder,
-        )
-
+    SeekerClawScaffold(title = skill.name, onBack = onBack) { padding ->
         Column(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.lg, vertical = Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
-            // Header: avatar + name + version
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Header row: avatar + name + version, with the green screen-level Export action
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 SkillAvatar(skill = skill, size = 56, emojiFontSize = 32)
-                Spacer(Modifier.width(16.dp))
-                Column {
+                Spacer(Modifier.width(Spacing.lg))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = skill.name,
                         fontFamily = RethinkSans,
-                        fontSize = 22.sp,
+                        fontSize = TypeScale.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = SeekerClawColors.TextPrimary,
                     )
                     if (skill.version.isNotEmpty()) {
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.height(Spacing.xxs))
                         Text(
                             text = "v${skill.version.removePrefix("v").removePrefix("V")}",
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
+                            fontSize = TypeScale.labelSmall,
                             color = SeekerClawColors.TextDim,
                         )
                     }
+                }
+                if (onExport != null) {
+                    Spacer(Modifier.width(Spacing.md))
+                    ScreenActionLink(label = "Export", onClick = onExport)
                 }
             }
 
@@ -173,7 +156,7 @@ fun SkillDetailScreen(
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = warning,
+                                    text = if (warning == MISSING_VERSION_RAW) MISSING_VERSION_FRIENDLY else warning,
                                     fontFamily = RethinkSans,
                                     fontSize = 13.sp,
                                     color = SeekerClawColors.Warning,
@@ -205,15 +188,8 @@ private fun InfoSection(
     content: @Composable () -> Unit,
 ) {
     CardSurface {
-        Text(
-            text = label,
-            fontFamily = RethinkSans,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = SeekerClawColors.TextDim,
-            letterSpacing = 1.sp,
-        )
-        Spacer(Modifier.height(10.dp))
+        InCardLabel(text = label)
+        Spacer(Modifier.height(Spacing.sm))
         content()
     }
 }

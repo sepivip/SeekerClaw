@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { workDir, log, localTimestamp, getOwnerId } = require('./config');
+const { flattenForLog } = require('./log-safe');
 
 // ============================================================================
 // DEPENDENCY INJECTION
@@ -364,7 +365,7 @@ const cronService = {
         saveCronStore(this.store);
         this._armTimer();
 
-        log(`[Cron] Created job ${job.id}: "${job.name}" → next: ${job.state.nextRunAtMs ? localTimestamp(new Date(job.state.nextRunAtMs)) : 'never'}`, 'INFO');
+        log(`[Cron] Created job ${job.id}: "${flattenForLog(job.name, 80)}" → next: ${job.state.nextRunAtMs ? localTimestamp(new Date(job.state.nextRunAtMs)) : 'never'}`, 'INFO');
         return job;
     },
 
@@ -400,7 +401,7 @@ const cronService = {
         const removed = this.store.jobs.splice(idx, 1)[0];
         saveCronStore(this.store);
         this._armTimer();
-        log(`[Cron] Removed job ${id}: "${removed.name}"`, 'INFO');
+        log(`[Cron] Removed job ${id}: "${flattenForLog(removed.name, 80)}"`, 'INFO');
         return true;
     },
 
@@ -466,7 +467,7 @@ const cronService = {
             if (job.schedule.kind === 'at') {
                 const nextRun = computeNextRunAtMs(job.schedule, now);
                 if (!nextRun && !job.state.lastStatus) {
-                    log(`[Cron] Skipping missed one-shot job: ${job.id} "${job.name}"`, 'DEBUG');
+                    log(`[Cron] Skipping missed one-shot job: ${job.id} "${flattenForLog(job.name, 80)}"`, 'DEBUG');
                     job.enabled = false;
                     job.state.lastStatus = 'skipped';
                     job.state.nextRunAtMs = undefined;
@@ -589,7 +590,7 @@ const cronService = {
     },
 
     async _executeJob(job, nowMs) {
-        log(`[Cron] Executing job ${job.id}: "${job.name}"`, 'DEBUG');
+        log(`[Cron] Executing job ${job.id}: "${flattenForLog(job.name, 80)}"`, 'DEBUG');
         job.state.runningAtMs = nowMs;
         // Fix 2 (BAT-21): Clear nextRunAtMs before execution to prevent
         // the job from being picked up as due again during async execution.

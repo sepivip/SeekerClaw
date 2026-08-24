@@ -60,7 +60,9 @@ fun ProviderPicker(
                     selected = isSelected,
                     onClick = null,
                     colors = RadioButtonDefaults.colors(
-                        selectedColor = SeekerClawColors.Primary,
+                        // Q5 (BAT-1247): green is THE active-control accent —
+                        // brand red is reserved for destructive/warning emphasis.
+                        selectedColor = SeekerClawColors.ActionPrimary,
                         unselectedColor = SeekerClawColors.TextDim,
                     ),
                 )

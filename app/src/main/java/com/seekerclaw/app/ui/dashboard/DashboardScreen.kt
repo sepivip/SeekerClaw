@@ -56,12 +56,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.ui.components.DashboardActionButton
 import com.seekerclaw.app.ui.components.DashboardActionState
+import com.seekerclaw.app.ui.components.InCardLabel
+import com.seekerclaw.app.ui.components.PageSectionHeader
+import com.seekerclaw.app.ui.components.StatusIndicator
 import com.seekerclaw.app.ui.components.WarningButton
 import com.seekerclaw.app.ui.components.cornerGlowBorder
 import com.seekerclaw.app.ui.theme.SeekerClawColors
@@ -71,6 +75,7 @@ import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.AgentHealth
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
+import com.seekerclaw.app.util.UptimeFormat
 import com.seekerclaw.app.util.rememberUptime
 import android.content.Context
 import android.net.ConnectivityManager
@@ -607,17 +612,10 @@ fun DashboardScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text(
-                text = "Uptime",
-                fontFamily = RethinkSans,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                color = SeekerClawColors.TextDim,
-                letterSpacing = 1.sp,
-            )
+            InCardLabel(text = "Uptime")
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = formatUptime(uptime),
+                text = UptimeFormat.format(uptime),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
@@ -639,14 +637,7 @@ fun DashboardScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         // Uplinks
-        Text(
-            text = "Status",
-            fontFamily = RethinkSans,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = SeekerClawColors.TextDim,
-            letterSpacing = 1.sp,
-        )
+        PageSectionHeader(title = "Status")
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -659,7 +650,7 @@ fun DashboardScreen(
                     "degraded" -> "Engine retrying"
                     "error" -> "Engine error"
                     "stale" -> "Engine unresponsive"
-                    else -> "Claw Engine"
+                    else -> "Gateway " + BuildConfig.OPENCLAW_VERSION
                 }
                 ServiceStatus.STARTING -> "Starting..."
                 ServiceStatus.STOPPED -> "Offline"
@@ -678,6 +669,18 @@ fun DashboardScreen(
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
                 ServiceStatus.ERROR -> SeekerClawColors.Error
             }
+            // Status word mirrors gatewayDotColor branch-for-branch (a11y:
+            // state must be carried by text, not hue alone).
+            val gatewayWord = when (status) {
+                ServiceStatus.RUNNING -> when (health.apiStatus) {
+                    "degraded", "stale" -> "Degraded"
+                    "error" -> "Down"
+                    else -> "Running"
+                }
+                ServiceStatus.STARTING -> "Starting"
+                ServiceStatus.STOPPED -> "Offline"
+                ServiceStatus.ERROR -> "Down"
+            }
 
             val channelSubtitle = if (!hasBotToken) "Bot token missing" else when (status) {
                 ServiceStatus.RUNNING -> "Message relay"
@@ -690,6 +693,12 @@ fun DashboardScreen(
                 ServiceStatus.STARTING -> SeekerClawColors.Warning
                 ServiceStatus.ERROR -> SeekerClawColors.Error
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
+            }
+            val channelWord = if (!hasBotToken) "Down" else when (status) {
+                ServiceStatus.RUNNING -> "Connected"
+                ServiceStatus.STARTING -> "Starting"
+                ServiceStatus.ERROR -> "Down"
+                ServiceStatus.STOPPED -> "Offline"
             }
 
             val aiSubtitle = if (!hasCredential) "Credential missing" else when (status) {
@@ -718,20 +727,32 @@ fun DashboardScreen(
                 ServiceStatus.ERROR -> SeekerClawColors.Error
                 ServiceStatus.STOPPED -> SeekerClawColors.TextDim
             }
+            val aiWord = if (!hasCredential) "Down" else when (status) {
+                ServiceStatus.RUNNING -> when (health.apiStatus) {
+                    "degraded", "stale" -> "Degraded"
+                    "error" -> "Down"
+                    else -> "Ready"
+                }
+                ServiceStatus.STARTING -> "Starting"
+                ServiceStatus.ERROR -> "Down"
+                ServiceStatus.STOPPED -> "Offline"
+            }
 
             val isDiscord = config?.channel == "discord"
             UplinkCard(
                 icon = if (isDiscord) "//DC" else "//TG",
                 name = if (isDiscord) "Discord" else "Telegram",
                 subtitle = channelSubtitle,
+                statusWord = channelWord,
                 dotColor = channelDotColor,
                 shape = shape,
                 dotAlpha = if (isRunning) pulseAlpha else 1f,
             )
             UplinkCard(
                 icon = "//GW",
-                name = "Engine",
+                name = "Claw Engine",
                 subtitle = gatewaySubtitle,
+                statusWord = gatewayWord,
                 dotColor = gatewayDotColor,
                 shape = shape,
                 dotAlpha = if (isRunning) pulseAlpha else 1f,
@@ -740,6 +761,7 @@ fun DashboardScreen(
                 icon = "//AI",
                 name = "AI Provider",
                 subtitle = aiSubtitle,
+                statusWord = aiWord,
                 dotColor = aiDotColor,
                 shape = shape,
                 dotAlpha = if (isRunning) pulseAlpha else 1f,
@@ -828,6 +850,7 @@ private fun UplinkCard(
     icon: String,
     name: String,
     subtitle: String,
+    statusWord: String,
     dotColor: Color,
     shape: RoundedCornerShape,
     dotAlpha: Float = 1f,
@@ -865,26 +888,14 @@ private fun UplinkCard(
             )
         }
 
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(dotColor)
-                .alpha(dotAlpha),
+        // CodeRabbit #449 R1: pulse only the dot — fading the whole row made
+        // the status word breathe to 40% opacity.
+        StatusIndicator(
+            word = statusWord,
+            color = dotColor,
+            dotAlpha = dotAlpha,
         )
     }
-}
-
-private fun formatUptime(millis: Long): String {
-    if (millis <= 0) return "00h 00m 00s"
-    val seconds = millis / 1000
-    val minutes = seconds / 60
-    val hours = minutes / 60
-    val days = hours / 24
-    return buildString {
-        if (days > 0) append("${days}d ")
-        append("%02dh %02dm %02ds".format(hours % 24, minutes % 60, seconds % 60))
-    }.trimEnd()
 }
 
 private fun formatLastActivity(timestamp: Long, context: Context): String {

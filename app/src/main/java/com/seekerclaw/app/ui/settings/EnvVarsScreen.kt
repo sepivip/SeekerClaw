@@ -2,27 +2,22 @@ package com.seekerclaw.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,10 +36,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,9 +46,11 @@ import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.EnvVar
 import com.seekerclaw.app.config.EnvVarRegistry
 import com.seekerclaw.app.ui.components.CardSurface
-import com.seekerclaw.app.ui.components.SectionLabel
+import com.seekerclaw.app.ui.components.EmptyState
+import com.seekerclaw.app.ui.components.ScreenActionLink
 import com.seekerclaw.app.ui.theme.RethinkSans
 import com.seekerclaw.app.ui.theme.SeekerClawColors
+import com.seekerclaw.app.ui.theme.Spacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -130,6 +125,10 @@ fun EnvVarsScreen(
             else -> envVars + newVar
         }
         ConfigManager.saveEnvVars(context, updated)
+        // CodeRabbit #449 R1: re-gate writes until the async configVersion
+        // reload lands — a second save built on the stale `envVars` snapshot
+        // could silently drop the first one. The reload effect flips this back.
+        isLoaded = false
         editsThisSession = true
         dialogState = EnvVarDialogState.Hidden
     }
@@ -156,16 +155,15 @@ fun EnvVarsScreen(
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = { dialogState = EnvVarDialogState.Add() },
-                        enabled = isLoaded,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Add env var",
-                            tint = if (isLoaded) SeekerClawColors.TextPrimary else SeekerClawColors.TextDim,
-                        )
-                    }
+                    // BAT-1247 M5: unified add affordance — green "+ Add"
+                    // ScreenActionLink instead of a bare "+" icon. The
+                    // isLoaded gate moves into onClick: saves must never
+                    // build on the not-yet-loaded (empty) list.
+                    ScreenActionLink(
+                        label = "+ Add",
+                        onClick = { if (isLoaded) dialogState = EnvVarDialogState.Add() },
+                        modifier = Modifier.padding(end = Spacing.lg),
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = SeekerClawColors.Background,
@@ -181,11 +179,10 @@ fun EnvVarsScreen(
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            SectionLabel("Environment Variables")
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Combined header card: security disclosure + summary + raw editor action.
-            // Three sections of related meta-info, one surface — less card noise.
+            // BAT-1247 M5 nit: no page section header — the top bar already
+            // titles this single-section screen.
+            // Combined header card: security disclosure + summary, plus the
+            // raw-editor link while vars exist. One surface — less card noise.
             CardSurface {
                 // Security disclosure — values are readable by agent tools / skills
                 Row(verticalAlignment = Alignment.Top) {
@@ -232,17 +229,14 @@ fun EnvVarsScreen(
                         color = SeekerClawColors.TextSecondary,
                     )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                TextButton(
-                    onClick = { showRawEditor = true },
-                    enabled = isLoaded,
-                    contentPadding = PaddingValues(0.dp),
-                ) {
-                    Text(
-                        text = "{ }  Raw editor",
-                        fontFamily = RethinkSans,
-                        fontSize = 13.sp,
-                        color = SeekerClawColors.TextInteractive,
+                if (envVars.isNotEmpty()) {
+                    // BAT-1247 M5: THE single raw-editor affordance while vars
+                    // exist, kept near the list header. When the list is empty
+                    // the EmptyState's secondary action covers it instead.
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+                    ScreenActionLink(
+                        label = "{ } Raw editor",
+                        onClick = { if (isLoaded) showRawEditor = true },
                     )
                 }
             }
@@ -250,66 +244,18 @@ fun EnvVarsScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (envVars.isEmpty()) {
-                // Empty state
-                CardSurface {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            text = "No env vars yet.",
-                            fontFamily = RethinkSans,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = SeekerClawColors.TextPrimary,
-                        )
-                        Text(
-                            text = "Tap + to add your first, or use the raw editor for bulk paste.",
-                            fontFamily = RethinkSans,
-                            fontSize = 13.sp,
-                            color = SeekerClawColors.TextDim,
-                            fontStyle = FontStyle.Italic,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            Button(
-                                onClick = { dialogState = EnvVarDialogState.Add() },
-                                shape = shape,
-                                enabled = isLoaded,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = SeekerClawColors.ActionPrimary,
-                                    contentColor = Color.White,
-                                ),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Text(
-                                    text = "Add",
-                                    fontFamily = RethinkSans,
-                                    fontSize = 14.sp,
-                                    modifier = Modifier.padding(start = 4.dp),
-                                )
-                            }
-                            TextButton(
-                                onClick = { showRawEditor = true },
-                                enabled = isLoaded,
-                            ) {
-                                Text(
-                                    text = "{ }  Raw editor",
-                                    fontFamily = RethinkSans,
-                                    fontSize = 14.sp,
-                                    color = SeekerClawColors.TextInteractive,
-                                )
-                            }
-                        }
-                    }
-                }
+                // BAT-1247 M5: shared EmptyState template. Copy must not
+                // point at the top bar; both actions carry the isLoaded gate
+                // in their handlers (saves must never build on the
+                // not-yet-loaded list).
+                EmptyState(
+                    headline = "No env vars yet.",
+                    hint = "Add your first variable, or use the raw editor for bulk paste.",
+                    primaryLabel = "+ Add",
+                    onPrimary = { if (isLoaded) dialogState = EnvVarDialogState.Add() },
+                    secondaryLabel = "{ } Raw editor",
+                    onSecondary = { if (isLoaded) showRawEditor = true },
+                )
             } else {
                 // Env var list
                 CardSurface {
@@ -448,6 +394,7 @@ fun EnvVarsScreen(
                 // Raw editor returns the COMPLETE intended list — replace outright,
                 // not merge. This is how rename/delete/edit-in-place work.
                 ConfigManager.saveEnvVars(context, finalList)
+                isLoaded = false // re-gate until reload (see onSave)
                 editsThisSession = true
                 showRawEditor = false
             },
@@ -486,6 +433,7 @@ fun EnvVarsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     ConfigManager.saveEnvVars(context, envVars.filterNot { it.name == target.name })
+                    isLoaded = false // re-gate until reload (see onSave)
                     editsThisSession = true
                     deleteTarget = null
                 }) {

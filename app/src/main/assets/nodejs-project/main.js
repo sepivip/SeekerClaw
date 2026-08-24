@@ -71,6 +71,10 @@ registerRedactedSecret(XAI_OAUTH_REFRESH);
 const { androidBridgeCall, fetchMcpToken } = require('./bridge');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const { telegramCommandMenu, telegramFallbackMenu } = require('./telegram-commands');
+// BAT-1247 (security): length + short hash instead of raw user/message text in
+// logs — same convention as ai.js's `msgLen=`/`msgFp=`.
+const { fingerprint: _fp, byteLen: _byteLen } = require('./reasoning-redact');
+const { flattenForLog } = require('./log-safe');
 
 // ── MCP (Model Context Protocol) — Remote tool servers (BAT-168, BAT-514) ───
 const { MCPManager } = require('./mcp-client');
@@ -401,8 +405,11 @@ async function autoResumeOnStartup() {
             full.resumeAttempts = attempts + 1;
             saveCheckpoint(cp.taskId, full);
 
-            const goalSnippet = full.originalGoal ? full.originalGoal.slice(0, 80) : null;
-            log(`[AutoResume] RESUMING taskId=${cp.taskId} chatId=${chatId} age=${ageStr} attempt=${full.resumeAttempts}/${AUTO_RESUME_MAX_ATTEMPTS} goal=${goalSnippet ? '"' + goalSnippet + '"' : 'none'}`, 'INFO');
+            // BAT-1247 (security): `originalGoal` is the user's own request text and
+            // carries no `Message: ` marker, so LogShareSanitizer never scrubbed it.
+            // Length + fingerprint still answers what this line is for — is a goal
+            // present, and is it the SAME goal across resume attempts.
+            log(`[AutoResume] RESUMING taskId=${cp.taskId} chatId=${chatId} age=${ageStr} attempt=${full.resumeAttempts}/${AUTO_RESUME_MAX_ATTEMPTS} goalLen=${_byteLen(full.originalGoal)} goalFp=${_fp(full.originalGoal)}`, 'INFO');
 
             // Restore conversation from checkpoint BEFORE notifying user
             // (prevents notification from interfering with conversation state)
@@ -434,6 +441,17 @@ async function autoResumeOnStartup() {
             }
 
             // Notify user after conversation is restored
+            //
+            // BAT-1247 note: `goalSnippet` is the user's OWN request text echoed
+            // back into THEIR chat via sendMessageSystem — it is NOT a log line,
+            // so the log-redaction pass does not apply to it. An earlier revision
+            // of this fix deleted the declaration while treating it as a log leak,
+            // leaving a dangling read below. `node --check` passes on that and the
+            // smoke test skips main.js, so nothing caught it: auto-resume died with
+            // a generic "Startup scan failed" AFTER silently burning both attempts.
+            // Declared AT the use site so it cannot be mistaken for log input again;
+            // the log line above deliberately uses goalLen=/goalFp= instead.
+            const goalSnippet = full.originalGoal ? full.originalGoal.slice(0, 80) : null;
             const goalHint = goalSnippet ? `\n> ${goalSnippet}${full.originalGoal.length > 80 ? '...' : ''}` : '';
             await sendMessageSystem(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
 
@@ -592,7 +610,23 @@ async function poll() {
                                 // Generic callback: inject as synthetic user message
                                 const buttonData = (cb.data || '').replace(/[\r\n\t"\\]/g, ' ').trim();
                                 const originalText = (cb.message?.text || '').replace(/[\r\n]/g, ' ').slice(0, 200).trim();
-                                log(`[Callback] Button tapped: "${buttonData}" on message: "${originalText.slice(0, 60)}"`, 'DEBUG');
+                                // BAT-1247 (security): `buttonData` is MODEL-authored. An earlier
+                                // revision of this comment called it app-generated and therefore
+                                // safe — that is inverted. handleQuickCallback() returns non-null
+                                // only for RECOGNISED quick actions (quick-actions.js sets their
+                                // callback_data itself), so this `else` branch is exactly the path
+                                // for callback_data the AGENT chose via telegram_send's `buttons`
+                                // parameter. It is kept because it is the diagnostic that matters
+                                // and is bounded by construction: Telegram caps callback_data at
+                                // 64 bytes, tools/telegram.js re-validates that cap, and the strip
+                                // above removes the characters that could break the line format.
+                                // `originalText`, by contrast,
+                                // `originalText` is a real message body with no `Message: `
+                                // marker for LogShareSanitizer to key on — a confirmation
+                                // prompt can quote addresses, amounts, or the user's own words.
+                                // Length + fingerprint identifies WHICH message was tapped
+                                // without reproducing it.
+                                log(`[Callback] Button tapped: "${buttonData}" on message: msgLen=${_byteLen(originalText)} msgFp=${_fp(originalText)}`, 'DEBUG');
                                 enqueueMessage({
                                     chatId: cbChat.id,
                                     senderId: String(cb.from.id),
@@ -1161,7 +1195,14 @@ async function runHeartbeat() {
             if (isAck) {
                 log('[Heartbeat] All clear' + (cleaned ? ` (suppressed ${cleaned.length} chars of ack filler)` : ''), 'DEBUG');
             } else {
-                log('[Heartbeat] Agent has alert: ' + cleaned.slice(0, 80), 'INFO');
+                // BAT-1247 (security): `cleaned` is the raw heartbeat completion — LLM
+                // text that routinely quotes the user's own data (balances, addresses,
+                // failed transfers). It carries NO `Message: ` marker, so
+                // LogShareSanitizer has nothing to key on, and this site is INFO, i.e.
+                // visible in the default Share payload. Unflattened, a newline inside
+                // the first 80 chars splits it into multiple fully-headered records —
+                // the same leak flattenForLog exists to prevent.
+                log('[Heartbeat] Agent has alert: ' + flattenForLog(cleaned, 80), 'INFO');
                 // Inject alert into user conversation so replies thread correctly.
                 // The user sees this alert in Telegram and may reply to it — having
                 // it in conversation history lets the agent connect the dots.
