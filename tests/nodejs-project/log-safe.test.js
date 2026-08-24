@@ -344,7 +344,8 @@ test('mcp-client flattens the REMOTE-supplied identifiers it logs', () => {
     // Scoped deliberately. mcp-client.js has ~14 log sites interpolating a name, but
     // they are not one population:
     //
-    //   serverInfo.name / tool.name -> REMOTE, i.e. attacker-influenced by a hostile
+    //   serverInfo.name / .version / tool.name -> REMOTE, i.e. attacker-influenced by a
+    //       hostile
     //       or compromised MCP server. Hardened here.
     //   this.name / cfg.name        -> the user's OWN mcp_servers.json entry, and it
     //       doubles as IDENTITY (mcp-client.js:184 `this.id = serverConfig.id ||
@@ -358,10 +359,10 @@ test('mcp-client flattens the REMOTE-supplied identifiers it logs', () => {
     for (const l of src.split('\n')) {
         if (!/\blog\s*\(/.test(l)) continue;
         for (const e of l.match(/\$\{[^}]*\}/g) || []) {
-            if (!/\b(?:serverInfo|tool)\.name\b/.test(e)) continue;
+            if (!/\b(?:serverInfo|tool)\.(?:name|version)\b/.test(e)) continue;
             assert.ok(
                 /flattenForLog\s*\(/.test(e),
-                `mcp-client.js: remote-supplied name logged raw — ${e}\n    ${l.trim()}`,
+                `mcp-client.js: remote-supplied identifier logged raw — ${e}\n    ${l.trim()}`,
             );
         }
     }
