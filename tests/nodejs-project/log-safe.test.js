@@ -319,6 +319,54 @@ test('every file calling flattenForLog actually imports it', () => {
     }
 });
 
+test('no cron log call interpolates a raw .name', () => {
+    // Derived from the invariant rather than enumerated by hand — the point of it.
+    // My sweep hand-listed cron's Created/Executing/Skipping sites and MISSED
+    // `[Cron] Removed job` (cron.js:404, INFO). The table guard above is hand-listed
+    // too, so it could not have caught that either; CodeRabbit did. This one scans
+    // EVERY log() call in the file, so a new site added later is covered without
+    // anyone remembering to extend a list.
+    const fs = require('fs');
+    const src = fs.readFileSync(path.join(BUNDLE, 'cron.js'), 'utf8');
+    for (const l of src.split('\n')) {
+        if (!/\blog\s*\(/.test(l)) continue;
+        for (const e of l.match(/\$\{[^}]*\}/g) || []) {
+            if (!/\.\s*name\b/.test(e)) continue;
+            assert.ok(
+                /flattenForLog\s*\(/.test(e),
+                `cron.js: log call interpolates a raw .name — ${e}\n    ${l.trim()}`,
+            );
+        }
+    }
+});
+
+test('mcp-client flattens the REMOTE-supplied identifiers it logs', () => {
+    // Scoped deliberately. mcp-client.js has ~14 log sites interpolating a name, but
+    // they are not one population:
+    //
+    //   serverInfo.name / tool.name -> REMOTE, i.e. attacker-influenced by a hostile
+    //       or compromised MCP server. Hardened here.
+    //   this.name / cfg.name        -> the user's OWN mcp_servers.json entry, and it
+    //       doubles as IDENTITY (mcp-client.js:184 `this.id = serverConfig.id ||
+    //       serverConfig.name`, and it is returned in result payloads). Sanitising at
+    //       the constructor — the tempting one-line fix — would change matching
+    //       semantics, so the safe form is 12 call-site edits. Deferred rather than
+    //       churned into an already over-scope PR; the exposure is a user's own typed
+    //       config in their own export, not an attacker's text.
+    const fs = require('fs');
+    const src = fs.readFileSync(path.join(BUNDLE, 'mcp-client.js'), 'utf8');
+    for (const l of src.split('\n')) {
+        if (!/\blog\s*\(/.test(l)) continue;
+        for (const e of l.match(/\$\{[^}]*\}/g) || []) {
+            if (!/\b(?:serverInfo|tool)\.name\b/.test(e)) continue;
+            assert.ok(
+                /flattenForLog\s*\(/.test(e),
+                `mcp-client.js: remote-supplied name logged raw — ${e}\n    ${l.trim()}`,
+            );
+        }
+    }
+});
+
 // A harness that prints PASS while assertions failed is worse than none:
 // process.exitCode was already set so CI was safe, but a human reading the
 // output saw a ✗ line AND a trailing `PASS:` and could take either as the

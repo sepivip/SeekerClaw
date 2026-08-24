@@ -433,7 +433,7 @@ class MCPClient {
             const prevHash = this.toolHashes.get(tool.name);
 
             if (prevHash && prevHash !== hash) {
-                this.log(`[MCP] WARNING: Tool definition changed for ${tool.name} on ${this.name} — blocking (rug pull protection)`, 'ERROR');
+                this.log(`[MCP] WARNING: Tool definition changed for ${flattenForLog(tool.name, 64)} on ${this.name} — blocking (rug pull protection)`, 'ERROR');
                 // Keep the old hash so the block persists across future refreshes
                 continue;
             }

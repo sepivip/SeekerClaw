@@ -401,7 +401,7 @@ const cronService = {
         const removed = this.store.jobs.splice(idx, 1)[0];
         saveCronStore(this.store);
         this._armTimer();
-        log(`[Cron] Removed job ${id}: "${removed.name}"`, 'INFO');
+        log(`[Cron] Removed job ${id}: "${flattenForLog(removed.name, 80)}"`, 'INFO');
         return true;
     },
 
