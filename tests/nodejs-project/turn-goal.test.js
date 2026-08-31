@@ -225,10 +225,40 @@ test('SAME-VALUE DIFFERENTIAL: the pre-fix producer agrees on those single-entry
 
 // ── provenance gate (Codex B2 / B4) ─────────────────────────────────────────
 
-test('goalIsTrusted accepts only the closed enum', () => {
-    for (const src of ['carried', 'turn', 'scan', 'none']) {
-        assert.strictEqual(goalIsTrusted({ goalSrc: src }), true, `expected trusted: ${src}`);
+test('goalIsTrusted accepts only provenance that can carry a real goal', () => {
+    // 'none' is a legitimate WRITE value but not a forwardable one — see below.
+    for (const src of ['carried', 'turn', 'scan']) {
+        assert.strictEqual(goalIsTrusted({ goalSrc: src, originalGoal: TASK }), true,
+            `expected trusted: ${src}`);
     }
+});
+
+test("'none' provenance is never forwardable, even carrying a goal", () => {
+    // CodeRabbit #450: 'none' records that the resolver found NOTHING, so a
+    // checkpoint holding both 'none' and a goal is internally inconsistent — the
+    // goal did not come from the resolver that stamped it. Fail closed.
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'none', originalGoal: 'Hey girl' }), false);
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'none', originalGoal: null }), false);
+});
+
+test('the stored goal itself is guarded, not just its provenance', () => {
+    // Persisted JSON living on disk for up to 7 days. The resolver only ever
+    // stores normalizeGoal() output, so anything untrimmed, empty, or over the
+    // bound did not come from it — treat as tampering and fail closed.
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'turn', originalGoal: 'x'.repeat(MAX_GOAL_CHARS + 1) }), false,
+        'oversized stored goal must not be trusted');
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'turn', originalGoal: '  padded  ' }), false,
+        'untrimmed stored goal must not be trusted');
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'turn', originalGoal: '' }), false);
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'turn', originalGoal: 12345 }), false);
+});
+
+test('NEGATIVE CONTROL: an ordinary goal is still trusted', () => {
+    // Without this, every assertion above would pass if goalIsTrusted simply
+    // returned false always — which would silently disable the whole feature.
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'turn', originalGoal: TASK }), true);
+    assert.strictEqual(goalIsTrusted({ goalSrc: 'turn', originalGoal: 'x'.repeat(MAX_GOAL_CHARS) }), true,
+        'exactly at the bound is still valid');
 });
 
 test('goalIsTrusted fails closed on anything else', () => {

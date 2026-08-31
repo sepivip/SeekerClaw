@@ -50,8 +50,19 @@ const CONTINUATION_MAX_CHARS = 24;
 /** Prefixes that mark machine-authored entries wearing role:'user'. */
 const SKIP_PREFIXES = ['[system event]', '[TASK RESUME]', '[System]'];
 
-/** Provenance values a post-fix checkpoint may carry. Closed set, validated on read. */
+/** Every provenance value post-fix code may WRITE. Presence marks a post-fix checkpoint. */
 const GOAL_SRC_VALUES = new Set(['carried', 'turn', 'scan', 'none']);
+
+/**
+ * The subset whose stored goal may be FORWARDED as an authoritative directive.
+ *
+ * 'none' is deliberately excluded: it records that the resolver found nothing, so
+ * a checkpoint carrying BOTH 'none' and a non-empty goal is internally
+ * inconsistent — the goal did not come from the resolver that stamped it. Treat
+ * that as tampering or corruption and fail closed. ('redacted', written by
+ * task-store when redaction altered the goal, is in neither set.)
+ */
+const GOAL_SRC_TRUSTED = new Set(['carried', 'turn', 'scan']);
 
 /**
  * Trim and bound any candidate goal. Returns null for anything unusable, so a
@@ -176,7 +187,13 @@ function resolveTurnGoal({ optionsGoal, userMessage, messages } = {}) {
  */
 function goalIsTrusted(full) {
     if (!full || typeof full !== 'object') return false;
-    return GOAL_SRC_VALUES.has(full.goalSrc);
+    if (!GOAL_SRC_TRUSTED.has(full.goalSrc)) return false;
+    // Guard the goal itself, not just its provenance: this is persisted JSON that
+    // lives on disk for up to 7 days. Requiring it to be ALREADY normalised is an
+    // integrity check — the resolver only ever stores normalizeGoal() output, so a
+    // value that is untrimmed, empty, or over MAX_GOAL_CHARS did not come from it.
+    return typeof full.originalGoal === 'string'
+        && normalizeGoal(full.originalGoal) === full.originalGoal;
 }
 
 module.exports = {
@@ -185,6 +202,7 @@ module.exports = {
     CONTINUATION_MAX_CHARS,
     SKIP_PREFIXES,
     GOAL_SRC_VALUES,
+    GOAL_SRC_TRUSTED,
     normalizeGoal,
     textOfContent,
     isContinuationControl,
