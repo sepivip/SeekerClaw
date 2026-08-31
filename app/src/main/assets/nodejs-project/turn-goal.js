@@ -80,6 +80,33 @@ const SKIP_PREFIXES = ['[system event]', '[TASK RESUME]', '[System]'];
  */
 const GOAL_SCAN_UNSAFE_KEY = 'goalScanUnsafe';
 
+/**
+ * Every string redactSecrets can leave behind (security.js:107-146):
+ *   sk-ant-***, ***:***, BSA***, pplx-***, sk-or-***, sk-proj-***, sk-***,
+ *   eyJ***, ***bridge-token***   -> all contain ***
+ *   [REDACTED_ENV]  and  [REDACTED:<key>]
+ *
+ * Needed because GOAL_SCAN_UNSAFE_KEY only covers checkpoints written by
+ * post-fix code. A checkpoint written by the PRE-fix build already holds
+ * redacted, unmarked slice text, and redaction is idempotent — re-saving it
+ * detects no change and so never marks it. Checkpoints live up to 7 days, so
+ * every upgrading user carries this for a week. Without a content signal the
+ * laundering path stays open for exactly those users.
+ *
+ * Applied to SCAN candidates only, never to this turn's own message: live user
+ * text has not been through redaction, so a user who types *** means it.
+ */
+const REDACTION_SENTINELS = /\*\*\*|\[REDACTED[:_]/;
+
+/**
+ * A scan candidate we cannot trust to be the user's own words — either marked
+ * at save time, or carrying a redaction sentinel (the legacy path above).
+ */
+function isScanTainted(msg, text) {
+    if (msg && msg[GOAL_SCAN_UNSAFE_KEY] === true) return true;
+    return typeof text === 'string' && REDACTION_SENTINELS.test(text);
+}
+
 /** Every provenance value post-fix code may WRITE. Presence marks a post-fix checkpoint. */
 const GOAL_SRC_VALUES = new Set(['carried', 'turn', 'scan', 'none']);
 
@@ -199,7 +226,8 @@ function extractOriginalGoalForward(messages) {
  *   1. carried  — a goal already established for this task, passed on resume.
  *   2. turn     — this turn's own message, when it is a substantive request.
  *   3. scan     — newest substantive request in the window, when (2) was a bare
- *                 control reply such as "continue" / "keep going".
+ *                 control reply such as "continue" / "keep going". The scan STOPS
+ *                 at the first tainted candidate rather than reaching past it.
  *   4. none     — nothing substantive available; the caller omits the directive
  *                 rather than inventing one.
  *
@@ -219,8 +247,13 @@ function resolveTurnGoal({ optionsGoal, userMessage, messages } = {}) {
         for (let i = messages.length - 1; i >= 0; i--) {
             const msg = messages[i];
             if (!msg || msg.role !== 'user') continue;
-            if (msg[GOAL_SCAN_UNSAFE_KEY] === true) continue;
             const text = textOfContent(msg.content);
+            // TERMINATE, do not skip. A tainted message is the user's most recent
+            // real request with its text mangled; continuing backward past it would
+            // promote OLDER chatter to src:'scan' — a TRUSTED provenance — which is
+            // precisely the bug this module exists to fix, reached by a new route.
+            // Returning 'none' loses the hint; skipping onward asserts a wrong goal.
+            if (isScanTainted(msg, text)) break;
             if (!isEligibleHistoryText(text)) continue;
             const goal = normalizeGoal(text);
             if (goal) return { goal, src: 'scan' };
@@ -265,6 +298,7 @@ module.exports = {
     isContinuationControl,
     isEligibleTurnText,
     isEligibleHistoryText,
+    isScanTainted,
     GOAL_SCAN_UNSAFE_KEY,
     extractOriginalGoalForward,
     resolveTurnGoal,

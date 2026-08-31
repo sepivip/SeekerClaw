@@ -23,6 +23,7 @@ const {
     isContinuationControl,
     isEligibleTurnText,
     isEligibleHistoryText,
+    isScanTainted,
     goalIsTrusted,
     GOAL_SCAN_UNSAFE_KEY,
     MAX_GOAL_CHARS,
@@ -332,33 +333,64 @@ test('the two predicates differ ONLY on machine prefixes', () => {
 
 // ── Codex diff-review blocker 1: redaction taint must not launder ────────────
 
-test('the scan refuses a message marked unsafe by redaction', () => {
+test('a tainted candidate TERMINATES the scan, it does not skip past it', () => {
+    // Codex diff-review point 2. Skipping onward would promote older chatter to
+    // src:'scan' — a TRUSTED provenance — which is the original bug by another
+    // route. Losing the hint is correct; asserting a wrong goal is not.
     const r = resolveTurnGoal({
         userMessage: 'continue',
         messages: [
-            { role: 'user', content: 'summarise my unread notes' },
+            { role: 'user', content: 'Hey girl' },                 // older, clean, WRONG
             { role: 'assistant', content: 'ok' },
             { role: 'user', content: 'ask-***', [GOAL_SCAN_UNSAFE_KEY]: true },
         ],
     });
-    assert.strictEqual(r.goal, 'summarise my unread notes',
-        'a mangled message must be skipped, not adopted');
+    assert.strictEqual(r.goal, null, 'no goal is better than the wrong goal');
+    assert.strictEqual(r.src, 'none');
+    assert.notStrictEqual(r.goal, 'Hey girl', 'must never reach past the tainted message');
+});
+
+test('GUARD 1 — the marker alone taints, with no sentinel in the text', () => {
+    // Isolates the save-time marker: this text is perfectly clean, so only the
+    // flag can be doing the work.
+    const clean = { role: 'user', content: 'summarise my unread notes', [GOAL_SCAN_UNSAFE_KEY]: true };
+    assert.strictEqual(isScanTainted(clean, clean.content), true);
+    const r = resolveTurnGoal({ userMessage: 'continue', messages: [clean] });
+    assert.strictEqual(r.src, 'none');
+});
+
+test('GUARD 2 — a redaction sentinel alone taints, with no marker (the legacy path)', () => {
+    // Isolates the content signal. A checkpoint written by the PRE-fix build has
+    // redacted text and NO marker, and redaction is idempotent so a re-save never
+    // adds one. Without this guard every upgrading user keeps the laundering path
+    // for the 7 days their old checkpoints live.
+    for (const mangled of ['ask-***', 'sk-***', 'my token is eyJ***', 'see [REDACTED_ENV]', 'key [REDACTED:BRAVE_API_KEY]']) {
+        const msg = { role: 'user', content: mangled };
+        assert.strictEqual(isScanTainted(msg, mangled), true, mangled);
+        const r = resolveTurnGoal({
+            userMessage: 'continue',
+            messages: [{ role: 'user', content: 'Hey girl' }, msg],
+        });
+        assert.strictEqual(r.src, 'none', `${mangled}: must not fall back to older chatter`);
+    }
+});
+
+test('NEGATIVE CONTROL: neither guard fires on ordinary text', () => {
+    // Without this, both guards would pass just as well if EVERYTHING were tainted
+    // — which would disable the scan fallback the device test relies on.
+    const msg = { role: 'user', content: 'summarise my unread notes' };
+    assert.strictEqual(isScanTainted(msg, msg.content), false);
+    const r = resolveTurnGoal({ userMessage: 'continue', messages: [msg] });
+    assert.strictEqual(r.goal, 'summarise my unread notes');
     assert.strictEqual(r.src, 'scan');
 });
 
-test('NEGATIVE CONTROL: without the mark, the mangled text IS adopted', () => {
-    // Proves the assertion above is pinned by the marker and not by ordering —
-    // remove the flag and the laundering reappears immediately.
-    const r = resolveTurnGoal({
-        userMessage: 'continue',
-        messages: [
-            { role: 'user', content: 'summarise my unread notes' },
-            { role: 'assistant', content: 'ok' },
-            { role: 'user', content: 'ask-***' },
-        ],
-    });
-    assert.strictEqual(r.goal, 'ask-***');
-    assert.strictEqual(r.src, 'scan');
+test('the sentinel guard applies to the SCAN only, never to live user text', () => {
+    // This turn's message has not been through redaction, so a user who types ***
+    // means it. Tainting it would silently drop a real request.
+    const r = resolveTurnGoal({ userMessage: 'grep the logs for *** and report', messages: [] });
+    assert.strictEqual(r.src, 'turn');
+    assert.strictEqual(r.goal, 'grep the logs for *** and report');
 });
 
 test('only an exact `true` marks a message unsafe', () => {

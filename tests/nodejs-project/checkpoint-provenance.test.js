@@ -252,18 +252,41 @@ test('a redacted goal cannot be laundered back into trusted provenance', () => {
         'generation 2 must not be authoritative either');
 });
 
-test('NEGATIVE CONTROL: strip the mark and generation 2 IS laundered', () => {
-    // Without this the test above would pass on an empty slice, a broken scan, or
-    // any change that merely happens to yield null. Removing the ONE field under
-    // test must reproduce the exact defect Codex reported.
+test('UPGRADE PATH: a pre-fix checkpoint cannot launder either', () => {
+    // Codex diff-review point 1. Stripping the marker models exactly what an
+    // upgrading user has on disk: a checkpoint written by the PRE-fix build, whose
+    // slice text is already redacted and carries no marker. Redaction is
+    // idempotent, so re-saving it under the new build never adds one — the marker
+    // alone cannot close this. The content sentinel is what covers it.
     const { resolved, gen2 } = generationTwo(LAUNDER_GOAL, { stripMark: true });
 
-    assert.strictEqual(resolved.goal, 'ask-***', 'the mangled text is adopted');
-    assert.strictEqual(resolved.src, 'scan', 'and wears a TRUSTED provenance');
-    assert.strictEqual(gen2.goalSrc, 'scan',
-        'redaction is idempotent, so nothing re-marks it on the way out');
-    assert.strictEqual(goalIsTrusted(gen2), true,
-        'this is the laundering: a mangled goal becomes authoritative');
+    assert.notStrictEqual(resolved.goal, 'ask-***', 'the mangled text must not be adopted');
+    assert.strictEqual(resolved.src, 'none');
+    assert.strictEqual(goalIsTrusted(gen2), false, 'and generation 2 is not authoritative');
+});
+
+test('UPGRADE PATH: older clean chatter behind the mangled message is NOT promoted', () => {
+    // Codex asked for this shape specifically. The dangerous outcome is not just
+    // adopting "ask-***" — it is reaching PAST it to an older message and stamping
+    // that with trusted 'scan' provenance, which is the original BAT-1283 bug.
+    const id = writeCheckpoint({
+        conversationSlice: [
+            { role: 'user', content: 'Hey girl' },          // older, clean, and WRONG
+            { role: 'assistant', content: 'hi' },
+            { role: 'user', content: LAUNDER_GOAL },        // redacted on write, unmarked below
+        ],
+    });
+    const full = loadCheckpoint(id);
+    const legacy = full.conversationSlice.map(m => {
+        const c = { ...m };
+        delete c[GOAL_SCAN_UNSAFE_KEY];                     // pre-fix build wrote no marker
+        return c;
+    });
+
+    const r = resolveTurnGoal({ userMessage: 'continue', messages: legacy });
+    assert.strictEqual(r.goal, null, 'no goal at all');
+    assert.strictEqual(r.src, 'none');
+    assert.notStrictEqual(r.goal, 'Hey girl', 'the original bug, reached by a new route');
 });
 
 test('NEGATIVE CONTROL: a clean goal still survives two generations', () => {
