@@ -292,6 +292,55 @@ test('the unsafe mark is written onto the slice message, and only when altered',
     assert.strictEqual(clean.content, 'a perfectly ordinary request', 'and survives verbatim');
 });
 
+test('only the SCAN-VISIBLE text block can mark a message unsafe', () => {
+    // CodeRabbit R2: textOfContent reads the FIRST type:'text' block. Marking on any
+    // other redacted block would skip a message whose goal text is clean, quietly
+    // disabling the scan fallback for it — the over-marking failure mode.
+    const id = writeCheckpoint({
+        conversationSlice: [{
+            role: 'user',
+            content: [
+                { type: 'text', text: 'summarise my unread notes' },   // scan reads THIS
+                { type: 'text', text: LAUNDER_GOAL },                  // mangled, but invisible
+                { type: 'image', text: LAUNDER_GOAL },                 // ditto, and not a text block
+            ],
+        }],
+    });
+    const [msg] = loadCheckpoint(id).conversationSlice;
+
+    assert.strictEqual(msg[GOAL_SCAN_UNSAFE_KEY], undefined,
+        'a clean first text block must not be marked by later redactions');
+    assert.strictEqual(msg.content[0].text, 'summarise my unread notes', 'and stays verbatim');
+    assert.notStrictEqual(msg.content[1].text, LAUNDER_GOAL,
+        'the other blocks are still redacted — this is about MARKING, not redaction');
+    // A tool_result block is deliberately NOT used here: a user message carrying one is
+    // dropped by the leading-orphan trim (task-store.js:41), so it never reaches the scan.
+    assert.notStrictEqual(msg.content[2].text, LAUNDER_GOAL);
+
+    // and the scan can still use it
+    const r = resolveTurnGoal({ userMessage: 'continue', messages: [msg] });
+    assert.strictEqual(r.goal, 'summarise my unread notes');
+    assert.strictEqual(r.src, 'scan');
+});
+
+test('NEGATIVE CONTROL: mangling the FIRST text block does mark it', () => {
+    const id = writeCheckpoint({
+        conversationSlice: [{
+            role: 'user',
+            content: [
+                { type: 'text', text: LAUNDER_GOAL },
+                { type: 'text', text: 'summarise my unread notes' },
+            ],
+        }],
+    });
+    const [msg] = loadCheckpoint(id).conversationSlice;
+    assert.strictEqual(msg[GOAL_SCAN_UNSAFE_KEY], true, 'the scan-visible block WAS mangled');
+
+    const r = resolveTurnGoal({ userMessage: 'continue', messages: [msg] });
+    assert.strictEqual(r.goal, null, 'so the message is skipped entirely');
+    assert.strictEqual(r.src, 'none');
+});
+
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best effort */ }
 
 if (failed > 0) {

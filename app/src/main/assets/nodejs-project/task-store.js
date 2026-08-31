@@ -81,11 +81,16 @@ function saveCheckpoint(taskId, state) {
                     if (redacted !== clone.content) textAltered = true;
                     clone.content = redacted;
                 } else if (Array.isArray(clone.content)) {
-                    clone.content = clone.content.map(block => {
+                    // textOfContent reads ONLY the FIRST type:'text' block, so only that
+                    // block's alteration can mangle a scannable goal. Marking on any other
+                    // redacted block (a later text block, or a non-text block carrying a
+                    // .text field) would skip a message whose goal text is perfectly clean.
+                    const scanIdx = clone.content.findIndex(b => b && b.type === 'text');
+                    clone.content = clone.content.map((block, idx) => {
                         const b = { ...block };
                         if (typeof b.text === 'string') {
                             const redactedText = redactSecrets(b.text);
-                            if (redactedText !== b.text) textAltered = true;
+                            if (idx === scanIdx && redactedText !== b.text) textAltered = true;
                             b.text = redactedText;
                         }
                         if (typeof b.content === 'string') b.content = redactSecrets(b.content);
