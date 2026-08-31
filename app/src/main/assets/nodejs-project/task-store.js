@@ -97,7 +97,27 @@ function saveCheckpoint(taskId, state) {
             });
         }
         if (typeof trimmed.originalGoal === 'string') {
-            trimmed.originalGoal = redactSecrets(trimmed.originalGoal);
+            const redactedGoal = redactSecrets(trimmed.originalGoal);
+            if (redactedGoal !== trimmed.originalGoal) {
+                // BAT-1283 (OQ2): redaction ALTERED the goal, so the stored text no
+                // longer faithfully represents the user's request. Measured: the
+                // /sk-[a-zA-Z0-9_-]{20,}/ pattern (security.js:121) fires on any
+                // kebab-case phrase whose word ends in "sk" — ask-, task-, risk- —
+                // turning "ask-claude-to-summarise-this-long-document-please" into
+                // "ask-***". Promoting that to ORIGINAL USER REQUEST would hand the
+                // model authoritative nonsense, which is worse than omitting it.
+                //
+                // Mark it so the read sites fail closed. 'redacted' is deliberately
+                // NOT a member of GOAL_SRC_VALUES (turn-goal.js), so goalIsTrusted()
+                // rejects it with no change to that function. Distinguishable from a
+                // legacy checkpoint, where the key is absent entirely.
+                //
+                // Only ever SET, never cleared: redactSecrets is idempotent, so a
+                // re-save (main.js:405-406 attempt bump, markComplete round-trip)
+                // sees no further change and the mark survives.
+                trimmed.goalSrc = 'redacted';
+            }
+            trimmed.originalGoal = redactedGoal;
         }
 
         trimmed.updatedAt = Date.now();

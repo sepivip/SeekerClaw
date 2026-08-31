@@ -60,6 +60,9 @@ const { buildSecurityRejectBlock } = require('./security-reject-block');
 const _reasoningRecovery = require('./reasoning-recovery');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
 const { fingerprint: _reasoningFingerprint, byteLen: _byteLen } = require('./reasoning-redact');
+// BAT-1283: goal resolution for the checkpoint this turn writes. Pure module so the
+// resolver is testable without ai.js's dependency graph (history-trim.js precedent).
+const { resolveTurnGoal, MAX_GOAL_CHARS } = require('./turn-goal');
 // BAT-582 Phase 4: dynamic confirmation hook + wallet state collector.
 // Replaces the static CONFIRM_REQUIRED set in config.js.
 const { getConfirmationPolicy, normalizePolicy } = require('./confirmation');
@@ -2686,8 +2689,12 @@ async function chat(chatId, userMessage, options = {}) {
     let resumeBlock = '';
     if (options.isResume) {
         // Sanitize originalGoal: strip control chars and cap length to prevent prompt injection
-        const safeGoal = options.originalGoal
-            ? options.originalGoal.replace(/[\r\n\0\u2028\u2029]/g, ' ').slice(0, 500)
+        // BAT-1283: typeof guard, not truthiness. A hand-edited or partially written
+        // checkpoint can carry a truthy non-string here; .replace() would throw inside
+        // chat() on the resume turn. One of three guard sites (main.js:454 and the
+        // resolver's carried path are the others).
+        const safeGoal = typeof options.originalGoal === 'string' && options.originalGoal
+            ? options.originalGoal.replace(/[\r\n\0\u2028\u2029]/g, ' ').slice(0, MAX_GOAL_CHARS)
             : null;
         const goalLine = safeGoal
             ? `\nORIGINAL USER REQUEST: "${safeGoal}"\n`
@@ -2741,16 +2748,29 @@ async function chat(chatId, userMessage, options = {}) {
     // genuine usage-exhaustion 400 looping forever).
     let _contentFilterSelfHealed = false;
 
-    // P2.4b: Extract original goal from conversation for checkpoint persistence.
-    // On resume, this lets the agent know exactly what it was trying to accomplish.
-    const originalGoal = options.originalGoal || _extractOriginalGoal(messages);
+    // BAT-1283: resolve the goal this turn's checkpoint will carry.
+    //
+    // Was: `options.originalGoal || _extractOriginalGoal(messages)` — a FORWARD scan of
+    // the retained window, returning the OLDEST eligible user message. This turn's own
+    // message was appended to the TAIL at :2722, so the scan reliably returned an
+    // unrelated earlier greeting and persisted it as the task's goal.
+    //
+    // `goalSrc` is BOTH the diagnostic below and the checkpoint's provenance marker:
+    // its presence is what lets a later resume know a post-fix resolver produced the
+    // stored goal. See turn-goal.js and goalIsTrusted().
+    const { goal: originalGoal, src: goalSrc } = resolveTurnGoal({
+        optionsGoal: options.originalGoal,
+        userMessage,
+        messages,
+    });
+    log(`[Goal] turn=${turnId} src=${goalSrc} goalLen=${_byteLen(originalGoal)} goalFp=${_reasoningFingerprint(originalGoal)}`, 'DEBUG');
 
     // Fix any orphaned tool_use/tool_result blocks from previous failed calls
     // (prevents 400 errors from Claude API due to mismatched pairs)
     sanitizeConversation(messages, turnId);
 
     // BAT-1186 (A5): identity handle on THIS turn's user message — the entry
-    // addToConversation pushed at :2694 (always the tail: it push()es, then trims
+    // addToConversation pushed at :2722 (always the tail: it push()es, then trims
     // from the FRONT). Captured AFTER sanitizeConversation so it cannot be a stale
     // reference. IDENTITY, not index: several paths splice this live array mid-turn,
     // so an index is invalid after the first one. `let` because _applyRecovery
@@ -3572,6 +3592,7 @@ async function chat(chatId, userMessage, options = {}) {
                 complete: false,
                 reason: null,
                 originalGoal,
+                goalSrc, // BAT-1283 provenance: presence marks a post-fix resolver
                 conversationSlice: buildCheckpointSlicePreservingAnchor(messages, _turnAnchor, 8), // BAT-1186 (R1-A)
             });
             if (cpDuration >= 0) {
@@ -3611,6 +3632,7 @@ async function chat(chatId, userMessage, options = {}) {
                 complete: false,
                 reason: 'budget_exhausted',
                 originalGoal,
+                goalSrc, // BAT-1283 provenance: presence marks a post-fix resolver
                 conversationSlice: buildCheckpointSlicePreservingAnchor(messages, _turnAnchor, 8), // BAT-1186 (R1-A)
             });
 
@@ -3809,31 +3831,6 @@ function _finalizeSecurityReject(chatId, taskId, turnId, pending, turnAnchor = n
         reasonLen: (typeof pending.rejectReason === 'string' ? pending.rejectReason.length : 0),
     })}`, 'WARN');
     return block;
-}
-
-/**
- * Extract the original user goal from conversation history.
- * Walks messages to find the first plain-text user message (not a tool_result,
- * not a "continue", not a system event). Returns truncated to 500 chars.
- */
-function _extractOriginalGoal(messages) {
-    for (const msg of messages) {
-        // Skip tool result messages (neutral format: role='tool')
-        if (msg.role === 'tool') continue;
-        if (msg.role !== 'user') continue;
-        let text = '';
-        if (typeof msg.content === 'string') {
-            text = msg.content;
-        } else if (Array.isArray(msg.content)) {
-            // Vision messages: extract text from content blocks
-            const textBlock = msg.content.find(b => b.type === 'text');
-            if (textBlock) text = textBlock.text;
-        }
-        // Skip empty, resume triggers, and system events
-        if (!text || text === 'continue' || text.startsWith('[system event]') || text.startsWith('[TASK RESUME]')) continue;
-        return text.slice(0, 500);
-    }
-    return null;
 }
 
 // ============================================================================

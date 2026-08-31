@@ -60,6 +60,7 @@ const LOAD_TARGETS = [
     'silent-reply.js',
     // BAT-1186: pure anchor-preserving history-trim primitives — no deps, no IO.
     'history-trim.js',
+    'turn-goal.js',
     // BAT-1247: pure log-safety helpers (flattenForLog) — no deps, no IO.
     'log-safe.js',
     'loop-detector.js',

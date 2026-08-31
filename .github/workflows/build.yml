@@ -116,6 +116,9 @@ jobs:
             logging-substrate \
             history-anchor-trim \
             log-safe \
+            turn-goal \
+            checkpoint-provenance \
+            resume-goal-provenance \
             ci-coverage-manifest
           do
             echo "── $t ──"
