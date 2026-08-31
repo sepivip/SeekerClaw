@@ -47,8 +47,38 @@ const CONTINUATION_CONTROLS = new Set([
 /** Longest plausible control phrase; anything longer is prose, not a control. */
 const CONTINUATION_MAX_CHARS = 24;
 
-/** Prefixes that mark machine-authored entries wearing role:'user'. */
+/**
+ * Prefixes that mark machine-authored entries wearing role:'user'.
+ *
+ * Applied to the HISTORY SCAN ONLY. Applying them to this turn's own message
+ * would reject a legitimate request that merely quotes one of these prefixes
+ * ("[System] production node is stuck; diagnose it") and then fall through to
+ * the scan -- reproducing the exact bug this module exists to fix. No producer
+ * passes machine text as chat()'s explicit userMessage: the call sites pass
+ * 'continue' (main.js auto-resume), a `[cron:<id>] ...` prompt, HEARTBEAT_PROMPT
+ * ("Read HEARTBEAT.md ..."), or real user content. The synthetic entries are
+ * pushed straight into the conversation instead (ai.js loop detector,
+ * message-handler '[system event]'), so they are only ever reachable through the
+ * scan, where these prefixes still apply.
+ */
 const SKIP_PREFIXES = ['[system event]', '[TASK RESUME]', '[System]'];
+
+/**
+ * Marks a persisted message whose text was ALTERED by secret redaction, so the
+ * backward scan will not adopt the mangled text as a goal.
+ *
+ * Without it the OQ2 protection is only one generation deep: task-store redacts
+ * the conversationSlice as well as originalGoal, so a goal mangled into
+ * "ask-***" survives inside the slice. The next resume's scan reads it back and
+ * stamps the successor checkpoint 'scan' -- a TRUSTED value -- so a second crash
+ * replays the mangled text as an authoritative directive. Redaction is
+ * idempotent, so no later pass would ever notice the difference.
+ *
+ * Set by task-store on write, carried forward by the `{...msg}` clone on every
+ * re-save, never cleared. Internal-only: every adapter's toApiMessages() builds
+ * fresh {role, content} objects, so this never reaches a provider wire body.
+ */
+const GOAL_SCAN_UNSAFE_KEY = 'goalScanUnsafe';
 
 /** Every provenance value post-fix code may WRITE. Presence marks a post-fix checkpoint. */
 const GOAL_SRC_VALUES = new Set(['carried', 'turn', 'scan', 'none']);
@@ -97,8 +127,17 @@ function textOfContent(content) {
 function isContinuationControl(text) {
     if (typeof text !== 'string') return false;
     let t = text.trim().toLowerCase();
-    t = t.replace(/^["'`]+|["'`]+$/g, '');   // surrounding quotes
-    t = t.replace(/[.!?,…]+$/g, '');         // trailing punctuation
+    // Peel quotes and terminal punctuation together, repeatedly: on a phone the
+    // realistic forms nest them in either order and use smart quotes --
+    // "continue." / "continue". / “continue.” / continue; -- and a single
+    // outside-in pass leaves the innermost layer attached.
+    for (let pass = 0; pass < 3; pass++) {
+        const before = t;
+        t = t.replace(/^[\s"'`\u2018\u2019\u201c\u201d]+/, '');
+        t = t.replace(/[\s"'`\u2018\u2019\u201c\u201d]+$/, '');
+        t = t.replace(/[.!?,;:\u2026]+$/, '');
+        if (t === before) break;
+    }
     t = t.replace(/,/g, ' ');                // internal commas -> space
     t = t.replace(/\s+/g, ' ').trim();       // collapse whitespace
     if (!t || t.length > CONTINUATION_MAX_CHARS) return false;
@@ -106,13 +145,30 @@ function isContinuationControl(text) {
 }
 
 /**
- * Shared eligibility predicate. Used in BOTH directions so the turn message and
- * the history scan can never disagree about what counts as a real request.
+ * Eligibility for THIS TURN's own message.
+ *
+ * Rejects only bare control replies. A machine prefix is NOT disqualifying here:
+ * see SKIP_PREFIXES for why applying it to the turn message re-creates the bug.
  */
-function isEligibleGoalText(text) {
-    if (!text) return false;
-    if (SKIP_PREFIXES.some(p => text.startsWith(p))) return false;
+function isEligibleTurnText(text) {
+    // Whitespace-only is caught downstream by normalizeGoal too, but a predicate
+    // named isEligible must not answer true for it — the next caller may not have
+    // that second guard.
+    if (!text || !text.trim()) return false;
     if (isContinuationControl(text)) return false;
+    return true;
+}
+
+/**
+ * Eligibility for a candidate pulled out of the retained history window.
+ *
+ * Strictly narrower than isEligibleTurnText: history is where machine-authored
+ * entries wearing role:'user' actually live, and they are always NEWER than the
+ * real request, so a backward scan reaches them first.
+ */
+function isEligibleHistoryText(text) {
+    if (!isEligibleTurnText(text)) return false;
+    if (SKIP_PREFIXES.some(p => text.startsWith(p))) return false;
     return true;
 }
 
@@ -154,7 +210,7 @@ function resolveTurnGoal({ optionsGoal, userMessage, messages } = {}) {
     if (carried) return { goal: carried, src: 'carried' };
 
     const turnText = textOfContent(userMessage);
-    if (isEligibleGoalText(turnText)) {
+    if (isEligibleTurnText(turnText)) {
         const goal = normalizeGoal(turnText);
         if (goal) return { goal, src: 'turn' };
     }
@@ -163,8 +219,9 @@ function resolveTurnGoal({ optionsGoal, userMessage, messages } = {}) {
         for (let i = messages.length - 1; i >= 0; i--) {
             const msg = messages[i];
             if (!msg || msg.role !== 'user') continue;
+            if (msg[GOAL_SCAN_UNSAFE_KEY] === true) continue;
             const text = textOfContent(msg.content);
-            if (!isEligibleGoalText(text)) continue;
+            if (!isEligibleHistoryText(text)) continue;
             const goal = normalizeGoal(text);
             if (goal) return { goal, src: 'scan' };
         }
@@ -206,7 +263,9 @@ module.exports = {
     normalizeGoal,
     textOfContent,
     isContinuationControl,
-    isEligibleGoalText,
+    isEligibleTurnText,
+    isEligibleHistoryText,
+    GOAL_SCAN_UNSAFE_KEY,
     extractOriginalGoalForward,
     resolveTurnGoal,
     goalIsTrusted,

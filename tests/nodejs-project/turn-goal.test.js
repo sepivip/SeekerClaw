@@ -21,7 +21,10 @@ const {
     resolveTurnGoal,
     extractOriginalGoalForward,
     isContinuationControl,
+    isEligibleTurnText,
+    isEligibleHistoryText,
     goalIsTrusted,
+    GOAL_SCAN_UNSAFE_KEY,
     MAX_GOAL_CHARS,
 } = require(path.join(BUNDLE, 'turn-goal'));
 
@@ -274,6 +277,135 @@ test('goalIsTrusted fails closed on anything else', () => {
                        { goalSrc: null }, null, undefined, 'turn', 42]) {
         assert.strictEqual(goalIsTrusted(bad), false, `expected untrusted: ${JSON.stringify(bad)}`);
     }
+});
+
+// ── Codex diff-review blocker 2: machine prefixes are a HISTORY rule ─────────
+//
+// SKIP_PREFIXES had been applied to this turn's own message as well. A user who
+// pastes a log line and asks for help ("[System] production node is stuck") had
+// their real request rejected, and the scan then handed back older chatter —
+// the exact failure this module exists to fix, re-created one layer up.
+
+test('a current task quoting a machine prefix is still THIS turn\'s goal', () => {
+    const history = [{ role: 'user', content: 'Hey girl' }];
+    for (const prefix of ['[System]', '[system event]', '[TASK RESUME]']) {
+        const task = `${prefix} production node is stuck; diagnose it`;
+        const r = resolveTurnGoal({ userMessage: task, messages: history });
+        assert.strictEqual(r.src, 'turn', `${prefix}: must resolve from the turn`);
+        assert.strictEqual(r.goal, task, `${prefix}: the user's own words, verbatim`);
+        assert.notStrictEqual(r.goal, 'Hey girl', `${prefix}: must not fall back to chatter`);
+    }
+});
+
+test('NEGATIVE CONTROL: the same strings in HISTORY are still skipped', () => {
+    // The turn/history split must not weaken the scan. Machine-authored entries
+    // wearing role:'user' are always NEWER than the real request, so a backward
+    // scan reaches them first — that is why the prefix rule exists at all.
+    for (const prefix of ['[System]', '[system event]', '[TASK RESUME]']) {
+        const r = resolveTurnGoal({
+            userMessage: 'continue',
+            messages: [
+                { role: 'user', content: 'summarise my unread notes' },
+                { role: 'assistant', content: 'working on it' },
+                { role: 'user', content: `${prefix} loop detected, stop repeating` },
+            ],
+        });
+        assert.strictEqual(r.src, 'scan', `${prefix}: control reply must fall through`);
+        assert.strictEqual(r.goal, 'summarise my unread notes',
+            `${prefix}: must skip the machine entry and keep scanning back`);
+    }
+});
+
+test('the two predicates differ ONLY on machine prefixes', () => {
+    assert.strictEqual(isEligibleTurnText('[System] diagnose this'), true);
+    assert.strictEqual(isEligibleHistoryText('[System] diagnose this'), false);
+    // everything else agrees, in both directions
+    for (const t of ['check my wallet balance', 'x', 'a real request here']) {
+        assert.strictEqual(isEligibleTurnText(t), true, t);
+        assert.strictEqual(isEligibleHistoryText(t), true, t);
+    }
+    for (const t of ['continue', 'ok', 'yes, proceed', '', '   ']) {
+        assert.strictEqual(isEligibleTurnText(t), false, JSON.stringify(t));
+        assert.strictEqual(isEligibleHistoryText(t), false, JSON.stringify(t));
+    }
+});
+
+// ── Codex diff-review blocker 1: redaction taint must not launder ────────────
+
+test('the scan refuses a message marked unsafe by redaction', () => {
+    const r = resolveTurnGoal({
+        userMessage: 'continue',
+        messages: [
+            { role: 'user', content: 'summarise my unread notes' },
+            { role: 'assistant', content: 'ok' },
+            { role: 'user', content: 'ask-***', [GOAL_SCAN_UNSAFE_KEY]: true },
+        ],
+    });
+    assert.strictEqual(r.goal, 'summarise my unread notes',
+        'a mangled message must be skipped, not adopted');
+    assert.strictEqual(r.src, 'scan');
+});
+
+test('NEGATIVE CONTROL: without the mark, the mangled text IS adopted', () => {
+    // Proves the assertion above is pinned by the marker and not by ordering —
+    // remove the flag and the laundering reappears immediately.
+    const r = resolveTurnGoal({
+        userMessage: 'continue',
+        messages: [
+            { role: 'user', content: 'summarise my unread notes' },
+            { role: 'assistant', content: 'ok' },
+            { role: 'user', content: 'ask-***' },
+        ],
+    });
+    assert.strictEqual(r.goal, 'ask-***');
+    assert.strictEqual(r.src, 'scan');
+});
+
+test('only an exact `true` marks a message unsafe', () => {
+    // Guards against a truthy-string or JSON round-trip surprise silently
+    // disabling the scan for ordinary messages.
+    for (const v of [false, 0, '', null, undefined]) {
+        const r = resolveTurnGoal({
+            userMessage: 'continue',
+            messages: [{ role: 'user', content: 'a real request', [GOAL_SCAN_UNSAFE_KEY]: v }],
+        });
+        assert.strictEqual(r.goal, 'a real request', `marker=${JSON.stringify(v)} must not skip`);
+    }
+});
+
+// ── Codex diff-review nits: quote / punctuation normalisation ────────────────
+
+test('controls are recognised through nested quotes and punctuation', () => {
+    // Phone keyboards produce smart quotes, and users nest the punctuation both
+    // ways. Each of these is a bare control reply, not a new request.
+    const forms = [
+        '"continue."', '"continue".', '\u201ccontinue.\u201d', '\u2018go ahead\u2019!',
+        'continue;', 'ok:', "'proceed'.", '  YES,  ', '\u201cyes, proceed\u201d',
+    ];
+    for (const f of forms) {
+        assert.strictEqual(isContinuationControl(f), true, `expected control: ${JSON.stringify(f)}`);
+    }
+});
+
+test('NEGATIVE CONTROL: quoted real requests survive normalisation', () => {
+    const forms = [
+        '"turn on the TV."', '\u201ccheck my wallet balance\u201d',
+        'yes, turn on the TV', 'continue the migration script',
+    ];
+    for (const f of forms) {
+        assert.strictEqual(isContinuationControl(f), false, `must stay a goal: ${JSON.stringify(f)}`);
+    }
+});
+
+test('ACCEPTED AMBIGUITY: a bare "Resume." is read as a control', () => {
+    // Codex flagged this as unavoidable: "resume" is in the control vocabulary,
+    // so a one-word message asking about a CV is indistinguishable from asking the
+    // agent to carry on. Pinned deliberately so the behaviour is a decision on
+    // record rather than an accident — the cost is one scan fallback, and any
+    // longer phrasing ("send me your resume") is unaffected.
+    assert.strictEqual(isContinuationControl('Resume.'), true);
+    assert.strictEqual(isContinuationControl('send me your resume'), false);
+    assert.strictEqual(isContinuationControl('resume the deployment please'), false);
 });
 
 if (failed > 0) {

@@ -7,6 +7,7 @@ const path = require('path');
 
 const { TASKS_DIR, log } = require('./config');
 const { redactSecrets } = require('./security');
+const { GOAL_SCAN_UNSAFE_KEY } = require('./turn-goal');
 
 const MAX_CHECKPOINT_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_CONVERSATION_SLICE = 8; // Keep last 8 messages in checkpoint
@@ -69,12 +70,24 @@ function saveCheckpoint(taskId, state) {
         if (Array.isArray(trimmed.conversationSlice)) {
             trimmed.conversationSlice = trimmed.conversationSlice.map(msg => {
                 const clone = { ...msg };
+                // BAT-1283: track whether redaction altered the text the goal scan
+                // would READ (turn-goal's textOfContent: a string body, or the
+                // first type:'text' block). Tool inputs and tool_result bodies are
+                // redacted too but never feed the scan, so they must not taint the
+                // message -- over-marking would disable a fallback that works.
+                let textAltered = false;
                 if (typeof clone.content === 'string') {
-                    clone.content = redactSecrets(clone.content);
+                    const redacted = redactSecrets(clone.content);
+                    if (redacted !== clone.content) textAltered = true;
+                    clone.content = redacted;
                 } else if (Array.isArray(clone.content)) {
                     clone.content = clone.content.map(block => {
                         const b = { ...block };
-                        if (typeof b.text === 'string') b.text = redactSecrets(b.text);
+                        if (typeof b.text === 'string') {
+                            const redactedText = redactSecrets(b.text);
+                            if (redactedText !== b.text) textAltered = true;
+                            b.text = redactedText;
+                        }
                         if (typeof b.content === 'string') b.content = redactSecrets(b.content);
                         // Deep-redact tool_use input — Claude-native format
                         if (b.type === 'tool_use' && b.input && typeof b.input === 'object') {
@@ -93,6 +106,10 @@ function saveCheckpoint(taskId, state) {
                         return t;
                     });
                 }
+                // Sticky: only ever set. A re-save spreads the existing marker
+                // through `{...msg}` above, and redaction is idempotent, so a
+                // second pass finds no further change to re-trigger it.
+                if (textAltered) clone[GOAL_SCAN_UNSAFE_KEY] = true;
                 return clone;
             });
         }
@@ -116,8 +133,15 @@ function saveCheckpoint(taskId, state) {
                 // re-save (main.js:405-406 attempt bump, markComplete round-trip)
                 // sees no further change and the mark survives.
                 trimmed.goalSrc = 'redacted';
+                // Drop the mangled text rather than persisting it. On a post-fix
+                // build 'redacted' already fails the gate, so nothing is lost; on
+                // a DOWNGRADED build, which knows nothing about goalSrc, a stored
+                // "ask-***" would be replayed verbatim as the original request.
+                // null is the only value both builds read as "no goal".
+                trimmed.originalGoal = null;
+            } else {
+                trimmed.originalGoal = redactedGoal;
             }
-            trimmed.originalGoal = redactedGoal;
         }
 
         trimmed.updatedAt = Date.now();

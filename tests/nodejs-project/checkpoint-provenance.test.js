@@ -44,7 +44,7 @@ require.cache[configPath] = {
 };
 
 const { saveCheckpoint, listCheckpoints, loadCheckpoint } = require(path.join(BUNDLE, 'task-store'));
-const { goalIsTrusted } = require(path.join(BUNDLE, 'turn-goal'));
+const { goalIsTrusted, resolveTurnGoal, GOAL_SCAN_UNSAFE_KEY } = require(path.join(BUNDLE, 'turn-goal'));
 
 let passed = 0;
 let failed = 0;
@@ -125,6 +125,10 @@ test('a goal mangled by redaction is marked and fails closed', () => {
     const full = loadCheckpoint(id);
     assert.notStrictEqual(full.originalGoal, goal, 'redaction should have altered it');
     assert.strictEqual(full.goalSrc, 'redacted', 'alteration must be recorded');
+    // Downgrade safety: an old build knows nothing about goalSrc, so the mangled
+    // text must not be sitting in the field it WOULD read. null is the only value
+    // both builds agree means "no goal".
+    assert.strictEqual(full.originalGoal, null, 'the mangled text must not be persisted');
     assert.strictEqual(goalIsTrusted(full), false, 'a mangled goal is not authoritative');
 });
 
@@ -150,6 +154,7 @@ test('the redacted mark survives a re-save and the goal does not degrade further
     const twice = loadCheckpoint(id);
     assert.strictEqual(twice.goalSrc, 'redacted', 'mark must survive the re-save');
     assert.strictEqual(twice.originalGoal, once.originalGoal, 'goal must not degrade further');
+    assert.strictEqual(twice.originalGoal, null, 'and stays dropped, not resurrected');
     assert.strictEqual(goalIsTrusted(twice), false);
 });
 
@@ -185,6 +190,106 @@ test('SOURCE GUARD: /resume gates the same way, via the same shared helper', () 
         const s = fs.readFileSync(path.join(BUNDLE, f), 'utf8');
         assert.ok(/require\('\.\/turn-goal'\)/.test(s), `${f} must import the shared helper`);
     }
+});
+
+// ── Codex diff-review blocker 1: two-generation laundering ──────────────────
+//
+// The single-generation tests above all pass with the bug present. The store
+// redacts the conversationSlice as well as originalGoal, so a goal mangled into
+// "ask-***" ALSO survives inside the slice. On resume the backward scan reads it
+// back and stamps the SUCCESSOR checkpoint 'scan' — a trusted value — and the
+// second crash replays the mangled text authoritatively. Only a save -> resolve
+// -> save sequence can see it, which is why this test spans two generations.
+
+function generationTwo(sliceText, { stripMark = false } = {}) {
+    // gen 1: the crash that mangles the goal
+    const id = writeCheckpoint({
+        originalGoal: sliceText,
+        goalSrc: 'turn',
+        conversationSlice: [
+            { role: 'user', content: sliceText },
+            { role: 'assistant', content: 'I was interrupted mid-task.' },
+        ],
+    });
+    const gen1 = loadCheckpoint(id);
+
+    // resume: main.js restores the slice verbatim, then chat(chatId, 'continue')
+    const restored = gen1.conversationSlice.map(m => {
+        const c = { ...m };
+        if (stripMark) delete c[GOAL_SCAN_UNSAFE_KEY];
+        return c;
+    });
+    const resolved = resolveTurnGoal({
+        optionsGoal: goalIsTrusted(gen1) ? gen1.originalGoal : null,
+        userMessage: 'continue',
+        messages: restored,
+    });
+
+    // gen 2: the resumed turn checkpoints itself
+    const id2 = writeCheckpoint({
+        originalGoal: resolved.goal,
+        goalSrc: resolved.src,
+        conversationSlice: restored,
+    });
+    return { gen1, resolved, gen2: loadCheckpoint(id2) };
+}
+
+const LAUNDER_GOAL = 'ask-claude-to-summarise-this-long-document-please';
+
+test('a redacted goal cannot be laundered back into trusted provenance', () => {
+    const { gen1, resolved, gen2 } = generationTwo(LAUNDER_GOAL);
+
+    assert.strictEqual(gen1.goalSrc, 'redacted', 'precondition: gen 1 is marked');
+    assert.strictEqual(goalIsTrusted(gen1), false, 'precondition: gen 1 fails closed');
+
+    // The scan must not have adopted the mangled slice text...
+    assert.notStrictEqual(resolved.goal, 'ask-***', 'the mangled text must not be re-adopted');
+    // ...and with nothing else in the window, there is simply no goal to promote.
+    assert.strictEqual(resolved.goal, null, 'nothing substantive survives the mangling');
+    assert.strictEqual(resolved.src, 'none');
+
+    assert.strictEqual(goalIsTrusted(gen2), false,
+        'generation 2 must not be authoritative either');
+});
+
+test('NEGATIVE CONTROL: strip the mark and generation 2 IS laundered', () => {
+    // Without this the test above would pass on an empty slice, a broken scan, or
+    // any change that merely happens to yield null. Removing the ONE field under
+    // test must reproduce the exact defect Codex reported.
+    const { resolved, gen2 } = generationTwo(LAUNDER_GOAL, { stripMark: true });
+
+    assert.strictEqual(resolved.goal, 'ask-***', 'the mangled text is adopted');
+    assert.strictEqual(resolved.src, 'scan', 'and wears a TRUSTED provenance');
+    assert.strictEqual(gen2.goalSrc, 'scan',
+        'redaction is idempotent, so nothing re-marks it on the way out');
+    assert.strictEqual(goalIsTrusted(gen2), true,
+        'this is the laundering: a mangled goal becomes authoritative');
+});
+
+test('NEGATIVE CONTROL: a clean goal still survives two generations', () => {
+    // The marker must not fire on ordinary text — otherwise the fix would work by
+    // disabling the scan fallback entirely, which the device test relies on.
+    const clean = 'summarise my unread notes and tell me what needs action today';
+    const { gen1, resolved, gen2 } = generationTwo(clean);
+
+    assert.strictEqual(gen1.originalGoal, clean, 'untouched by redaction');
+    assert.strictEqual(goalIsTrusted(gen1), true);
+    assert.strictEqual(resolved.goal, clean, 'carried forward, not lost');
+    assert.strictEqual(resolved.src, 'carried');
+    assert.strictEqual(goalIsTrusted(gen2), true);
+});
+
+test('the unsafe mark is written onto the slice message, and only when altered', () => {
+    const id = writeCheckpoint({
+        conversationSlice: [
+            { role: 'user', content: LAUNDER_GOAL },
+            { role: 'user', content: 'a perfectly ordinary request' },
+        ],
+    });
+    const [mangled, clean] = loadCheckpoint(id).conversationSlice;
+    assert.strictEqual(mangled[GOAL_SCAN_UNSAFE_KEY], true, 'altered message must be marked');
+    assert.strictEqual(clean[GOAL_SCAN_UNSAFE_KEY], undefined, 'clean message must NOT be marked');
+    assert.strictEqual(clean.content, 'a perfectly ordinary request', 'and survives verbatim');
 });
 
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best effort */ }
