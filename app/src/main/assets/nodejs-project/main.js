@@ -74,6 +74,8 @@ const { telegramCommandMenu, telegramFallbackMenu } = require('./telegram-comman
 // BAT-1247 (security): length + short hash instead of raw user/message text in
 // logs — same convention as ai.js's `msgLen=`/`msgFp=`.
 const { fingerprint: _fp, byteLen: _byteLen } = require('./reasoning-redact');
+// BAT-1283: fail-closed provenance gate for a checkpoint's stored goal.
+const { goalIsTrusted } = require('./turn-goal');
 const { flattenForLog } = require('./log-safe');
 
 // ── MCP (Model Context Protocol) — Remote tool servers (BAT-168, BAT-514) ───
@@ -377,6 +379,12 @@ async function autoResumeOnStartup() {
 
             // Load full checkpoint to check resumeAttempts
             const full = loadCheckpoint(cp.taskId);
+            // BAT-1283: provenance MUST come from the loaded checkpoint, never from `cp`.
+            // `cp` is the listCheckpoints() summary — an explicit six-field whitelist
+            // (taskId, chatId, startedAt, updatedAt, complete, reason) that can never
+            // carry goalSrc. Reading it here would mark EVERY checkpoint legacy and
+            // silently disable the fix instead of failing loudly.
+            const goalTrusted = goalIsTrusted(full);
             if (!full) {
                 log(`[AutoResume] SKIP taskId=${cp.taskId} — corrupt checkpoint`, 'WARN');
                 continue;
@@ -451,7 +459,14 @@ async function autoResumeOnStartup() {
             // a generic "Startup scan failed" AFTER silently burning both attempts.
             // Declared AT the use site so it cannot be mistaken for log input again;
             // the log line above deliberately uses goalLen=/goalFp= instead.
-            const goalSnippet = full.originalGoal ? full.originalGoal.slice(0, 80) : null;
+            // BAT-1283: two conditions before echoing a stored goal back to the user.
+            //   1. provenance — a pre-fix checkpoint's goal is untrustworthy (it IS the
+            //      visible symptom of this bug), so show nothing rather than a wrong quote.
+            //   2. typeof — a truthy non-string would throw on .slice()/.length BEFORE
+            //      chat() at :462, inside the outer try, with both resume attempts already
+            //      burned at :405-406. Third of three guard sites.
+            const goalIsUsableString = goalTrusted && typeof full.originalGoal === 'string' && !!full.originalGoal;
+            const goalSnippet = goalIsUsableString ? full.originalGoal.slice(0, 80) : null;
             const goalHint = goalSnippet ? `\n> ${goalSnippet}${full.originalGoal.length > 80 ? '...' : ''}` : '';
             await sendMessageSystem(chatId, `Resuming interrupted task (${cp.taskId})...${goalHint}`);
 
@@ -459,7 +474,7 @@ async function autoResumeOnStartup() {
             const prev = chatQueues.get(chatId) || Promise.resolve();
             const task = prev.then(async () => {
                 try {
-                    const response = await chat(chatId, 'continue', { isResume: true, originalGoal: full.originalGoal || null });
+                    const response = await chat(chatId, 'continue', { isResume: true, originalGoal: goalIsUsableString ? full.originalGoal : null });
                     // Strip protocol tokens (BAT-279, OpenClaw parity 2026.3.1; BAT-488 centralized silent-reply strip)
                     if (response && containsSilentReply(response)) log('[Audit] AutoResume sent SILENT_REPLY', 'DEBUG');
                     const cleaned = response ? stripSilentReply(

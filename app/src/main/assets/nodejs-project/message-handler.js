@@ -13,6 +13,8 @@ const { buildHelpLines } = require('./telegram-commands');
 // occurrences of the same value and to see how big it was, without carrying the
 // value itself onto the Share path.
 const { fingerprint: _fp, byteLen: _byteLen } = require('./reasoning-redact');
+// BAT-1283: fail-closed provenance gate, shared with main.js auto-resume.
+const { goalIsTrusted } = require('./turn-goal');
 const { flattenForLog } = require('./log-safe');
 
 let deps = {};
@@ -381,8 +383,10 @@ Platform: \`${platform}\``;
                 deps.log(`[Resume] FAIL: loadCheckpoint returned null for taskId=${cp.taskId}`, 'ERROR');
                 return `Found checkpoint for task ${cp.taskId} but it was corrupt. Please start the task again.`;
             }
-            // BAT-1247 (security): `originalGoal` is the user's own request text
-            // (ai.js _extractOriginalGoal returns the first user message verbatim).
+            // BAT-1247 (security): `originalGoal` is the user's own request text.
+            // (BAT-1283: it is now resolved by turn-goal.js resolveTurnGoal() — the
+            // old claim that ai.js returned "the first user message verbatim" WAS the
+            // bug, and that forward scan is gone.)
             // It carries no `Message: ` marker, so LogShareSanitizer never touched
             // it and it reached the Share payload in full. Length + fingerprint
             // keeps the diagnostic value — "was a goal restored, and is it the same
@@ -431,9 +435,14 @@ Platform: \`${platform}\``;
             // BAT-549 R6 thread 2: forward the resumed-from taskId so chat()
             // can quarantine THIS file if the 400 fires on the first API
             // call (common on /resume — there's no fresh checkpoint yet).
+            // BAT-1283: provenance from the LOADED checkpoint, never from `cp` (the
+            // listCheckpoints() summary cannot carry goalSrc). Untrusted or non-string
+            // goals fail closed to null, so a pre-fix value is never promoted to the
+            // authoritative ORIGINAL USER REQUEST directive built at ai.js:2689-2695.
+            const goalTrusted = goalIsTrusted(full) && typeof full.originalGoal === 'string' && !!full.originalGoal;
             return {
                 __resumeFallthrough: true,
-                originalGoal: full.originalGoal || null,
+                originalGoal: goalTrusted ? full.originalGoal : null,
                 resumedFromTaskId: cp.taskId,
             };
         }

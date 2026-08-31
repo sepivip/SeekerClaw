@@ -7,6 +7,7 @@ const path = require('path');
 
 const { TASKS_DIR, log } = require('./config');
 const { redactSecrets } = require('./security');
+const { GOAL_SCAN_UNSAFE_KEY } = require('./turn-goal');
 
 const MAX_CHECKPOINT_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_CONVERSATION_SLICE = 8; // Keep last 8 messages in checkpoint
@@ -69,12 +70,29 @@ function saveCheckpoint(taskId, state) {
         if (Array.isArray(trimmed.conversationSlice)) {
             trimmed.conversationSlice = trimmed.conversationSlice.map(msg => {
                 const clone = { ...msg };
+                // BAT-1283: track whether redaction altered the text the goal scan
+                // would READ (turn-goal's textOfContent: a string body, or the
+                // first type:'text' block). Tool inputs and tool_result bodies are
+                // redacted too but never feed the scan, so they must not taint the
+                // message -- over-marking would disable a fallback that works.
+                let textAltered = false;
                 if (typeof clone.content === 'string') {
-                    clone.content = redactSecrets(clone.content);
+                    const redacted = redactSecrets(clone.content);
+                    if (redacted !== clone.content) textAltered = true;
+                    clone.content = redacted;
                 } else if (Array.isArray(clone.content)) {
-                    clone.content = clone.content.map(block => {
+                    // textOfContent reads ONLY the FIRST type:'text' block, so only that
+                    // block's alteration can mangle a scannable goal. Marking on any other
+                    // redacted block (a later text block, or a non-text block carrying a
+                    // .text field) would skip a message whose goal text is perfectly clean.
+                    const scanIdx = clone.content.findIndex(b => b && b.type === 'text');
+                    clone.content = clone.content.map((block, idx) => {
                         const b = { ...block };
-                        if (typeof b.text === 'string') b.text = redactSecrets(b.text);
+                        if (typeof b.text === 'string') {
+                            const redactedText = redactSecrets(b.text);
+                            if (idx === scanIdx && redactedText !== b.text) textAltered = true;
+                            b.text = redactedText;
+                        }
                         if (typeof b.content === 'string') b.content = redactSecrets(b.content);
                         // Deep-redact tool_use input — Claude-native format
                         if (b.type === 'tool_use' && b.input && typeof b.input === 'object') {
@@ -93,11 +111,42 @@ function saveCheckpoint(taskId, state) {
                         return t;
                     });
                 }
+                // Sticky: only ever set. A re-save spreads the existing marker
+                // through `{...msg}` above, and redaction is idempotent, so a
+                // second pass finds no further change to re-trigger it.
+                if (textAltered) clone[GOAL_SCAN_UNSAFE_KEY] = true;
                 return clone;
             });
         }
         if (typeof trimmed.originalGoal === 'string') {
-            trimmed.originalGoal = redactSecrets(trimmed.originalGoal);
+            const redactedGoal = redactSecrets(trimmed.originalGoal);
+            if (redactedGoal !== trimmed.originalGoal) {
+                // BAT-1283 (OQ2): redaction ALTERED the goal, so the stored text no
+                // longer faithfully represents the user's request. Measured: the
+                // /sk-[a-zA-Z0-9_-]{20,}/ pattern (security.js:121) fires on any
+                // kebab-case phrase whose word ends in "sk" — ask-, task-, risk- —
+                // turning "ask-claude-to-summarise-this-long-document-please" into
+                // "ask-***". Promoting that to ORIGINAL USER REQUEST would hand the
+                // model authoritative nonsense, which is worse than omitting it.
+                //
+                // Mark it so the read sites fail closed. 'redacted' is deliberately
+                // NOT a member of GOAL_SRC_VALUES (turn-goal.js), so goalIsTrusted()
+                // rejects it with no change to that function. Distinguishable from a
+                // legacy checkpoint, where the key is absent entirely.
+                //
+                // Only ever SET, never cleared: redactSecrets is idempotent, so a
+                // re-save (main.js:405-406 attempt bump, markComplete round-trip)
+                // sees no further change and the mark survives.
+                trimmed.goalSrc = 'redacted';
+                // Drop the mangled text rather than persisting it. On a post-fix
+                // build 'redacted' already fails the gate, so nothing is lost; on
+                // a DOWNGRADED build, which knows nothing about goalSrc, a stored
+                // "ask-***" would be replayed verbatim as the original request.
+                // null is the only value both builds read as "no goal".
+                trimmed.originalGoal = null;
+            } else {
+                trimmed.originalGoal = redactedGoal;
+            }
         }
 
         trimmed.updatedAt = Date.now();
