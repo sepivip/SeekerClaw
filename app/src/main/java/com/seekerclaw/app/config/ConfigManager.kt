@@ -2210,7 +2210,8 @@ object ConfigManager {
             // first calls run before config parse, so boot/build/version travel via config.json.
             put("bootId", currentBootId())
             put("appVersion", BuildConfig.VERSION_NAME)
-            put("gitSha", BuildConfig.GIT_SHA)
+            put("gitSha", BuildProvenance.get(context).commitShort ?: "unknown")
+            put("gitDirty", BuildProvenance.get(context).dirty ?: false)
             if (config.braveApiKey.isNotBlank()) put("braveApiKey", config.braveApiKey)
             put("searchProvider", config.searchProvider)
             if (config.perplexityApiKey.isNotBlank()) put("perplexityApiKey", config.perplexityApiKey)

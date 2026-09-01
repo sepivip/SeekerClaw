@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.seekerclaw.app.config.BuildProvenance
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import androidx.compose.material3.LinearProgressIndicator
 
@@ -178,7 +179,9 @@ fun SystemScreen(onBack: () -> Unit) {
         CardSurface {
             InfoRow("Version", buildString {
                 append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                if (BuildConfig.DEBUG) append(" · ${BuildConfig.GIT_SHA}")
+                val prov = BuildProvenance.get(context)
+                if (BuildConfig.DEBUG) append(" · ${prov.commitShort ?: "unknown"}")
+                append(prov.marker)
             })
             InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
             InfoRow(

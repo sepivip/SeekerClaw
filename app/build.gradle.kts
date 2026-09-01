@@ -2,7 +2,10 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.util.Properties
 import java.util.Date
+import java.io.ByteArrayOutputStream
+import java.nio.file.Files
 import java.security.MessageDigest
+import java.time.Instant
 import java.text.SimpleDateFormat
 import java.util.zip.ZipInputStream
 
@@ -56,15 +59,25 @@ android {
         buildConfigField("String", "OPENCLAW_VERSION", "\"2026.4.10\"")
         buildConfigField("String", "NODEJS_VERSION", "\"18 LTS\"")
 
-        // Git commit SHA (short) — always available, every build knows its source
-        val gitSha = providers.exec {
-            commandLine("git", "rev-parse", "--short", "HEAD")
-        }.standardOutput.asText.get().trim()
-        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
-
-        // Build timestamp (ISO date)
-        val buildDate = SimpleDateFormat("yyyy-MM-dd").format(Date())
-        buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
+        // BAT-1293: GIT_SHA and BUILD_DATE are GONE from BuildConfig.
+        //
+        // They were `public static final String`, i.e. compile-time constants,
+        // and Java/Kotlin INLINE those at every call site. When the value
+        // changed, AGP regenerated BuildConfig.java but incremental compilation
+        // did not recompile the readers, so ConfigManager / SystemScreen /
+        // SettingsScreen kept the PREVIOUS literal in their bytecode. Verified
+        // by dex inspection: classes4.dex held the new sha while classes3/11/13
+        // held the old one and were byte-identical to the previously installed
+        // APK. A clean build hides it, so it only bit the incremental path.
+        //
+        // Build identity now lives in assets/build-metadata.json, written by an
+        // execution-time task and read at RUNTIME (BuildProvenance). A runtime
+        // read cannot be inlined, so it cannot drift.
+        //
+        // The invariant, so this never comes back: NO build-identity value may
+        // be a compile-time constant — not `static final`, not `const val`, not
+        // a buildConfigField. A generated Kotlin file would be just as unsafe
+        // if it used `const`.
 
         externalNativeBuild {
             cmake {
@@ -247,6 +260,238 @@ abstract class DownloadNodejsTask : DefaultTask() {
 
 tasks.register<DownloadNodejsTask>("downloadNodejs")
 tasks.named("preBuild") { dependsOn("downloadNodejs") }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BAT-1293 — build provenance (see the invariant note in defaultConfig)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Canonical digest over the packaged Node bundle.
+ *
+ * SHARED CONTRACT with BAT-1298, which must reproduce this byte-for-byte or the
+ * cross-check the two exist to enable is meaningless. One record per file,
+ * concatenated in ascending path order, then SHA-256 over the whole stream:
+ *
+ *     <relative-path> NUL <byteLength> NUL <sha256-hex-of-file> LF
+ *
+ * Paths are UTF-8, relative, '/'-separated (normalised on Windows) and
+ * CASE-SENSITIVE, sorted by the bytes of their UTF-8 encoding. Length and
+ * separators are explicit precisely so `a/b` + `c` cannot collide with
+ * `a` + `b/c`. Symlinks are rejected — the bundle must be plain files. The
+ * empty tree hashes the empty stream.
+ *
+ * Byte lengths are decimal with no leading zeros; hex is lowercase.
+ */
+/**
+ * Minimal JSON string literal, built character by character.
+ *
+ * Deliberately avoids nested string-literal escaping: getting `\\` and `\"`
+ * right inside a Kotlin string inside a Gradle script is a reliable source of
+ * silent breakage, and this file is the one place a mistake would be stamped
+ * into every artifact.
+ */
+
+
+// NOTE: this task lives in the script rather than buildSrc, matching the existing
+// DownloadNodejsTask precedent. That constrains it: Gradle cannot generate a
+// managed subclass for a class nested in a .gradle.kts, so ABSTRACT properties
+// (`abstract val x: Property<T>`) fail with "non-static inner class". Properties
+// are therefore created eagerly from `project.objects`. outputDir must stay a
+// DirectoryProperty because addGeneratedSourceDirectory wires it.
+open class GenerateBuildProvenanceTask : DefaultTask() {
+    @get:OutputDirectory
+    val outputDir: DirectoryProperty = project.objects.directoryProperty()
+
+    @get:Input var versionNameIn: String = ""
+    @get:Input var versionCodeIn: Int = 0
+    @get:Input var openclawVersionIn: String = ""
+    @get:Input var nodejsVersionIn: String = ""
+    @get:Input var isReleaseIn: Boolean = false
+    @get:Input var allowUnverifiedIn: Boolean = false
+    @get:Internal var repoRootIn: File = File(".")
+    @get:Internal var bundleDirIn: File = File(".")
+
+    // These helpers live INSIDE the task class deliberately. Declared at script
+    // scope they were captured by the class, which makes Kotlin emit it as an
+    // INNER class — and Gradle then refuses with "non-static inner class".
+    // DownloadNodejsTask avoids this only by referencing nothing outside itself.
+    fun jsonStr(v: String?): String {
+        if (v == null) return "null"
+        val sb = StringBuilder()
+        sb.append('"')
+        for (c in v) {
+            when (c) {
+                '"' -> { sb.append('\\'); sb.append('"') }
+                '\\' -> { sb.append('\\'); sb.append('\\') }
+                else -> sb.append(c)
+            }
+        }
+        sb.append('"')
+        return sb.toString()
+    }
+
+    fun jsonObj(pairs: List<Pair<String, String>>): String =
+        pairs.joinToString(",", "{", "}") { p -> jsonStr(p.first) + ":" + p.second }
+
+    fun bundleTreeDigest(root: File): String {
+        val stream = ByteArrayOutputStream()
+        if (root.isDirectory) {
+            val files = root.walkTopDown()
+                .onEnter { !Files.isSymbolicLink(it.toPath()) }
+                .filter { it.isFile }
+                .toList()
+            for (f in files) {
+                if (Files.isSymbolicLink(f.toPath())) {
+                    throw GradleException("Bundle contains a symlink, which the digest contract forbids: $f")
+                }
+            }
+            val records = files.map { f ->
+                val rel = root.toPath().relativize(f.toPath()).joinToString("/") { it.toString() }
+                val bytes = f.readBytes()
+                val sha = MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it) }
+                Triple(rel, bytes.size, sha)
+            }.sortedBy { it.first.toByteArray(Charsets.UTF_8).toList().joinToString(",") { b -> b.toString().padStart(4, '0') } }
+            for ((rel, len, sha) in records) {
+                stream.write(rel.toByteArray(Charsets.UTF_8)); stream.write(0)
+                stream.write(len.toString().toByteArray(Charsets.UTF_8)); stream.write(0)
+                stream.write(sha.toByteArray(Charsets.UTF_8)); stream.write('\n'.code)
+            }
+        }
+        return MessageDigest.getInstance("SHA-256").digest(stream.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+    }
+
+
+    /**
+     * D2: git is invoked at EXECUTION time, from the repo root.
+     *
+     * ProcessBuilder rather than an injected ExecOperations because Gradle
+     * cannot inject services into a class declared inside a .gradle.kts
+     * script. `git -C <root>` lets git resolve a pointer-file .git, packed
+     * refs and detached HEAD itself — never read .git internals by hand.
+     */
+    private fun git(vararg args: String): Pair<Int, String> {
+        val cmd = listOf("git", "-C", repoRootIn.absolutePath) + args.toList()
+        return try {
+            val p = ProcessBuilder(cmd).start()
+            val stdout = p.inputStream.bufferedReader().readText().trim()
+            p.errorStream.bufferedReader().readText()
+            p.waitFor() to stdout
+        } catch (e: Exception) {
+            logger.warn("[BuildProvenance] git failed: " + e.message)
+            -1 to ""
+        }
+    }
+
+    @TaskAction
+    fun generate() {
+        val dir = outputDir.get().asFile
+        dir.mkdirs()
+        val target = File(dir, "build-metadata.json")
+
+        val (shaCode, commit) = git("rev-parse", "HEAD")
+        val ok = shaCode == 0 && Regex("^[0-9a-f]{40}$").matches(commit)
+
+        if (!ok) {
+            // D5: fail closed. Never emit a plausible-looking wrong identity.
+            if (!allowUnverifiedIn || isReleaseIn) {
+                throw GradleException(
+                    "Build provenance unavailable (git exit=$shaCode). Release builds always fail; " +
+                    "for a debug build pass -PallowUnverifiedBuildProvenance=true on the COMMAND LINE."
+                )
+            }
+            target.writeText(jsonObj(listOf(
+                "schema" to "1",
+                "commit" to "null",
+                "commitShort" to "null",
+                "dirty" to "null",
+                "branch" to "null",
+                "buildTimestampUtc" to jsonStr(Instant.now().toString()),
+                "versionName" to jsonStr(versionNameIn),
+                "versionCode" to versionCodeIn.toString(),
+                "openclawVersion" to jsonStr(openclawVersionIn),
+                "nodejsVersion" to jsonStr(nodejsVersionIn),
+                "bundleDigest" to "null",
+                "provenance" to jsonStr("unverified"),
+            )))
+            logger.warn("[BuildProvenance] UNVERIFIED build — no usable git state")
+            return
+        }
+
+        // D3: dirty is part of identity. Untracked files are INCLUDED: an
+        // untracked .kt or asset can be compiled and packaged, so ignoring them
+        // would stamp a clean commit over bits that commit does not contain.
+        // core.fileMode=false so a chmod (as CI does to gradlew) is not "dirty".
+        val (_, status) = git("-c", "core.fileMode=false", "status", "--porcelain")
+        val dirty = status.isNotEmpty()
+        if (dirty && isReleaseIn) {
+            throw GradleException("Refusing to build a RELEASE artifact from a dirty tree:\n$status")
+        }
+
+        val (_, branch) = git("rev-parse", "--abbrev-ref", "HEAD")
+        val digest = bundleTreeDigest(bundleDirIn)
+
+        target.writeText(jsonObj(listOf(
+            "schema" to "1",
+            "commit" to jsonStr(commit),
+            "commitShort" to jsonStr(commit.take(12)),
+            "dirty" to dirty.toString(),
+            "branch" to jsonStr(branch),
+            "buildTimestampUtc" to jsonStr(Instant.now().toString()),
+            "versionName" to jsonStr(versionNameIn),
+            "versionCode" to versionCodeIn.toString(),
+            "openclawVersion" to jsonStr(openclawVersionIn),
+            "nodejsVersion" to jsonStr(nodejsVersionIn),
+            "bundleDigest" to jsonStr(digest),
+            "provenance" to jsonStr("verified"),
+        )))
+        logger.lifecycle("[BuildProvenance] " + commit.take(12) + " dirty=" + dirty + " bundle=" + digest.take(12))
+    }
+}
+
+// D2: ONE TASK PER VARIANT, registered as a GENERATED source directory.
+//
+// `variant.sources.assets.addGeneratedSourceDirectory` is the only AGP 8 API
+// that makes the task's output a declared, content-hashed input of
+// merge<Variant>Assets. AGP's own KDoc says: "Do not use addStaticSourceDirectory
+// to add sources that are generated by a task, instead use
+// addGeneratedSourceDirectory."
+//
+// EXPLICITLY FORBIDDEN here: `sourceSets["main"].assets.srcDir(...)` plus a
+// dependsOn. That registers a STATIC directory with no producer relationship —
+// at best Gradle reports an implicit-dependency problem, at worst mergeAssets
+// snapshots the directory before the generator writes and the APK ships the
+// previous build's metadata. That is this bug again with a file swapped for a
+// constant. The repo's only local precedent (jniLibs.srcDirs, and
+// DownloadNodejsTask ordered by dependsOn with no declared output) is the
+// unsafe shape — do not copy it.
+//
+// upToDateWhen{false} only guarantees the PRODUCER re-runs; repackaging follows
+// because the merged asset input's CONTENT hash changes. Different claims.
+androidComponents {
+    onVariants { variant ->
+        val isRelease = variant.buildType == "release"
+        val t = tasks.register<GenerateBuildProvenanceTask>(
+            "generateBuildProvenance" + variant.name.replaceFirstChar { it.uppercase() }
+        ) {
+            versionNameIn = "2.2.0"
+            versionCodeIn = 23
+            openclawVersionIn = "2026.4.10"
+            nodejsVersionIn = "18 LTS"
+            isReleaseIn = isRelease
+            allowUnverifiedIn = (
+                // CLI-only: a value in gradle.properties must NOT make this
+                // permanent and invisible.
+                gradle.startParameter.projectProperties["allowUnverifiedBuildProvenance"] == "true"
+            )
+            repoRootIn = rootProject.layout.projectDirectory.asFile
+            bundleDirIn = layout.projectDirectory.dir("src/main/assets/nodejs-project").asFile
+            outputs.upToDateWhen { false }
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(t, GenerateBuildProvenanceTask::outputDir)
+    }
+}
 
 // --- Dependencies ---
 
