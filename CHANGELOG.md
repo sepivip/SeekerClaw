@@ -5,6 +5,48 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Interface polish pass across the app** — one consistent style per pattern
+  instead of several competing ones: unified section headers and in-card
+  labels, a single search field treatment on Logs and Skills, a shared
+  empty-state layout, and one uptime format everywhere. Status indicators now
+  show a status word next to the coloured dot rather than relying on colour
+  alone, so state is readable without distinguishing hues. 42 findings from a
+  full interface audit. (BAT-1247, #449)
+
+### Fixed
+
+- **The agent no longer loses your instruction on a long task.** On a task that
+  ran many tool steps in a single turn, the oldest part of the conversation was
+  trimmed to stay within limits — and that could remove the very message you
+  had asked for. The agent would then reply as though it had received nothing,
+  or abandon the task partway through, while the chat still showed your
+  request. Your instruction is now kept for as long as the task is running.
+  (BAT-1186, #446)
+- **An interrupted task now resumes the task you actually asked for.** If the
+  agent was interrupted mid-task and restarted, it could be told to continue
+  the wrong request — whichever older message still happened to be in its
+  history, such as an earlier greeting — rather than the task it was working
+  on. Resumed tasks now carry their own goal, and when it cannot be established
+  with confidence the agent continues from the restored conversation instead of
+  asserting a wrong one. (BAT-1283, #450)
+
+### Changed
+
+- **Targets Android 16 (API 36).** Required for app updates on Google Play from
+  31 August 2026. No dependency changes and no change to behaviour; the app's
+  own native library is also now 16 KB page-size aligned. (BAT-1187, #448)
+
+### Security
+
+- **Sharing logs no longer includes message text.** The share payload now
+  replaces each message body with a marker recording only its length, keeping
+  timestamps, levels and sources intact so a shared log is still useful for
+  diagnosis. Applies to multi-line message bodies as well, which previously
+  passed through in full. Console output and on-device logs are unchanged.
+  (BAT-1247, #449)
+
 ## [2.2.0] - 2026-07-20
 
 > **Sign in with your SuperGrok or X Premium subscription, the newest OpenAI
