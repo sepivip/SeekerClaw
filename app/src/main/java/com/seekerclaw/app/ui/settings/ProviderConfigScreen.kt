@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import com.seekerclaw.app.config.BuildProvenance
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
@@ -690,9 +691,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     // falsely report a signed-in user as "not connected").
                                     val authType = config?.authType ?: "api_key"
                                     if (authType == "oauth") {
-                                        testXaiOAuthConnection(config?.xaiOAuthToken ?: "")
+                                        testXaiOAuthConnection(config?.xaiOAuthToken ?: "", "SeekerClaw/" + (BuildProvenance.get(context).versionName ?: "unknown"))
                                     } else {
-                                        testXaiConnection(config?.xaiApiKey ?: "")
+                                        testXaiConnection(config?.xaiApiKey ?: "", "SeekerClaw/" + (BuildProvenance.get(context).versionName ?: "unknown"))
                                     }
                                 }
                                 "custom" -> testCustomConnection(
@@ -1349,17 +1350,17 @@ private suspend fun testOpenAIConnection(apiKey: String): Result<Unit> = withCon
     }
 }
 
-private suspend fun testXaiOAuthConnection(accessToken: String): Result<Unit> = withContext(Dispatchers.IO) {
+private suspend fun testXaiOAuthConnection(accessToken: String, userAgent: String): Result<Unit> = withContext(Dispatchers.IO) {
     runCatching {
         if (accessToken.isBlank()) error("OAuth token is empty — please sign in first")
-        xaiChatPing(accessToken, isOAuth = true)
+        xaiChatPing(accessToken, isOAuth = true, userAgent = userAgent)
     }
 }
 
-private suspend fun testXaiConnection(apiKey: String): Result<Unit> = withContext(Dispatchers.IO) {
+private suspend fun testXaiConnection(apiKey: String, userAgent: String): Result<Unit> = withContext(Dispatchers.IO) {
     runCatching {
         if (apiKey.isBlank()) error("API key is empty")
-        xaiChatPing(apiKey, isOAuth = false)
+        xaiChatPing(apiKey, isOAuth = false, userAgent = userAgent)
     }
 }
 
@@ -1415,7 +1416,7 @@ internal fun xaiConnErrorText(status: Int, apiMessage: String, isOAuth: Boolean)
     }
 }
 
-private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
+private fun xaiChatPing(bearer: String, isOAuth: Boolean, userAgent: String) {
     val url = URL("https://api.x.ai/v1/chat/completions")
     val conn = url.openConnection() as HttpURLConnection
     conn.requestMethod = "POST"
@@ -1424,7 +1425,7 @@ private fun xaiChatPing(bearer: String, isOAuth: Boolean) {
     conn.setRequestProperty("Authorization", "Bearer $bearer")
     // H4: SeekerClaw's own versioned UA — matches XaiOAuthActivity.TOKEN_UA (auth.x.ai is
     // CF-UA-gated; api.x.ai isn't today, but keep the house-style versioned UA on every call).
-    conn.setRequestProperty("User-Agent", "SeekerClaw/${com.seekerclaw.app.BuildConfig.VERSION_NAME}")
+    conn.setRequestProperty("User-Agent", userAgent)
     conn.connectTimeout = 15000
     conn.readTimeout = 15000
     val payload = JSONObject().apply {

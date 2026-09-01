@@ -7,6 +7,7 @@ import android.util.Base64
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.browser.customtabs.CustomTabsIntent
+import com.seekerclaw.app.config.BuildProvenance
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.KeystoreHelper
@@ -83,7 +84,13 @@ class XaiOAuthActivity : ComponentActivity() {
         private val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
         // H4: SeekerClaw's OWN User-Agent for the Cloudflare-gated token endpoint.
-        private val TOKEN_UA = "SeekerClaw/${BuildConfig.VERSION_NAME}"
+        // BAT-1293: was `private val TOKEN_UA = "SeekerClaw/${BuildConfig.VERSION_NAME}"`.
+        // VERSION_NAME is a compile-time constant, so it was INLINED into this
+        // companion initializer and could go stale on an incremental build. This UA
+        // goes to a Cloudflare-gated token endpoint, so a stale value is an AUTH
+        // FAILURE, not a cosmetic wrong label. The version is now passed in from a
+        // caller that holds a Context.
+        private fun tokenUa(versionName: String?) = "SeekerClaw/" + (versionName ?: "unknown")
 
         // Application-lifetime scope for the token exchange AND the server timeout.
         private val EXCHANGE_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -152,7 +159,7 @@ class XaiOAuthActivity : ComponentActivity() {
                         // PKCE verifier is transmitted here but NEVER logged (M2).
                         append("&code_verifier=").append(URLEncoder.encode(codeVerifier, "UTF-8"))
                     }
-                    httpPostStatic(TOKEN_URL, body)
+                    httpPostStatic(TOKEN_URL, body, tokenUa(BuildProvenance.get(appCtx).versionName))
                 }
                 val json = JSONObject(tokenResponse)
                 val accessToken = json.optString("access_token", "")
@@ -258,13 +265,13 @@ class XaiOAuthActivity : ComponentActivity() {
             }
         }
 
-        private fun httpPostStatic(url: String, body: String): String {
+        private fun httpPostStatic(url: String, body: String, userAgent: String): String {
             val conn = URL(url).openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
                 // H4: Cloudflare on auth.x.ai bot-blocks empty/default (Dalvik) UAs.
-                conn.setRequestProperty("User-Agent", TOKEN_UA)
+                conn.setRequestProperty("User-Agent", userAgent)
                 conn.doOutput = true
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 15_000
