@@ -11,7 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   instead of several competing ones: unified section headers and in-card
   labels, a single search field treatment on Logs and Skills, a shared
   empty-state layout, and one uptime format everywhere. Status indicators now
-  show a status word next to the coloured dot rather than relying on colour
+  show a status word next to the colored dot rather than relying on color
   alone, so state is readable without distinguishing hues. 42 findings from a
   full interface audit. (BAT-1247, #449)
 
