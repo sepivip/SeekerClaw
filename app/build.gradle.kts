@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import java.time.Instant
 import java.text.SimpleDateFormat
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 plugins {
@@ -469,6 +470,143 @@ open class GenerateBuildProvenanceTask : DefaultTask() {
 //
 // upToDateWhen{false} only guarantees the PRODUCER re-runs; repackaging follows
 // because the merged asset input's CONTENT hash changes. Different claims.
+
+/**
+ * BAT-1293 D6 — verify build identity FROM THE PACKAGED ARTIFACT.
+ *
+ * Reads assets/build-metadata.json out of the APK itself, never an intermediate,
+ * and compares it against execution-time git state. This is the manual check that
+ * originally caught the stale-SHA bug, made automatic.
+ *
+ * PM B3: a PRE-CONSUMPTION gate, not cleanup. `install<Variant>` dependsOn this, so
+ * a rejected artifact never reaches the device — including via Android Studio Run,
+ * which is the path every device test uses. A verifier that merely ran after
+ * packaging could let installDappStoreDebug consume a bad APK and only fail the
+ * build afterwards.
+ *
+ * On mismatch the artifact is DELETED before the failure is raised, so a rejected
+ * APK cannot be installed by hand later. It is a regenerable build output.
+ *
+ * Self-contained on purpose: referencing a script-level helper would make this an
+ * inner class, which Gradle refuses to instantiate.
+ */
+open class VerifyBuildProvenanceTask : DefaultTask() {
+    @get:InputFiles
+    val apkDir: DirectoryProperty = project.objects.directoryProperty()
+
+    @get:Input var isReleaseIn: Boolean = false
+    @get:Input var skipIn: Boolean = false
+    @get:Internal var repoRootIn: File = File(".")
+
+    private fun git(vararg args: String): Pair<Int, String> = try {
+        val p = ProcessBuilder(listOf("git", "-C", repoRootIn.absolutePath) + args.toList()).start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        p.errorStream.bufferedReader().readText()
+        p.waitFor() to out
+    } catch (e: Exception) {
+        -1 to ""
+    }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /**
+     * Scalar lookup by hand rather than a regex — the metadata is machine-written
+     * and flat, and nested string escaping inside a Gradle script is a reliable
+     * source of silent breakage (it already cost this file two debugging cycles).
+     */
+    private fun field(json: String, key: String): String? {
+        val marker = "\"" + key + "\":"
+        val i = json.indexOf(marker)
+        if (i < 0) return null
+        var p = i + marker.length
+        if (p >= json.length) return null
+        return if (json[p] == '"') {
+            val end = json.indexOf('"', p + 1)
+            if (end < 0) null else json.substring(p + 1, end)
+        } else {
+            val end = json.indexOfFirst(p) { c -> c == ',' || c == '}' }
+            val raw = json.substring(p, if (end < 0) json.length else end).trim()
+            if (raw == "null") null else raw
+        }
+    }
+
+    private fun String.indexOfFirst(from: Int, pred: (Char) -> Boolean): Int {
+        for (k in from until length) if (pred(this[k])) return k
+        return -1
+    }
+
+    @TaskAction
+    fun verify() {
+        if (skipIn) {
+            if (isReleaseIn) {
+                throw GradleException("-PskipProvenanceVerify is rejected for release variants.")
+            }
+            logger.warn("[VerifyProvenance] SKIPPED via -PskipProvenanceVerify — this build must NOT be used for any device-test attestation")
+            return
+        }
+
+        val dir = apkDir.get().asFile
+        val apks = dir.listFiles { f: File -> f.name.endsWith(".apk") }?.toList().orEmpty()
+        if (apks.isEmpty()) {
+            logger.lifecycle("[VerifyProvenance] no APK found in " + dir.path)
+            return
+        }
+
+        val (code, headSha) = git("rev-parse", "HEAD")
+        if (code != 0 || headSha.length != 40) {
+            throw GradleException("[VerifyProvenance] cannot resolve git HEAD (exit " + code + ")")
+        }
+
+        for (apk in apks) {
+            var meta: String? = null
+            ZipFile(apk).use { zf ->
+                val entry = zf.getEntry("assets/build-metadata.json")
+                if (entry != null) {
+                    meta = zf.getInputStream(entry).readBytes().toString(Charsets.UTF_8)
+                }
+            }
+            val m = meta
+            if (m == null) {
+                apk.delete()
+                throw GradleException("Artifact has no assets/build-metadata.json: " + apk.name + " (deleted)")
+            }
+
+            val packagedCommit = field(m, "commit")
+            val packagedDirty = field(m, "dirty")
+
+            if (packagedCommit != headSha) {
+                apk.delete()
+                throw GradleException(
+                    "BUILD IDENTITY MISMATCH — artifact deleted.\n" +
+                    "  packaged commit : " + packagedCommit + "\n" +
+                    "  actual HEAD     : " + headSha + "\n" +
+                    "This is the BAT-1293 failure class: the artifact does not carry the identity\n" +
+                    "of the tree it was built from. Do NOT record a device test against this build."
+                )
+            }
+            if (isReleaseIn && packagedDirty == "true") {
+                apk.delete()
+                throw GradleException("Release artifact was built from a dirty tree — deleted.")
+            }
+
+            // The sidecar binds the metadata to the ARTIFACT'S BYTES, so a device-test
+            // record can cite a content hash instead of a label. PM B2: it must travel
+            // with the artifact through any rename or upload.
+            val artifactSha = sha256(apk.readBytes())
+            File(apk.parentFile, apk.name + ".provenance.json").writeText(
+                "{\"artifactSha256\":\"" + artifactSha + "\"," +
+                "\"artifactName\":\"" + apk.name + "\"," +
+                "\"metadata\":" + m + "}"
+            )
+            logger.lifecycle(
+                "[VerifyProvenance] " + apk.name + " OK  commit=" + headSha.take(12) +
+                "  sha256=" + artifactSha.take(12)
+            )
+        }
+    }
+}
+
 androidComponents {
     onVariants { variant ->
         val isRelease = variant.buildType == "release"
@@ -490,6 +628,23 @@ androidComponents {
             outputs.upToDateWhen { false }
         }
         variant.sources.assets?.addGeneratedSourceDirectory(t, GenerateBuildProvenanceTask::outputDir)
+
+        // D6 / PM B3: a PRE-CONSUMPTION gate. install<Variant> dependsOn the verifier,
+        // so Android Studio Run cannot deploy a rejected artifact. assemble is
+        // finalizedBy it so a plain assemble is checked too.
+        val verify = tasks.register<VerifyBuildProvenanceTask>(
+            "verifyBuildProvenance" + variant.name.replaceFirstChar { it.uppercase() }
+        ) {
+            apkDir.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.APK))
+            isReleaseIn = isRelease
+            repoRootIn = rootProject.layout.projectDirectory.asFile
+            // CLI-only, per-invocation: a value in gradle.properties must not make
+            // this permanent and invisible. Rejected for release inside the task.
+            skipIn = gradle.startParameter.projectProperties["skipProvenanceVerify"] == "true"
+        }
+        val cap = variant.name.replaceFirstChar { it.uppercase() }
+        tasks.matching { it.name == "install" + cap }.configureEach { dependsOn(verify) }
+        tasks.matching { it.name == "assemble" + cap }.configureEach { finalizedBy(verify) }
     }
 }
 
