@@ -124,9 +124,9 @@ fs.writeFileSync(path.join(tmpRoot, 'memory', 'MEMORY.md'), '# memory must not b
 fs.writeFileSync(path.join(tmpRoot, 'SOUL.md'), '# soul must not be touched\n');
 fs.mkdirSync(path.join(tmpRoot, 'skills'), { recursive: true });
 fs.writeFileSync(path.join(tmpRoot, 'skills', 'foo.md'), '# skill must not be touched\n');
-fs.mkdirSync(path.join(tmpRoot, 'task-store'), { recursive: true });
+fs.mkdirSync(path.join(tmpRoot, 'tasks'), { recursive: true });
 const otherChatCp = { taskId: 'other', chatId: 'other-chat', conversationSlice: [{ role: 'user', content: 'unrelated' }] };
-fs.writeFileSync(path.join(tmpRoot, 'task-store', 'other.json'), JSON.stringify(otherChatCp));
+fs.writeFileSync(path.join(tmpRoot, 'tasks', 'other.json'), JSON.stringify(otherChatCp));
 
 const taskId = 'task-abc';
 const activeCp = {
@@ -135,12 +135,18 @@ const activeCp = {
     conversationSlice: sampleConv.slice(),
     originalGoal: 'do the thing',
 };
-fs.writeFileSync(path.join(tmpRoot, 'task-store', `${taskId}.json`), JSON.stringify(activeCp));
+fs.writeFileSync(path.join(tmpRoot, 'tasks', `${taskId}.json`), JSON.stringify(activeCp));
 
 const step1 = recovery.quarantineActiveSegment({
     chatId: '12345',
     messages: sampleConv,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 1,
     taskId,
     now: () => 1700000000000,
@@ -166,14 +172,14 @@ eq('forensic file: quarantinedLength=2', writtenForensic.quarantinedLength, 2);
 ok('forensic file: quarantinedSlice is array', Array.isArray(writtenForensic.quarantinedSlice));
 
 // Active checkpoint mutated to truncated state
-const activeCpAfter = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'task-store', `${taskId}.json`), 'utf8'));
+const activeCpAfter = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'tasks', `${taskId}.json`), 'utf8'));
 eq('active checkpoint conversationSlice truncated to 5',
     activeCpAfter.conversationSlice.length, 5);
 eq('active checkpoint recoveryQuarantineStep set', activeCpAfter.recoveryQuarantineStep, 1);
 eq('active checkpoint originalGoal preserved', activeCpAfter.originalGoal, 'do the thing');
 
 // Other chat's checkpoint UNTOUCHED
-const otherCpAfter = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'task-store', 'other.json'), 'utf8'));
+const otherCpAfter = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'tasks', 'other.json'), 'utf8'));
 eq('other-chat checkpoint untouched',
     otherCpAfter.conversationSlice[0].content, 'unrelated');
 ok('other-chat checkpoint has NO recovery marker',
@@ -193,6 +199,12 @@ const step2 = recovery.quarantineActiveSegment({
     chatId: '12345',
     messages: sampleConv, // original sample (not the step1 truncated one)
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 2,
     taskId,
     now: () => 1700000000001,
@@ -207,6 +219,12 @@ const step3 = recovery.quarantineActiveSegment({
     chatId: '12345',
     messages: sampleConv,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 3,
     taskId,
     now: () => 1700000000002,
@@ -224,6 +242,12 @@ const step1NoOp = recovery.quarantineActiveSegment({
     chatId: 'no-user',
     messages: noUserConv,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 1,
     taskId: null,
     now: () => 1700000000003,
@@ -238,6 +262,12 @@ recovery.quarantineActiveSegment({
     chatId: 'pure-test',
     messages: sampleConv,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 1,
     taskId: null,
     now: () => 1700000000004,
@@ -270,6 +300,12 @@ const step2result = recovery.quarantineActiveSegment({
     chatId: 'r4-step2',
     messages: liveMessagesS2,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 2,
     taskId: null,
     now: () => 1700000000005,
@@ -292,6 +328,12 @@ const step1result = recovery.quarantineActiveSegment({
     chatId: 'r4-step1',
     messages: liveMessagesS1,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 1,
     taskId: null,
     now: () => 1700000000006,
@@ -311,6 +353,12 @@ const step3result = recovery.quarantineActiveSegment({
     chatId: 'r4-step3',
     messages: liveMessagesS3,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 3,
     taskId: null,
     now: () => 1700000000007,
@@ -426,6 +474,12 @@ const evilStep1 = recovery.quarantineActiveSegment({
     chatId: evilChat,
     messages: sampleConv,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 1,
     taskId: evilTask,
     now: () => 1700000000888,
@@ -454,6 +508,12 @@ const fallbackStep1 = recovery.quarantineActiveSegment({
     chatId: allSpecialChat,
     messages: sampleConv,
     workDir: tmpRoot,
+    // BAT-1290: the checkpoint dir is INJECTED, and the kind selects policy.
+    // This fixture previously wrote into tmpRoot/task-store — a directory
+    // production never creates — so these assertions validated the consumer's
+    // wrong assumption instead of what task-store actually writes.
+    tasksDir: path.join(tmpRoot, 'tasks'),
+    checkpointKind: 'current',
     step: 1,
     taskId: '////',
     now: () => 1700000000999,

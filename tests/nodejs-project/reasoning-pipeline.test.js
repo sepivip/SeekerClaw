@@ -27,7 +27,7 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bat549-pipeline-'));
 // transitively, which reads `config` (the raw object) for redaction patterns,
 // `BRIDGE_TOKEN`, and `workDir`. We provide minimum stubs.
 const configPath = path.resolve(__dirname, '../../app/src/main/assets/nodejs-project/config.js');
-const TASKS_DIR = path.join(tmpRoot, 'task-store');
+const TASKS_DIR = path.join(tmpRoot, 'tasks');
 fs.mkdirSync(TASKS_DIR, { recursive: true });
 require.cache[configPath] = {
     id: configPath,
@@ -120,7 +120,7 @@ const oldShape = {
     ],
     originalGoal: 'pre-existing checkpoint',
 };
-fs.writeFileSync(path.join(tmpRoot, 'task-store', `${oldShapeTaskId}.json`),
+fs.writeFileSync(path.join(tmpRoot, 'tasks', `${oldShapeTaskId}.json`),
     JSON.stringify(oldShape, null, 2));
 
 const loadedOld = taskStore.loadCheckpoint(oldShapeTaskId);
@@ -173,7 +173,7 @@ eq('reasoning_content preserved verbatim through save/load (no spurious redactio
 
 console.log();
 console.log('── Backup file (.bak) is created on second save ──');
-const cpDir = path.join(tmpRoot, 'task-store');
+const cpDir = path.join(tmpRoot, 'tasks');
 ok('Primary task-store/<taskId>.json exists',
     fs.existsSync(path.join(cpDir, `${taskId}.json`)));
 // Second save creates .bak

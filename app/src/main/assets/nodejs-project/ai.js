@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const {
     workDir, MODEL, resolveActiveModel, PROVIDER, CHANNEL, ANTHROPIC_KEY, OPENAI_KEY, XAI_KEY, OPENROUTER_KEY, CUSTOM_KEY, CUSTOM_BASE_URL, CUSTOM_FORMAT, OPENROUTER_FALLBACK_MODEL, OPENROUTER_MODEL_CONTEXT, OPENROUTER_FALLBACK_CONTEXT, AUTH_TYPE, OPENAI_AUTH_TYPE,
     REACTION_GUIDANCE, REACTION_NOTIFICATIONS, MEMORY_DIR,
+    TASKS_DIR,
     TOOL_RATE_LIMITS, TOOL_STATUS_MAP,
     RICH_MESSAGES_ENABLED,
     API_TIMEOUT_RETRIES, API_TIMEOUT_BACKOFF_MS, API_TIMEOUT_MAX_BACKOFF_MS,
@@ -3199,25 +3200,42 @@ async function chat(chatId, userMessage, options = {}) {
                     let recovered = false;
                     while (_reasoningRecoveryStep < 3 && !recovered) {
                         _reasoningRecoveryStep++;
-                        // R6 thread 2: ALSO quarantine the resumed-from
-                        // checkpoint (if any) — its conversationSlice on
-                        // disk is what a future /resume would re-load.
-                        // The fresh taskId checkpoint is mutated for the
-                        // current run; the resumed-from checkpoint is
-                        // mutated to prevent re-load of the bad slice.
-                        if (resumedFromTaskId && resumedFromTaskId !== taskId) {
-                            _reasoningRecovery.quarantineActiveSegment({
-                                chatId, messages, workDir,
-                                taskId: resumedFromTaskId,
-                                step: _reasoningRecoveryStep, log,
-                            });
-                        }
+
+                        // BAT-1290 D1: tasksDir is injected — reasoning-recovery must
+                        // never re-derive it. It previously joined workDir with
+                        // 'task-store' while checkpoints live in TASKS_DIR
+                        // (<workDir>/tasks), so the on-disk repair never ran at all.
                         const result = _reasoningRecovery.quarantineActiveSegment({
                             chatId, messages, workDir, taskId,
+                            tasksDir: TASKS_DIR, checkpointKind: 'current',
                             step: _reasoningRecoveryStep, log,
                         });
                         if (result.ok) {
-                            log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} truncated at index ${result.cutIndex}; retrying turn`, 'WARN');
+                            const cpc = result.checkpoint || {};
+                            log(`[ReasoningRecovery] Step ${_reasoningRecoveryStep} truncated at index ${result.cutIndex}; current checkpoint=${cpc.status || 'unknown'}; retrying turn`, 'WARN');
+
+                            // BAT-1290 D4 SEQUENCING: the resumed-from checkpoint is
+                            // processed ONLY after live recovery succeeded for this
+                            // step, and BEFORE _applyRecovery/continue. The previous
+                            // order ran it first, so a step whose live recovery then
+                            // failed could still have quarantined a usable checkpoint.
+                            //
+                            // D6: the outcome is CONSUMED. It used to be discarded
+                            // entirely (no assignment), so absent / rejected / failed /
+                            // unchanged / repaired were indistinguishable.
+                            if (resumedFromTaskId && resumedFromTaskId !== taskId) {
+                                const resumedResult = _reasoningRecovery.quarantineActiveSegment({
+                                    chatId, messages, workDir,
+                                    taskId: resumedFromTaskId,
+                                    tasksDir: TASKS_DIR, checkpointKind: 'resumed',
+                                    step: _reasoningRecoveryStep, log,
+                                });
+                                const rc = resumedResult.checkpoint || {};
+                                const loud = rc.status === 'quarantined' || rc.status === 'failed' || rc.status === 'absent';
+                                log(`[ReasoningRecovery] resumed checkpoint ${resumedFromTaskId}: status=${rc.status || 'unknown'}${rc.reason ? ` reason=${rc.reason}` : ''}`,
+                                    loud ? 'WARN' : 'INFO');
+                            }
+
                             _applyRecovery(result);
                             recovered = true;
                         }
