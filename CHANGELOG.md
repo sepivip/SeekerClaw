@@ -35,7 +35,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 
 - **Targets Android 16 (API 36).** Required for app updates on Google Play from
-  31 August 2026. No dependency changes and no change to behaviour; the app's
+  31 August 2026. No dependency changes and no change to behavior; the app's
   own native library is also now 16 KB page-size aligned. (BAT-1187, #448)
 
 ### Security
