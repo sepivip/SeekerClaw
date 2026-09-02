@@ -248,6 +248,30 @@ abstract class DownloadNodejsTask : DefaultTask() {
 tasks.register<DownloadNodejsTask>("downloadNodejs")
 tasks.named("preBuild") { dependsOn("downloadNodejs") }
 
+// --- Strip runtime log artifacts from packaged assets (BAT-1073) ---
+// config.js writes node_debug.log into its own directory (workDir defaults to
+// __dirname) whenever the Node smoke/tests run locally — and that directory is
+// src/main/assets/nodejs-project. Android packages everything under
+// src/main/assets/ into the APK regardless of .gitignore, so a stale dev log
+// (which embeds an absolute developer-machine path) would otherwise ship to
+// users and land on-device at files/nodejs-project/node_debug.log.
+//
+// Delete these runtime artifacts at the start of every asset-merge task. The
+// source-set assets filter is not honored by the asset merge, so we strip the
+// files instead. Paths are captured at configuration time (via layout) so the
+// task action touches no Project state — configuration-cache safe.
+val packagedAssetLogArtifacts = listOf(
+    "node_debug.log",
+    "node_debug.log.old",
+    "node_debug.log.bak",
+).map { layout.projectDirectory.file("src/main/assets/nodejs-project/$it").asFile }
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    doFirst {
+        packagedAssetLogArtifacts.forEach { artifact -> artifact.delete() }
+    }
+}
+
 // --- Dependencies ---
 
 dependencies {
