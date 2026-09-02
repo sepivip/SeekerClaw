@@ -1,0 +1,189 @@
+package com.seekerclaw.app.flipper
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Resolution and audit-record tests.
+ *
+ * The press path itself needs a BLE stack, but the decisions *around* it — what the model is
+ * allowed to name, what it can never name, and what gets written down — are pure and belong under
+ * test. These are the rules a prompt-injected agent would be trying to get past.
+ */
+class FlipperControllerLogicTest {
+
+    private val tv = AllowedButton("/ext/infrared/tv.ir", "tv", "sha-tv", "Power")
+    private val tvVol = AllowedButton("/ext/infrared/tv.ir", "tv", "sha-tv", "Vol_up")
+    private val garage = AllowedButton("/ext/infrared/garage.ir", "garage", "sha-g", "Open")
+
+    private fun enrolled(vararg allowed: AllowedButton, enabled: Boolean = true) =
+        FlipperEnrollment(
+            EnrolledFlipper("80:E1:26:12:B7:E1", "Flipper Oytia", SecurityClass.OK, 0L, "1.4.3"),
+            allowed.toList(),
+            enabled,
+        )
+
+    // ------------------------------------------------------------- resolution
+
+    @Test fun `the model names a label and gets back a path it never supplied`() {
+        // "Never accept a path from the model" is only meaningful if the path comes from the store.
+        val e = enrolled(tv)
+        assertEquals("/ext/infrared/tv.ir", e.resolve("tv", "Power")?.remotePath)
+    }
+
+    @Test fun `an unknown label resolves to nothing`() {
+        assertNull(enrolled(tv).resolve("garage", "Power"))
+    }
+
+    @Test fun `a known label with an unknown button resolves to nothing`() {
+        assertNull(enrolled(tv).resolve("tv", "Mute"))
+    }
+
+    @Test fun `a button from another remote cannot be grafted on`() {
+        // The cross-remote bypass, at the resolution layer this time: "Open" exists, "garage"
+        // exists, but not together.
+        val e = enrolled(tv, garage)
+        assertNull(e.resolve("tv", "Open"))
+        assertNull(e.resolve("garage", "Power"))
+        assertNotNull(e.resolve("tv", "Power"))
+        assertNotNull(e.resolve("garage", "Open"))
+    }
+
+    @Test fun `resolution is byte exact`() {
+        val e = enrolled(tv)
+        assertNull("case", e.resolve("TV", "Power"))
+        assertNull("trailing space", e.resolve("tv", "Power "))
+        assertNotNull(e.resolve("tv", "Power"))
+    }
+
+    @Test fun `the master switch blocks resolution entirely`() {
+        assertNull(enrolled(tv, enabled = false).resolve("tv", "Power"))
+    }
+
+    @Test fun `an unacknowledged legacy device blocks resolution`() {
+        val e = FlipperEnrollment(
+            EnrolledFlipper("aa", "f", SecurityClass.LEGACY, acknowledgedAt = 0L),
+            listOf(tv),
+            enabled = true,
+        )
+        assertNull(e.resolve("tv", "Power"))
+    }
+
+    // ------------------------------------------------------- what is exposed
+
+    @Test fun `the listing groups buttons under their remote and hides paths`() {
+        val visible = enrolled(tv, tvVol, garage).visibleRemotes()
+        assertEquals(setOf("tv", "garage"), visible.keys)
+        assertEquals(listOf("Power", "Vol_up"), visible["tv"])
+        // The model never sees a filesystem path — nothing in the exposed structure carries one.
+        assertFalse(visible.toString().contains("/ext/infrared"))
+    }
+
+    @Test fun `nothing allowlisted exposes nothing`() {
+        assertTrue(enrolled().visibleRemotes().isEmpty())
+    }
+
+    // ------------------------------------------------------------ audit codec
+
+    @Test fun `audit entries round-trip`() {
+        val entries = listOf(
+            AuditEntry(1_700_000_000_000L, "tv", "Power", "sent", InvocationContext.USER_MESSAGE),
+            AuditEntry(1_700_000_001_000L, "garage", "Open", "rejected:not_allowed", InvocationContext.AUTOMATED),
+        )
+        assertEquals(entries, FlipperAuditCodec.decode(FlipperAuditCodec.encode(entries)))
+    }
+
+    @Test fun `user-message invocation survives the round-trip`() {
+        // USER_MESSAGE is ordinal 0; proto3 omits zero values, so a raw ordinal would read back as
+        // AUTOMATED and misattribute a legitimate press in the record.
+        val one = listOf(AuditEntry(1L, "tv", "Power", "sent", InvocationContext.USER_MESSAGE))
+        assertEquals(InvocationContext.USER_MESSAGE, FlipperAuditCodec.decode(FlipperAuditCodec.encode(one))[0].invocation)
+    }
+
+    @Test fun `a corrupt audit log decodes to empty rather than throwing`() {
+        // A damaged log must never be a reason a press fails.
+        assertTrue(FlipperAuditCodec.decode("!!!not base64!!!").isEmpty())
+        assertTrue(FlipperAuditCodec.decode(null).isEmpty())
+    }
+
+    @Test fun `timestamps format without throwing`() {
+        assertTrue(AuditEntry(1_700_000_000_000L, "tv", "Power", "sent", InvocationContext.USER_MESSAGE)
+            .formattedTime().startsWith("20"))
+    }
+
+    // ------------------------------------------------------------ eviction
+
+    private fun at(ms: Long) = AuditEntry(ms, "tv", "Power", "sent", InvocationContext.USER_MESSAGE)
+
+    @Test fun `the cap evicts the oldest entry, not the newest`() {
+        // Regression: the merge used to prepend then truncate, which assumes the stored list is
+        // already newest-first. Independent write coroutines do not guarantee that, so a list
+        // holding an out-of-order tail would drop a NEWER entry and keep an older one —
+        // permanently, on a log whose whole purpose is showing recent activity.
+        val existing = listOf(at(500), at(100), at(400))  // deliberately not sorted
+        val merged = FlipperAuditCodec.merge(at(300), existing, 3)
+
+        assertEquals(3, merged.size)
+        assertEquals(listOf(500L, 400L, 300L), merged.map { it.timestampMillis })
+        assertTrue("the oldest entry is the one evicted", merged.none { it.timestampMillis == 100L })
+    }
+
+    @Test fun `a new entry older than everything stored is itself evicted`() {
+        // The honest consequence of ordering by time: a late-arriving stale record does not push
+        // out a newer one just because it was written last.
+        val existing = listOf(at(900), at(800))
+        val merged = FlipperAuditCodec.merge(at(1), existing, 2)
+
+        assertEquals(listOf(900L, 800L), merged.map { it.timestampMillis })
+    }
+
+    @Test fun `merge returns newest first below the cap`() {
+        val merged = FlipperAuditCodec.merge(at(200), listOf(at(100), at(300)), 10)
+        assertEquals(listOf(300L, 200L, 100L), merged.map { it.timestampMillis })
+    }
+
+    @Test fun `merge into an empty log keeps the entry`() {
+        assertEquals(listOf(700L), FlipperAuditCodec.merge(at(700), emptyList(), 200).map { it.timestampMillis })
+    }
+
+    // ------------------------------------------------- App.Exit safety (§5 R1)
+
+    @Test fun `App_Exit is refused after a transport failure`() {
+        // The regression. A timeout says WE stopped waiting, not that the Flipper stopped working —
+        // and the link is still up, so ownership and liveness both still look fine. The old inline
+        // gate checked only those and would have sent App.Exit into a possibly-busy device, which
+        // double-confirms into a furi_check and reboots the user's Flipper.
+        assertFalse(
+            "a command may still be running on the device",
+            canSafelyExitApp(startedApp = true, sawAppStarted = true, linkUp = true, mayBeOutstanding = true),
+        )
+    }
+
+    @Test fun `App_Exit is sent only when we own the app and nothing is in flight`() {
+        assertTrue(
+            canSafelyExitApp(startedApp = true, sawAppStarted = true, linkUp = true, mayBeOutstanding = false),
+        )
+    }
+
+    @Test fun `App_Exit needs both halves of ownership`() {
+        // R1b: without it, Exit closes whatever app the user had open on the device.
+        assertFalse(
+            "App.Start never succeeded",
+            canSafelyExitApp(startedApp = false, sawAppStarted = true, linkUp = true, mayBeOutstanding = false),
+        )
+        assertFalse(
+            "APP_STARTED never observed in this session",
+            canSafelyExitApp(startedApp = true, sawAppStarted = false, linkUp = true, mayBeOutstanding = false),
+        )
+    }
+
+    @Test fun `App_Exit is not attempted on a dead link`() {
+        assertFalse(
+            canSafelyExitApp(startedApp = true, sawAppStarted = true, linkUp = false, mayBeOutstanding = false),
+        )
+    }
+}

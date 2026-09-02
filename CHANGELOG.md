@@ -5,6 +5,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Flipper Zero infrared control** — ask the agent to turn on the TV or the air
+  conditioner, and it presses a button on a remote you already saved on your
+  Flipper Zero. Pair the Flipper in your phone's Bluetooth settings, then open
+  Settings → Flipper Zero to pick it and tick exactly which remotes and buttons
+  the agent may use. Nothing is enabled by default, and the agent cannot change
+  that list — only you can, from Settings. A master switch turns everything off
+  at once, and every attempt is recorded in an audit log you can review in the
+  app.
+
+  Infrared is one-way, so the agent reports that it *sent* a command, never that
+  the appliance responded — it has no way to know, and it will not retry a
+  failed press, because most power buttons are toggles.
+
+  Scoped to infrared only: sub-GHz radio, NFC/RFID, BadUSB and GPIO are not
+  included. If the Flipper's firmware predates the Bluetooth security fix, the
+  app explains what that means and how to resolve it before the feature can run.
+  (BAT-1202, #447)
+
 ## [2.2.0] - 2026-07-20
 
 > **Sign in with your SuperGrok or X Premium subscription, the newest OpenAI

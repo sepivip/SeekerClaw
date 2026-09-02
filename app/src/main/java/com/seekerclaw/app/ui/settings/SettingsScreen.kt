@@ -944,6 +944,14 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
+        // Flipper Zero IR control (BAT-1202). Collapsed by default — most installs have no
+        // Flipper, and an expanded empty section reads as something being wrong.
+        CollapsibleSection("Flipper Zero", initiallyExpanded = false) {
+            FlipperSection()
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
         // Data backup
         CollapsibleSection("Data", initiallyExpanded = false) {
             Column {

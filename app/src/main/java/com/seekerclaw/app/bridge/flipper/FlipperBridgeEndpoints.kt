@@ -1,0 +1,68 @@
+package com.seekerclaw.app.bridge.flipper
+
+import android.content.Context
+import com.seekerclaw.app.flipper.FlipperEnrollmentStore
+import com.seekerclaw.app.flipper.FlipperLimits
+import com.seekerclaw.app.flipper.FlipperIrController
+import com.seekerclaw.app.flipper.InvocationContext
+import org.json.JSONObject
+
+/**
+ * The two `/flipper` endpoints the Node agent may call.
+ *
+ * **Read and execute only — there is deliberately no mutation endpoint.** The allowlist and the
+ * kill switch are edited exclusively in the app's Settings UI. Contract §3 (blocker B3) requires
+ * this: `tools/file.js`'s `write` handler has no secrets check on its write path, so any endpoint
+ * that could change the allowlist would be one a prompt-injected agent could reach.
+ *
+ * Enforcement lives here and below, never in the prompt. A fully injected agent must be
+ * *incapable* of exceeding the allowlist, not merely instructed not to.
+ */
+class FlipperBridgeEndpoints(context: Context) {
+
+    private val store = FlipperEnrollmentStore.get(context)
+    private val controller = FlipperIrController(context, store)
+
+    /** `GET`-shaped: the remotes and buttons the user enabled. Never returns a filesystem path. */
+    fun remotes(): Map<String, Any?> = controller.listRemotes()
+
+    /**
+     * Fires one allowlisted button.
+     *
+     * [invocation] is a parameter rather than a field this reads out of [params], so that the one
+     * place deciding it is visible. That is a code-organisation point, **not** a security one: its
+     * only caller derives it from the request body, which is model-influenced. See
+     * `AndroidBridge.handleFlipperPress` and [InvocationContext] for why §4b's trust boundary is
+     * not implementable on this side, and which controls carry the weight instead.
+     */
+    suspend fun press(params: JSONObject, invocation: InvocationContext): Map<String, Any?> {
+        val remote = params.optString("remote", "")
+        val button = params.optString("button", "")
+        // `isEmpty`, deliberately not `isBlank`. The firmware's tokeniser preserves whitespace, and
+        // `seek_to_key`'s unconditional +2 means a `.ir` line reading `name:  ` yields a button
+        // literally named " " — see IrFileParserTest, "two spaces after the colon is not an empty
+        // value". That name can be scanned, shown, ticked and stored, so rejecting it here made an
+        // allowlisted button permanently unpressable, refused before enforcement ever ran.
+        //
+        // Absence is the only thing this check is for. Whether a whitespace name is *permitted* is
+        // the allowlist's decision, and it matches byte-exactly, so only a button the user actually
+        // ticked can get through.
+        if (remote.isEmpty() || button.isEmpty()) {
+            return mapOf(
+                "error" to "invalid_request",
+                "reason" to "Both 'remote' and 'button' are required.",
+            )
+        }
+        // Bounded before anything downstream sees them. Both are model-supplied, and a rejected
+        // attempt is still written to the audit log — which is decoded and re-encoded on every
+        // subsequent operation, so an unbounded string would be paid for repeatedly. Real names
+        // come from a .ir file and are far shorter than this.
+        if (remote.length > FlipperLimits.MAX_NAME_CHARS || button.length > FlipperLimits.MAX_NAME_CHARS) {
+            return mapOf(
+                "error" to "invalid_request",
+                "reason" to "Remote and button names must be ${FlipperLimits.MAX_NAME_CHARS} characters or fewer.",
+            )
+        }
+        return controller.press(remote, button, invocation)
+    }
+}

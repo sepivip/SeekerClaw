@@ -114,6 +114,7 @@ const LOAD_TARGETS = [
     'confirmation/policy.js',
     'confirmation/index.js',
     'tools/solana-send-guard.js',   // BAT-1037: pure native-SOL-only denomination guard (no config dep)
+    'tools/flipper-invocation.js',  // BAT-1202: pure turn-origin classifier (no bridge dep)
     'security-reject-block.js',   // BAT-1039: pure deterministic security-reject renderer (no config dep)
     'bridge-token.js',   // BAT-1071: pure require-safe bridge-token UUID validator (no config dep)
 ];
@@ -156,6 +157,7 @@ const SKIP_REASONS = {
     'providers/xai.js': 'requires config.js (BAT-1124 xAI Grok adapter)',
     'tools/index.js': 'requires main.js + handlers',
     'tools/android.js': 'requires bridge.js',
+    'tools/flipper.js': 'requires bridge.js (BAT-1202 Flipper IR control)',
     'tools/cron.js': 'requires cron.js',
     'tools/env.js': 'requires config.js (USER_ENV_KEYS)',
     'tools/file.js': 'requires main.js globals',

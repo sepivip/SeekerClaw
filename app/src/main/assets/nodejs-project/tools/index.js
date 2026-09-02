@@ -16,6 +16,10 @@ const skillMod    = require('./skill');
 const cronMod     = require('./cron');
 const sessionMod  = require('./session');
 const androidMod  = require('./android');
+// BAT-1202: Flipper Zero IR control. Registered unconditionally; the bridge
+// returns not_enrolled / none_allowlisted until the user sets one up, so the
+// tools describe a capability that is inert rather than absent.
+const flipperMod  = require('./flipper');
 const solanaMod   = require('./solana');
 const telegramMod = CHANNEL === 'telegram' ? require('./telegram') : null;
 const systemMod   = require('./system');
@@ -35,6 +39,7 @@ const TOOLS = [
     ...cronMod.tools,
     ...sessionMod.tools,
     ...androidMod.tools,
+    ...flipperMod.tools,
     ...solanaMod.tools,
     ...(telegramMod ? telegramMod.tools : []),
     ...systemMod.tools,
@@ -53,6 +58,7 @@ const handlerMap = Object.assign({},
     cronMod.handlers,
     sessionMod.handlers,
     androidMod.handlers,
+    flipperMod.handlers,
     solanaMod.handlers,
     ...(telegramMod ? [telegramMod.handlers] : []),
     systemMod.handlers,
