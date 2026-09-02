@@ -264,6 +264,43 @@ test('a parse failure on a resumed checkpoint quarantines rather than silently p
     assert.strictEqual(taskStore.loadCheckpoint(id), null);
 });
 
+// BAT-1290 / CodeRabbit on #452: JSON.parse also succeeds on `null`, on bare
+// primitives, and on arrays — none of which the field reads below can survive.
+// The two failure shapes are NOT the same:
+//   * `null`      -> `cp.conversationSlice` THROWS TypeError. The throw escapes
+//                    _repairCheckpoint AND quarantineActiveSegment, so the
+//                    structured outcome is lost and the quarantine never runs.
+//                    That is precisely the class this ticket exists to kill.
+//   * `5` / `[]`  -> field read yields undefined, so it did NOT crash; it fell
+//                    through to a MISLABELLED 'no-cut-point'. No crash, but the
+//                    forensic record lies about why the checkpoint was dropped.
+// Both are contract breaks, so both are pinned here.
+test('REGRESSION: a checkpoint file holding literal null does not escape as a TypeError', () => {
+    const id = writeCp(SHRINKABLE());
+    fs.writeFileSync(path.join(TASKS_DIR, `${id}.json`), 'null', 'utf8');
+
+    // Pre-guard this threw "Cannot read properties of null (reading
+    // 'conversationSlice')" straight out of the function.
+    const out = repair(id, 'resumed', 1);
+    assert.strictEqual(out.status, 'quarantined');
+    assert.strictEqual(out.reason, 'parse-failed');
+    assert.strictEqual(taskStore.loadCheckpoint(id), null,
+        'a null checkpoint must not stay resumable — reloading it re-triggers the same 400');
+});
+
+for (const [label, body] of [['a bare number', '5'], ['a bare string', '"poisoned"'], ['an array', '[]']]) {
+    test(`a checkpoint holding ${label} is reported parse-failed, not no-cut-point`, () => {
+        const id = writeCp(SHRINKABLE());
+        fs.writeFileSync(path.join(TASKS_DIR, `${id}.json`), body, 'utf8');
+
+        const out = repair(id, 'resumed', 1);
+        assert.strictEqual(out.status, 'quarantined');
+        assert.strictEqual(out.reason, 'parse-failed',
+            'a non-object checkpoint IS a parse failure; reporting no-cut-point misrepresents it in the forensic record');
+        assert.strictEqual(taskStore.loadCheckpoint(id), null);
+    });
+}
+
 // ── D6 + D1 wiring: source guards ───────────────────────────────────────────
 // ai.js has no module.exports and requiring it boots the agent, so the caller
 // contract is pinned by source inspection. Weaker than behavioural coverage and

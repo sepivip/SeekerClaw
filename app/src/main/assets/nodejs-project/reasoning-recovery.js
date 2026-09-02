@@ -322,6 +322,18 @@ function _repairCheckpoint(o) {
         return unrepairable('parse-failed');
     }
 
+    // JSON.parse succeeds on `null`, on bare primitives and on arrays, none of
+    // which survive the field reads below. `null` is the dangerous one: the
+    // TypeError escapes _repairCheckpoint AND quarantineActiveSegment, so the
+    // structured outcome is lost and the quarantine never runs -- the exact
+    // failure this ticket exists to remove. Primitives and arrays did not throw
+    // but reported 'no-cut-point', which misstates the cause in the forensic
+    // record. A checkpoint that is not a JSON object is a parse failure.
+    if (!cp || typeof cp !== 'object' || Array.isArray(cp)) {
+        log(`[ReasoningRecovery] Step ${step} checkpoint is not a JSON object`, 'WARN');
+        return unrepairable('parse-failed');
+    }
+
     // D3: the marker is stamped ONLY when the slice actually shrank. The old
     // code stamped it unconditionally, recording a repair that never happened.
     let shrank = false;
