@@ -1099,13 +1099,13 @@ fun SettingsScreen(
             // the two surfaces never show diverging version strings. InfoRow
             // renders values monospace by default — matching System.
             InfoRow("Version", buildString {
-                append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                append(BuildProvenance.installed(context).display)
                 val prov = BuildProvenance.get(context)
                 if (BuildConfig.DEBUG) append(" · ${prov.commitShort ?: "unknown"}")
                 append(prov.marker)
             })
-            InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
-            InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
+            InfoRow("Claw Engine", BuildProvenance.get(context).openclawVersion ?: "unknown")
+            InfoRow("Node.js", BuildProvenance.get(context).nodejsVersion ?: "unknown", isLast = true)
         }
 
         Spacer(modifier = Modifier.height(32.dp))

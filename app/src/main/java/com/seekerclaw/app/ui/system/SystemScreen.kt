@@ -178,15 +178,15 @@ fun SystemScreen(onBack: () -> Unit) {
 
         CardSurface {
             InfoRow("Version", buildString {
-                append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                append(BuildProvenance.installed(context).display)
                 val prov = BuildProvenance.get(context)
                 if (BuildConfig.DEBUG) append(" · ${prov.commitShort ?: "unknown"}")
                 append(prov.marker)
             })
-            InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
+            InfoRow("Claw Engine", BuildProvenance.get(context).openclawVersion ?: "unknown")
             InfoRow(
                 label = "Node.js",
-                value = "${BuildConfig.NODEJS_VERSION} — ${when (status) {
+                value = "${BuildProvenance.get(context).nodejsVersion ?: "unknown"} — ${when (status) {
                     ServiceStatus.RUNNING -> "Running"
                     ServiceStatus.STARTING -> "Starting"
                     ServiceStatus.STOPPED -> "Stopped"

@@ -2209,7 +2209,7 @@ object ConfigManager {
             // BAT-1161 P1A gate 5: session-banner metadata. Node has no BuildConfig and log()'s
             // first calls run before config parse, so boot/build/version travel via config.json.
             put("bootId", currentBootId())
-            put("appVersion", BuildConfig.VERSION_NAME)
+            put("appVersion", BuildProvenance.installed(context).versionName ?: "unknown")
             put("gitSha", BuildProvenance.get(context).commitShort ?: "unknown")
             put("gitDirty", BuildProvenance.get(context).dirty ?: false)
             if (config.braveApiKey.isNotBlank()) put("braveApiKey", config.braveApiKey)
@@ -2629,10 +2629,12 @@ object ConfigManager {
         val walletLabel = getWalletLabel(context)
 
         // Versions
-        val appVersion = BuildConfig.VERSION_NAME
-        val appCode = BuildConfig.VERSION_CODE
-        val openclawVersion = BuildConfig.OPENCLAW_VERSION
-        val nodejsVersion = BuildConfig.NODEJS_VERSION
+        val installed = BuildProvenance.installed(context)
+        val prov = BuildProvenance.get(context)
+        val appVersion = installed.versionName ?: "unknown"
+        val appCode = installed.versionCode?.toString() ?: "?"
+        val openclawVersion = prov.openclawVersion ?: "unknown"
+        val nodejsVersion = prov.nodejsVersion ?: "unknown"
 
         // Paths
         val workspacePath = workspaceDir.absolutePath

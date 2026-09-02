@@ -119,6 +119,7 @@ jobs:
             turn-goal \
             checkpoint-provenance \
             resume-goal-provenance \
+            build-identity-invariant \
             ci-coverage-manifest
           do
             echo "── $t ──"

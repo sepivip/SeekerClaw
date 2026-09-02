@@ -120,6 +120,51 @@ object BuildProvenance {
         return loaded
     }
 
+    /**
+     * versionName/versionCode of the INSTALLED package.
+     *
+     * Strictly better than either alternative for these two values:
+     *   - BuildConfig.VERSION_NAME/VERSION_CODE are compile-time constants, so
+     *     they inline into every reader and go stale on an incremental build.
+     *     That is the exact defect this ticket exists to remove.
+     *   - build-metadata.json is a COPY produced at build time, and a copy can
+     *     drift from what was actually packaged (it already did once: the
+     *     generator was fed hand-typed literals -- see part 4b).
+     *
+     * PackageManager reports the merged manifest of the APK Android actually
+     * installed. It cannot be inlined and it is not a copy: it IS the installed
+     * identity, so there is no third thing for it to disagree with.
+     *
+     * Memoised per process, like get(). The two caches are separate because the
+     * sources and their failure modes are unrelated.
+     */
+    data class Installed(val versionName: String?, val versionCode: Long?) {
+        /** "2.2.0 (23)" -- degrades honestly rather than inventing a version. */
+        val display: String
+            get() = (versionName ?: "unknown") + " (" + (versionCode?.toString() ?: "?") + ")"
+    }
+
+    @Volatile
+    private var installedCache: Installed? = null
+
+    fun installed(context: Context): Installed {
+        installedCache?.let { return it }
+        val value = try {
+            val app = context.applicationContext
+            // longVersionCode is API 28+; minSdk is 34.
+            val pi = app.packageManager.getPackageInfo(app.packageName, 0)
+            Installed(pi.versionName, pi.longVersionCode)
+        } catch (e: Exception) {
+            LogCollector.append("[BuildProvenance] package info unreadable: ${e.message}", LogLevel.WARN)
+            Installed(null, null)
+        }
+        installedCache = value
+        return value
+    }
+
     /** Test seam only. */
-    fun resetForTest() { cached = null }
+    fun resetForTest() {
+        cached = null
+        installedCache = null
+    }
 }

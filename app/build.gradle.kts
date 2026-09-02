@@ -79,9 +79,12 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
 
-        // Values come from the single source of truth above; update them there.
-        buildConfigField("String", "OPENCLAW_VERSION", "\"$openclawVersion\"")
-        buildConfigField("String", "NODEJS_VERSION", "\"$nodejsVersion\"")
+        // BAT-1293: OPENCLAW_VERSION and NODEJS_VERSION are NO LONGER buildConfigFields.
+        // Like GIT_SHA before them they were compile-time constants, and every reader
+        // now takes them from the packaged provenance asset at runtime instead. Leaving
+        // the fields behind would re-arm the bug: the next BuildConfig.OPENCLAW_VERSION
+        // anyone writes reintroduces it silently. The values live in openclawVersion /
+        // nodejsVersion above.
 
         // BAT-1293: GIT_SHA and BUILD_DATE are GONE from BuildConfig.
         //
