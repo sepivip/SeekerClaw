@@ -120,6 +120,9 @@ jobs:
             checkpoint-provenance \
             resume-goal-provenance \
             build-identity-invariant \
+            reasoning-checkpoint-durability \
+            reasoning-recovery \
+            reasoning-pipeline \
             ci-coverage-manifest
           do
             echo "── $t ──"
