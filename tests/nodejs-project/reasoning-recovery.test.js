@@ -496,11 +496,26 @@ ok('Path traversal: filename has no slashes or dots',
 ok('Path traversal: forensic file actually exists at sanitized path',
     fs.existsSync(evilStep1.quarantinePath));
 
-// Verify nothing was written outside tmpRoot
-const tmpRootParent = path.dirname(tmpRoot);
-const evilEtcPasswd = path.join(tmpRootParent, '..', 'etc', 'passwd');
-ok('Path traversal: nothing written outside tmpRoot (no /etc/passwd)',
-    !fs.existsSync(evilEtcPasswd));
+// Verify nothing escaped tmpRoot.
+//
+// BAT-1290: this previously computed
+//     path.join(path.dirname(tmpRoot), '..', 'etc', 'passwd')
+// and asserted it did not exist. That tested the OPERATING SYSTEM, not this
+// code. On Linux CI os.tmpdir() is /tmp, so the expression resolves to the
+// real /etc/passwd, which always exists -- the assertion could never pass. On
+// Windows it points at a path that never exists, so it passed vacuously.
+// Either way the sanitizer was never actually exercised.
+//
+// It went unnoticed because reasoning-recovery was not in the build.yml test
+// loop until this branch added it; the file only ever ran locally, on Windows,
+// where it was green for the wrong reason.
+//
+// The real invariant is CONTAINMENT: the resolved quarantine path must sit
+// inside tmpRoot. That is precisely what a traversal would break, and it is
+// deterministic on every platform.
+const escapeRel = path.relative(tmpRoot, path.resolve(evilStep1.quarantinePath));
+ok('Path traversal: resolved quarantine path stays inside tmpRoot',
+    escapeRel !== '' && !escapeRel.startsWith('..') && !path.isAbsolute(escapeRel));
 
 // chatId that sanitizes to empty (all special chars) gets fallback
 const allSpecialChat = '////';
