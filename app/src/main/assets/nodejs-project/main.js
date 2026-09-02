@@ -1,6 +1,98 @@
 // SeekerClaw AI Agent
 // Phase 2: Full Claude AI agent with tools, memory, and personality
 
+// BAT-992: Force IPv4-first DNS resolution. MUST run before any code that
+// triggers outbound networking (telegram.js polling, providers/* AI calls,
+// http.js fetches). Loaded at the very top of main.js for that reason.
+//
+// Why: Node 17+ changed dns.lookup() default `verbatim` from false to true
+// (RFC 6724 compliant — returns OS-resolver order, which typically prefers
+// AAAA). On networks where IPv6 is "half-on" (router advertises IPv6 prefix
+// but upstream IPv6 route is broken — common on consumer routers worldwide,
+// hotel/café WiFi, regional ISPs in the Caucasus / LATAM / SE Asia), the
+// TCP SYN to an AAAA address goes nowhere. The kernel doesn't fail-fast
+// because the IPv6 stack is partially up, so the request hangs for the
+// full local timeout (60s).
+//
+// Node's classic http/https module (which telegram.js, http.js, providers/*
+// all use) has NO Happy Eyeballs (RFC 8305) fallback to save us. curl works
+// on the same network because curl has Happy Eyeballs and falls back to
+// IPv4 after ~7s. Node does not — once it picks AAAA, it commits.
+//
+// Symptoms on broken-IPv6 networks: 60s Telegram getUpdates timeouts in a
+// clockwork pattern, "Status reaction failed: ETIMEDOUT" on Telegram-IPv6
+// addresses, stuck 👀 reaction emojis, AI API transport timeouts. Live
+// debugged on a Solana Seeker on a real WiFi network 2026-06-01.
+//
+// Override via SEEKERCLAW_DNS_RESULT_ORDER env var if you want pure RFC
+// behavior (set to 'verbatim'). For the vast majority of users
+// 'ipv4first' is correct. The known exception: true IPv6-only networks
+// (no IPv4 routing at all — some mobile carriers like T-Mobile US, some
+// Asian carriers, some corporate networks; NAT64 is fine, IPv6-only-with-
+// no-NAT64 is the edge case). On those, ipv4first would attempt the A
+// record first, hit ENETUNREACH, and Node's classic http module would
+// NOT auto-fallback to the AAAA. Operators on confirmed IPv6-only networks
+// should set SEEKERCLAW_DNS_RESULT_ORDER=verbatim via Settings → Env Vars
+// (or via process env if launching outside the app).
+//
+// PR #392 Copilot R1: defensively normalize + whitelist the env-var value
+// and wrap setDefaultResultOrder in try/catch with a safe fallback. A typo
+// or whitespace ("ipv4first ", "IPV4FIRST", "ipv4") would otherwise throw
+// at module load BEFORE logging is wired up, crashing the agent on boot
+// with no diagnostic surface.
+//
+// PR #392 Copilot R2/CI: nodejs-mobile target is Node 18, which only
+// supports the two values in this whitelist. (Node 20+ added a third
+// option for IPv6-first ordering; we don't expose it because the runtime
+// can't honor it — passing it to setDefaultResultOrder on Node 18 throws.)
+//
+// PR #392 Copilot R3: the user-facing path for setting env vars is
+// Settings → Env Vars on the SeekerClaw app, which writes into
+// workspace/config.json under `envVars.*`. config.js later merges those
+// into process.env — but config.js runs AFTER this block. So we read
+// config.json directly here (same path resolution config.js uses) to
+// honor the on-device Settings override. Process-level env vars
+// (OS-level for nodejs-mobile or set in the bridge harness for tests)
+// still take precedence.
+const _DNS_RESULT_ORDERS = new Set(['ipv4first', 'verbatim']);
+
+function _readDnsOrderFromConfigJson() {
+    // Same path resolution as config.js (workDir = argv[2] || __dirname,
+    // then path.join(workDir, 'config.json')). Defensive everywhere:
+    // missing argv, missing file, malformed JSON, missing envVars block,
+    // non-string value — all paths return null and fall through to default.
+    try {
+        const _fs = require('fs');
+        const _path = require('path');
+        const _workDir = process.argv[2] || __dirname;
+        const _cfgPath = _path.join(_workDir, 'config.json');
+        if (!_fs.existsSync(_cfgPath)) return null;
+        const _raw = _fs.readFileSync(_cfgPath, 'utf8');
+        const _cfg = JSON.parse(_raw);
+        const _v = _cfg && _cfg.envVars && _cfg.envVars.SEEKERCLAW_DNS_RESULT_ORDER;
+        return typeof _v === 'string' ? _v : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+const _rawDnsOrder = (
+    process.env.SEEKERCLAW_DNS_RESULT_ORDER
+    || _readDnsOrderFromConfigJson()
+    || ''
+).trim().toLowerCase();
+const _dnsResultOrder = _DNS_RESULT_ORDERS.has(_rawDnsOrder)
+    ? _rawDnsOrder
+    : 'ipv4first';
+try {
+    require('dns').setDefaultResultOrder(_dnsResultOrder);
+} catch (_dnsErr) {
+    // Should never fire — the whitelist above only allows values Node
+    // accepts. Belt-and-suspenders: if a future Node version drops support
+    // for one of these constants, fall back hard to ipv4first.
+    try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) { /* give up gracefully */ }
+}
+
 const fs = require('fs');
 
 // ============================================================================

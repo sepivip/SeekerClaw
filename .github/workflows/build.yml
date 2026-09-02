@@ -125,6 +125,14 @@ jobs:
             node "tests/nodejs-project/${t}.test.js"
           done
 
+      # BAT-992 / PR #392 R2: locks the IPv4-first DNS line in main.js so a
+      # future "cleanup" pass can't silently regress users on broken-IPv6
+      # networks back to 60s hangs. Has to run in CI (not just pre-push)
+      # because Copilot/Codex review only inspects diff, not whether the
+      # required line is still present. Cheap (<1s).
+      - name: DNS IPv4-first regression test
+        run: node tests/nodejs-project/dns-ipv4-first.test.js
+
   build:
     name: Android build (dappStore + googlePlay)
     runs-on: ubuntu-latest
