@@ -119,6 +119,9 @@ jobs:
             turn-goal \
             checkpoint-provenance \
             resume-goal-provenance \
+            reasoning-checkpoint-durability \
+            reasoning-recovery \
+            reasoning-pipeline \
             ci-coverage-manifest
           do
             echo "── $t ──"

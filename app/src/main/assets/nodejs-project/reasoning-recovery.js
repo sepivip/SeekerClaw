@@ -116,15 +116,71 @@ function findEarliestAssistantToolCallIndex(messages) {
 }
 
 /**
- * Atomic-ish JSON write — temp file + rename. Forensic file is nice-to-have,
- * not required for safe truncation, so caller logs and continues on failure.
+ * BAT-1290 D5: staging and publication are SEPARATE steps.
+ *
+ * The checkpoint repair must remove a poisoned `.bak` BETWEEN writing the
+ * repaired JSON and publishing it over the primary. Publishing first opens a
+ * window where a repaired primary sits beside a poisoned backup, and
+ * `loadCheckpoint` falls back to that backup when the primary is unreadable
+ * (task-store.js:192) — the bad slice could be resurrected.
+ *
+ * Two-file atomicity is not available; the achievable guarantee is
+ * crash-consistent ORDERING:
+ *     forensic copy -> stage -> remove/quarantine .bak -> publish primary
+ *
+ * A crash between stage and publish leaves an unpublished `.tmp` that
+ * loadCheckpoint neither reads nor enumerates (it reads primary, then `.bak`),
+ * so no half-written checkpoint is ever loadable.
  */
-function writeJsonAtomic(filePath, obj) {
+function stageJson(filePath, obj) {
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true });
     const tmp = filePath + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
-    fs.renameSync(tmp, filePath);
+    return tmp;
+}
+
+function publishStaged(tmpPath, filePath) {
+    fs.renameSync(tmpPath, filePath);
+}
+
+/**
+ * Combined stage+publish. Retained for the forensic quarantine write, whose
+ * behaviour is unchanged; the checkpoint repair path uses the split form.
+ */
+function writeJsonAtomic(filePath, obj) {
+    publishStaged(stageJson(filePath, obj), filePath);
+}
+
+/** BAT-1290 D2: the structured checkpoint outcome. Every return path sets one. */
+function _cp(status, reason, cpPath) {
+    return { status, reason: reason || null, path: cpPath || null };
+}
+
+/**
+ * BAT-1290 D4: move an unrepairable checkpoint OUT of the resumable directory
+ * so a future /resume cannot reload it. Timestamped + step + which file, with
+ * an exclusive-create suffix so repeated quarantines of the same task cannot
+ * collide.
+ */
+function _quarantineFile(src, recoveryDir, safeTask, step, kind, now) {
+    fs.mkdirSync(recoveryDir, { recursive: true });
+    const base = `${now}-${safeTask}-step${step}-${kind}`;
+    for (let i = 0; i < 50; i++) {
+        const dest = path.join(recoveryDir, i === 0 ? `${base}.json` : `${base}-${i}.json`);
+        if (!_isUnderDir(dest, recoveryDir)) return null;
+        try {
+            // 'wx' fails if the path exists — collision-resistant by construction.
+            const fd = fs.openSync(dest, 'wx');
+            try { fs.writeFileSync(fd, fs.readFileSync(src)); } finally { fs.closeSync(fd); }
+            fs.unlinkSync(src);
+            return dest;
+        } catch (e) {
+            if (e && e.code === 'EEXIST') continue;
+            throw e;
+        }
+    }
+    return null;
 }
 
 // Copilot 2b finding: chatId comes from a Telegram-platform-provided value
@@ -181,13 +237,146 @@ function computeCutIndex(messages, step) {
  *   - ok : true if step actually truncated; false → caller escalates
  *   - cutIndex : the index used; -1 means no-op
  */
+/**
+ * BAT-1290: repair (or quarantine) the persisted checkpoint for `taskId`.
+ *
+ * Previously this probed `path.join(workDir, 'task-store')` while checkpoints
+ * live at `config.TASKS_DIR = <workDir>/tasks`, so `fs.existsSync` was ALWAYS
+ * false and the on-disk half of recovery never ran on a device — silently,
+ * because the block had no else. The canonical directory is now INJECTED
+ * (D1); this module never re-derives it from workDir.
+ *
+ * @returns {{status: string, reason: string|null, path: string|null}}
+ */
+function _repairCheckpoint(o) {
+    const { tasksDir, taskId, checkpointKind, recoveryDir, fileBase, step, now, log, safeTask } = o;
+
+    // D1: never fall back to a derived path — that drift is the whole bug.
+    if (!tasksDir) {
+        log(`[ReasoningRecovery] Step ${step} checkpoint rejected — no tasksDir supplied (caller bug)`, 'WARN');
+        return _cp('rejected', 'no-tasks-dir');
+    }
+    // D4: the kind decides policy; defaulting it would silently disable the
+    // resumed-path quarantine, which is the point of this work.
+    if (checkpointKind !== 'current' && checkpointKind !== 'resumed') {
+        log(`[ReasoningRecovery] Step ${step} checkpoint failed — invalid checkpointKind=${String(checkpointKind)}`, 'WARN');
+        return _cp('failed', 'invalid-checkpoint-kind');
+    }
+
+    const primary = path.join(tasksDir, `${taskId}.json`);
+    const backup = primary + '.bak';
+    if (!_isUnderDir(primary, tasksDir)) {
+        log(`[ReasoningRecovery] Step ${step} checkpoint rejected — taskId escapes tasksDir (sanitized=${safeTask})`, 'WARN');
+        return _cp('rejected', 'path-escape');
+    }
+
+    const hasPrimary = fs.existsSync(primary);
+    const hasBackup = fs.existsSync(backup);
+
+    // D2: `absent` means BOTH are gone. A backup-only checkpoint is still
+    // loadable (task-store.js:192), so calling that "absent" would be a lie in
+    // the dangerous direction.
+    if (!hasPrimary && !hasBackup) {
+        // D4: a resumed checkpoint is EXPECTED to exist; its absence is notable.
+        log(`[ReasoningRecovery] Step ${step} checkpoint absent for ${checkpointKind} task`,
+            checkpointKind === 'resumed' ? 'WARN' : 'DEBUG');
+        return _cp('absent', 'no-file');
+    }
+
+    const source = hasPrimary ? primary : backup;
+
+    // (a) forensic copy FIRST — it is the only record if repair fails.
+    let forensic = null;
+    try {
+        const dest = path.join(recoveryDir, `${fileBase}-checkpoint.json`);
+        if (_isUnderDir(dest, recoveryDir)) {
+            fs.mkdirSync(recoveryDir, { recursive: true });
+            fs.copyFileSync(source, dest);
+            forensic = dest;
+        }
+    } catch (e) {
+        log(`[ReasoningRecovery] Step ${step} forensic copy failed: ${e.message}`, 'WARN');
+    }
+
+    const unrepairable = (reason) => {
+        if (checkpointKind !== 'resumed') return _cp('unchanged', reason, forensic);
+        // D4: a resumed checkpoint that cannot be repaired must not stay
+        // resumable — it is SUSPECTED poisoned, and reloading it re-triggers
+        // the same 400. Forensic copy is already taken.
+        try {
+            if (hasPrimary) _quarantineFile(primary, recoveryDir, safeTask, step, 'primary', now);
+            if (fs.existsSync(backup)) _quarantineFile(backup, recoveryDir, safeTask, step, 'bak', now);
+            log(`[ReasoningRecovery] Step ${step} quarantined resumed checkpoint (${reason})`, 'WARN');
+            return _cp('quarantined', reason, forensic);
+        } catch (e) {
+            log(`[ReasoningRecovery] Step ${step} quarantine FAILED: ${e.message}`, 'ERROR');
+            return _cp('failed', 'quarantine-failed', forensic);
+        }
+    };
+
+    let cp;
+    try {
+        cp = JSON.parse(fs.readFileSync(source, 'utf8'));
+    } catch (e) {
+        log(`[ReasoningRecovery] Step ${step} checkpoint parse failed: ${e.message}`, 'WARN');
+        return unrepairable('parse-failed');
+    }
+
+    // JSON.parse succeeds on `null`, on bare primitives and on arrays, none of
+    // which survive the field reads below. `null` is the dangerous one: the
+    // TypeError escapes _repairCheckpoint AND quarantineActiveSegment, so the
+    // structured outcome is lost and the quarantine never runs -- the exact
+    // failure this ticket exists to remove. Primitives and arrays did not throw
+    // but reported 'no-cut-point', which misstates the cause in the forensic
+    // record. A checkpoint that is not a JSON object is a parse failure.
+    if (!cp || typeof cp !== 'object' || Array.isArray(cp)) {
+        log(`[ReasoningRecovery] Step ${step} checkpoint is not a JSON object`, 'WARN');
+        return unrepairable('parse-failed');
+    }
+
+    // D3: the marker is stamped ONLY when the slice actually shrank. The old
+    // code stamped it unconditionally, recording a repair that never happened.
+    let shrank = false;
+    if (Array.isArray(cp.conversationSlice)) {
+        const cpCut = computeCutIndex(cp.conversationSlice, step);
+        if (cpCut >= 0 && cpCut < cp.conversationSlice.length) {
+            cp.conversationSlice = cp.conversationSlice.slice(0, cpCut);
+            shrank = true;
+        }
+    }
+    if (!shrank) return unrepairable('no-cut-point');
+
+    cp.updatedAt = now;
+    cp.recoveryQuarantineStep = step;
+    cp.recoveryQuarantinedAt = new Date(now).toISOString();
+
+    // (b) stage -> (c) drop the poisoned backup -> (d) publish primary.
+    // NOT task-store.saveCheckpoint(): it copies the existing primary into
+    // .bak before publishing (task-store.js:156-165), which would re-poison
+    // the backup with the very slice being removed.
+    try {
+        const tmp = stageJson(primary, cp);
+        if (fs.existsSync(backup)) fs.unlinkSync(backup);
+        publishStaged(tmp, primary);
+    } catch (e) {
+        log(`[ReasoningRecovery] Step ${step} checkpoint write failed: ${e.message}`, 'WARN');
+        return unrepairable('write-failed');
+    }
+
+    log(`[ReasoningRecovery] Step ${step} repaired ${checkpointKind} checkpoint ${primary}`, 'INFO');
+    return _cp('repaired', 'slice-truncated', forensic);
+}
+
 function quarantineActiveSegment(ctx) {
-    const { chatId, messages, workDir, step, taskId } = ctx;
+    // BAT-1290 D1/D4: tasksDir is INJECTED (never derived from workDir here) and
+    // checkpointKind is REQUIRED — see _repairCheckpoint.
+    const { chatId, messages, workDir, step, taskId, tasksDir, checkpointKind } = ctx;
     const log = ctx.log || (() => {});
     const now = (ctx.now || Date.now)();
 
     if (!Array.isArray(messages)) {
-        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex: -1 };
+        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex: -1,
+                 checkpoint: _cp('skipped', 'invalid-messages') };
     }
 
     const cutIndex = computeCutIndex(messages, step);
@@ -195,11 +384,13 @@ function quarantineActiveSegment(ctx) {
     // No-op detection: step 1/2 may not find a valid cut point. Step 3
     // (cutIndex=0) is always valid — it resets the whole conversation.
     if (cutIndex < 0) {
-        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex: -1 };
+        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex: -1,
+                 checkpoint: _cp('skipped', 'no-cut-point') };
     }
     if (step !== 3 && cutIndex >= messages.length) {
         // Cut point is at or past the tail — nothing to truncate
-        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex };
+        return { newMessages: messages, systemNote: null, quarantinePath: null, checkpointPath: null, ok: false, cutIndex,
+                 checkpoint: _cp('skipped', 'tail-noop') };
     }
 
     // R2 thread 2: step 1 was "lost in an upgrade" — but the recovery
@@ -253,62 +444,20 @@ function quarantineActiveSegment(ctx) {
         log(`[ReasoningRecovery] Step ${step} forensic write failed: ${e.message}`, 'WARN');
     }
 
-    // Active task-store checkpoint quarantine (Codex v4.1 finding 3).
-    // Best-effort: checkpoint may not exist on first turn or for a fresh chat.
+    // BAT-1290: the on-disk half of recovery. Previously probed
+    // `path.join(workDir, 'task-store')` — a directory nothing creates — so it
+    // never ran on a device, silently. The canonical dir is now injected.
     let checkpointPath = null;
+    let checkpointOutcome = _cp('skipped', 'no-task-id');
     if (taskId) {
-        try {
-            // 2b Copilot + 2c R2 thread 3: containment-check defense WITHOUT
-            // sanitizing the lookup id. The task-store file we wrote during
-            // normal operation uses the original taskId — sanitizing it for
-            // the LOOKUP would prevent reading legitimately-named files
-            // whose ids happened to contain non-allowlist chars (none today,
-            // but defensive sanitization on a read path is the wrong shape).
-            //
-            // The safety guarantee comes from `_isUnderDir`: even if `taskId`
-            // contains `/` or `..` (e.g. injected via a tampered
-            // resumedFromTaskId on disk), `path.resolve` will collapse the
-            // traversal, and the containment check rejects anything that
-            // escapes `task-store/`. SAFE FOR READ = let path.join produce
-            // the literal path, then verify resolved location.
-            const taskStoreDir = path.join(workDir, 'task-store');
-            const taskFile = path.join(taskStoreDir, `${taskId}.json`);
-            if (!_isUnderDir(taskFile, taskStoreDir)) {
-                log(`[ReasoningRecovery] Step ${step} skipped checkpoint mutation — taskId escapes task-store dir (sanitized=${safeTask})`, 'WARN');
-                return { newMessages: keptPrefix, systemNote, quarantinePath: quarantineWritten, checkpointPath: null, ok: true, cutIndex };
-            }
-            if (fs.existsSync(taskFile)) {
-                const cpForensic = path.join(recoveryDir, `${fileBase}-checkpoint.json`);
-                if (!_isUnderDir(cpForensic, recoveryDir)) {
-                    log(`[ReasoningRecovery] Step ${step} skipped checkpoint forensic — escapes recoveryDir`, 'WARN');
-                    return { newMessages: keptPrefix, systemNote, quarantinePath: quarantineWritten, checkpointPath: null, ok: true, cutIndex };
-                }
-                fs.copyFileSync(taskFile, cpForensic);
-                checkpointPath = cpForensic;
-
-                const cpRaw = fs.readFileSync(taskFile, 'utf8');
-                const cp = JSON.parse(cpRaw);
-                if (Array.isArray(cp.conversationSlice)) {
-                    // Apply the SAME boundary detection on the checkpoint slice
-                    // (it may diverge in length from the live messages array,
-                    // so re-compute rather than reuse cutIndex).
-                    const cpCut = computeCutIndex(cp.conversationSlice, step);
-                    if (cpCut >= 0) {
-                        cp.conversationSlice = cp.conversationSlice.slice(0, cpCut);
-                    }
-                }
-                cp.updatedAt = now;
-                cp.recoveryQuarantineStep = step;
-                cp.recoveryQuarantinedAt = new Date(now).toISOString();
-                writeJsonAtomic(taskFile, cp);
-                log(`[ReasoningRecovery] Step ${step} rewrote active checkpoint ${taskFile}`, 'INFO');
-            }
-        } catch (e) {
-            log(`[ReasoningRecovery] Step ${step} checkpoint mutation failed: ${e.message}`, 'WARN');
-        }
+        checkpointOutcome = _repairCheckpoint({
+            tasksDir, taskId, checkpointKind, recoveryDir, fileBase, step, now, log, safeTask,
+        });
+        checkpointPath = checkpointOutcome.path;
     }
 
     return {
+        checkpoint: checkpointOutcome,
         newMessages: keptPrefix,
         systemNote,
         quarantinePath: quarantineWritten,
@@ -319,6 +468,9 @@ function quarantineActiveSegment(ctx) {
 }
 
 module.exports = {
+    _repairCheckpoint,
+    stageJson,
+    publishStaged,
     isReasoningContent400,
     findLastUserBoundary,
     findEarliestAssistantToolCallIndex,
