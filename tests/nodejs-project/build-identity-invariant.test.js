@@ -35,6 +35,18 @@
  *   3. change `versionNameIn = appVersionName` back to a literal `"2.2.0"`
  *      -> case 3 must go red
  * All three were confirmed red before this file was committed.
+ *
+ * Case 3 also has to stay QUIET when nothing is wrong, or it gets switched off
+ * and the duplicate it exists to catch then ships behind it. Its first version
+ * counted with `src.split(value)` over the RAW file and cried wolf on both of the
+ * shapes below, so those are controls too:
+ *   4. add a second `versionNameIn = "2.2.0"` line          -> must go red
+ *   5. put `"2.2.0"`, quotes included, inside a comment     -> must stay green
+ *   6. put an unrelated 23 in a comment, and a number that
+ *      merely contains 23 (e.g. 2300) in code               -> must stay green
+ * Observed: 4 red, 5 green, 6 green. Against the old split()-on-raw counting the
+ * same 5 and 6 were both RED — two false alarms, which is why the counting is now
+ * comment-aware and, for the unquoted versionCode, whole-token.
  */
 
 const test = require('node:test');
@@ -77,6 +89,33 @@ function stripComments(src) {
         .replace(/\/\/[^\r\n]*/g, '');
 }
 
+/** Escape a literal so it can be embedded in a RegExp source. */
+function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Count how many times an identity VALUE is literally written in `src`.
+ *
+ * This began as `src.split(value).length - 1` over the RAW file, which counts
+ * SUBSTRINGS and counts prose. Both shapes cried wolf: `appVersionCode = 23` was
+ * reported as duplicated by any unrelated 23 in the file (a line number, a 2023,
+ * a `.23` inside some other version string), and a comment quoting "2.2.0"
+ * counted as a second definition. A guard that reports duplicates which are not
+ * there is a guard someone deletes — and then the real duplicate ships.
+ *
+ * The caller strips comments, so only code is counted. A quoted value is counted
+ * WITH its quotes, and a bare number counts only as a whole token — no digit and
+ * no `.` on either side — so it can never match a slice of a longer number or of
+ * a dotted version string.
+ */
+function countLiteral(src, value) {
+    const pattern = value.startsWith('"')
+        ? escapeRegExp(value)
+        : '(?<![\\d.])' + escapeRegExp(value) + '(?![\\d.])';
+    return (src.match(new RegExp(pattern, 'g')) || []).length;
+}
+
 test('no build-identity value is declared as a buildConfigField', () => {
     const src = stripComments(fs.readFileSync(GRADLE, 'utf8'));
     const offenders = [];
@@ -108,7 +147,11 @@ test('no Kotlin source reads a build-identity value off BuildConfig', () => {
 });
 
 test('each build-identity value is written down exactly once in build.gradle.kts', () => {
-    const src = fs.readFileSync(GRADLE, 'utf8');
+    // Stripped, not raw: the declarations sit under a comment block that quotes
+    // the very values it explains, and prose is not a second definition anyone
+    // can bump out of sync. Stripping also stops a commented-out `val` counting
+    // as a declaration.
+    const src = stripComments(fs.readFileSync(GRADLE, 'utf8'));
     // The four single-source declarations, e.g. `val appVersionName = "2.2.0"`.
     const decls = [...src.matchAll(/^val\s+(appVersionName|appVersionCode|openclawVersion|nodejsVersion)\s*=\s*(.+)$/gm)];
     assert.strictEqual(decls.length, 4,
@@ -120,7 +163,7 @@ test('each build-identity value is written down exactly once in build.gradle.kts
         const value = rawValue.trim();
         // Count literal occurrences of the VALUE. One is the declaration itself;
         // any second occurrence is a hand-typed copy that can silently diverge.
-        const count = src.split(value).length - 1;
+        const count = countLiteral(src, value);
         if (count !== 1) dupes.push(name + ' = ' + value + ' appears ' + count + 'x');
     }
     assert.deepStrictEqual(dupes, [],

@@ -73,13 +73,30 @@ See [CLAUDE.md](CLAUDE.md) for the full architecture guide, including:
 
 ## Version Tracking
 
-All version numbers live in one place: `app/build.gradle.kts`. The UI reads from `BuildConfig`.
+All version numbers are **defined** in one place, `app/build.gradle.kts`, and
+**read at runtime** — never from `BuildConfig`.
 
-| Version | Location |
-|---------|----------|
-| **App version** | `versionName` / `versionCode` |
-| **OpenClaw version** | `OPENCLAW_VERSION` buildConfigField |
-| **Node.js version** | `NODEJS_VERSION` buildConfigField |
+| Version | Defined in `app/build.gradle.kts` | Read at runtime via |
+|---------|-----------------------------------|---------------------|
+| **App version** | `appVersionName` / `appVersionCode` | `BuildProvenance.installed(context)` (PackageManager) |
+| **OpenClaw version** | `openclawVersion` | `BuildProvenance.get(context).openclawVersion` |
+| **Node.js version** | `nodejsVersion` | `BuildProvenance.get(context).nodejsVersion` |
+
+> **Do not add a `buildConfigField` for any of these, and do not read them off
+> `BuildConfig`.** Those are compile-time constants, which Java and Kotlin inline
+> at every call site. When the value changes, AGP regenerates `BuildConfig` but
+> incremental compilation does not recompile the readers, so they keep the
+> **previous** literal. A clean build hides it, so it only bites the incremental
+> path used all day — which is how a wrong commit SHA once reached a device-test
+> record (BAT-1293).
+>
+> `versionName` / `versionCode` come from `PackageManager` rather than the
+> packaged `build-metadata.json`, because that asset is a build-time *copy* and a
+> copy can drift. `PackageManager` reports the merged manifest of the APK Android
+> actually installed, so it is the installed identity rather than a record of it.
+>
+> `tests/nodejs-project/build-identity-invariant.test.js` enforces all of this in
+> CI and will fail the build if a constant comes back or a value is written twice.
 
 ## Questions?
 

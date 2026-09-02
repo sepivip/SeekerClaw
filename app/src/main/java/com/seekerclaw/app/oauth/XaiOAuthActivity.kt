@@ -89,7 +89,11 @@ class XaiOAuthActivity : ComponentActivity() {
         // companion initializer and could go stale on an incremental build. This UA
         // goes to a Cloudflare-gated token endpoint, so a stale value is an AUTH
         // FAILURE, not a cosmetic wrong label. The version is now passed in from a
-        // caller that holds a Context.
+        // caller that holds a Context, read from the INSTALLED package via
+        // BuildProvenance.installed(). NOT BuildProvenance.get(): that reads
+        // build-metadata.json, a build-time COPY that can drift from what was
+        // packaged, and it degrades to null (UA "SeekerClaw/unknown") when the asset
+        // is unreadable — both reach Cloudflare as the same auth failure.
         private fun tokenUa(versionName: String?) = "SeekerClaw/" + (versionName ?: "unknown")
 
         // Application-lifetime scope for the token exchange AND the server timeout.
@@ -159,7 +163,7 @@ class XaiOAuthActivity : ComponentActivity() {
                         // PKCE verifier is transmitted here but NEVER logged (M2).
                         append("&code_verifier=").append(URLEncoder.encode(codeVerifier, "UTF-8"))
                     }
-                    httpPostStatic(TOKEN_URL, body, tokenUa(BuildProvenance.get(appCtx).versionName))
+                    httpPostStatic(TOKEN_URL, body, tokenUa(BuildProvenance.installed(appCtx).versionName))
                 }
                 val json = JSONObject(tokenResponse)
                 val accessToken = json.optString("access_token", "")

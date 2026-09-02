@@ -689,11 +689,16 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                     // BAT-1124 M5: BOTH auth paths use a 1-token POST /v1/chat/completions
                                     // ping (NOT GET /v1/models — that 403s on first OAuth login and would
                                     // falsely report a signed-in user as "not connected").
+                                    // BAT-1293: the UA version is read from the INSTALLED package, not
+                                    // from BuildProvenance.get() — build-metadata.json is a build-time
+                                    // COPY that can drift, and it degrades to "SeekerClaw/unknown" when
+                                    // unreadable. api.x.ai is Cloudflare-gated, so a wrong or degraded UA
+                                    // fails the connection test on both auth paths.
                                     val authType = config?.authType ?: "api_key"
                                     if (authType == "oauth") {
-                                        testXaiOAuthConnection(config?.xaiOAuthToken ?: "", "SeekerClaw/" + (BuildProvenance.get(context).versionName ?: "unknown"))
+                                        testXaiOAuthConnection(config?.xaiOAuthToken ?: "", "SeekerClaw/" + (BuildProvenance.installed(context).versionName ?: "unknown"))
                                     } else {
-                                        testXaiConnection(config?.xaiApiKey ?: "", "SeekerClaw/" + (BuildProvenance.get(context).versionName ?: "unknown"))
+                                        testXaiConnection(config?.xaiApiKey ?: "", "SeekerClaw/" + (BuildProvenance.installed(context).versionName ?: "unknown"))
                                     }
                                 }
                                 "custom" -> testCustomConnection(

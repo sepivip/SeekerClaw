@@ -364,21 +364,39 @@ open class GenerateBuildProvenanceTask : DefaultTask() {
         val stream = ByteArrayOutputStream()
         if (root.isDirectory) {
             val files = root.walkTopDown()
-                .onEnter { !Files.isSymbolicLink(it.toPath()) }
+                // The contract FORBIDS symlinks; it does not tolerate them. The old
+                // `onEnter { !isSymbolicLink(...) }` SILENTLY SKIPPED a symlinked
+                // directory, so a bundle containing one still produced a digest — one
+                // that omitted that subtree while claiming to describe the whole tree.
+                // Checked on EVERY entry, not just the ones that survive the isFile
+                // filter: isFile/isDirectory FOLLOW links, so a symlinked directory is
+                // dropped by the filter and a broken symlink is dropped by both. walk
+                // yields a directory before descending into it, so this still rejects
+                // before reading anything underneath.
+                .onEach { e ->
+                    if (Files.isSymbolicLink(e.toPath())) {
+                        throw GradleException("Bundle contains a symlink, which the digest contract forbids: " + e.path)
+                    }
+                }
                 .filter { it.isFile }
                 .toList()
-            for (f in files) {
-                if (Files.isSymbolicLink(f.toPath())) {
-                    throw GradleException("Bundle contains a symlink, which the digest contract forbids: $f")
-                }
-            }
             val records = files.map { f ->
                 val rel = root.toPath().relativize(f.toPath()).joinToString("/") { it.toString() }
                 val bytes = f.readBytes()
                 val sha = MessageDigest.getInstance("SHA-256").digest(bytes)
                     .joinToString("") { "%02x".format(it) }
                 Triple(rel, bytes.size, sha)
-            }.sortedBy { it.first.toByteArray(Charsets.UTF_8).toList().joinToString(",") { b -> b.toString().padStart(4, '0') } }
+            }
+                // Sorted by UTF-8 PATH BYTES, unsigned. Kotlin's Byte is SIGNED, so the
+                // previous key rendered every byte above 0x7F as a negative number:
+                // (-61).toString().padStart(4, '0') == "0-61", and '-' (0x2D) < '0' (0x30),
+                // so "0-61" sorted BEFORE "0065" — the opposite of UTF-8 byte order for any
+                // non-ASCII path. BAT-1298 has to reproduce this digest byte-for-byte with an
+                // independent implementation, so the two would have disagreed on such a tree.
+                // `and 0xFF` restores the 0..255 value; the fixed 4-char width makes plain
+                // string order equal byte order, and a path that is a prefix of a longer one
+                // still sorts first because its key is a prefix of the longer key.
+                .sortedBy { r -> r.first.toByteArray(Charsets.UTF_8).toList().joinToString(",") { b -> (b.toInt() and 0xFF).toString().padStart(4, '0') } }
             for ((rel, len, sha) in records) {
                 stream.write(rel.toByteArray(Charsets.UTF_8)); stream.write(0)
                 stream.write(len.toString().toByteArray(Charsets.UTF_8)); stream.write(0)
@@ -424,8 +442,14 @@ open class GenerateBuildProvenanceTask : DefaultTask() {
             // D5: fail closed. Never emit a plausible-looking wrong identity.
             if (!allowUnverifiedIn || isReleaseIn) {
                 throw GradleException(
-                    "Build provenance unavailable (git exit=$shaCode). Release builds always fail; " +
-                    "for a debug build pass -PallowUnverifiedBuildProvenance=true on the COMMAND LINE."
+                    "Build provenance unavailable (git exit=$shaCode). Release builds always fail.\n" +
+                    "A debug build needs BOTH of these on the COMMAND LINE:\n" +
+                    "  -PallowUnverifiedBuildProvenance=true -PskipProvenanceVerify=true\n" +
+                    "The first lets this task emit commit=null. The second is REQUIRED, not\n" +
+                    "optional: verifyBuildProvenance<Variant> runs from assemble/install, resolves\n" +
+                    "git HEAD itself and DELETES any artifact whose packaged commit does not match,\n" +
+                    "so a commit=null artifact can never pass verification — allow alone just moves\n" +
+                    "the failure to the verifier."
                 )
             }
             target.writeText(jsonObj(listOf(
@@ -442,7 +466,11 @@ open class GenerateBuildProvenanceTask : DefaultTask() {
                 "bundleDigest" to "null",
                 "provenance" to jsonStr("unverified"),
             )))
-            logger.warn("[BuildProvenance] UNVERIFIED build — no usable git state")
+            logger.warn(
+                "[BuildProvenance] UNVERIFIED build — no usable git state. This artifact carries " +
+                "commit=null, so verifyBuildProvenance will DELETE it unless -PskipProvenanceVerify=true " +
+                "was also passed. Either way it must NOT be used for any device-test attestation."
+            )
             return
         }
 
