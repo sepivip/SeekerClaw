@@ -34,6 +34,29 @@ val localProps = Properties().apply {
 fun signingProp(localKey: String, envKey: String): String? =
     localProps.getProperty(localKey) ?: System.getenv(envKey)
 
+// ── BAT-1293: the ONE definition of build identity ──────────────────────────
+//
+// Both consumers derive from these: `defaultConfig` below (which AGP stamps
+// into the merged manifest, and thus into what PackageManager reports at
+// runtime) and GenerateBuildProvenanceTask (which writes
+// assets/build-metadata.json, the file every runtime reader consults).
+//
+// They used to be typed out TWICE, 560 lines apart, with nothing asserting
+// they agreed. That is the same stale-identity failure this ticket exists to
+// remove, merely relocated from bytecode inlining into script-level
+// duplication — and strictly worse, because unlike the inlining bug it never
+// self-heals on a clean build. A bump that edited one site and not the other
+// stamped the OLD version into build-metadata.json, and Part 2 already put
+// that value on the xAI Cloudflare-gated auth path.
+//
+// No product flavor or build type overrides versionName/versionCode (only
+// DISTRIBUTION/STORE_NAME and signing configs differ), so defaultConfig is the
+// sole definition and these four lines are the only place any of them appear.
+val appVersionName = "2.2.0"
+val appVersionCode = 23
+val openclawVersion = "2026.4.10"
+val nodejsVersion = "18 LTS"
+
 android {
     namespace = "com.seekerclaw.app"
     compileSdk = 36
@@ -53,12 +76,12 @@ android {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
         targetSdk = 36
-        versionCode = 23
-        versionName = "2.2.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
-        // Keep these in sync when updating OpenClaw or nodejs-mobile
-        buildConfigField("String", "OPENCLAW_VERSION", "\"2026.4.10\"")
-        buildConfigField("String", "NODEJS_VERSION", "\"18 LTS\"")
+        // Values come from the single source of truth above; update them there.
+        buildConfigField("String", "OPENCLAW_VERSION", "\"$openclawVersion\"")
+        buildConfigField("String", "NODEJS_VERSION", "\"$nodejsVersion\"")
 
         // BAT-1293: GIT_SHA and BUILD_DATE are GONE from BuildConfig.
         //
@@ -498,6 +521,31 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
     @get:Input var skipIn: Boolean = false
     @get:Internal var repoRootIn: File = File(".")
 
+    /**
+     * BAT-1293 part 4. The MERGED MANIFEST is what AGP actually stamps into the
+     * APK, and therefore what PackageManager reports on device. Cross-checking
+     * build-metadata.json against it is the gate that was missing: Part 1
+     * verified `commit` and `dirty` but never the version fields, which is
+     * precisely why the generator could be fed hand-typed version literals that
+     * silently diverged from defaultConfig.
+     */
+    @get:InputFile
+    val mergedManifestIn: RegularFileProperty = project.objects.fileProperty()
+
+    /**
+     * Scanned by hand rather than with a Regex, matching `field()` below: nested
+     * string escaping inside a Gradle script is a reliable source of silent
+     * breakage and has already cost this file two debugging cycles.
+     */
+    private fun attr(xml: String, name: String): String? {
+        val marker = name + "=" + '"'
+        val i = xml.indexOf(marker)
+        if (i < 0) return null
+        val start = i + marker.length
+        val end = xml.indexOf('"', start)
+        return if (end < 0) null else xml.substring(start, end)
+    }
+
     private fun git(vararg args: String): Pair<Int, String> = try {
         val p = ProcessBuilder(listOf("git", "-C", repoRootIn.absolutePath) + args.toList()).start()
         val out = p.inputStream.bufferedReader().readText().trim()
@@ -590,6 +638,36 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
                 throw GradleException("Release artifact was built from a dirty tree — deleted.")
             }
 
+            // Version identity must agree with what Android will actually install.
+            // defaultConfig and the generator now derive from ONE pair of vals so
+            // they cannot diverge today; this gate exists so that a future refactor
+            // re-splitting them FAILS THE BUILD instead of shipping a wrong version
+            // silently — which is exactly how the duplication survived unnoticed.
+            val manifestFile = mergedManifestIn.get().asFile
+            val manifestXml = manifestFile.readText()
+            val mfName = attr(manifestXml, "android:versionName")
+            val mfCode = attr(manifestXml, "android:versionCode")
+            if (mfName == null || mfCode == null) {
+                apk.delete()
+                throw GradleException(
+                    "[VerifyProvenance] could not read versionName/versionCode from the merged\n" +
+                    "manifest at " + manifestFile.path + " — refusing to attest an artifact whose\n" +
+                    "identity cannot be cross-checked. Artifact deleted."
+                )
+            }
+            val packagedName = field(m, "versionName")
+            val packagedCode = field(m, "versionCode")
+            if (packagedName != mfName || packagedCode != mfCode) {
+                apk.delete()
+                throw GradleException(
+                    "BUILD VERSION MISMATCH — artifact deleted.\n" +
+                    "  build-metadata.json : versionName=" + packagedName + " versionCode=" + packagedCode + "\n" +
+                    "  merged manifest     : versionName=" + mfName + " versionCode=" + mfCode + "\n" +
+                    "What the app REPORTS would differ from what Android INSTALLED. Both must\n" +
+                    "derive from appVersionName/appVersionCode in app/build.gradle.kts."
+                )
+            }
+
             // The sidecar binds the metadata to the ARTIFACT'S BYTES, so a device-test
             // record can cite a content hash instead of a label. PM B2: it must travel
             // with the artifact through any rename or upload.
@@ -613,10 +691,11 @@ androidComponents {
         val t = tasks.register<GenerateBuildProvenanceTask>(
             "generateBuildProvenance" + variant.name.replaceFirstChar { it.uppercase() }
         ) {
-            versionNameIn = "2.2.0"
-            versionCodeIn = 23
-            openclawVersionIn = "2026.4.10"
-            nodejsVersionIn = "18 LTS"
+            // Derived, never re-typed — see "the ONE definition" above.
+            versionNameIn = appVersionName
+            versionCodeIn = appVersionCode
+            openclawVersionIn = openclawVersion
+            nodejsVersionIn = nodejsVersion
             isReleaseIn = isRelease
             allowUnverifiedIn = (
                 // CLI-only: a value in gradle.properties must NOT make this
@@ -636,6 +715,9 @@ androidComponents {
             "verifyBuildProvenance" + variant.name.replaceFirstChar { it.uppercase() }
         ) {
             apkDir.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.APK))
+            mergedManifestIn.set(
+                variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST)
+            )
             isReleaseIn = isRelease
             repoRootIn = rootProject.layout.projectDirectory.asFile
             // CLI-only, per-invocation: a value in gradle.properties must not make
