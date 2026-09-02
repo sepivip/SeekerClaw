@@ -33,16 +33,32 @@
 ## Version Tracking (KEEP UPDATED)
 
 > **When updating OpenClaw or nodejs-mobile, update these version strings in ONE place:**
-> **`app/build.gradle.kts`** → `buildConfigField` for `OPENCLAW_VERSION` and `NODEJS_VERSION`
+> **`app/build.gradle.kts`** → the `openclawVersion` / `nodejsVersion` vals at the top of the file.
 >
-> The app version (`versionName` / `versionCode`) is also in `app/build.gradle.kts`.
-> All UI screens read versions from `BuildConfig` — no hardcoded strings in Kotlin code.
+> The app version (`versionName` / `versionCode`) is also in `app/build.gradle.kts`, as
+> `appVersionName` / `appVersionCode`. All four are declared once and referenced from
+> everywhere else — never retype a value a second time, or the copies drift.
+>
+> **Identity is read at RUNTIME — never off `BuildConfig` (BAT-1293).**
+> UI and diagnostics get `versionName` / `versionCode` from
+> `BuildProvenance.installed(context)`, which asks `PackageManager` about the
+> **installed** package, and `commit` / `dirty` / `openclawVersion` / `nodejsVersion`
+> from `BuildProvenance.get(context)`, which reads the packaged
+> `assets/build-metadata.json` (`app/src/main/java/com/seekerclaw/app/config/BuildProvenance.kt`).
+>
+> A `buildConfigField` for any identity value is FORBIDDEN: it compiles to a
+> `static final`, which is INLINED into every reader, so when the value changes
+> incremental compilation does not recompile those readers and they keep the OLD
+> literal — that is how a build reported a SHA it did not contain. And
+> `build-metadata.json` is a build-time COPY, so it is the source for the engine and
+> commit fields only, never for `versionName` / `versionCode`.
+> `tests/nodejs-project/build-identity-invariant.test.js` enforces both halves in CI.
 
 | Version | Current | Location |
 |---------|---------|----------|
-| **App** | `2.2.0` (code 23) | `app/build.gradle.kts` → `versionName` / `versionCode` |
-| **OpenClaw** | `2026.4.10` | `app/build.gradle.kts` → `OPENCLAW_VERSION` buildConfigField |
-| **Node.js** | `18 LTS` | `app/build.gradle.kts` → `NODEJS_VERSION` buildConfigField |
+| **App** | `2.2.0` (code 23) | `app/build.gradle.kts` → `appVersionName` / `appVersionCode` vals |
+| **OpenClaw** | `2026.4.10` | `app/build.gradle.kts` → `openclawVersion` val |
+| **Node.js** | `18 LTS` | `app/build.gradle.kts` → `nodejsVersion` val |
 
 ## Tech Stack
 
@@ -472,6 +488,10 @@ Two product flavors under the `distribution` dimension, defined in `app/build.gr
 **BuildConfig fields** available in Kotlin code:
 - `BuildConfig.DISTRIBUTION` — `"dappStore"` or `"googlePlay"`
 - `BuildConfig.STORE_NAME` — `"Solana dApp Store"` or `"Google Play"`
+
+These two are flavor selectors, fixed per variant. **No build-identity value belongs
+here** — no version, SHA, or build time; a constant inlines into its readers and goes
+stale on an incremental build. See *Version Tracking* above.
 
 **Signing config resolution:** `signingProp(localKey, envKey)` helper checks `local.properties` first (Android Studio), then `System.getenv()` (GitHub Actions CI).
 

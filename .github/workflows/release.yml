@@ -38,7 +38,7 @@ jobs:
         run: echo "$KEYSTORE_BASE64" | base64 -d > app/dappstore-release.jks
 
       - name: Build dApp Store release APK
-        run: chmod +x gradlew && ./gradlew assembleDappStoreRelease
+        run: ./gradlew assembleDappStoreRelease
         env:
           SEEKERCLAW_KEYSTORE_PATH: dappstore-release.jks
           SEEKERCLAW_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
@@ -96,7 +96,7 @@ jobs:
         run: echo "$PLAY_KEYSTORE_BASE64" | base64 -d > app/googleplay-release.jks
 
       - name: Build Google Play release AAB
-        run: chmod +x gradlew && ./gradlew bundleGooglePlayRelease
+        run: ./gradlew bundleGooglePlayRelease
         env:
           PLAY_KEYSTORE_PATH: googleplay-release.jks
           PLAY_STORE_PASSWORD: ${{ secrets.PLAY_STORE_PASSWORD }}

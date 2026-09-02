@@ -2,8 +2,12 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.util.Properties
 import java.util.Date
+import java.io.ByteArrayOutputStream
+import java.nio.file.Files
 import java.security.MessageDigest
+import java.time.Instant
 import java.text.SimpleDateFormat
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 plugins {
@@ -30,6 +34,29 @@ val localProps = Properties().apply {
 fun signingProp(localKey: String, envKey: String): String? =
     localProps.getProperty(localKey) ?: System.getenv(envKey)
 
+// ── BAT-1293: the ONE definition of build identity ──────────────────────────
+//
+// Both consumers derive from these: `defaultConfig` below (which AGP stamps
+// into the merged manifest, and thus into what PackageManager reports at
+// runtime) and GenerateBuildProvenanceTask (which writes
+// assets/build-metadata.json, the file every runtime reader consults).
+//
+// They used to be typed out TWICE, 560 lines apart, with nothing asserting
+// they agreed. That is the same stale-identity failure this ticket exists to
+// remove, merely relocated from bytecode inlining into script-level
+// duplication — and strictly worse, because unlike the inlining bug it never
+// self-heals on a clean build. A bump that edited one site and not the other
+// stamped the OLD version into build-metadata.json, and Part 2 already put
+// that value on the xAI Cloudflare-gated auth path.
+//
+// No product flavor or build type overrides versionName/versionCode (only
+// DISTRIBUTION/STORE_NAME and signing configs differ), so defaultConfig is the
+// sole definition and these four lines are the only place any of them appear.
+val appVersionName = "2.2.0"
+val appVersionCode = 23
+val openclawVersion = "2026.4.10"
+val nodejsVersion = "18 LTS"
+
 android {
     namespace = "com.seekerclaw.app"
     compileSdk = 36
@@ -49,22 +76,35 @@ android {
         applicationId = "com.seekerclaw.app"
         minSdk = 34
         targetSdk = 36
-        versionCode = 23
-        versionName = "2.2.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
-        // Keep these in sync when updating OpenClaw or nodejs-mobile
-        buildConfigField("String", "OPENCLAW_VERSION", "\"2026.4.10\"")
-        buildConfigField("String", "NODEJS_VERSION", "\"18 LTS\"")
+        // BAT-1293: OPENCLAW_VERSION and NODEJS_VERSION are NO LONGER buildConfigFields.
+        // Like GIT_SHA before them they were compile-time constants, and every reader
+        // now takes them from the packaged provenance asset at runtime instead. Leaving
+        // the fields behind would re-arm the bug: the next BuildConfig.OPENCLAW_VERSION
+        // anyone writes reintroduces it silently. The values live in openclawVersion /
+        // nodejsVersion above.
 
-        // Git commit SHA (short) — always available, every build knows its source
-        val gitSha = providers.exec {
-            commandLine("git", "rev-parse", "--short", "HEAD")
-        }.standardOutput.asText.get().trim()
-        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
-
-        // Build timestamp (ISO date)
-        val buildDate = SimpleDateFormat("yyyy-MM-dd").format(Date())
-        buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
+        // BAT-1293: GIT_SHA and BUILD_DATE are GONE from BuildConfig.
+        //
+        // They were `public static final String`, i.e. compile-time constants,
+        // and Java/Kotlin INLINE those at every call site. When the value
+        // changed, AGP regenerated BuildConfig.java but incremental compilation
+        // did not recompile the readers, so ConfigManager / SystemScreen /
+        // SettingsScreen kept the PREVIOUS literal in their bytecode. Verified
+        // by dex inspection: classes4.dex held the new sha while classes3/11/13
+        // held the old one and were byte-identical to the previously installed
+        // APK. A clean build hides it, so it only bit the incremental path.
+        //
+        // Build identity now lives in assets/build-metadata.json, written by an
+        // execution-time task and read at RUNTIME (BuildProvenance). A runtime
+        // read cannot be inlined, so it cannot drift.
+        //
+        // The invariant, so this never comes back: NO build-identity value may
+        // be a compile-time constant — not `static final`, not `const val`, not
+        // a buildConfigField. A generated Kotlin file would be just as unsafe
+        // if it used `const`.
 
         externalNativeBuild {
             cmake {
@@ -247,6 +287,479 @@ abstract class DownloadNodejsTask : DefaultTask() {
 
 tasks.register<DownloadNodejsTask>("downloadNodejs")
 tasks.named("preBuild") { dependsOn("downloadNodejs") }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BAT-1293 — build provenance (see the invariant note in defaultConfig)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Canonical digest over the packaged Node bundle.
+ *
+ * SHARED CONTRACT with BAT-1298, which must reproduce this byte-for-byte or the
+ * cross-check the two exist to enable is meaningless. One record per file,
+ * concatenated in ascending path order, then SHA-256 over the whole stream:
+ *
+ *     <relative-path> NUL <byteLength> NUL <sha256-hex-of-file> LF
+ *
+ * Paths are UTF-8, relative, '/'-separated (normalised on Windows) and
+ * CASE-SENSITIVE, sorted by the bytes of their UTF-8 encoding. Length and
+ * separators are explicit precisely so `a/b` + `c` cannot collide with
+ * `a` + `b/c`. Symlinks are rejected — the bundle must be plain files. The
+ * empty tree hashes the empty stream.
+ *
+ * Byte lengths are decimal with no leading zeros; hex is lowercase.
+ */
+/**
+ * Minimal JSON string literal, built character by character.
+ *
+ * Deliberately avoids nested string-literal escaping: getting `\\` and `\"`
+ * right inside a Kotlin string inside a Gradle script is a reliable source of
+ * silent breakage, and this file is the one place a mistake would be stamped
+ * into every artifact.
+ */
+
+
+// NOTE: this task lives in the script rather than buildSrc, matching the existing
+// DownloadNodejsTask precedent. That constrains it: Gradle cannot generate a
+// managed subclass for a class nested in a .gradle.kts, so ABSTRACT properties
+// (`abstract val x: Property<T>`) fail with "non-static inner class". Properties
+// are therefore created eagerly from `project.objects`. outputDir must stay a
+// DirectoryProperty because addGeneratedSourceDirectory wires it.
+open class GenerateBuildProvenanceTask : DefaultTask() {
+    @get:OutputDirectory
+    val outputDir: DirectoryProperty = project.objects.directoryProperty()
+
+    @get:Input var versionNameIn: String = ""
+    @get:Input var versionCodeIn: Int = 0
+    @get:Input var openclawVersionIn: String = ""
+    @get:Input var nodejsVersionIn: String = ""
+    @get:Input var isReleaseIn: Boolean = false
+    @get:Input var allowUnverifiedIn: Boolean = false
+    @get:Internal var repoRootIn: File = File(".")
+    @get:Internal var bundleDirIn: File = File(".")
+
+    // These helpers live INSIDE the task class deliberately. Declared at script
+    // scope they were captured by the class, which makes Kotlin emit it as an
+    // INNER class — and Gradle then refuses with "non-static inner class".
+    // DownloadNodejsTask avoids this only by referencing nothing outside itself.
+    fun jsonStr(v: String?): String {
+        if (v == null) return "null"
+        val sb = StringBuilder()
+        sb.append('"')
+        for (c in v) {
+            when (c) {
+                '"' -> { sb.append('\\'); sb.append('"') }
+                '\\' -> { sb.append('\\'); sb.append('\\') }
+                else -> sb.append(c)
+            }
+        }
+        sb.append('"')
+        return sb.toString()
+    }
+
+    fun jsonObj(pairs: List<Pair<String, String>>): String =
+        pairs.joinToString(",", "{", "}") { p -> jsonStr(p.first) + ":" + p.second }
+
+    fun bundleTreeDigest(root: File): String {
+        val stream = ByteArrayOutputStream()
+        if (root.isDirectory) {
+            val files = root.walkTopDown()
+                // The contract FORBIDS symlinks; it does not tolerate them. The old
+                // `onEnter { !isSymbolicLink(...) }` SILENTLY SKIPPED a symlinked
+                // directory, so a bundle containing one still produced a digest — one
+                // that omitted that subtree while claiming to describe the whole tree.
+                // Checked on EVERY entry, not just the ones that survive the isFile
+                // filter: isFile/isDirectory FOLLOW links, so a symlinked directory is
+                // dropped by the filter and a broken symlink is dropped by both. walk
+                // yields a directory before descending into it, so this still rejects
+                // before reading anything underneath.
+                .onEach { e ->
+                    if (Files.isSymbolicLink(e.toPath())) {
+                        throw GradleException("Bundle contains a symlink, which the digest contract forbids: " + e.path)
+                    }
+                }
+                .filter { it.isFile }
+                .toList()
+            val records = files.map { f ->
+                val rel = root.toPath().relativize(f.toPath()).joinToString("/") { it.toString() }
+                val bytes = f.readBytes()
+                val sha = MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it) }
+                Triple(rel, bytes.size, sha)
+            }
+                // Sorted by UTF-8 PATH BYTES, unsigned. Kotlin's Byte is SIGNED, so the
+                // previous key rendered every byte above 0x7F as a negative number:
+                // (-61).toString().padStart(4, '0') == "0-61", and '-' (0x2D) < '0' (0x30),
+                // so "0-61" sorted BEFORE "0065" — the opposite of UTF-8 byte order for any
+                // non-ASCII path. BAT-1298 has to reproduce this digest byte-for-byte with an
+                // independent implementation, so the two would have disagreed on such a tree.
+                // `and 0xFF` restores the 0..255 value; the fixed 4-char width makes plain
+                // string order equal byte order, and a path that is a prefix of a longer one
+                // still sorts first because its key is a prefix of the longer key.
+                .sortedBy { r -> r.first.toByteArray(Charsets.UTF_8).toList().joinToString(",") { b -> (b.toInt() and 0xFF).toString().padStart(4, '0') } }
+            for ((rel, len, sha) in records) {
+                stream.write(rel.toByteArray(Charsets.UTF_8)); stream.write(0)
+                stream.write(len.toString().toByteArray(Charsets.UTF_8)); stream.write(0)
+                stream.write(sha.toByteArray(Charsets.UTF_8)); stream.write('\n'.code)
+            }
+        }
+        return MessageDigest.getInstance("SHA-256").digest(stream.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+    }
+
+
+    /**
+     * D2: git is invoked at EXECUTION time, from the repo root.
+     *
+     * ProcessBuilder rather than an injected ExecOperations because Gradle
+     * cannot inject services into a class declared inside a .gradle.kts
+     * script. `git -C <root>` lets git resolve a pointer-file .git, packed
+     * refs and detached HEAD itself — never read .git internals by hand.
+     */
+    private fun git(vararg args: String): Pair<Int, String> {
+        val cmd = listOf("git", "-C", repoRootIn.absolutePath) + args.toList()
+        return try {
+            val p = ProcessBuilder(cmd).start()
+            val stdout = p.inputStream.bufferedReader().readText().trim()
+            p.errorStream.bufferedReader().readText()
+            p.waitFor() to stdout
+        } catch (e: Exception) {
+            logger.warn("[BuildProvenance] git failed: " + e.message)
+            -1 to ""
+        }
+    }
+
+    @TaskAction
+    fun generate() {
+        val dir = outputDir.get().asFile
+        dir.mkdirs()
+        val target = File(dir, "build-metadata.json")
+
+        val (shaCode, commit) = git("rev-parse", "HEAD")
+        val ok = shaCode == 0 && Regex("^[0-9a-f]{40}$").matches(commit)
+
+        if (!ok) {
+            // D5: fail closed. Never emit a plausible-looking wrong identity.
+            if (!allowUnverifiedIn || isReleaseIn) {
+                throw GradleException(
+                    "Build provenance unavailable (git exit=$shaCode). Release builds always fail.\n" +
+                    "A debug build needs BOTH of these on the COMMAND LINE:\n" +
+                    "  -PallowUnverifiedBuildProvenance=true -PskipProvenanceVerify=true\n" +
+                    "The first lets this task emit commit=null. The second is REQUIRED, not\n" +
+                    "optional: verifyBuildProvenance<Variant> runs from assemble/install, resolves\n" +
+                    "git HEAD itself and DELETES any artifact whose packaged commit does not match,\n" +
+                    "so a commit=null artifact can never pass verification — allow alone just moves\n" +
+                    "the failure to the verifier."
+                )
+            }
+            target.writeText(jsonObj(listOf(
+                "schema" to "1",
+                "commit" to "null",
+                "commitShort" to "null",
+                "dirty" to "null",
+                "branch" to "null",
+                "buildTimestampUtc" to jsonStr(Instant.now().toString()),
+                "versionName" to jsonStr(versionNameIn),
+                "versionCode" to versionCodeIn.toString(),
+                "openclawVersion" to jsonStr(openclawVersionIn),
+                "nodejsVersion" to jsonStr(nodejsVersionIn),
+                "bundleDigest" to "null",
+                "provenance" to jsonStr("unverified"),
+            )))
+            logger.warn(
+                "[BuildProvenance] UNVERIFIED build — no usable git state. This artifact carries " +
+                "commit=null, so verifyBuildProvenance will DELETE it unless -PskipProvenanceVerify=true " +
+                "was also passed. Either way it must NOT be used for any device-test attestation."
+            )
+            return
+        }
+
+        // D3: dirty is part of identity. Untracked files are INCLUDED: an
+        // untracked .kt or asset can be compiled and packaged, so ignoring them
+        // would stamp a clean commit over bits that commit does not contain.
+        // core.fileMode=false so a chmod (as CI does to gradlew) is not "dirty".
+        val (_, status) = git("-c", "core.fileMode=false", "status", "--porcelain")
+        val dirty = status.isNotEmpty()
+        if (dirty && isReleaseIn) {
+            throw GradleException("Refusing to build a RELEASE artifact from a dirty tree:\n$status")
+        }
+
+        val (_, branch) = git("rev-parse", "--abbrev-ref", "HEAD")
+        val digest = bundleTreeDigest(bundleDirIn)
+
+        target.writeText(jsonObj(listOf(
+            "schema" to "1",
+            "commit" to jsonStr(commit),
+            "commitShort" to jsonStr(commit.take(12)),
+            "dirty" to dirty.toString(),
+            "branch" to jsonStr(branch),
+            "buildTimestampUtc" to jsonStr(Instant.now().toString()),
+            "versionName" to jsonStr(versionNameIn),
+            "versionCode" to versionCodeIn.toString(),
+            "openclawVersion" to jsonStr(openclawVersionIn),
+            "nodejsVersion" to jsonStr(nodejsVersionIn),
+            "bundleDigest" to jsonStr(digest),
+            "provenance" to jsonStr("verified"),
+        )))
+        logger.lifecycle("[BuildProvenance] " + commit.take(12) + " dirty=" + dirty + " bundle=" + digest.take(12))
+    }
+}
+
+// D2: ONE TASK PER VARIANT, registered as a GENERATED source directory.
+//
+// `variant.sources.assets.addGeneratedSourceDirectory` is the only AGP 8 API
+// that makes the task's output a declared, content-hashed input of
+// merge<Variant>Assets. AGP's own KDoc says: "Do not use addStaticSourceDirectory
+// to add sources that are generated by a task, instead use
+// addGeneratedSourceDirectory."
+//
+// EXPLICITLY FORBIDDEN here: `sourceSets["main"].assets.srcDir(...)` plus a
+// dependsOn. That registers a STATIC directory with no producer relationship —
+// at best Gradle reports an implicit-dependency problem, at worst mergeAssets
+// snapshots the directory before the generator writes and the APK ships the
+// previous build's metadata. That is this bug again with a file swapped for a
+// constant. The repo's only local precedent (jniLibs.srcDirs, and
+// DownloadNodejsTask ordered by dependsOn with no declared output) is the
+// unsafe shape — do not copy it.
+//
+// upToDateWhen{false} only guarantees the PRODUCER re-runs; repackaging follows
+// because the merged asset input's CONTENT hash changes. Different claims.
+
+/**
+ * BAT-1293 D6 — verify build identity FROM THE PACKAGED ARTIFACT.
+ *
+ * Reads assets/build-metadata.json out of the APK itself, never an intermediate,
+ * and compares it against execution-time git state. This is the manual check that
+ * originally caught the stale-SHA bug, made automatic.
+ *
+ * PM B3: a PRE-CONSUMPTION gate, not cleanup. `install<Variant>` dependsOn this, so
+ * a rejected artifact never reaches the device — including via Android Studio Run,
+ * which is the path every device test uses. A verifier that merely ran after
+ * packaging could let installDappStoreDebug consume a bad APK and only fail the
+ * build afterwards.
+ *
+ * On mismatch the artifact is DELETED before the failure is raised, so a rejected
+ * APK cannot be installed by hand later. It is a regenerable build output.
+ *
+ * Self-contained on purpose: referencing a script-level helper would make this an
+ * inner class, which Gradle refuses to instantiate.
+ */
+open class VerifyBuildProvenanceTask : DefaultTask() {
+    @get:InputFiles
+    val apkDir: DirectoryProperty = project.objects.directoryProperty()
+
+    @get:Input var isReleaseIn: Boolean = false
+    @get:Input var skipIn: Boolean = false
+    @get:Internal var repoRootIn: File = File(".")
+
+    /**
+     * BAT-1293 part 4. The MERGED MANIFEST is what AGP actually stamps into the
+     * APK, and therefore what PackageManager reports on device. Cross-checking
+     * build-metadata.json against it is the gate that was missing: Part 1
+     * verified `commit` and `dirty` but never the version fields, which is
+     * precisely why the generator could be fed hand-typed version literals that
+     * silently diverged from defaultConfig.
+     */
+    @get:InputFile
+    val mergedManifestIn: RegularFileProperty = project.objects.fileProperty()
+
+    /**
+     * Scanned by hand rather than with a Regex, matching `field()` below: nested
+     * string escaping inside a Gradle script is a reliable source of silent
+     * breakage and has already cost this file two debugging cycles.
+     */
+    private fun attr(xml: String, name: String): String? {
+        val marker = name + "=" + '"'
+        val i = xml.indexOf(marker)
+        if (i < 0) return null
+        val start = i + marker.length
+        val end = xml.indexOf('"', start)
+        return if (end < 0) null else xml.substring(start, end)
+    }
+
+    private fun git(vararg args: String): Pair<Int, String> = try {
+        val p = ProcessBuilder(listOf("git", "-C", repoRootIn.absolutePath) + args.toList()).start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        p.errorStream.bufferedReader().readText()
+        p.waitFor() to out
+    } catch (e: Exception) {
+        -1 to ""
+    }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /**
+     * Scalar lookup by hand rather than a regex — the metadata is machine-written
+     * and flat, and nested string escaping inside a Gradle script is a reliable
+     * source of silent breakage (it already cost this file two debugging cycles).
+     */
+    private fun field(json: String, key: String): String? {
+        val marker = "\"" + key + "\":"
+        val i = json.indexOf(marker)
+        if (i < 0) return null
+        var p = i + marker.length
+        if (p >= json.length) return null
+        return if (json[p] == '"') {
+            val end = json.indexOf('"', p + 1)
+            if (end < 0) null else json.substring(p + 1, end)
+        } else {
+            val end = json.indexOfFirst(p) { c -> c == ',' || c == '}' }
+            val raw = json.substring(p, if (end < 0) json.length else end).trim()
+            if (raw == "null") null else raw
+        }
+    }
+
+    private fun String.indexOfFirst(from: Int, pred: (Char) -> Boolean): Int {
+        for (k in from until length) if (pred(this[k])) return k
+        return -1
+    }
+
+    @TaskAction
+    fun verify() {
+        if (skipIn) {
+            if (isReleaseIn) {
+                throw GradleException("-PskipProvenanceVerify is rejected for release variants.")
+            }
+            logger.warn("[VerifyProvenance] SKIPPED via -PskipProvenanceVerify — this build must NOT be used for any device-test attestation")
+            return
+        }
+
+        val dir = apkDir.get().asFile
+        val apks = dir.listFiles { f: File -> f.name.endsWith(".apk") }?.toList().orEmpty()
+        if (apks.isEmpty()) {
+            logger.lifecycle("[VerifyProvenance] no APK found in " + dir.path)
+            return
+        }
+
+        val (code, headSha) = git("rev-parse", "HEAD")
+        if (code != 0 || headSha.length != 40) {
+            throw GradleException("[VerifyProvenance] cannot resolve git HEAD (exit " + code + ")")
+        }
+
+        for (apk in apks) {
+            var meta: String? = null
+            ZipFile(apk).use { zf ->
+                val entry = zf.getEntry("assets/build-metadata.json")
+                if (entry != null) {
+                    meta = zf.getInputStream(entry).readBytes().toString(Charsets.UTF_8)
+                }
+            }
+            val m = meta
+            if (m == null) {
+                apk.delete()
+                throw GradleException("Artifact has no assets/build-metadata.json: " + apk.name + " (deleted)")
+            }
+
+            val packagedCommit = field(m, "commit")
+            val packagedDirty = field(m, "dirty")
+
+            if (packagedCommit != headSha) {
+                apk.delete()
+                throw GradleException(
+                    "BUILD IDENTITY MISMATCH — artifact deleted.\n" +
+                    "  packaged commit : " + packagedCommit + "\n" +
+                    "  actual HEAD     : " + headSha + "\n" +
+                    "This is the BAT-1293 failure class: the artifact does not carry the identity\n" +
+                    "of the tree it was built from. Do NOT record a device test against this build."
+                )
+            }
+            if (isReleaseIn && packagedDirty == "true") {
+                apk.delete()
+                throw GradleException("Release artifact was built from a dirty tree — deleted.")
+            }
+
+            // Version identity must agree with what Android will actually install.
+            // defaultConfig and the generator now derive from ONE pair of vals so
+            // they cannot diverge today; this gate exists so that a future refactor
+            // re-splitting them FAILS THE BUILD instead of shipping a wrong version
+            // silently — which is exactly how the duplication survived unnoticed.
+            val manifestFile = mergedManifestIn.get().asFile
+            val manifestXml = manifestFile.readText()
+            val mfName = attr(manifestXml, "android:versionName")
+            val mfCode = attr(manifestXml, "android:versionCode")
+            if (mfName == null || mfCode == null) {
+                apk.delete()
+                throw GradleException(
+                    "[VerifyProvenance] could not read versionName/versionCode from the merged\n" +
+                    "manifest at " + manifestFile.path + " — refusing to attest an artifact whose\n" +
+                    "identity cannot be cross-checked. Artifact deleted."
+                )
+            }
+            val packagedName = field(m, "versionName")
+            val packagedCode = field(m, "versionCode")
+            if (packagedName != mfName || packagedCode != mfCode) {
+                apk.delete()
+                throw GradleException(
+                    "BUILD VERSION MISMATCH — artifact deleted.\n" +
+                    "  build-metadata.json : versionName=" + packagedName + " versionCode=" + packagedCode + "\n" +
+                    "  merged manifest     : versionName=" + mfName + " versionCode=" + mfCode + "\n" +
+                    "What the app REPORTS would differ from what Android INSTALLED. Both must\n" +
+                    "derive from appVersionName/appVersionCode in app/build.gradle.kts."
+                )
+            }
+
+            // The sidecar binds the metadata to the ARTIFACT'S BYTES, so a device-test
+            // record can cite a content hash instead of a label. PM B2: it must travel
+            // with the artifact through any rename or upload.
+            val artifactSha = sha256(apk.readBytes())
+            File(apk.parentFile, apk.name + ".provenance.json").writeText(
+                "{\"artifactSha256\":\"" + artifactSha + "\"," +
+                "\"artifactName\":\"" + apk.name + "\"," +
+                "\"metadata\":" + m + "}"
+            )
+            logger.lifecycle(
+                "[VerifyProvenance] " + apk.name + " OK  commit=" + headSha.take(12) +
+                "  sha256=" + artifactSha.take(12)
+            )
+        }
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val isRelease = variant.buildType == "release"
+        val t = tasks.register<GenerateBuildProvenanceTask>(
+            "generateBuildProvenance" + variant.name.replaceFirstChar { it.uppercase() }
+        ) {
+            // Derived, never re-typed — see "the ONE definition" above.
+            versionNameIn = appVersionName
+            versionCodeIn = appVersionCode
+            openclawVersionIn = openclawVersion
+            nodejsVersionIn = nodejsVersion
+            isReleaseIn = isRelease
+            allowUnverifiedIn = (
+                // CLI-only: a value in gradle.properties must NOT make this
+                // permanent and invisible.
+                gradle.startParameter.projectProperties["allowUnverifiedBuildProvenance"] == "true"
+            )
+            repoRootIn = rootProject.layout.projectDirectory.asFile
+            bundleDirIn = layout.projectDirectory.dir("src/main/assets/nodejs-project").asFile
+            outputs.upToDateWhen { false }
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(t, GenerateBuildProvenanceTask::outputDir)
+
+        // D6 / PM B3: a PRE-CONSUMPTION gate. install<Variant> dependsOn the verifier,
+        // so Android Studio Run cannot deploy a rejected artifact. assemble is
+        // finalizedBy it so a plain assemble is checked too.
+        val verify = tasks.register<VerifyBuildProvenanceTask>(
+            "verifyBuildProvenance" + variant.name.replaceFirstChar { it.uppercase() }
+        ) {
+            apkDir.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.APK))
+            mergedManifestIn.set(
+                variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST)
+            )
+            isReleaseIn = isRelease
+            repoRootIn = rootProject.layout.projectDirectory.asFile
+            // CLI-only, per-invocation: a value in gradle.properties must not make
+            // this permanent and invisible. Rejected for release inside the task.
+            skipIn = gradle.startParameter.projectProperties["skipProvenanceVerify"] == "true"
+        }
+        val cap = variant.name.replaceFirstChar { it.uppercase() }
+        tasks.matching { it.name == "install" + cap }.configureEach { dependsOn(verify) }
+        tasks.matching { it.name == "assemble" + cap }.configureEach { finalizedBy(verify) }
+    }
+}
 
 // --- Dependencies ---
 

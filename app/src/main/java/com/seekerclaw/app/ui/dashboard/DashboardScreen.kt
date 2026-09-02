@@ -51,6 +51,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import com.seekerclaw.app.config.BuildProvenance
 import com.seekerclaw.app.ui.theme.RethinkSans
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
@@ -650,7 +651,7 @@ fun DashboardScreen(
                     "degraded" -> "Engine retrying"
                     "error" -> "Engine error"
                     "stale" -> "Engine unresponsive"
-                    else -> "Gateway " + BuildConfig.OPENCLAW_VERSION
+                    else -> "Gateway " + (BuildProvenance.get(context).openclawVersion ?: "unknown")
                 }
                 ServiceStatus.STARTING -> "Starting..."
                 ServiceStatus.STOPPED -> "Offline"

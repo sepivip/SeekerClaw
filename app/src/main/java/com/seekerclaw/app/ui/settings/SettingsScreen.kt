@@ -44,6 +44,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import com.seekerclaw.app.config.BuildProvenance
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1098,11 +1099,13 @@ fun SettingsScreen(
             // the two surfaces never show diverging version strings. InfoRow
             // renders values monospace by default — matching System.
             InfoRow("Version", buildString {
-                append("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                if (BuildConfig.DEBUG) append(" · ${BuildConfig.GIT_SHA}")
+                append(BuildProvenance.installed(context).display)
+                val prov = BuildProvenance.get(context)
+                if (BuildConfig.DEBUG) append(" · ${prov.commitShort ?: "unknown"}")
+                append(prov.marker)
             })
-            InfoRow("Claw Engine", BuildConfig.OPENCLAW_VERSION)
-            InfoRow("Node.js", BuildConfig.NODEJS_VERSION, isLast = true)
+            InfoRow("Claw Engine", BuildProvenance.get(context).openclawVersion ?: "unknown")
+            InfoRow("Node.js", BuildProvenance.get(context).nodejsVersion ?: "unknown", isLast = true)
         }
 
         Spacer(modifier = Modifier.height(32.dp))
