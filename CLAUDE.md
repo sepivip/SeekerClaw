@@ -328,6 +328,108 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 
 ---
 
+## Upgrade Safety for Existing Users (NEVER SKIP)
+
+> **RULE: For every PR that touches user-persisted state (SharedPreferences, files in `workspace/`, Keystore-encrypted blobs, SQL.js DB), explicitly verify upgrade safety BEFORE merging. Required AC, not a footnote.**
+
+SeekerClaw ships on the Solana dApp Store + Google Play. Real users have it installed. When they update from version N to N+1, their state must survive: API keys, Telegram tokens, MCP servers, memory, conversation history, agent personality. Anything else is an incident.
+
+### What to check on every state-touching PR
+
+Before merging, answer ALL of:
+
+1. **What state does this change touch?** SharedPreferences keys, files in `workspace/`, Keystore-encrypted blobs, SQL.js tables, or other.
+2. **What state does an existing user have when they update?** Walk through their device: prefs values, workspace files, keystore blobs.
+3. **What does the new code do on its first run after update?** Does it read existing data correctly? If schema changed, does it migrate? If a file moved, does it find the old location and copy?
+4. **What happens if migration fails partway?** Out of disk, corrupt source, Keystore decrypt failure, process killed mid-write. Is there a rollback? Does the user see anything intelligible, or just a broken agent?
+5. **Has the upgrade path been tested?** Not just fresh install — a real "install vN, populate state, install vN+1 with `adb install -r`" sequence. If you can't verify, say so explicitly in the PR.
+
+### Risk categorization (declare in PR description)
+
+| Category | When | Required mitigation |
+|---|---|---|
+| **None** | Additive code, no schema change | Note explicitly so reviewers don't have to re-derive |
+| **Low** | Re-reads existing data in same shape | Note it |
+| **Medium** | One-shot migration of non-critical state (UI prefs, search provider) | Migration code + test |
+| **High** | Loses something user can't easily recover (MCP servers, custom skills) | Medium + keep old store as fallback for 1–2 releases |
+| **CRITICAL** | Encrypted credentials, OAuth tokens — anything where re-entry costs the user real time/money | Atomic migration, dual-write phase, recovery path, manual rollback instructions in PR description |
+
+### Required AC for state-migration PRs
+
+Every PR that migrates state must include in its description:
+
+- [ ] Upgrade-safety analyzed (migration story documented in this PR)
+- [ ] Upgrade-safety tested (install vN, populate state, install vN+1, verify state preserved)
+- [ ] Risk category declared (None / Low / Medium / High / CRITICAL)
+
+Unchecked = unreviewable. Same honor-system gate as the SAB checklist.
+
+### When in doubt
+
+Ask: *"What happens to a user who has been running this app for 6 months when this code lands?"* If the answer isn't immediately confident, the migration story isn't complete yet.
+
+### Why this rule exists
+
+Discovered during BAT-509 / BAT-511 family planning (2026-04-27). User asked: *"Ok! All these are safe for existing users who will update right? you always check that?"* — and the honest answer was "I started doing it but not rigorously enough." Production-app migrations are too easy to get wrong silently. This rule is the fix.
+
+---
+
+## Pre-Push Check (NEVER SKIP)
+
+> **RULE: Run `scripts/pre-push-check.sh` before EVERY `git push`. No exceptions for "tiny changes," "just a fix," or "I'm in a hurry." The script catches Kotlin compile errors that Node smoke can't see — in ~90 seconds locally vs. 3–5 minutes via CI plus a Copilot review round.**
+
+The script does in-process what CI catches with a slow round-trip:
+
+1. **Node smoke** (`tests/nodejs-project/smoke.js`) — syntax + module load, ~1s
+2. **Kotlin compile** (`compileDappStoreDebugKotlin`) — incremental, ~5–90s
+   - Auto-detects Android Studio's bundled JBR (`jbr/`) — works even if system Java is 8
+
+### Why this rule exists
+
+Discovered the hard way during BAT-518 phase 1 (PR #343, 2026-04-27): three FileObserver event-mask references (`MODIFY`, `CLOSE_WRITE`, etc.) were unqualified — they're Java static fields and don't auto-import into Kotlin function bodies, so the build would have failed. Copilot caught it on review (R1) but only after wasting a full review round and the user's mental cycles. The script would have caught it locally in ~90 seconds.
+
+User feedback that triggered this rule:
+
+> "Why we push fixes that throws compile errors? ... Always use it, it will safe tons of time! Wtf... add to i dont know, everywhere... dev workflow, claude.md etc."
+
+### Required workflow
+
+Before `git push`:
+
+```bash
+scripts/pre-push-check.sh
+```
+
+Wait for `─── ALL CHECKS PASSED ───` before pushing. Don't push and hope CI catches it.
+
+If it fails, fix the issue and re-run. Exit codes documented at the top of the script:
+- `0` — all checks passed
+- `1` — Node smoke failed
+- `2` — Kotlin compile failed
+- `3` — JDK 17+ not found (fix: install Android Studio for the bundled JBR)
+- `4` — Android SDK not found (fix: set `ANDROID_HOME` or `local.properties`)
+
+### No legitimate exceptions
+
+| Excuse | Why it's wrong |
+|---|---|
+| "It's just a tiny change" | Tiny changes are exactly when imports get forgotten. |
+| "It's docs-only" | If the diff includes ANY `.kt` file, run it. Docs-only is fine to skip; mixed isn't. |
+| "I'm in a hurry" | A failed Copilot round costs 3–5x longer than the 90s local check. |
+| "Node smoke passes" | Node smoke can't compile Kotlin. Run the full check. |
+| "Local Java is 8, can't compile JVM 17 code" | The script uses Android Studio's bundled JBR. Verify it works once, then never skip again. |
+
+### When to bypass
+
+Only when changing files that are 100% guaranteed not to affect compilation:
+- Pure markdown docs PRs
+- README updates
+- Linear ticket comments
+
+**Anything else: run the check.**
+
+---
+
 ## Agent Self-Awareness (NEVER SKIP)
 
 > **RULE: When adding or changing features that affect what the agent can do, you MUST update the agent's system prompt and tool descriptions so the agent knows about its own capabilities.**
