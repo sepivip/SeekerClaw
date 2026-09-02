@@ -38,7 +38,7 @@
 > The app version (`versionName` / `versionCode`) is also in `app/build.gradle.kts`, as
 > `appVersionName` / `appVersionCode`. All four are declared once and referenced from
 > everywhere else — never retype a value a second time, or the copies drift.
-
+>
 > **Identity is read at RUNTIME — never off `BuildConfig` (BAT-1293).**
 > UI and diagnostics get `versionName` / `versionCode` from
 > `BuildProvenance.installed(context)`, which asks `PackageManager` about the
