@@ -134,7 +134,7 @@ const bogus = mc.validateModelForProvider('openai', 'api_key', 'gpt-99');
 check('unknown model rejected with reason', bogus.ok === false && typeof bogus.reason === 'string', true);
 check('unknown model returns options list', Array.isArray(bogus.options) && bogus.options.length > 0, true);
 
-check('claude-opus-4-7 valid on claude', mc.validateModelForProvider('claude', 'api_key', 'claude-opus-4-7').ok, true);
+check('claude-opus-5 valid on claude', mc.validateModelForProvider('claude', 'api_key', 'claude-opus-5').ok, true);
 
 console.log();
 console.log('── validateModelForProvider (freeform) ──────────');
@@ -396,10 +396,10 @@ check('claude/claude-fable-5 → yes',
     mc.reasoningSupportFor('claude', 'claude-fable-5', 'api_key'), 'yes');
 check('claude/claude-opus-4-8 → yes',
     mc.reasoningSupportFor('claude', 'claude-opus-4-8', 'api_key'), 'yes');
-check('claude/claude-opus-4-7 → yes',
-    mc.reasoningSupportFor('claude', 'claude-opus-4-7', 'api_key'), 'yes');
-check('claude/claude-opus-4-6 → yes',
-    mc.reasoningSupportFor('claude', 'claude-opus-4-6', 'api_key'), 'yes');
+check('claude/claude-opus-5 → yes',
+    mc.reasoningSupportFor('claude', 'claude-opus-5', 'api_key'), 'yes');
+check('claude/claude-fable-5-1 → yes',
+    mc.reasoningSupportFor('claude', 'claude-fable-5-1', 'api_key'), 'yes');
 check('claude/claude-sonnet-5 → yes',
     mc.reasoningSupportFor('claude', 'claude-sonnet-5', 'api_key'), 'yes');
 check('claude/claude-sonnet-4-6 → yes',

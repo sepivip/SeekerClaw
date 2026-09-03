@@ -100,7 +100,8 @@ class RuntimeStateStoreTest {
         // Existing BAT-513 fields preserved
         assertEquals("claude", state.provider)
         assertEquals("api_key", state.authType)
-        assertEquals("claude-opus-4-8", state.model)
+        // BAT-1315: claude-opus-4-8 -> claude-opus-5, tracking model-registry.json.
+        assertEquals("claude-opus-5", state.model)
         // New BAT-549 fields default to safe-off so existing users don't
         // silently flip on reasoning capability when they update the app.
         assertEquals(false, state.reasoningEnabled)

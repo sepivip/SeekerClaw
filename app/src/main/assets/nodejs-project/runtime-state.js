@@ -61,7 +61,9 @@ const { createStore } = require('./cross-process-store');
 const DEFAULTS = Object.freeze({
     provider: 'claude',
     authType: 'api_key',
-    model: 'claude-opus-4-8',
+    // BAT-1315: must match RuntimeState.kt's `model` default and the registry's
+    // claude defaultModel — this is the Node mirror of the same value.
+    model: 'claude-opus-5',
     reasoningEnabled: false,
     reasoningDisplayInChat: false,
     customEchoReasoning: false,

@@ -178,7 +178,7 @@ object ConfigClaimImporter {
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
             "xai" -> "grok-4.5" // BAT-1124
-            else -> "claude-opus-4-8"
+            else -> "claude-opus-5" // BAT-1315
         }
         // Trim like botToken/ownerId above: reconcile's equality gate
         // compares trimmed values, so a padded model here would miss the
