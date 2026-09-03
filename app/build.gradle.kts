@@ -660,8 +660,19 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
             if (b.isFile) artifacts += b
         }
         if (artifacts.isEmpty()) {
-            logger.lifecycle("[VerifyProvenance] no artifact to verify")
-            return
+            // Copilot on #454: this used to log and RETURN, which is a silent pass --
+            // exactly the ungated path BAT-1308 exists to close, reintroduced one level
+            // up. A wiring mistake, an AGP output-location change, or an unexpected
+            // layout would all land here and report success having verified nothing.
+            // A gate with nothing to check has failed, not passed.
+            throw GradleException(
+                "[VerifyProvenance] nothing to verify -- refusing to pass." + "\n" +
+                "  apkDir present    : " + apkDir.isPresent + "\n" +
+                "  bundleFile present: " + bundleFile.isPresent + "\n" +
+                "If the build itself failed, fix that first: this task is finalizedBy " +
+                "assemble/bundle and still runs when they fail, so an upstream failure " +
+                "surfaces here as an absent artifact."
+            )
         }
 
         val (code, headSha) = git("rev-parse", "HEAD")
