@@ -181,10 +181,26 @@ if (!fs.existsSync(configPath)) {
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
+// BAT-1309: the ONE definition of the app version on the Node side.
+//
+// It used to be hand-maintained in three places -- package.json, mcp-client's
+// clientInfo, and providers/xai.js -- and git history shows they drift: the
+// package.json copy shipped stale across 1.10.0 -> 2.0.0 -> 2.1.0 -> 2.1.1 and
+// was only ever repaired by hand, while it was the value the user-visible
+// /version command actually printed.
+//
+// `appVersion` is written by ConfigManager from BuildProvenance.installed(),
+// i.e. PackageManager's view of the INSTALLED package, so it cannot drift from
+// what Android actually has. Degrades to 'unknown' rather than to a stale
+// literal: a wrong version is worse than an absent one.
+const APP_VERSION = (typeof config.appVersion === 'string' && config.appVersion.trim())
+    ? config.appVersion.trim()
+    : 'unknown';
+
 // BAT-1161 P1A: session-boundary banner, emitted right after config parse so the Kotlin
 // startup-watermark forwarder and humans can delimit each :node session. boot/build/version
 // are generated Kotlin-side and transported via config.json — never a packaged asset (BAT-1073).
-log(`=== SESSION boot=${config.bootId || 'unknown'} build=${config.gitSha || '?'} ver=${config.appVersion || '?'} logfmt=${LOG_FMT_VERSION} pid=${process.pid} ===`, 'INFO');
+log(`=== SESSION boot=${config.bootId || 'unknown'} build=${config.gitSha || '?'} dirty=${config.gitDirty === undefined ? '?' : (config.gitDirty ? 'true' : 'false')} ver=${APP_VERSION} logfmt=${LOG_FMT_VERSION} pid=${process.pid} ===`, 'INFO');
 
 // Strip hidden line breaks from secrets (clipboard paste can include \r\n, Unicode separators)
 function normalizeSecret(val) {
@@ -1037,6 +1053,9 @@ module.exports = {
 
     // Config object (for accessing optional API keys etc.)
     config,
+
+    // BAT-1309: every Node-side consumer of the app version reads THIS.
+    APP_VERSION,
 
     // BAT-513: handle on the cross-process runtime state file so
     // command handlers (`/model`, `/provider` in message-handler.js)

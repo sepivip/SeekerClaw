@@ -8,6 +8,8 @@ const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
 const { flattenForLog } = require('./log-safe');
+// BAT-1309: single source for the version we announce to third-party MCP servers.
+const { APP_VERSION } = require('./config');
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -365,7 +367,10 @@ class MCPClient {
         const initResult = await this._sendRequest('initialize', {
             protocolVersion: MCP_PROTOCOL_VERSION,
             capabilities: {},
-            clientInfo: { name: 'SeekerClaw', version: '2.2.0' },
+            // BAT-1309: was a hardcoded '2.2.0'. This value is sent to every
+            // third-party MCP server the user connects, so a stale copy misreports
+            // us off-device. Independently stale at 1.2.0 before the last release.
+            clientInfo: { name: 'SeekerClaw', version: APP_VERSION },
         }, CONNECT_TIMEOUT_MS);
 
         if (initResult.error) {

@@ -153,8 +153,8 @@ ok('config.js uses Date.now() for the record epoch', /const epoch = Date\.now\(\
 ok('config.js defines LOG_MAX_RECORD_BYTES = 64 * 1024', /LOG_MAX_RECORD_BYTES = 64 \* 1024/.test(src));
 ok('config.js defines LOG_FMT_VERSION = 1', /LOG_FMT_VERSION = 1\b/.test(src));
 ok('config.js emits the ROTATED gen marker', /=== ROTATED gen=\$\{_logRotationSeq\} logfmt=\$\{LOG_FMT_VERSION\} ===/.test(src));
-ok('config.js emits the SESSION banner (boot/build/ver/logfmt/pid)',
-    /=== SESSION boot=\$\{config\.bootId[^]*build=\$\{config\.gitSha[^]*ver=\$\{config\.appVersion[^]*logfmt=\$\{LOG_FMT_VERSION\} pid=\$\{process\.pid\} ===/.test(src));
+ok('config.js emits the SESSION banner (boot/build/dirty/ver/logfmt/pid)',
+    /=== SESSION boot=\$\{config\.bootId[^]*build=\$\{config\.gitSha[^]*dirty=\$\{config\.gitDirty[^]*ver=\$\{APP_VERSION\} logfmt=\$\{LOG_FMT_VERSION\} pid=\$\{process\.pid\} ===/.test(src));
 ok('config.js rotation renames the WHOLE current to .old (no carryover)',
     /fs\.renameSync\(debugLog, debugLog \+ '\.old'\)/.test(src) && /fs\.writeFileSync\(debugLog, marker\)/.test(src));
 ok('OLD keep-~1MB carryover rotation is REMOVED', !/kept last ~1 MB/.test(src) && !/KEEP_BYTES/.test(src));
