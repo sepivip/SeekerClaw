@@ -669,9 +669,9 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
                 "[VerifyProvenance] nothing to verify -- refusing to pass." + "\n" +
                 "  apkDir present    : " + apkDir.isPresent + "\n" +
                 "  bundleFile present: " + bundleFile.isPresent + "\n" +
-                "If the build itself failed, fix that first: this task is finalizedBy " +
-                "assemble/bundle and still runs when they fail, so an upstream failure " +
-                "surfaces here as an absent artifact."
+                "If the build itself failed, fix that first: this task runs as a " +
+                "FINALIZER for assemble/bundle, so it still executes when they fail and " +
+                "an upstream failure surfaces here as an absent artifact."
             )
         }
 
