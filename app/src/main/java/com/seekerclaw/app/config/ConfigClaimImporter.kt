@@ -177,7 +177,7 @@ object ConfigClaimImporter {
             "openai" -> "gpt-5.6-sol" // BAT-1151: keep in sync with model-registry.json openai defaultModel
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
-            "xai" -> "grok-4.6" // BAT-1124, bumped BAT-1315
+            "xai" -> "grok-4.5" // BAT-1124
             else -> "claude-opus-5" // BAT-1315
         }
         // Trim like botToken/ownerId above: reconcile's equality gate

@@ -2276,8 +2276,7 @@ const MODEL_CONTEXT_LIMITS = {
     'gpt-5.3-codex':       200000, // BAT-1151: dropped from registry; kept for existing users still on it
     // BAT-1124: xAI Grok context windows. grok-4.x is ~256k+ actual (grok-4.5 ~500k) →
     // 200000 mobile cap (consistent with the claude/gpt caps above). Registry ships
-    // grok-4.6 / grok-4.5 / grok-4.3; anything else is a user-typed Custom model.
-    'grok-4.6':                     200000,
+    // only grok-4.3 + grok-4.5; anything else is a user-typed Custom model.
     'grok-4.5':                     200000,
     'grok-4.3':                     200000,
 };

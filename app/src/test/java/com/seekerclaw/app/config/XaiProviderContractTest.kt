@@ -107,12 +107,7 @@ class XaiProviderContractTest {
         assertTrue("xai.keyHint must be present", xai.keyHint.isNotBlank())
         assertTrue("xai.consoleUrl must be present", xai.consoleUrl.isNotBlank())
         assertTrue("xai.keysUrl must be present", xai.keysUrl.isNotBlank())
-        // BAT-1315: grok-4.5 -> grok-4.6. This pinned value is a deliberate tripwire:
-        // the invariant that defaultModel is IN the model list is asserted below, so
-        // this line exists purely to make a default change a conscious act rather than
-        // a silent one. Changing the shipped default changes what an existing user's
-        // agent runs after an update, so it should never pass unnoticed.
-        assertEquals("grok-4.6", xai.defaultModel)
+        assertEquals("grok-4.5", xai.defaultModel)
         assertEquals(listOf("api_key", "oauth"), xai.authTypes)
         // defaultModel must be present in the model list (freeform:false, models:[] is unshippable).
         assertTrue(
