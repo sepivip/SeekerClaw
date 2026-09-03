@@ -1,0 +1,93 @@
+# CodeRabbit configuration for SeekerClaw.
+#
+# WHY THIS FILE EXISTS (BAT-1293 review, 2026-09-02)
+#
+# CodeRabbit was enforcing a rule that said "UI screens read versions from
+# BuildConfig". BAT-1293 deliberately reversed that rule, so every PR touching
+# SystemScreen/SettingsScreen drew the same finding against code that was
+# correct. The rule was not in the repository -- it lived in the CodeRabbit web
+# dashboard, so no commit could fix it and it could not be reviewed or diffed.
+#
+# Rules that describe our invariants belong in version control, next to the code
+# they describe, where they change in the same commit the invariant changes.
+#
+# NOTE: this file takes precedence over the web dashboard configuration. If a
+# useful rule was configured there and is not represented here, it stops
+# applying -- add it below rather than re-adding it in the dashboard.
+
+language: en-US
+
+reviews:
+  # Matches the profile the repository was already being reviewed under, so
+  # adding this file does not silently change review volume.
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_instructions:
+    - path: "app/src/main/java/**/*.kt"
+      instructions: |
+        BUILD IDENTITY IS READ AT RUNTIME. Never from BuildConfig.
+
+        `versionName` and `versionCode` come from
+        `BuildProvenance.installed(context)`, which asks PackageManager about the
+        INSTALLED package. `commit`, `dirty`, `openclawVersion` and
+        `nodejsVersion` come from `BuildProvenance.get(context)`, which reads the
+        packaged `assets/build-metadata.json`.
+
+        Flag any read of `BuildConfig.VERSION_NAME`, `BuildConfig.VERSION_CODE`,
+        `BuildConfig.OPENCLAW_VERSION`, `BuildConfig.NODEJS_VERSION`,
+        `BuildConfig.GIT_SHA` or `BuildConfig.BUILD_DATE`, and any new
+        `buildConfigField` declaring one.
+
+        Reason: those are compile-time constants, which Java and Kotlin inline at
+        every call site. When the value changes, AGP regenerates BuildConfig but
+        incremental compilation does not recompile the readers, so they keep the
+        PREVIOUS literal. A clean build hides it. This shipped a wrong commit SHA
+        into a device-test record (BAT-1293).
+
+        `tests/nodejs-project/build-identity-invariant.test.js` enforces this in
+        CI; a finding here should agree with that test, not contradict it.
+
+    - path: "app/src/main/assets/nodejs-project/**/*.js"
+      instructions: |
+        The app version has ONE source on the Node side: `APP_VERSION`, exported
+        from `config.js` and derived from the `appVersion` that ConfigManager
+        writes. Flag any new hardcoded version literal, and any new read of
+        `process.env.AGENT_VERSION` -- nothing sets that variable and it is on
+        the reserved list, so such a read is always dead code (BAT-1309).
+
+        Prefer degrading to "unknown" over falling back to a hardcoded version: a
+        wrong version is worse than an absent one.
+
+    - path: "app/build.gradle.kts"
+      instructions: |
+        Build-identity values (`appVersionName`, `appVersionCode`,
+        `openclawVersion`, `nodejsVersion`) are declared exactly ONCE near the
+        top and referenced everywhere else. Flag any retyped literal.
+
+        A previous fix fed the provenance generator four hand-typed copies of
+        these, duplicating defaultConfig 560 lines above with nothing asserting
+        they agreed -- the same stale-identity bug relocated into the build
+        script, and worse than the original because it never self-heals on a
+        clean build.
+
+    - path: "tests/**/*.js"
+      instructions: |
+        Tests must be able to FAIL. Flag any assertion that cannot distinguish a
+        working implementation from a broken one -- checks whose result depends
+        on the OS or filesystem rather than the code under test, assertions of
+        byte-identity that hold before and after the fix, and fixtures
+        hand-shaped to match the consumer's assumption rather than what the
+        producer actually emits.
+
+        This repo has shipped all three. One traversal assertion checked whether
+        `/etc/passwd` existed, so it could never pass on Linux and passed
+        vacuously on Windows; it tested nothing for a year (BAT-1290).
+
+chat:
+  auto_reply: true
