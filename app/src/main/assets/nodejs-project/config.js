@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 // BAT-1071: pure, require-safe bridge-token validator (no config init).
 const { isCanonicalBridgeToken } = require('./bridge-token');
+const { formatSessionBanner } = require('./log-safe');
 
 // ============================================================================
 // WORKSPACE & LOG PATHS
@@ -200,7 +201,7 @@ const APP_VERSION = (typeof config.appVersion === 'string' && config.appVersion.
 // BAT-1161 P1A: session-boundary banner, emitted right after config parse so the Kotlin
 // startup-watermark forwarder and humans can delimit each :node session. boot/build/version
 // are generated Kotlin-side and transported via config.json — never a packaged asset (BAT-1073).
-log(`=== SESSION boot=${config.bootId || 'unknown'} build=${config.gitSha || '?'} dirty=${config.gitDirty === true ? 'true' : config.gitDirty === false ? 'false' : '?'} ver=${APP_VERSION} logfmt=${LOG_FMT_VERSION} pid=${process.pid} ===`, 'INFO');
+log(formatSessionBanner(config, APP_VERSION, LOG_FMT_VERSION, process.pid), 'INFO');
 
 // Strip hidden line breaks from secrets (clipboard paste can include \r\n, Unicode separators)
 function normalizeSecret(val) {

@@ -77,4 +77,33 @@ function flattenForLog(text, maxChars) {
     return truncated ? out + '...' : out;
 }
 
-module.exports = { flattenForLog, NEWLINE_GLYPH };
+/**
+ * BAT-1310 / CodeRabbit on #454. The session banner is formatted HERE rather
+ * than inline in config.js so it can be tested against REAL OUTPUT.
+ *
+ * The previous guard was a regex over config.js's source text. That cannot tell
+ * a correct implementation from one that interpolates the raw value -- both
+ * contain the same fragment -- so it was a test that could not fail for the
+ * thing it existed to check. config.js cannot be required from a test (it reads
+ * a real config.json at load), which is why this lives in a module that can.
+ *
+ * Every field is type-checked before interpolation. config.json is PERSISTED
+ * STATE: hand-editable, corruptible, and possibly written by an older version,
+ * so a value that parsed is not a value whose shape may be trusted. In
+ * particular a string "false" must not read as a clean tree, and a non-string
+ * identifier must not be stringified into the banner.
+ */
+function formatSessionBanner(cfg, appVersion, logFmt, pid) {
+    const c = (cfg && typeof cfg === 'object') ? cfg : {};
+    const str = (v, fallback) => (typeof v === 'string' && v.trim()) ? v.trim() : fallback;
+    // Only a real boolean is an answer; everything else is "we do not know".
+    const dirty = c.gitDirty === true ? 'true' : c.gitDirty === false ? 'false' : '?';
+    return '=== SESSION boot=' + str(c.bootId, 'unknown') +
+        ' build=' + str(c.gitSha, '?') +
+        ' dirty=' + dirty +
+        ' ver=' + str(appVersion, '?') +
+        ' logfmt=' + logFmt +
+        ' pid=' + pid + ' ===';
+}
+
+module.exports = { flattenForLog, NEWLINE_GLYPH, formatSessionBanner };
