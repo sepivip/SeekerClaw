@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, runtimeState: _runtimeState, config: _config } = require('./config');
+const { CHANNEL, workDir, PROVIDER, AUTH_TYPE, OPENAI_AUTH_TYPE, resolveActiveModel, runtimeState: _runtimeState, config: _config, APP_VERSION } = require('./config');
 const { stripSilentReply, containsSilentReply } = require('./silent-reply');
 const modelCatalog = require('./model-catalog');
 const { buildHelpLines } = require('./telegram-commands');
@@ -270,18 +270,15 @@ Use YAML frontmatter with \`name\`, \`description\`, and \`triggers\` fields.`;
         case '/version': {
             const nodeVer = process.version;
             const platform = `${process.platform}/${process.arch}`;
-            // Determine agent version from config, env, or package.json (in priority order)
-            let pkgVersion = 'unknown';
-            if (deps.config && deps.config.version) {
-                pkgVersion = deps.config.version;
-            } else if (process.env.AGENT_VERSION) {
-                pkgVersion = process.env.AGENT_VERSION;
-            } else {
-                try {
-                    const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, 'package.json'), 'utf8'));
-                    if (pkg.version) pkgVersion = pkg.version;
-                } catch (_) {}
-            }
+            // BAT-1309: this used to try config.version, then AGENT_VERSION, then
+            // the package.json literal. The first two could NEVER fire:
+            //   config.version   -- ConfigManager writes `appVersion`, not `version`,
+            //                       so the correct value sat one key away, unread.
+            //   AGENT_VERSION    -- set nowhere in the repo, and on the reserved
+            //                       list (config.js) so a user cannot set it either.
+            // So the hand-maintained package.json literal was the only live path,
+            // and it is what this user-visible command printed while stale.
+            const pkgVersion = APP_VERSION;
             return `**SeekerClaw**
 Agent: \`${deps.getAgentName()}\`
 Package: \`${pkgVersion}\`

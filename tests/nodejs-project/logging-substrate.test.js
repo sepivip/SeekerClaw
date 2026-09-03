@@ -153,8 +153,44 @@ ok('config.js uses Date.now() for the record epoch', /const epoch = Date\.now\(\
 ok('config.js defines LOG_MAX_RECORD_BYTES = 64 * 1024', /LOG_MAX_RECORD_BYTES = 64 \* 1024/.test(src));
 ok('config.js defines LOG_FMT_VERSION = 1', /LOG_FMT_VERSION = 1\b/.test(src));
 ok('config.js emits the ROTATED gen marker', /=== ROTATED gen=\$\{_logRotationSeq\} logfmt=\$\{LOG_FMT_VERSION\} ===/.test(src));
-ok('config.js emits the SESSION banner (boot/build/ver/logfmt/pid)',
-    /=== SESSION boot=\$\{config\.bootId[^]*build=\$\{config\.gitSha[^]*ver=\$\{config\.appVersion[^]*logfmt=\$\{LOG_FMT_VERSION\} pid=\$\{process\.pid\} ===/.test(src));
+// CodeRabbit on #454: the previous check here was a regex over config.js's SOURCE.
+// That cannot distinguish a correct implementation from one that interpolates the
+// raw value -- both contain the same fragment -- and the broad [^]* could stitch
+// together fragments from unrelated lines. It was a test that could not fail for
+// the thing it existed to check.
+//
+// The banner is now built by formatSessionBanner in log-safe.js, which has no
+// requires and so CAN be loaded here (config.js cannot: it reads a real
+// config.json at load). These assert the RENDERED line for every shape
+// config.json can actually hold.
+const { formatSessionBanner } = require(path.join(path.dirname(CONFIG_JS), 'log-safe.js'));
+const _b = (cfg) => formatSessionBanner(cfg, '2.2.0', LOG_FMT_VERSION, 999);
+const _base = { bootId: 'abc123', gitSha: 'cf458855f9d9' };
+
+ok('banner: dirty=true for a genuinely dirty tree',
+    _b({ ..._base, gitDirty: true }).includes(' dirty=true '));
+ok('banner: dirty=false for a genuinely clean tree',
+    _b({ ..._base, gitDirty: false }).includes(' dirty=false '));
+ok('banner: dirty=? when the field is absent (old config.json)',
+    _b({ ..._base }).includes(' dirty=? '));
+ok('banner: dirty=? for null, not a false-clean reading',
+    _b({ ..._base, gitDirty: null }).includes(' dirty=? '));
+// The shape that made the ORIGINAL implementation lie: a truthy string.
+ok('banner: the STRING "false" reads ? and never true',
+    _b({ ..._base, gitDirty: 'false' }).includes(' dirty=? '));
+ok('banner: a non-string bootId degrades to unknown, not stringified',
+    _b({ ..._base, bootId: 12345, gitDirty: false }).includes('boot=unknown '));
+ok('banner: a non-string gitSha degrades to ?, not [object Object]',
+    _b({ ..._base, gitSha: {}, gitDirty: false }).includes('build=? '));
+ok('banner: full shape is exactly as the log parser expects',
+    _b({ ..._base, gitDirty: true }) ===
+    '=== SESSION boot=abc123 build=cf458855f9d9 dirty=true ver=2.2.0 logfmt='
+    + LOG_FMT_VERSION + ' pid=999 ===');
+
+// Still assert config.js actually CALLS it, so the formatter cannot be
+// orphaned while these tests keep passing against a function nobody uses.
+ok('config.js emits the banner via formatSessionBanner',
+    /log\(formatSessionBanner\(config, APP_VERSION, LOG_FMT_VERSION, process\.pid\)/.test(src));
 ok('config.js rotation renames the WHOLE current to .old (no carryover)',
     /fs\.renameSync\(debugLog, debugLog \+ '\.old'\)/.test(src) && /fs\.writeFileSync\(debugLog, marker\)/.test(src));
 ok('OLD keep-~1MB carryover rotation is REMOVED', !/kept last ~1 MB/.test(src) && !/KEEP_BYTES/.test(src));

@@ -42,6 +42,7 @@ const {
     XAI_OAUTH_REAUTH_REQUIRED,
     XAI_OAUTH_REAUTH_NOTIFIED_EPOCH,
     AUTH_TYPE,
+    APP_VERSION,
 } = require('../config');
 const { androidBridgeCall } = require('../bridge');
 const { registerRedactedSecret } = require('../security');
@@ -76,13 +77,14 @@ const MAX_PERSIST_CONVERGENCE_ATTEMPTS = 5;
 // same turn, short enough that the next real turn/heartbeat can retry.
 const REFRESH_FAIL_COOLDOWN_MS = 60 * 1000;
 
-// H4: SeekerClaw's OWN User-Agent (never Grok-CLI's). Version from the
-// AGENT_VERSION env var Kotlin injects (message-handler.js reads the same),
-// else a stable "SeekerClaw" — Cloudflare only needs a non-empty, non-curl UA.
-const _AGENT_VER = (typeof process.env.AGENT_VERSION === 'string' && process.env.AGENT_VERSION.trim())
-    ? process.env.AGENT_VERSION.trim()
-    : '';
-const SEEKERCLAW_UA = _AGENT_VER ? `SeekerClaw/${_AGENT_VER}` : 'SeekerClaw';
+// H4: SeekerClaw's OWN User-Agent (never Grok-CLI's), sent to a Cloudflare-gated
+// endpoint, so it must be non-empty and non-curl.
+//
+// BAT-1309: this read process.env.AGENT_VERSION, and the comment claimed Kotlin
+// injected it. Nothing sets that variable anywhere in the repo, and it sits on the
+// reserved list, so _AGENT_VER was ALWAYS '' and this UA has never once carried a
+// version. It now takes the same APP_VERSION every other consumer reads.
+const SEEKERCLAW_UA = APP_VERSION !== 'unknown' ? `SeekerClaw/${APP_VERSION}` : 'SeekerClaw';
 
 const isOAuth = AUTH_TYPE === 'oauth';
 

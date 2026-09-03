@@ -545,8 +545,19 @@ open class GenerateBuildProvenanceTask : DefaultTask() {
  * inner class, which Gradle refuses to instantiate.
  */
 open class VerifyBuildProvenanceTask : DefaultTask() {
+    /**
+     * BAT-1308: exactly ONE of these is set per task instance. The APK instance
+     * gates assemble/install; the bundle instance gates bundle<Variant>. Separate
+     * registrations because `assemble` never produces an .aab and `bundle` never
+     * produces an .apk -- one task demanding both would force every build to make both.
+     */
     @get:InputFiles
+    @get:org.gradle.api.tasks.Optional
     val apkDir: DirectoryProperty = project.objects.directoryProperty()
+
+    @get:InputFile
+    @get:org.gradle.api.tasks.Optional
+    val bundleFile: RegularFileProperty = project.objects.fileProperty()
 
     @get:Input var isReleaseIn: Boolean = false
     @get:Input var skipIn: Boolean = false
@@ -615,6 +626,20 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
         return -1
     }
 
+    /**
+     * An APK keeps assets at `assets/`; an AAB keeps the base module's at
+     * `base/assets/`. Both are tried rather than branching on file extension, so an
+     * artifact layout we do not know about fails LOUDLY as a missing entry rather
+     * than being silently skipped.
+     */
+    private fun readMetadata(zf: ZipFile): String? {
+        for (p in listOf("assets/build-metadata.json", "base/assets/build-metadata.json")) {
+            val e = zf.getEntry(p)
+            if (e != null) return zf.getInputStream(e).readBytes().toString(Charsets.UTF_8)
+        }
+        return null
+    }
+
     @TaskAction
     fun verify() {
         if (skipIn) {
@@ -625,11 +650,29 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
             return
         }
 
-        val dir = apkDir.get().asFile
-        val apks = dir.listFiles { f: File -> f.name.endsWith(".apk") }?.toList().orEmpty()
-        if (apks.isEmpty()) {
-            logger.lifecycle("[VerifyProvenance] no APK found in " + dir.path)
-            return
+        val artifacts = mutableListOf<File>()
+        if (apkDir.isPresent) {
+            val dir = apkDir.get().asFile
+            artifacts += dir.listFiles { f: File -> f.name.endsWith(".apk") }?.toList().orEmpty()
+        }
+        if (bundleFile.isPresent) {
+            val b = bundleFile.get().asFile
+            if (b.isFile) artifacts += b
+        }
+        if (artifacts.isEmpty()) {
+            // Copilot on #454: this used to log and RETURN, which is a silent pass --
+            // exactly the ungated path BAT-1308 exists to close, reintroduced one level
+            // up. A wiring mistake, an AGP output-location change, or an unexpected
+            // layout would all land here and report success having verified nothing.
+            // A gate with nothing to check has failed, not passed.
+            throw GradleException(
+                "[VerifyProvenance] nothing to verify -- refusing to pass." + "\n" +
+                "  apkDir present    : " + apkDir.isPresent + "\n" +
+                "  bundleFile present: " + bundleFile.isPresent + "\n" +
+                "If the build itself failed, fix that first: this task runs as a " +
+                "FINALIZER for assemble/bundle, so it still executes when they fail and " +
+                "an upstream failure surfaces here as an absent artifact."
+            )
         }
 
         val (code, headSha) = git("rev-parse", "HEAD")
@@ -637,18 +680,13 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
             throw GradleException("[VerifyProvenance] cannot resolve git HEAD (exit " + code + ")")
         }
 
-        for (apk in apks) {
+        for (apk in artifacts) {
             var meta: String? = null
-            ZipFile(apk).use { zf ->
-                val entry = zf.getEntry("assets/build-metadata.json")
-                if (entry != null) {
-                    meta = zf.getInputStream(entry).readBytes().toString(Charsets.UTF_8)
-                }
-            }
+            ZipFile(apk).use { zf -> meta = readMetadata(zf) }
             val m = meta
             if (m == null) {
                 apk.delete()
-                throw GradleException("Artifact has no assets/build-metadata.json: " + apk.name + " (deleted)")
+                throw GradleException("Artifact has no build-metadata.json (checked assets/ and base/assets/): " + apk.name + " (deleted)")
             }
 
             val packagedCommit = field(m, "commit")
@@ -758,6 +796,27 @@ androidComponents {
         val cap = variant.name.replaceFirstChar { it.uppercase() }
         tasks.matching { it.name == "install" + cap }.configureEach { dependsOn(verify) }
         tasks.matching { it.name == "assemble" + cap }.configureEach { finalizedBy(verify) }
+
+        // BAT-1308: the Play AAB is our WIDEST-DISTRIBUTION artifact and was the
+        // only one shipping ungated. The verifier read SingleArtifact.APK, which a
+        // bundle build never produces, so bundle<Variant> skipped the gate entirely
+        // while assemble/install were covered.
+        //
+        // A separate registration rather than one task taking both artifacts: a
+        // single task declaring APK *and* BUNDLE inputs would force every assemble
+        // to also build a bundle, and every bundle to also build an APK.
+        val verifyBundle = tasks.register<VerifyBuildProvenanceTask>(
+            "verifyBundleProvenance" + cap
+        ) {
+            bundleFile.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.BUNDLE))
+            mergedManifestIn.set(
+                variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST)
+            )
+            isReleaseIn = isRelease
+            repoRootIn = rootProject.layout.projectDirectory.asFile
+            skipIn = gradle.startParameter.projectProperties["skipProvenanceVerify"] == "true"
+        }
+        tasks.matching { it.name == "bundle" + cap }.configureEach { finalizedBy(verifyBundle) }
     }
 }
 

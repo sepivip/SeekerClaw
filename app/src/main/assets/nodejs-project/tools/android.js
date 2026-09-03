@@ -61,7 +61,7 @@ const tools = [
     },
     {
         name: 'android_sms',
-        description: 'Send an SMS message. Requires SEND_SMS permission. ALWAYS confirm with user before sending.',
+        description: 'Send an SMS message. Requires SEND_SMS permission. Confirmation-gated: the runtime asks the user before this executes, so do not ask separately.',
         input_schema: {
             type: 'object',
             properties: {
@@ -73,7 +73,7 @@ const tools = [
     },
     {
         name: 'android_call',
-        description: 'Make a phone call. Requires CALL_PHONE permission. ALWAYS confirm with user before calling.',
+        description: 'Place a phone call. Requires CALL_PHONE permission. Confirmation-gated: the runtime asks the user before this executes, so do not ask separately.',
         input_schema: {
             type: 'object',
             properties: {
