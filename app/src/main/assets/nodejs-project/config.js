@@ -437,11 +437,16 @@ const CUSTOM_FORMAT = (typeof config.customFormat === 'string' ? config.customFo
 const OPENROUTER_FALLBACK_MODEL = (typeof config.openrouterFallbackModel === 'string' ? config.openrouterFallbackModel : '').trim();
 const OPENROUTER_MODEL_CONTEXT = parseInt(config.openrouterModelContext, 10) || 0;
 const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 10) || 0;
+// BAT-1315: these MUST match `defaultModel` per provider in model-registry.json.
+// This chain is a full copy of the registry's defaults with nothing reconciling
+// them — the same shape as ConfigClaimImporter.kt's `when`. Update all of them
+// together, or a fresh install lands on a different model than the registry
+// advertises. Tracked for a proper single-source fix.
 const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.6-sol'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
-    : PROVIDER === 'xai' ? 'grok-4.5'
-    : 'claude-opus-4-8';
+    : PROVIDER === 'xai' ? 'grok-4.6'
+    : 'claude-opus-5';
 // BAT-513: model resolves from runtime_state.json first, then
 // config.json, then the per-provider safe default. The agent_settings.json
 // overlay path (resolveActiveModel) still applies AFTER this for live

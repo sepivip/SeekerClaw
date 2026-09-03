@@ -2256,7 +2256,9 @@ function sanitizeConversation(messages, turnId) {
 // Context window limits per model (input tokens). Conservative — actual limits may be
 // slightly higher, but underestimating is safer than overestimating.
 const MODEL_CONTEXT_LIMITS = {
+    'claude-fable-5-1':    200000, // 1M actual; conservative cap consistent with mobile memory limits
     'claude-fable-5':      200000, // 1M actual; conservative cap consistent with mobile memory limits
+    'claude-opus-5':       200000, // 1M actual; conservative cap consistent with mobile memory limits
     'claude-opus-4-8':     200000,
     'claude-opus-4-7':     200000,
     'claude-opus-4-6':     200000,
@@ -2274,7 +2276,8 @@ const MODEL_CONTEXT_LIMITS = {
     'gpt-5.3-codex':       200000, // BAT-1151: dropped from registry; kept for existing users still on it
     // BAT-1124: xAI Grok context windows. grok-4.x is ~256k+ actual (grok-4.5 ~500k) →
     // 200000 mobile cap (consistent with the claude/gpt caps above). Registry ships
-    // only grok-4.3 + grok-4.5; anything else is a user-typed Custom model.
+    // grok-4.6 / grok-4.5 / grok-4.3; anything else is a user-typed Custom model.
+    'grok-4.6':                     200000,
     'grok-4.5':                     200000,
     'grok-4.3':                     200000,
 };

@@ -67,7 +67,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    Clean — no spurious prefs write or signalConfigChanged.
  *  - **Fresh-install path** (prefs absent): `prefs.getString(KEY_*,
  *    null)` returns `null`; seedFromPrefs uses defaults
- *    (`claude/api_key/claude-opus-4-8`) since no key is present;
+ *    (`claude/api_key/claude-opus-5`) since no key is present;
  *    the migration write puts those defaults into the file; the
  *    first observed emission compares default strings against
  *    `null` prefs values → mismatch → ONE prefs `apply()` runs +
@@ -324,9 +324,15 @@ object RuntimeStateStore {
      * UI's model picker normalizes them on next save.
      */
     internal fun seedFromPrefs(prefs: SharedPreferences): RuntimeState {
-        val provider = prefs.getString(KEY_PROVIDER, "claude") ?: "claude"
-        val authType = prefs.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
-        val model = prefs.getString(KEY_MODEL, "claude-opus-4-8") ?: "claude-opus-4-8"
+        // BAT-1315: these fell back to hardcoded literals — "claude-opus-4-8" written
+        // twice on one line — which made this a THIRD place the shipped default lived,
+        // silently diverging from model-registry.json and RuntimeState. Derive them
+        // from RuntimeState instead, so the default has one definition and updating it
+        // cannot leave a stale copy behind here.
+        val fallback = RuntimeState()
+        val provider = prefs.getString(KEY_PROVIDER, fallback.provider) ?: fallback.provider
+        val authType = prefs.getString(KEY_AUTH_TYPE, fallback.authType) ?: fallback.authType
+        val model = prefs.getString(KEY_MODEL, fallback.model) ?: fallback.model
         val candidate = RuntimeState(provider = provider, authType = authType, model = model)
         return if (isValidPair(candidate.provider, candidate.authType)) candidate else RuntimeState()
     }

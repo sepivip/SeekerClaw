@@ -63,7 +63,12 @@ import kotlinx.serialization.Serializable
 data class RuntimeState(
     val provider: String = "claude",
     val authType: String = "api_key",
-    val model: String = "claude-opus-4-8",
+    // BAT-1315: must match `defaultModel` for the `claude` provider in
+    // model-registry.json. This is a SECOND place the shipped default is written
+    // down, and it is the value a fresh install with empty prefs actually starts
+    // on -- so if the two drift, the registry says one thing and new users get
+    // another. Kept in step by ModelRegistryDefaultsTest.
+    val model: String = "claude-opus-5",
     /**
      * BAT-549 Commit 3b: user-facing toggle for "Extended Thinking".
      * When `true` AND the active model's `reasoningSupport === "yes"`
