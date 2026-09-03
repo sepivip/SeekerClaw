@@ -100,6 +100,52 @@ class ModelRegistryDefaultsTest {
         }
     }
 
+    /**
+     * BAT-1315 — the shipped list is LATEST + ONE PREVIOUS per model line.
+     *
+     * Anthropic keeps every generation available indefinitely, so without a rule the
+     * dropdown grows forever and users scroll past six Opus versions to reach the one
+     * they want. The rule: when Opus 6 ships, Opus 4.8 leaves.
+     *
+     * Dropping a model does NOT strand anyone. Three things carry them:
+     *   - reconcile's equality gate keeps a dropped-from-registry selection working
+     *     (ConfigManagerModelReconcileTest: "dropped-from-registry model survives")
+     *   - the model's MODEL_CONTEXT_LIMITS entry is retained in ai.js, so they keep
+     *     200000 rather than falling to the 128000 default
+     *   - the Custom-model field lets anyone type a dropped id back
+     *
+     * This is a PINNED LIST rather than a computed family rule on purpose. Model
+     * naming does not decompose reliably — gpt-5.6-sol / -terra / -luna are three
+     * tiers of one generation, not a version series — so a clever parser would
+     * mis-fire on OpenAI while adding nothing here. Pinning makes every add or
+     * removal a conscious edit with a reviewer, which is the actual goal.
+     */
+    @Test
+    fun `claude list is latest plus one previous per line`() {
+        val expected = listOf(
+            "claude-fable-5-1",  // latest Fable
+            "claude-fable-5",    // previous Fable
+            "claude-opus-5",     // latest Opus
+            "claude-opus-4-8",   // previous Opus — drops when Opus 6 ships
+            "claude-sonnet-5",   // latest Sonnet
+            "claude-sonnet-4-6", // previous Sonnet
+            "claude-haiku-4-5",  // only Haiku
+        )
+        val actual = providers()
+            .first { it.jsonObject["id"]!!.jsonPrimitive.content == "claude" }
+            .jsonObject["models"]!!.jsonArray
+            .map { it.jsonObject["id"]!!.jsonPrimitive.content }
+
+        assertEquals(
+            "The Anthropic list is latest + one previous per line (see CONTRIBUTING.md). " +
+                "If you are adding a new generation, drop the oldest in that line and update " +
+                "this list — but KEEP its MODEL_CONTEXT_LIMITS entry in ai.js so existing " +
+                "users on it are not silently downgraded to the 128000 fallback.",
+            expected,
+            actual,
+        )
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private fun providers() =

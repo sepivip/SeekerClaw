@@ -98,6 +98,37 @@ All version numbers are **defined** in one place, `app/build.gradle.kts`, and
 > `tests/nodejs-project/build-identity-invariant.test.js` enforces all of this in
 > CI and will fail the build if a constant comes back or a value is written twice.
 
+## Shipping a new AI model
+
+The model dropdown carries **the latest plus one previous per model line**. When
+Opus 6 ships, Opus 4.8 leaves. Anthropic and OpenAI keep old generations
+available indefinitely, so without a rule the list only ever grows and users
+scroll past six Opus versions to reach the one they want.
+
+To add a generation:
+
+1. Add the new id to `app/src/main/assets/nodejs-project/model-registry.json`,
+   and remove the now-third-oldest entry in that line.
+2. **Keep the removed model's `MODEL_CONTEXT_LIMITS` entry in `ai.js`.** Do not
+   delete it. Existing users can still be running it, and without the entry they
+   silently drop from a 200000 context budget to the 128000 fallback — trimming
+   and summarising ~37% earlier than before an update they never asked for.
+3. Set `reasoningSupport` from an **observed live call**, not from the provider's
+   docs. For xAI in particular the docs do not state it, and the live harness has
+   already caught a `reasoning_effort` bug that unit tests missed.
+4. Update the pinned list in `ModelRegistryDefaultsTest` — it exists to make this
+   a conscious edit rather than a drive-by one.
+
+Removing a model does **not** strand anyone who has it selected. Reconcile's
+equality gate passes an off-list selection through unchanged (see
+`ConfigManagerModelReconcileTest`: *"dropped-from-registry model survives for
+existing users"*), and the Custom-model field lets anyone type a dropped id back.
+
+**Changing a `defaultModel` is a user-visible behaviour change** — it decides what
+a fresh install runs. It is pinned in tests on purpose; if an assertion carries a
+rationale in its name (`"reasoning fix device-verified 2026-07-09"`), that
+rationale is evidence, and a provider's documentation does not outrank it.
+
 ## Questions?
 
 - Open a [Discussion](https://github.com/sepivip/SeekerClaw/discussions) for general questions

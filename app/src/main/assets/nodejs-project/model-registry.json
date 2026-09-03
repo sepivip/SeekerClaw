@@ -33,8 +33,6 @@
         { "id": "claude-fable-5",    "displayName": "Fable 5",    "reasoningSupport": "yes" },
         { "id": "claude-opus-5",     "displayName": "Opus 5",     "reasoningSupport": "yes" },
         { "id": "claude-opus-4-8",   "displayName": "Opus 4.8",   "reasoningSupport": "yes" },
-        { "id": "claude-opus-4-7",   "displayName": "Opus 4.7",   "reasoningSupport": "yes" },
-        { "id": "claude-opus-4-6",   "displayName": "Opus 4.6",   "reasoningSupport": "yes" },
         { "id": "claude-sonnet-5",   "displayName": "Sonnet 5",   "reasoningSupport": "yes" },
         { "id": "claude-sonnet-4-6", "displayName": "Sonnet 4.6", "reasoningSupport": "yes" },
         { "id": "claude-haiku-4-5",  "displayName": "Haiku 4.5",  "reasoningSupport": "no"  }

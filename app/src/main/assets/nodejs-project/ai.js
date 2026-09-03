@@ -2260,6 +2260,11 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-fable-5':      200000, // 1M actual; conservative cap consistent with mobile memory limits
     'claude-opus-5':       200000, // 1M actual; conservative cap consistent with mobile memory limits
     'claude-opus-4-8':     200000,
+    // BAT-1315: dropped from the registry dropdown under the latest+previous rule,
+    // kept here for existing users still on them. Reconcile's equality gate lets a
+    // dropped-from-registry selection keep working, so without these entries those
+    // users would silently fall to DEFAULT_CONTEXT_LIMIT (128000) and start trimming
+    // ~37% earlier than before the update — a regression they never opted into.
     'claude-opus-4-7':     200000,
     'claude-opus-4-6':     200000,
     'claude-sonnet-5':     200000, // 1M actual; conservative cap consistent with mobile memory limits
