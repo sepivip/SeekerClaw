@@ -81,7 +81,13 @@ const REGISTRY_MODELS = [
   'grok-4.20-multi-agent-0309',
   'grok-build-0.1',
 ];
-const SCRUTINY_MODELS = ['grok-4.5'];
+// BAT-1316: grok-4.6 joins the scrutiny set. /v1/models already merges in
+// anything the credential can see, so [A]/[B]/[C] would cover it either way --
+// but SCRUTINY_MODELS is what drives phase [D] PARAMETER PROBING, and [D] is the
+// only phase that answers the question the registry actually needs: does this
+// model accept reasoning_effort? Without it, a model that merely WORKS is never
+// param-probed, and we would be guessing reasoningSupport again.
+const SCRUTINY_MODELS = ['grok-4.6', 'grok-4.5'];
 
 // ── .env.test loader (manual KEY=VALUE; no dotenv dependency) ─────────────────
 function loadEnvTest() {
