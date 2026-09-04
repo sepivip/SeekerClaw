@@ -53,7 +53,11 @@ const REDIRECT_PATH = '/callback';
 const REDIRECT_URI = `http://${REDIRECT_HOST}:${REDIRECT_PORT}${REDIRECT_PATH}`;
 const SCOPE = 'openid profile email offline_access grok-cli:access api:access';
 const HTTP_TIMEOUT_MS = 30000;
-const LOGIN_WAIT_MS = 5 * 60 * 1000;
+// BAT-1316: was 5 min, which is not enough when the URL has to travel through a
+// chat round-trip before a human sees it -- two runs died on the login rather
+// than on anything the probe was measuring. Overridable so a CI/unattended run
+// can still fail fast.
+const LOGIN_WAIT_MS = Number(process.env.XAI_LOGIN_WAIT_MS || 20 * 60 * 1000);
 
 // Inference base (mirror providers/xai.js XAI_BASE_URL override, incl. protocol+port).
 function resolveBase() {
@@ -275,7 +279,7 @@ function chatStreamTimed(token, model, { variant = {}, tools = 0, timeoutMs = 20
 
 async function diagnose45(token) {
   console.log(`\n${'═'.repeat(78)}`);
-  console.log('grok-4.5 REASONING/TIMEOUT DIAGNOSIS  (agent-like: system prompt + tools + stream, 200s cap)');
+  console.log('REASONING/TIMEOUT DIAGNOSIS  (agent-like: system prompt + tools + stream, 200s cap)');
   console.log('The app times out at 60s of socket IDLE. firstByte>60000ms ⇒ silent reasoning kills it.');
   console.log('═'.repeat(78));
   const variants = [
@@ -286,7 +290,11 @@ async function diagnose45(token) {
     ['reasoning_effort:minimal+24t [o-series min]', { tools: 24, variant: { reasoning_effort: 'minimal' } }],
     ['no tools, no reasoning       [control]', { tools: 0, variant: {} }],
   ];
-  for (const model of ['grok-4.5', 'grok-4.3']) {
+  // BAT-1316: grok-4.6 first -- it is the model under scrutiny. grok-4.5 and
+  // grok-4.3 stay as the comparison baseline: 4.5 is the model whose device
+  // failure this harness was built to diagnose, and 4.3 is the known-good
+  // control, so a 4.6 number is only meaningful read next to both.
+  for (const model of ['grok-4.6', 'grok-4.5', 'grok-4.3']) {
     console.log(`\n── ${model} ──`);
     for (const [label, opts] of variants) {
       const r = await chatStreamTimed(token, model, { ...opts, timeoutMs: 150000 });
@@ -406,7 +414,7 @@ function awaitCallback(expectedState) {
     });
     server.on('error', (e) => reject(e.code === 'EADDRINUSE' ? new Error(`port ${REDIRECT_PORT} in use — close whatever holds it`) : e));
     server.listen(REDIRECT_PORT, REDIRECT_HOST);
-    setTimeout(() => { try { server.close(); } catch (_) {} reject(new Error('login timeout (5 min)')); }, LOGIN_WAIT_MS);
+    setTimeout(() => { try { server.close(); } catch (_) {} reject(new Error(`login timeout (${Math.round(LOGIN_WAIT_MS / 60000)} min)`)); }, LOGIN_WAIT_MS);
   });
 }
 
