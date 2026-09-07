@@ -2271,6 +2271,7 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-sonnet-4-6':   200000,
     'claude-sonnet-4-5':   200000,
     'claude-haiku-4-5':    200000,
+    'gpt-6-astra':         200000, // 1.05M actual; same mobile cap as the rest
     'gpt-5.6-sol':         200000, // BAT-1151: gpt-5.6 family real window 272k → 200000 mobile cap (consistent with the caps above)
     'gpt-5.6-terra':       200000,
     'gpt-5.6-luna':        200000,

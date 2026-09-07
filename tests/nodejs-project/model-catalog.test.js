@@ -64,7 +64,18 @@ function check(label, actual, expected) {
 }
 
 console.log('── modelsForProvider ────────────────────────────');
-check('openai api_key list starts with gpt-5.6-sol', mc.modelsForProvider('openai', 'api_key')[0].id, 'gpt-5.6-sol');
+// List head = the most capable model, which is picker ORDER, not the default --
+// defaults are explicit constants (asserted below), never list-order-derived. The
+// claude list follows the same convention with Fable 5.1 at the head.
+// gpt-6-astra took the head from gpt-5.6-sol when it was added: it is a generation
+// above, and OpenAI's own docs route "use GPT-6 Astra" for the hardest work while
+// skipping Sol in the recommendation flow. Sol is NOT deprecated and stays listed.
+// Astra is deliberately NOT the default -- $10/$50 per MTok against Sol's $4/$20.
+// Verified live 2026-09-07 on BOTH auth paths (api_key 200/3300ms, oauth-Codex
+// 200/4070ms), so it needs no modelsByAuth.oauth override.
+check('openai api_key list starts with gpt-6-astra (most capable first; NOT the default)', mc.modelsForProvider('openai', 'api_key')[0].id, 'gpt-6-astra');
+check('openai oauth list includes gpt-6-astra (Codex path verified live 2026-09-07)', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-6-astra'), true);
+check('openai default is still gpt-5.6-sol — astra is offered, not defaulted (cost)', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-5.6-sol');
 // BAT-1151 (re-swept 2026-07-17): EVERY listed openai model answers 200 on BOTH auth paths
 // (verified live via the BAT-1144 exact-agent-copy harness), so there is no per-auth split and
 // the registry carries NO `modelsByAuth.oauth` override. These pin the documented fallback
