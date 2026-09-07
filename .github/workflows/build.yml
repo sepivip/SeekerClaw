@@ -147,6 +147,15 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # BAT-1315: the repo has 30+ JVM unit tests that ran NOWHERE automatically —
+      # not in CI, not in pre-push-check.sh. They only executed when someone
+      # remembered to run them by hand, which meant guards like
+      # ModelRegistryDefaultsTest (shipped default vs registry drift) and
+      # XaiProviderContractTest (registry decodes without MissingFieldException)
+      # were decorative. A guard that never executes protects nothing.
+      - name: JVM unit tests
+        run: ./gradlew testDappStoreDebugUnitTest
+
       - name: Build debug APKs
         run: ./gradlew assembleDappStoreDebug assembleGooglePlayDebug
 
