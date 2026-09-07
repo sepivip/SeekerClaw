@@ -106,3 +106,10 @@ tests/jupiter-ultra/fixtures/v2-flow-*.json
 tests/jupiter-ultra/node_modules/
 tests/jupiter-ultra/package-lock.json.local-backup
 tests/jupiter-ultra/package.json.local-backup
+
+# JVM crash dumps. Local Gradle runs can exhaust memory ("insufficient memory
+# for the Java Runtime Environment to continue") and drop these in the repo
+# root and app/. They are large, machine-specific, and easy to commit by
+# accident during a git add -A.
+hs_err_pid*.log
+replay_pid*.log
