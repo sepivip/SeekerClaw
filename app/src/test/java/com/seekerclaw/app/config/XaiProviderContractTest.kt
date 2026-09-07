@@ -107,7 +107,12 @@ class XaiProviderContractTest {
         assertTrue("xai.keyHint must be present", xai.keyHint.isNotBlank())
         assertTrue("xai.consoleUrl must be present", xai.consoleUrl.isNotBlank())
         assertTrue("xai.keysUrl must be present", xai.keysUrl.isNotBlank())
-        assertEquals("grok-4.5", xai.defaultModel)
+        // BAT-1316: grok-4.5 -> grok-4.6, on a live OAuth probe (the device path),
+        // 2026-09-07: agent-shaped streaming with 24 tools gave firstByte 912ms
+        // against the app's 60s socket-idle timeout, with reasoningStreamed=Y on
+        // every variant -- i.e. it streams reasoning rather than thinking silently,
+        // which is precisely what made grok-4.5 look dead on device.
+        assertEquals("grok-4.6", xai.defaultModel)
         assertEquals(listOf("api_key", "oauth"), xai.authTypes)
         // defaultModel must be present in the model list (freeform:false, models:[] is unshippable).
         assertTrue(

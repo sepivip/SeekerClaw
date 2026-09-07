@@ -188,14 +188,16 @@ console.log('── xai (BAT-1124) ───────────────
 check('xai → xAI display name', mc.displayNameForProvider('xai'), 'xAI');
 check('xai has api_key + oauth', mc.authTypesForProvider('xai'), ['api_key', 'oauth']);
 check('provider order = openai, claude, xai, openrouter, custom (xAI 3rd, Custom always last — BAT-1124)', mc.KNOWN_PROVIDERS, ['openai', 'claude', 'xai', 'openrouter', 'custom']);
-check('xai default is grok-4.5 (reasoning fix device-verified 2026-07-09)', mc.defaultModelForProvider('xai', 'oauth'), 'grok-4.5');
-check('xai list trimmed to exactly 2 models (grok-4.3 + grok-4.5)', mc.modelsForProvider('xai', 'api_key').length, 2);
+check('xai default is grok-4.6 (OAuth probe 2026-09-07: firstByte 912ms w/ 24 tools vs 60s timeout, reasoningStreamed=Y)', mc.defaultModelForProvider('xai', 'oauth'), 'grok-4.6');
+check('xai list is latest + one previous (grok-4.6 + grok-4.5)', mc.modelsForProvider('xai', 'api_key').length, 2);
+check('xai model list includes grok-4.6', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.6'), true);
 check('xai model list includes grok-4.5', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.5'), true);
-check('xai model list includes grok-4.3', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.3'), true);
+check('xai dropped grok-4.3 from the dropdown (latest+previous rule; still runs for existing users via reconcile)', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.3'), false);
 check('xai dropped grok-4.20-multi-agent-0309 (broken on chat/completions)', mc.modelsForProvider('xai', 'api_key').some((m) => m.id === 'grok-4.20-multi-agent-0309'), false);
 check('xai is NOT freeform — rejects unknown model', mc.validateModelForProvider('xai', 'api_key', 'grok-nope').ok, false);
+check('xai accepts grok-4.6', mc.validateModelForProvider('xai', 'api_key', 'grok-4.6').ok, true);
 check('xai accepts grok-4.5', mc.validateModelForProvider('xai', 'api_key', 'grok-4.5').ok, true);
-check('xai accepts grok-4.3', mc.validateModelForProvider('xai', 'api_key', 'grok-4.3').ok, true);
+
 check('xai does NOT ship image/video models', mc.modelsForProvider('xai', 'api_key').some((m) => /imagine/.test(m.id)), false);
 check('xai oauth creds present', mc.hasCredentialsFor({ xaiOAuthToken: 'eyJabc' }, 'xai', 'oauth').ok, true);
 check('xai oauth creds missing → rejected', mc.hasCredentialsFor({}, 'xai', 'oauth').ok, false);
