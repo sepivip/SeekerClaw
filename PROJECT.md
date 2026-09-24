@@ -12,19 +12,19 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent that can pa
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **37 skills (22 bundled incl. burner-wallet + paysh-catalog + 13 workspace + 2 user-created)**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + xAI/Grok + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **22 bundled skills (incl. burner-wallet + paysh-catalog) + 13 workspace examples**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + xAI/Grok + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
 
 ## What It Is
 
-SeekerClaw is an Android app built for the Solana Seeker phone (also works on any Android 14+ device with 4GB+ RAM). It packages a Node.js 18 runtime via nodejs-mobile and runs an AI agent gateway derived from OpenClaw. The agent connects to Anthropic's Claude API for intelligence and to Telegram for user communication.
+SeekerClaw is an Android app built for the Solana Seeker phone (also works on any Android 14+ device with 4GB+ RAM). It packages a Node.js 18 runtime via nodejs-mobile and runs an AI agent gateway derived from OpenClaw. The agent connects to the user's chosen AI provider (Anthropic Claude, OpenAI, OpenRouter, xAI Grok, or any OpenAI-compatible gateway) for intelligence and to Telegram or Discord for user communication.
 
-**Who it's for:** Seeker phone owners who want an always-on AI assistant that can manage their crypto wallet, control their phone, search the web, and automate tasks — all from Telegram.
+**Who it's for:** Seeker phone owners who want an always-on AI assistant that can manage their crypto wallet, control their phone, search the web, and automate tasks — all from Telegram or Discord.
 
 **How it works:**
 1. User installs the app, scans a QR code with API credentials
 2. The app starts a foreground service running Node.js
-3. Node.js runs the AI gateway, connecting to Claude + Telegram
-4. User sends messages in Telegram, agent responds with tools
+3. Node.js runs the AI gateway, connecting to the chosen AI provider + Telegram or Discord
+4. User sends messages in Telegram or Discord, agent responds with tools
 
 ## Tech Stack
 
@@ -33,32 +33,33 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | Language (Android) | Kotlin | — |
 | UI Framework | Jetpack Compose (Material 3) | — |
 | Min SDK | 34 (Android 14) | — |
+| Target / Compile SDK | 36 (Android 16) | — |
 | Node.js Runtime | nodejs-mobile (community fork) | Node 18 LTS |
-| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + xAI Grok (Chat Completions) + Custom (any OpenAI-compatible gateway) | Claude Opus 4.8 default; OpenAI + OpenRouter + xAI + Custom via adapters |
-| Messaging | Telegram Bot API (grammy) | — |
+| AI Provider | Anthropic Claude API + OpenAI Responses API + OpenRouter Chat Completions + xAI Grok (Chat Completions) + Custom (any OpenAI-compatible gateway) | Defaults: Claude Opus 5 · OpenAI GPT-5.6 Sol · xAI Grok 4.6 · OpenRouter `anthropic/claude-sonnet-4-6` · Custom uses the configured model |
+| Messaging | Telegram Bot API (direct HTTPS long-polling, no SDK) + Discord Gateway v10 (WebSocket via bundled `ws`) | Bot API 10.1 |
 | Database | SQL.js (WASM SQLite) | 1.12.0 |
 | OpenClaw Parity | OpenClaw gateway (ported) | 2026.4.10 |
 | Web Search | Brave, Perplexity, Exa, Tavily, Firecrawl (single-provider) | — |
-| Wallet | Solana Web3.js + Jupiter API | — |
-| Build | Gradle (Kotlin DSL) | — |
+| Wallet | Solana JSON-RPC with hand-rolled transaction parsing in Node (no `@solana/web3.js`); Mobile Wallet Adapter (main wallet) + BouncyCastle Ed25519 (burner wallet) in Kotlin; Jupiter API | MWA clientlib-ktx 2.0.4; BouncyCastle 1.78.1 |
+| Build | Gradle (Kotlin DSL); per-variant build metadata (`assets/build-metadata.json`) packaged into every artifact and verified against git HEAD and the merged manifest before install | — |
 
 ## Features — Shipped
 
 ### AI Agent Core
-- **Claude integration** — Fable 5, Opus 4.8 (default), Opus 4.7, Opus 4.6, Sonnet 5, Sonnet 4.6, Haiku 4.5 selectable (+ custom model IDs). Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
-- **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter/xai/custom) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. xAI (Grok) adapter via `api.x.ai/v1/chat/completions` for both API-key and "Sign in with Grok" OAuth (PKCE; SuperGrok / X subscription token) — Grok 4.5 (default) + Grok 4.3, OpenAI-style `reasoning_effort`, full tool + vision parity. Custom provider for any OpenAI-compatible gateway — user-configurable base URL, API key, custom headers, and Chat Completions or Responses API format. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
-- **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, MAX_TOOL_USES=25 for complex tasks
+- **Claude integration** — Fable 5.1, Fable 5, Opus 5 (default), Opus 4.8, Sonnet 5, Sonnet 4.6, Haiku 4.5 selectable (+ custom model IDs); the picker keeps the latest + one previous per model line, and a model dropped from the picker keeps working for anyone who already has it selected. Extended Thinking available on every listed model except Haiku 4.5. Prompt caching, retry with backoff, rate-limit throttling, user-friendly error messages. OAuth/setup token support for Claude Pro/Max users. Conversational API key setup flow.
+- **Multi-provider architecture** — Provider adapter pattern (claude/openai/openrouter/xai/custom) with unified internal message format. OpenAI Responses API support (`/v1/responses`) with SSE streaming, function_call items, vision; API-key or ChatGPT-subscription (Codex OAuth) sign-in with the same model list on both — GPT-5.6 Sol (default) / Terra / Luna, GPT-6 Astra (opt-in), GPT-5.5, GPT-5.4, GPT-5.4 Mini. OpenRouter Chat Completions adapter with prompt caching, model fallbacks, error classification (401-503), vision support. xAI (Grok) adapter via `api.x.ai/v1/chat/completions` for both API-key and "Sign in with Grok" OAuth (PKCE; SuperGrok / X subscription token) — Grok 4.6 (default) + Grok 4.5, OpenAI-style `reasoning_effort`, full tool + vision parity. Custom provider for any OpenAI-compatible gateway — user-configurable base URL, API key, custom headers, and Chat Completions or Responses API format. Provider-agnostic DB logging and usage tracking. Safe defaults — unknown provider falls back to Claude. Credential hygiene — only active provider's key written to config.json.
+- **Multi-turn task execution** — Reliable P2 multi-turn: tool budget management with validation-aware restore, silent turn stop prevention on budget exhaustion, per-turn tool-step cap `maxStepsPerTurn` (default 35, adjustable 10–100 in Settings; when reached, the agent offers `continue` or `/resume`)
 - **API timeout hardening** — Configurable timeouts (replacing hardcoded 60s), bounded retry with backoff for timeout paths, turn-level tracing instrumentation, sanitized user-visible error messages, 429 retry jitter
 - **Context token estimation + adaptive trimming** — Token-aware conversation management that estimates context size and trims oldest messages to stay within limits, preventing API failures from oversized contexts
 - **Streaming + payload optimization** — Eliminates API transport timeouts via streaming responses, response field whitelisting to prevent payload bloat (_inputJson leak fix), MAX_HISTORY bumped 20→35 for richer context
-- **Telegram owner gate** — Service refuses to start without valid TELEGRAM_OWNER_ID; unauthorized users get reaction + comment warning; all gate events logged at WARN level
+- **Telegram owner gate** — Only the owner's messages are processed. With no owner ID configured, the first account to message the bot claims ownership (persisted via the Android bridge); messages and inline-button callbacks from anyone else are ignored and logged at WARN level
 - **MCP support** — Remote MCP (Model Context Protocol) servers via Streamable HTTP. Users add server URLs in Settings; agent discovers and uses tools at startup. Description sanitization, SHA-256 rug-pull detection, untrusted content wrapping, per-server + global rate limiting.
 - **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (docs/internal/TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.), inline keyboard buttons via `telegram_send` with callback query handling
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
 - **Setup token billing attribution** — Anthropic setup tokens (sk-ant-oat01-*) now work with Sonnet/Opus via CC_BILLING_HEADER in system prompt (BAT-460)
-- **Self-awareness system prompt** — Self-knowledge doors, architecture blocks, self-diagnosis playbook for troubleshooting tool failures and silent responses. Debug log rotation at 5MB with `.old` archive. DIAGNOSTICS.md deep troubleshooting guide. SAB-AUDIT-v13: 100% score (141/141 audit points)
+- **Self-awareness system prompt** — Self-knowledge doors, architecture blocks, self-diagnosis playbook for troubleshooting tool failures and silent responses. Debug log rotation at 5MB with `.old` archive. DIAGNOSTICS.md deep troubleshooting guide. Latest audit: SAB-AUDIT-v47 (2026-09-07), 51/51 on its audited surface
 - **Structured log levels** — DEBUG/INFO/WARN/ERROR pipeline with per-level routing; UI log viewer color-coded by level; LogCollector filters noise from debug output
 - **Quick Actions** — `/quick` command sends Telegram inline keyboard with 6 preset one-tap buttons (Status, Portfolio, SOL Price, News Brief, My Tasks, Memory). Self-contained `quick-actions.js` module with single-source-of-truth button definitions.
 - **Search provider system** — Configurable web search backend (Exa, Tavily, Firecrawl, Brave, Perplexity) with per-provider API key management in Settings. Single-provider architecture — one active at a time.
@@ -82,7 +83,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Recurring jobs** — "every 2 hours", "every day at noon"
 - **Natural language parsing** — No cron syntax needed
 - **JSON persistence** — Atomic writes with backup, per-job execution history
-- **Zombie detection** — 2-hour threshold with error backoff
+- **Stuck-job protection** — per-run timeouts (60s reminders, 5 min agent turns), interrupted-run markers cleared on restart, exponential error backoff for recurring jobs (30s → 60 min)
 
 ### Web Intelligence
 - **Web search** — 5 providers: Brave Search, Perplexity Sonar, Exa, Tavily, Firecrawl (single-provider selection, no fallback chain)
@@ -97,28 +98,30 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Phone calls** — Dial numbers (requires CALL_PHONE, user confirmation)
 - **GPS location** — Current coordinates (requires ACCESS_FINE_LOCATION)
 - **Text-to-speech** — Speak text with configurable speed/pitch
-- **Camera** — Capture photos (front/back) + Claude vision analysis
+- **Camera** — Capture photos (front/back) + vision analysis via the active AI provider
 - **Apps** — List installed apps, launch by package name
 
-### Solana Wallet (16 tools)
+### Solana Wallet (18 tools)
 - **Balance check** — SOL + SPL token balances
 - **Transaction history** — Recent transactions for any address
 - **Connected wallet** — Get address from SeekerClaw app
 - **Send SOL** — Transfer with wallet approval on phone
 - **Token prices** — Real-time USD prices via Jupiter
-- **Swap quotes** — Jupiter Ultra API quotes with price impact
+- **Swap quotes** — Jupiter Swap API quotes (Metis routing) with price impact
 - **Token swaps** — Gasless swaps via Jupiter Ultra API with MWA sign-only flow, v0 transaction validation
 - **Limit orders** — Create/list/cancel limit orders and stop-loss orders (Jupiter Trigger API)
-- **DCA orders** — Create/list/cancel dollar-cost averaging positions (Jupiter DCA API)
+- **DCA orders** — Create/list/cancel dollar-cost averaging positions (Jupiter Recurring API)
 - **Token search** — Search tokens by symbol or name, get mint addresses
 - **Token security** — Check token security/legitimacy before trading
 - **Wallet holdings** — Full portfolio view with USD values via Jupiter
+- **SPL token sends** — `solana_send_token` sends USDC, USDT or any classic SPL mint, creating the recipient's token account if missing; USDC under the burner caps goes silently from the burner wallet, any other token (and Token-2022 mints) prompts the main wallet
+- **NFT holdings** — `solana_nft_holdings` lists NFTs held by a wallet, including compressed NFTs (requires a Helius API key)
 
 ### Burner Wallet — Autonomous Solana Signing + x402 Payments (BAT-582, 3 tools)
 - **User-imported, app-stored Solana keypair** — user pastes a private key once (base58 or JSON byte array) from Phantom / Solflare / hardware wallet / `solana-keygen`. **SeekerClaw does not generate keys.** Encrypted at rest in Android KeyVault (BouncyCastle Ed25519, KeystoreHelper-backed AES-256-GCM, Base64 boundary). **Key never crosses the bridge into Node** — Android signs, Node calls bridge endpoints.
-- **Per-tx + daily caps** for SOL and USDC (atomic units, BigInteger throughout, UTC midnight rollover). Defaults: 0.05 / 0.5 SOL, 5 / 50 USDC.
+- **Per-tx + daily caps** for SOL and USDC (atomic units, BigInteger throughout, UTC midnight rollover). No caps are pre-set: every cap starts at 0, and the burner cannot spend an asset until both its per-tx and daily caps are set (the Settings form suggests 0.05 / 0.5 SOL, 5 / 50 USDC).
 - **Reserve / commit / release** state machine with stale-reservation sweep (60s TTL, 30s sweep). Mutex-guarded. Android is the SOLE writer of cap state.
-- **Wallet routing** in `caps/preflight.js` decides burner vs main on every spending tool. Under-cap burner → silent (`policy: "none"`); main wallet → MWA popup (`policy: "confirm"`); over-cap with no fallback → blocked. `solana_send`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create`, `jupiter_trigger_cancel`, `jupiter_dca_cancel` all participate.
+- **Wallet routing** in `caps/preflight.js` decides burner vs main on every spending tool. Under-cap burner → silent (`policy: "none"`); main wallet → MWA popup (`policy: "confirm"`); over-cap with no fallback → blocked. `solana_send`, `solana_send_token` (USDC is cap-gated; any other SPL token routes to the main wallet), `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create`, `jupiter_trigger_cancel`, `jupiter_dca_cancel` all participate.
 - **`wallet_status`** — read both wallets' state (configured, pubkey, caps, today's spend, remaining daily).
 - **`wallet_set_caps`** — update burner caps (per-tx and daily, SOL + USDC). Always confirms; surface shows old → new diff.
 - **`agent_pay`** — pay an x402-protected HTTP endpoint and fetch its response. Object-shaped args `{ url, max_usdc, method?, body? }`. `max_usdc` is a decimal string. `body` is a JSON object/array for POST (rejected on primitives via `body_not_json`).
@@ -133,12 +136,13 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **44 catalog entries** in v2 across **10 services** (genuinely multi-endpoint now: stablecrypto-market-data has 21 endpoints covering CoinGecko price/chart/markets + DefiLlama TVL/yields/stablecoins; tripadvisor 5 endpoints (search/nearby/details/reviews/photos); rentcast 5 endpoints (markets/avm/properties/listings-sale/listings-rental); crushrewards 4 endpoints (best-price/price-history/deal-finder/inflation); perplexity 2 (search/agent); wolframalpha 2 (v1-result/v2-query); reducto 2 (extract/parse); singletons: 2Captcha, Purch, Textbelt SMS. Service breakdown: StableCrypto Market Data, Wolfram Alpha, Tripadvisor, 2Captcha, Rentcast, Reducto, Crushrewards, Perplexity, Purch, Textbelt SMS. StableEnrich was demoted to unsupported in BAT-761 PR #379 R7 — re-probe + re-promote planned in BAT-772. Skill is OPT-IN ONLY (activates on explicit pay.sh / paysh / x402 / 'pay for' keywords) per BAT-704. Tier 1 catalog expansion was BAT-769 (perplexity, 2 entries) + BAT-768+766 combined (stablecrypto extras 20 + same-provider extras 13 = 33 entries).
 - **`unsupported.json` v2** — 63 known-but-not-usable entries with **six reason buckets** in the top-level `reasons` registry: `mpp_protocol`, `siwx_auth_required`, `invalid_demand`, `requires_binary_response`, `endpoint_not_402_at_probe`, `unverified_paid_response_shape`. Many entries carry an `audit_pending[]` field listing sibling endpoints found by the BAT-706 full-catalog audit (238 sibling endpoints total across 10 services — quicknode 133, stablesocial 36, stableenrich 32 [from the demoted catalog entry — see Tier 2c BAT-772], stablecrypto extras, perplexity (1 remaining: /v1/async/sonar after BAT-769 promoted /search + /v1/agent — async-fetch follow-up unscheduled, `deferred_to: null`), fal, etc.) — each pending endpoint's `deferred_to` is either a BAT-XXX follow-up ticket id (BAT-766/768/770/771/772/764 — note BAT-769 is closed; perplexity is now catalogued except for /v1/async/sonar which is unscheduled) when a follow-up exists, or `null` when the endpoint is unscheduled (no ticket yet). Agent can answer "I know about Google Vision but can't pay it — our probe got HTTP 400" honestly instead of generic "I don't have that."
 - **Maintenance tooling** (`tests/paysh/probe-catalog.js` BAT-761): `--drift` fetches pay.sh upstream tree + diffs against catalog (exits non-zero on drift, CI-friendly); `--status` writes `tests/paysh/catalog-status.md` with fresh/stale/audit-pending sections; `--refresh <id>` re-probes one entry and updates its verification + capture file. v1 → v2 migration via `tests/paysh/migrate-v1-to-v2.js` (one-shot, idempotent, with built-in schema validation per SCHEMA.md).
-- **Folder seeding** — Bundled skills' support files (catalog.json, unsupported.json, services/*.md, SCHEMA.md) are copied from `assets/default-skills/<name>/` to `workspace/skills/<name>/` recursively on first install and version upgrade (BAT-699 R6 extended `ConfigManager.seedSkill()`; BAT-699 R7 stage-then-swap preserves user-added entries). SKILL.md version 1.6.0 (bumped 1.3.0 → 1.4.0 in BAT-761, → 1.5.0 in BAT-769, → 1.6.0 in BAT-768+766) triggers re-seed for existing installs on each catalog change.
+- **Folder seeding** — Bundled skills' support files (catalog.json, unsupported.json, services/*.md, SCHEMA.md) are copied from `assets/default-skills/<name>/` to `workspace/skills/<name>/` recursively on first install and version upgrade (BAT-699 R6 extended `ConfigManager.seedSkill()`; BAT-699 R7 stage-then-swap preserves user-added entries). SKILL.md version 1.9.0 (bumped 1.3.0 → 1.4.0 in BAT-761, → 1.5.0 in BAT-769, → 1.6.0 in BAT-768+766, → 1.7.0 and 1.8.0 in the BAT-768 openapi fixes #382/#383, → 1.9.0 in BAT-1035 #405) triggers re-seed for existing installs on each catalog change.
 - **Static bundle** — Ships with APK. Auto-refresh from upstream pay.sh is a follow-up (BAT-700 / BAT-765 weekly CI drift check).
 
 ### Execution
-- **Shell exec** — 33 sandboxed commands including Android tools (cat, ls, curl, grep, find, sed, diff, screencap, getprop, etc.), workspace-restricted
+- **Shell exec** — 34 sandboxed commands including Android tools (cat, ls, curl, grep, find, sed, diff, screencap, getprop, etc.), workspace-restricted
 - **JS eval** — Run JavaScript inside Node.js process, async/await, require() for builtins
+- **Tool search** — `tool_search` looks up available tools by keyword and returns their names, descriptions and schemas
 
 ### File Management
 - **Read/Write/Edit/Delete** — Full workspace file operations
@@ -146,7 +150,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Protected files** — SOUL.md, MEMORY.md, IDENTITY.md, USER.md, HEARTBEAT.md cannot be deleted
 
 ### Analytics
-- **API request logging** — Every Claude call logged to SQL.js (tokens, latency, cache hits, errors)
+- **API request logging** — AI provider calls (chat turns, vision, session summaries) logged to SQL.js (tokens, latency, cache hits, errors)
 - **Session status** — Uptime, memory usage, model, conversation stats, today's API usage
 - **Memory stats** — File sizes, daily file count, database index status
 - **Stats bridge endpoint** — `/stats/db-summary` for Android UI
@@ -161,11 +165,17 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | `/reset` | Clear conversation (no summary) |
 | `/soul` | Show personality |
 | `/memory` | Show long-term memory |
-| `/skills` | List installed skills |
+| `/skill` (alias `/skills`) | List skills or run one by name |
 | `/version` | Show app/OpenClaw/Node versions |
 | `/logs` | Show recent debug log entries |
 | `/approve` | Approve pending confirmation |
 | `/deny` | Deny pending confirmation |
+| `/quick` | One-tap preset actions |
+| `/model` | Show or switch AI model |
+| `/provider` | Show or switch AI provider |
+| `/think` | Toggle extended thinking & display |
+| `/resume` | Resume an interrupted task |
+| `/commands` | Alias for `/help` |
 
 ### Skills (22 bundled + 13 workspace, version-aware seeding)
 **Bundled skills (OpenClaw format, seeded by ConfigManager.kt with SHA-256 integrity + version tracking):** bookmark, briefing, burner-wallet, calclaw (AI calorie tracker), calculator, crypto-prices, define, github, joke, movie-tv, netwatch (network monitoring & security audit), news, notes, paysh-catalog, quote, reminders, research, summarize, timer, todo, translate, weather
@@ -179,21 +189,21 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ### Security
 - **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
 - **Skill file protection** — Writes/edits to `skills/` blocked when suspicious injection patterns detected in content
-- **Tool confirmation gates** — `android_sms`, `android_call`, `solana_send`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES via Telegram before execution. 60s timeout auto-cancels. Rate limited (SMS/call 1 per 60s, Solana 1 per 15s, Jupiter 1 per 30s)
+- **Tool confirmation gates** — `android_sms`, `android_call`, `android_camera_capture`, `android_location`, `solana_send`, `solana_send_token`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES in chat before execution (with a burner wallet configured, under-cap burner spends skip the prompt — see Burner Wallet). The runtime gate is the only prompt: the SMS and call tool descriptions tell the model not to ask separately, so the user confirms once, not twice (BAT-1306). 60s timeout auto-cancels; unavailable in scheduled-task and heartbeat turns. Rate limited (SMS/call 1 per 60s; camera, location, `solana_send`, `solana_swap` 1 per 15s; Jupiter order creation 1 per 30s)
 - **Jupiter API hardening** — 7 fixes from official skill audit (BAT-151-157): no retry for non-idempotent POSTs, amount validation, slippage bounds, error message sanitization
-- **Secrets blocklist** — `config.json`, `config.yaml`, `seekerclaw.db` blocked from `read` tool (with symlink resolution) and `js_eval` fs access (proxied `fs`/`fs.promises` modules)
-- **ALT-safe swap verification** — `verifySwapTransaction()` rejects instructions referencing programs via Address Lookup Tables (prevents drainer bypass)
+- **Secrets blocklist** — `config.js`, `config.json`, `config.yaml`, `seekerclaw.db`, `xai_oauth.json` blocked from `read` tool (with symlink resolution) and `js_eval` fs access (proxied `fs`/`fs.promises` modules)
+- **Swap transaction verification** — `verifySwapTransaction()` checks the fee payer and required signers; programs are labelled for logs, not allowlisted, and Address Lookup Tables are accepted (BAT-1013). Autonomous burner signing adds drainer-instruction blocking, a per-account loss invariant and simulate-vs-quote enforcement (`wallet/burner-policy.js`); main-wallet transactions still require approval in the wallet app
 - **js_eval sandbox** — blocked modules (child_process, vm, etc.), restricted fs (read/write/copy guards on sensitive files), shadowed `process`/`global`/`globalThis`
 - API key redaction in logs
 - Path traversal prevention (workspace sandboxing)
 - Shell command allowlist (no rm, kill, etc.)
 - Bridge token authentication
-- Swap transaction verification (checks payer, programs, signers)
+- Swap transaction verification (checks fee payer and required signers)
 
 ### Channels
 - **Telegram** — Primary channel. HTML formatting, reactions, file sharing, vision, inline keyboards, bot commands.
-- **Discord** — Gateway v10 WebSocket, channel abstraction (`channel.js`), message formatting adapted for Discord markdown. Seeded via `channel` field in `config.yaml`. Full feature parity with Telegram (tools, confirmations, reactions via message edits).
-- **Channel abstraction** — `channel.js` module provides a unified `sendMessage()`/`sendTyping()`/`sendReaction()` interface. Adding a new channel requires only a new adapter module — core agent logic is channel-agnostic.
+- **Discord** — Gateway v10 WebSocket, channel abstraction (`channel.js`), message formatting adapted for Discord markdown. Selected via the `channel` field in `config.json` (one active channel at a time). Shares the agent core and confirmations; all tools except the four Telegram-specific ones (60 of 64); status reactions are not shown on Discord.
+- **Channel abstraction** — `channel.js` module provides a unified `sendMessage()`/`sendTyping()`/`sendFile()`/`editMessage()`/`deleteMessage()` interface plus a status-reaction controller. Adding a new channel requires only a new adapter module — core agent logic is channel-agnostic.
 
 ### App (Android)
 - **Live cross-process state** — Provider/authType/model (BAT-513), MCP servers (BAT-514), and agent name + search provider (BAT-515) all live in CrossProcessStore-backed JSON files (`runtime_state.json`, `mcp_servers.json`, `agent_preferences.json`). Settings UI and `:node` see each other's writes without a service restart. Atomic-rollback in `saveConfig` keeps prefs and the cross-process files convergent on FS failure.
@@ -201,15 +211,16 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Setup wizard** — QR scan or manual API key entry, OAuth/setup token support, haptic feedback
 - **Dashboard** — Status with pulse animation (running) + dimming (stopped), uptime, message stats, active uplinks, mini terminal, API health monitoring (green/amber/red), dismissible error/network banners, deploy button disabled state when config incomplete
 - **Logs viewer** — Color-coded, auto-scrolling monospace, stable keys for performance
-- **Settings** — Collapsible sections with animation, grouped Anthropic & Telegram settings, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons, permission revoke dialog on granted toggles
+- **Settings** — Collapsible sections with animation, dedicated screens for AI provider, channel (Telegram / Discord), search provider, MCP servers, env vars and burner wallet, edit config with masked fields, required field indicators (*), model dropdown, auto-start, battery optimization, export/import (allowlist-based, size-capped, auto-backup before import), wallet copy button, MCP server management (add/edit/remove/toggle), visual escalation for danger zone, semantic action colors (green positive, red danger), accessibility content descriptions on all icons, permission revoke dialog on granted toggles
 - **Skills tab** — Installed skills list with search, skill detail view with export button, marketplace teaser, skill images (Coil), "Added"/"Default" grouping, bulk export/import (ZIP + .md)
-- **System screen** — API usage stats, memory index status, Material Design polish with M3 spacing tokens
+- **System screen** — API usage stats, memory index status, Material Design polish with M3 spacing tokens. Version, Claw Engine and Node.js rows (shared with Settings → System) are read at runtime — version name/code from the installed package, engine versions from the packaged build metadata — so they always describe the build that is actually running; a build whose identity is unverified, unreadable or built from uncommitted changes is labelled as such.
 - **Foreground service** — START_STICKY with wake lock, boot receiver, watchdog (30s health check), heartbeat end-to-end probe
-- **Open-source ready** — MIT license, CONTRIBUTING.md, issue/PR templates, GitHub Actions CI + release workflows, Firebase Analytics build-optional, product flavors (full w/ Firebase + FOSS without)
+- **Open-source ready** — MIT license, CONTRIBUTING.md (incl. the model-shipping rule: latest + one previous per model line), issue/PR templates, GitHub Actions CI (Node tests + JVM unit tests) + release workflows, build-provenance gate on both APK and AAB outputs, Firebase Analytics build-optional, product flavors `dappStore` (APK) + `googlePlay` (AAB)
+- **Store distribution** — live on Google Play (`googlePlay` AAB) and the Solana dApp Store (`dappStore` APK); tagged releases also attach the APK and AAB to GitHub Releases. Both store builds ship the same version name and version code.
 
 ## Features — In Progress
 
-_None currently._
+- **Flipper Zero IR appliance control over BLE** (BAT-1202) — lets the agent press infrared-remote buttons the user has saved and enabled on a Bluetooth-paired Flipper Zero. The allowlist is enforced on the Android side and can only be edited in Settings; IR only. Open PR #447, not yet merged.
 
 ## Features — Planned
 
@@ -217,8 +228,7 @@ _None currently._
 |----------|---------|-------|
 | High | Transaction monitoring & smart alerts | Watch wallet for incoming/outgoing, alert via Telegram |
 | High | Vector embeddings for semantic memory | Needs native bindings or WASM solution |
-| Medium | FTS5 full-text search | SQL.js supports it, needs implementation |
-| Medium | dApp Store listing | Pipeline exists, needs submission |
+| Medium | Full-text search (FTS4) | Bundled SQL.js build has FTS3/FTS4 but not FTS5 — needs implementation |
 | Low | Multi-channel (WhatsApp, Slack) | Discord shipped (BAT-483); channel abstraction exists — add new channel adapters |
 | Low | Multi-agent coordination | Future architecture |
 | Low | Community skill marketplace | Skill distribution |
@@ -228,7 +238,7 @@ _None currently._
 ```
 User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gateway (on phone)
                                                                           |
-                                                                    Claude API (HTTPS)
+                                                                    AI Provider API (HTTPS)
                                                                           |
                                                                     Android Bridge (localhost:8765)
                                                                           |
@@ -241,12 +251,12 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 │   - Dashboard                  - Node.js Runtime   │
 │   - Setup                        - OpenClaw Gateway │
 │   - Logs                         - AI Agent         │
-│   - Settings                     - 63 Tools         │
+│   - Settings                     - 64 Tools         │
 │                                  - SQL.js DB        │
 │  Boot Receiver ──> Auto-start                      │
 │  Watchdog ──> 30s health check                     │
 │  Android Bridge (port 8765)                        │
-│  Stats Server (port 8766)                          │
+│  Node Control Server (port 8766)                   │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -256,33 +266,36 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 - **No vector embeddings** — Semantic memory search not possible yet (keyword search only)
 - **OEM battery killers** — Xiaomi MIUI, Samsung OneUI may aggressively kill the background service; Seeker's stock Android avoids this
 - **No browser/screen/canvas skills** — Can't be ported from OpenClaw (requires desktop environment)
-- **Ephemeral context** — Conversation history resets on Node.js restart (mitigated by session summaries)
+- **Ephemeral context** — Conversation history is held in memory and resets on Node.js restart (mitigated by session summaries, and by on-disk checkpoints of an interrupted task — its last 8 messages, kept up to 7 days — which resume automatically after a restart if under 5 minutes old, otherwise via `/resume`)
 - **Two channels** — Telegram and Discord supported; WhatsApp and others not yet implemented
-- **dApp Store live** — Available on Solana dApp Store (v1.4.3)
+- **Google Play build: SMS is hand-off only** — the Google Play build has no `SEND_SMS` permission, so the agent opens the system SMS app with the message pre-filled and the user taps Send; the dApp Store build sends directly
 - **No light theme** — Dark only (DarkOps single theme)
 
 ## Stats
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 740+ |
-| PRs merged | 437+ |
+| Total commits | 768 |
+| PRs merged | 364 (of 407 opened) |
 | AI Providers | 5 (Claude, OpenAI, OpenRouter, xAI/Grok, Custom) |
-| Tools | 64 (18 Solana/Jupiter [+solana_send_token], 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram, 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
-| Skills | 37 (22 bundled incl. paysh-catalog + burner-wallet + 13 workspace + 2 user-created) |
+| Tools | 64 built-in on Telegram, 60 on Discord (18 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram [Telegram channel only], 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
+| Skills | 22 bundled (incl. paysh-catalog + burner-wallet) + 13 workspace examples; user-installed skills live on the device and are not counted |
 | Paysh-catalog entries | 44 across 10 services (OPT-IN only; 63 unsupported with structured "why not" reasons) |
-| Android Bridge endpoints | 18+ |
-| Telegram commands | 12 |
+| Android Bridge endpoints | 42 (33 core routes in `AndroidBridge.kt` incl. `/ping`, plus 9 burner-wallet and Jupiter order-ownership routes in `BurnerBridgeEndpoints.kt`) |
+| Telegram commands | 17 (`/start` + 16 `/`-menu commands; aliases `/commands` → `/help` and `/skills` → `/skill` not counted) |
 | Channels | 2 (Telegram + Discord) |
-| Lines of JS | ~20,000 (main.js + message-handler.js + ai.js + 18 modules + 5 provider adapters incl. xai.js + tools/env.js) |
-| Lines of Kotlin | ~15,000+ (50 files) |
-| SQL.js tables | 4 |
+| Lines of JS | ~41,600 (81 agent source files: 39 top-level modules incl. main.js / message-handler.js / ai.js, tools/ [13 tool modules], providers/ [5 adapters], wallet/, payment/, confirmation/, jupiter/, caps/; excludes node_modules, vendored sql-wasm.js + markdown-it, and tests) |
+| Lines of Kotlin | ~37,500 (93 files in app/src/main/java; excludes ~10,000 lines of unit tests) |
+| SQL.js tables | 5 (api_request_log, chunks, files, meta, sessions) |
 | Themes | 1 (DarkOps only) |
 
 ## Links
 
 - **GitHub:** https://github.com/sepivip/SeekerClaw
 - **Website:** https://seekerclaw.xyz/
+- **Google Play:** https://play.google.com/store/apps/details?id=com.seekerclaw.app
+- **Solana dApp Store:** `solanadappstore://details?id=com.seekerclaw.app` (deep link, opens in the dApp Store app)
+- **Direct APK:** https://github.com/sepivip/SeekerClaw/releases/latest
 - **X/Twitter:** https://x.com/SeekerClaw
 - **Telegram:** https://t.me/seekerclaw
 
@@ -298,18 +311,20 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | WEBSITE.md Content | config.js Status | Action |
 |-------------------|-----------------|--------|
-| Stats: 56+ tools, 182+ PRs | Shows 43+ tools, 78+ commits | Update config.js stats[] |
-| Roadmap: 10 shipped items | Shows 10 items (outdated list) | Update roadmap.columns[0] |
-| Feature cards: updated descriptions | Stale descriptions | Update features.items[] + index.html |
-| "NFT tracking" in JSON-LD | Not implemented | Remove from index.html |
-| "DeFi automation" in OG meta | Swap tools only, no automation | Tone down in index.html |
-| dApp Store button href="#" | Not submitted yet | Fix link or mark "Coming Soon" |
-| "Open-source" (privacy page) | Repo is public | Verify license |
+| Stats: see WEBSITE.md → Stats | Shows 200,000+ Seeker devices, 56+ tools, 35+ skills, 24/7 | Update config.js stats[] |
+| Roadmap: 29 shipped items | Shipped column has 17 items (still "56 built-in tools", "35 skills", "Multi-provider support (Claude + OpenAI)"); Future column still lists Discord, which has shipped | Update roadmap.columns[] |
+| Feature cards: updated descriptions | Six cards; AI card still reads "Claude Opus, GPT-5, Sonnet, 100+ models via OpenRouter" (no xAI Grok); skills card says "35+ skills" (WEBSITE.md: 37) | Update features.items[] + index.html |
 
 ## Changelog
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-09-10 | **Release: v2.3.1** — packaging release with no functional changes from 2.3.0: version raised to 2.3.1 (version code 25) so the Google Play and Solana dApp Store builds carry the same version and version code. Provider setups, agent memory and settings are unchanged. | direct |
+| 2026-09-07 | **Release: v2.3.0** — four new models and newer defaults, plus fixes to things the app was quietly getting wrong about itself: Opus 5 (new Anthropic default) + Fable 5.1 (BAT-1315), Grok 4.6 (new xAI default, BAT-1316) and opt-in GPT-6 Astra, with the picker trimmed to the newest two per family (an already-selected older model keeps working); one SMS/call confirmation instead of two (BAT-1306), a `/version` that reports the running build (BAT-1309), build details that always match the running build (BAT-1293), a turn rejected for malformed reasoning no longer loops on its own saved progress (BAT-1290), the user's instruction kept on long tasks (BAT-1186), interrupted tasks resume the right goal (BAT-1283), Android 16 target (BAT-1187), UX polish pass + message text stripped from shared logs (BAT-1247), and the Google Play bundle verified before release (BAT-1308). | #446, #448, #449, #450, #452, #453, #457, #458 |
+| 2026-09-07 | Feat: **GPT-6 Astra in the OpenAI model picker** (BAT-1315 follow-up) — the generation above the GPT-5.6 family, verified live on both auth paths (API key on `/v1/responses`, ChatGPT sign-in on the Codex endpoint), so it joins the shared model list with no per-auth override. It heads the picker as the most capable option but is deliberately **not** the default: at $10 / $50 per MTok it costs 2.5× GPT-5.6 Sol ($4 / $20), which stays the default, so switching is an explicit opt-in. On-device context cap 200K, same as the rest of the OpenAI line. | #458 |
+| 2026-09-07 | Fix + Feat: **audit fixes + model registry refresh** (BAT-1306/1307/1308/1309/1310, BAT-1315, BAT-1316) — SMS / call tool descriptions no longer tell the model to ask for confirmation on top of the runtime gate, so the user gets one prompt, not two; the token-security hint now states when to run it (before a swap or transfer involving a mint not yet verified this session) instead of a bare ALWAYS (BAT-1306). paysh-catalog system-prompt block cut by more than half (2,452 → 1,164 characters per turn), opt-in keywords and the no-autonomous-`agent_pay` rule unchanged (BAT-1307). Build-provenance gate now also verifies the Google Play AAB (rejects + deletes on mismatch) and fails closed when there is nothing to verify (BAT-1308). One Node-side `APP_VERSION`, read from the installed package, now feeds `/version`, the MCP `clientInfo` and the xAI User-Agent (BAT-1309); the session log banner records `dirty=true/false/?` (BAT-1310). Models: Opus 5 (new Anthropic default) + Fable 5.1 added, Opus 4.7 / 4.6 leave the picker under a latest + one-previous rule; Grok 4.6 becomes the xAI default and Grok 4.3 leaves the picker (BAT-1315, BAT-1316). Models dropped from the picker keep working for users who already selected them; defaults pinned by `ModelRegistryDefaultsTest`, and CI now runs the JVM unit tests. Device-verified. | #457 (combines #454, #455, #456) |
+| 2026-09-02 | Fix: **build identity is read at runtime, so it cannot go stale** (BAT-1293) — `BuildConfig.GIT_SHA` was a compile-time constant inlined into each reader, so after an incremental build the app could show the previous build's commit while running current code (a clean build hid it). Nothing reads build identity from a compile-time constant any more: a per-variant Gradle task writes `assets/build-metadata.json` at execution time (commit, dirty flag, branch, engine versions, bundle digest), and version name/code come from the installed package via `PackageManager` — feeding System, Settings, the Dashboard gateway label, the agent's PLATFORM.md and the xAI sign-in User-Agent. `verifyBuildProvenance` gates install: it reads the metadata out of the packaged APK, checks the commit against git state and the versions against the merged manifest, and deletes a mismatching artifact; release builds refuse a dirty tree. Each version value is now defined once in `build.gradle.kts`, held there by a CI source guard (`build-identity-invariant.test.js`). | #453 |
+| 2026-09-02 | Fix: **reasoning-400 recovery now repairs the saved checkpoint** (BAT-1290) — the on-disk half of the 3-step quarantine recovery looked in `<workDir>/task-store`, a directory nothing creates, while checkpoints live in `<workDir>/tasks`, so it never ran; on a `/resume` whose first call hit the 400, the poisoned slice stayed on disk and auto-resume reloaded it into the identical 400. The checkpoint directory is now injected rather than derived, every attempt returns a structured outcome (repaired / quarantined / absent / rejected / failed / unchanged / skipped), a repaired checkpoint is published only after its poisoned `.bak` is removed, and a resumed checkpoint that cannot be repaired is moved aside so it cannot be reloaded. New 22-case durability suite; the two existing reasoning-recovery suites, previously skipped, now run in CI. | #452 |
 | 2026-08-31 | Fix: **interrupted tasks resume with the right goal** (BAT-1283) — auto-resume derived the "original request" by scanning history forward, returning the OLDEST retained user message rather than the interrupted task's own; that value was injected as an authoritative system directive. Goal is now resolved with explicit precedence and a provenance marker, read sites fail closed on anything untrusted, and a goal mangled by secret redaction can never be replayed — including via a checkpoint written by an older build. 62 test cases (the suites' own counters), 8/8 mutation guards, device-verified 3/3. | #450 |
 | 2026-08-30 | Feat: **UX polish pass** (BAT-1247) — 42 interface-audit findings across Compose UI **and** the Node logging path (new `log-safe.js` plus `ai.js`/`cron.js`/`main.js`/`mcp-client.js`/`message-handler.js`/`tools/system.js`): shared primitives (one section-header style, one search field, one empty state, one uptime formatter), status indicators with a visible status word rather than color alone, plus a log-share sanitizer that replaces message bodies with a length marker while preserving timestamp/level/source. | #449 |
 | 2026-08-29 | Build: **target Android 16 (API 36)** (BAT-1187) — required by Google Play for updates from 31 Aug 2026. Zero dependency changes; the deferring comment had the dependency arrow backwards (androidx.core 1.17 requires compileSdk 36, not the reverse). Also pins `ndkVersion` and 16 KB-aligns our JNI shim via explicit linker flags. `libnode.so` remains out of scope — that is the separate Feb 2027 gate. | #448 |

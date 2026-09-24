@@ -1,6 +1,6 @@
 # WEBSITE.md — Website Content
 
-> Last updated: 2026-09-10 | Last deployed: _never_
+> Last updated: 2026-09-24 | Last deployed: _never_
 >
 > **Rule:** Every item must earn its screen space. Less is more.
 > Before deploying, review the Editorial Notes in each section.
@@ -26,7 +26,7 @@
 **What NOT to lead with:**
 - Internal tech details (SQL.js, OpenClaw parity, cron implementation)
 - Developer-facing features (MCP servers, shell exec, js_eval)
-- Feature counts alone — "54 tools" means nothing without context
+- Feature counts alone — "64 tools" means nothing without context
 
 ---
 
@@ -35,7 +35,7 @@
 <!-- Derived from: PROJECT.md → Stats -->
 
 <!-- VERIFY BEFORE PUBLISHING. Every number here is re-derivable; do not copy
-     forward. Checked 2026-09-10 at v2.3.1:
+     forward. Checked 2026-09-24 at v2.3.1:
        Built-in Tools  64  = assembled TOOLS.length (telegram, no MCP).
                             NEVER a raw grep of input_schema — that
                             overcounts badly (it returned 79).
@@ -66,6 +66,10 @@
 - **Description:** SeekerClaw turns your Seeker phone into an autonomous AI agent. Monitor your wallet, trade on Jupiter, get Telegram alerts, control your device — all running 24/7 on your phone.
 - **CTA Primary:** Get on dApp Store
 - **CTA Secondary:** Quick Setup
+
+<!-- REVIEW 2026-09-24: Google Play is live alongside the Solana dApp Store (see Roadmap → Distribution),
+   but the primary CTA names only the dApp Store. Consider a badge for each store, or a neutral
+   "Get the app" CTA that offers both. -->
 
 <!-- REVIEW: "AI Agent Layer" — is this clear to non-technical users?
    Alternatives: "Your Phone's AI Brain", "Always-On AI Assistant" -->
@@ -101,6 +105,12 @@ and deep research on any topic — delivered to your chat.
 37 built-in skills: crypto prices, calorie tracking, news briefings,
 reminders, research, and more. Export, import, and share skills as files.
 
+<!-- REVIEW 2026-09-24: "37" (here and in Roadmap → Shipped) is not re-derivable from the app.
+   It is PROJECT.md's old 22 bundled + 13 workspace examples + 2 user-created; the user-created two
+   are not shipped, and 3 workspace examples share a name with a bundled skill. The app seeds
+   22 bundled skills from assets/default-skills. The "34 Skills" alternative under Stats is stale
+   for the same reason. Confirm the figure before deploying. -->
+
 <!-- REVIEW: Card order matters. Currently: Wallet → AI → Social → Device → Web → Skills
    Should Wallet lead? Or should AI Agent lead since that's the primary value prop?
    Consider: AI Agent → Wallet → Web → Device → Social → Skills -->
@@ -113,7 +123,11 @@ reminders, research, and more. Export, import, and share skills as files.
 
 **Title:** An Agent That Knows Itself
 
-**Subtitle:** SeekerClaw scores 100% on SAB (Self-Awareness Benchmark) — behavioral probes that verify the agent knows its own tools, capabilities, and failure modes (latest: SAB-AUDIT-v43).
+**Subtitle:** SeekerClaw scores 100% on SAB (Self-Awareness Benchmark) — audits and behavioral probes that verify the agent knows its own tools, capabilities, and failure modes (latest: SAB-AUDIT-v47).
+
+<!-- REVIEW 2026-09-24: SAB-AUDIT-v47 (2026-09-07) scored 100% on the areas changed in v2.3.0 but was
+   a partial (delta) audit that did not run the behavioral probes. Refresh this line from the next full
+   audit before quoting it as a headline figure. -->
 
 **Three points:**
 
@@ -121,7 +135,7 @@ reminders, research, and more. Export, import, and share skills as files.
 - **Diagnoses its own problems** — When something breaks, it checks logs, reads health files, and pinpoints the issue — across Telegram, wallet, memory, scheduling, and device control.
 - **Tells you what's wrong** — No silent failures. If the API is down, a permission is missing, or a tool times out — your agent explains what happened and what to do next.
 
-<!-- REVIEW: Consider a visual element — a circular badge showing "100%" or "36/36 ✅"
+<!-- REVIEW: Consider a visual element — a circular badge showing "100%" (not "36/36" — that is one section's sub-score, not the full audit total)
    alongside the three points. Keeps it punchy and adds visual proof. -->
 
 ---
@@ -203,7 +217,7 @@ reminders, research, and more. Export, import, and share skills as files.
 - NFT holdings viewer (Helius DAS API — regular + compressed NFTs)
 - Cron agent turns — scheduled jobs run full AI conversations
 - Session memory — agent remembers context across restarts
-- Multi-provider support (Claude + OpenAI + OpenRouter + xAI Grok + Custom OpenAI-compatible gateways)
+- Multi-provider support (Claude + OpenAI + OpenRouter + xAI Grok + Custom OpenAI-compatible gateways) — newest models include Claude Opus 5 and Fable 5.1, GPT-6 Astra, and Grok 4.6
 - OAuth / ChatGPT subscription auth — connect your Claude Max or ChatGPT plan instead of paying per token
 - User-managed env vars — skill `requires.env` gates unlocked, paste-`.env` bulk import
 - Extended thinking on every provider (Anthropic, OpenAI, OpenRouter, Custom) — survives tool calls + `/resume`
@@ -212,13 +226,22 @@ reminders, research, and more. Export, import, and share skills as files.
 - 26-week activity heatmap on the System screen
 - OpenClaw v2026.4.10 parity
 - Open-source: MIT license, CI/CD, community contribution ready
-- Self-aware agent: 100% SAB score (36/36 audit points)
-- Discord channel support — full feature parity with Telegram (tools, confirmations, reactions)
+- Self-aware agent: 100% SAB score (Self-Awareness Benchmark)
+- Discord channel support — use your agent from Discord instead of Telegram, with the same agent core, confirmations and tools (except the Telegram-specific messaging tools)
 - Autonomous USDC payments (x402) — the agent pays for paid HTTP APIs on Solana, within your caps
 - Burner wallet — user-imported, app-encrypted keypair for autonomous spending under per-tx + daily caps
 - Autonomous on-chain trading — burner swaps, SOL/SPL sends, convert held tokens → USDC/SOL, all cap-bounded
 - Telegram Rich Messages — optional tables, headings, task lists, math, spoilers (Bot API 10.1)
-- "Sign in with Grok" — connect an xAI / SuperGrok subscription, no API key needed
+- "Sign in with Grok" — connect a SuperGrok or X Premium subscription, no API key needed
+
+<!-- REVIEW 2026-09-24 (covers v2.2.0 → v2.3.1): apart from Sign in with Grok (already listed above), no
+     major new capability shipped in this window — it brought new models, interface polish, security
+     hardening and fixes — so the Feature Cards are unchanged. Considered for Shipped and left out:
+     - Interface polish pass — status indicators show a status word, not color alone (accessibility)
+     - Shared logs strip message text; API keys are masked from the AI model and from logs (privacy/security)
+     - Android 16 target, Play build verification, and the v2.3.0 fixes (compliance / bug fixes)
+     If a privacy/trust line is wanted, REPLACE a weaker internal item (e.g. "OpenClaw v2026.4.10 parity")
+     rather than appending: the list is 29 items against a target of ~8. -->
 
 <!-- REVIEW 2026-07-12: Two big shifts since the last website pass are NOT yet reflected above the fold:
      (1) The v2 thesis is "your phone's AI can autonomously PAY for paid APIs in USDC" (burner wallet + x402)
