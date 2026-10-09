@@ -239,7 +239,7 @@ export PATH="$RESOLVED_JDK/bin:$PATH"
 
 
 # ── 1. Node.js smoke test ───────────────────────────────────────────────────
-echo "── 1/4  Node smoke test ─────────────────────────"
+echo "── 1/5  Node smoke test ─────────────────────────"
 if ! node tests/nodejs-project/smoke.js; then
     echo ""
     echo "❌ Node smoke test failed — don't push."
@@ -252,7 +252,7 @@ echo ""
 # down EVERY agent turn (not just calls to the bad tool) — see BAT-664
 # device-test incident 2026-05-12. This step takes <1s and shipping without
 # it directly affects users.
-echo "── 2/4  Tool input_schema validity ──────────────"
+echo "── 2/5  Tool input_schema validity ──────────────"
 if ! node tests/nodejs-project/tool-schemas.test.js; then
     echo ""
     echo "❌ Tool input_schema check failed — don't push (would break agent on device)."
@@ -265,7 +265,7 @@ echo ""
 # additions (multi-call composition transparency, do-NOT-auto-retry-on-4xx,
 # DIAGNOSTICS.md → "paysh-catalog" door). Dropping these silently re-opens
 # the post-Test-2 USDC-burn loop. <1s, so always run.
-echo "── 3/4  Wallets prompt regression test ──────────"
+echo "── 3/5  Wallets prompt regression test ──────────"
 if ! node tests/nodejs-project/system-prompt-wallets.test.js; then
     echo ""
     echo "❌ Wallets prompt assertions failed — don't push (would regress agent's payment-safety self-awareness)."
@@ -273,10 +273,25 @@ if ! node tests/nodejs-project/system-prompt-wallets.test.js; then
 fi
 echo ""
 
-# ── 4. Kotlin compile (dappStore debug) ─────────────────────────────────────
+# ── 4. DNS IPv4-first regression (BAT-992) ─────────────────────────────────
+# Locks the `dns.setDefaultResultOrder('ipv4first')` line at the top of
+# main.js. Without it, users on broken-IPv6 networks (consumer routers
+# advertising IPv6 prefix without working uplink — common worldwide) hit
+# deterministic 60s hangs on Telegram polls, AI API calls, every outbound
+# HTTPS. The line is one line and looks like dead code to a future
+# contributor doing a "cleanup" pass — this test enforces it stays.
+echo "── 4/5  DNS IPv4-first regression (BAT-992) ─────"
+if ! node tests/nodejs-project/dns-ipv4-first.test.js; then
+    echo ""
+    echo "❌ DNS IPv4-first check failed — don't push (would re-introduce 60s hangs on broken-IPv6 networks)."
+    exit 8
+fi
+echo ""
+
+# ── 5. Kotlin compile (dappStore debug) ─────────────────────────────────────
 # Only compile the dappStore flavor — googlePlay is identical Kotlin source, so
 # dappStore catches every compile error at ~half the time of both flavors.
-echo "── 4/4  Kotlin compile (dappStoreDebug) ─────────"
+echo "── 5/5  Kotlin compile (dappStoreDebug) ─────────"
 
 # Unique temp log per invocation — avoids races between concurrent runs and
 # symlink-clobber risk on multi-user systems. Path is printed below on failure.

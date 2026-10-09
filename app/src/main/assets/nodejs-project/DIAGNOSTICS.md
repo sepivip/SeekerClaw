@@ -64,6 +64,31 @@ grep -i "Prolonged outage\|consecutive.*poll\|consecutive.*fail" node_debug.log 
 
 ---
 
+### Telegram Poll Timeouts Every ~60 Seconds (Broken IPv6 Path)
+**Symptoms:**
+- `Poll timeout — reconnecting` firing every ~60s like clockwork, even when idle
+- `Status reaction failed: connect ETIMEDOUT 2001:...:443` (IPv6 address in the error)
+- Stuck 👀 / ⏳ reaction emojis on user messages (never clear)
+- Pattern: launch agent → 1-2 messages OK → 3rd stalls → cycle begins
+- Same WiFi works on another device
+
+**Check:**
+```
+grep -E "ETIMEDOUT 2001:|Poll timeout|Status reaction failed" node_debug.log | tail -10
+# Also check from a shell on the device:
+adb shell "ip -6 route"  # Empty/no default route → broken IPv6 confirmed
+adb shell "ping -c 2 2001:67c:4e8:f004::9"  # "Network unreachable" → broken IPv6
+```
+
+**Diagnosis:** The device's network gives an IPv6 stack (ULA addresses, etc.) but no working upstream IPv6 route. DNS returns AAAA records, Node picks IPv6, TCP SYN goes nowhere, request hangs the full local timeout (60s). Node's classic http/https module has no Happy Eyeballs fallback (BAT-992).
+
+**Fix:** Should be impossible to hit on builds that include BAT-992 — that change forces IPv4-first DNS resolution globally at startup via `dns.setDefaultResultOrder('ipv4first')` in `main.js`. If a user is still seeing this:
+1. Confirm the BAT-992 line is still in `main.js` top
+2. Check if user set `SEEKERCLAW_DNS_RESULT_ORDER=verbatim` in env vars (would override the fix back to broken behavior)
+3. If neither: their network has BOTH broken IPv6 AND broken IPv4 — different issue, escalate
+
+---
+
 ## Discord
 
 ### Bot Token Invalid or Missing Intents
