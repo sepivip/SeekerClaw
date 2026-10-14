@@ -35,6 +35,8 @@ function unquotedMessage(c) {
  * trailing backslash or an unquoted character outside the safe set.
  */
 function tokenize(line) {
+    // Newlines and NUL never belong in a command line (shell_exec refuses them up front too).
+    if (/[\r\n\0\u2028\u2029]/.test(line)) throw new ShellArgsError('Newline, NUL and line separator characters are not allowed.');
     const argv = [];
     const raw = [];
     let i = 0;

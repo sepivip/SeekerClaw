@@ -301,6 +301,9 @@ function sedAddress(script, i) {
 
 /** Validates one sed script against the safe subset (one command, no w/e/r/R/W/F/v/b/t/T/:). */
 function checkSedScript(script) {
+    // One command per expression: a newline would start a second, unchecked one (shell_exec also
+    // refuses newlines in the whole command line before tokenizing).
+    if (/[\r\n\u2028\u2029]/.test(script)) throw new GrammarError('sed: one command per -e expression (no newlines).');
     let i = 0;
     const skipWs = () => { while (script[i] === ' ' || script[i] === '\t') i++; };
     skipWs();

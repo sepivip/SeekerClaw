@@ -98,6 +98,8 @@ async function refuses(line, rx) {
         assert.throws(() => tokenize("echo 'open"), /Unterminated/);
         assert.throws(() => tokenize('echo x\\'), /trailing backslash/);
         assert.deepStrictEqual(tokenize('echo "#x" "a;b" "*"').argv, ['echo', '#x', 'a;b', '*']);
+        // Defence in depth (shell_exec refuses these before tokenizing): no newline in any word.
+        assert.throws(() => tokenize("sed 'a x" + String.fromCharCode(10) + "w /tmp/x' notes.txt"), /Newline/);
     });
 
     // ---- coverage
@@ -229,6 +231,7 @@ async function refuses(line, rx) {
         await refuses('sed s/x/date/e notes.txt', /w and e/);
         await refuses("sed 'r /etc/passwd' notes.txt", /not allowed/);
         await refuses('sed -f script.sed notes.txt', /script file/);
+        assert.throws(() => require(path.join(BUNDLE, 'tools', 'shell-validate.js')).checkSedScript('a x' + String.fromCharCode(10) + 'w /tmp/x'), /no newlines/);
         await refuses("sed '1d' ../outside/x", /outside the workspace/);
         for (const ok of ["sed -n '$p' notes.txt", "sed '$d' notes.txt", "sed -n '5,$p' notes.txt", "sed '$!d' notes.txt", "sed -n '1~2p' notes.txt"]) await accepts(ok);
         await refuses('sed -in s/x/y/ notes.txt', /suffix/);
