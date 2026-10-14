@@ -1,6 +1,26 @@
 // SeekerClaw AI Agent
 // Phase 2: Full Claude AI agent with tools, memory, and personality
 
+// --- BAT-1409 P1-B preamble (keep first: nothing may be required before it) ---
+// Trusted module resolution. Node 18 builds its global module search list ($HOME/.node_modules,
+// $HOME/.node_libraries, NODE_PATH) once, in Module._initPaths(), from HOME, USERPROFILE and
+// NODE_PATH. Rebuild that list without them, so a module planted under HOME can never resolve.
+// Module.globalPaths is only an introspection copy; _initPaths() rebuilds the real list (a test
+// pins that it exists). HOME itself is restored for code that reads it.
+(function trustModulePaths() {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    delete process.env.USERPROFILE;
+    delete process.env.NODE_PATH;
+    require('module')._initPaths();
+    if (savedHome !== undefined) process.env.HOME = savedHome;
+})();
+// ws would otherwise try to load the optional native helpers `bufferutil` and `utf-8-validate`
+// by bare name. Both names are reserved in config.js, so user env vars cannot unset them.
+process.env.WS_NO_BUFFER_UTIL = '1';
+process.env.WS_NO_UTF_8_VALIDATE = '1';
+// --- end BAT-1409 P1-B preamble ---
+
 const fs = require('fs');
 
 // ============================================================================
@@ -31,6 +51,13 @@ const {
 
 process.on('uncaughtException', (err) => log('UNCAUGHT: ' + (err.stack || err), 'ERROR'));
 process.on('unhandledRejection', (reason) => log('UNHANDLED: ' + reason, 'ERROR'));
+
+// BAT-1409 P1-B: bundle modules that are otherwise required only inside functions load at boot,
+// so a bundle file changed during a session is never picked up later in that session (the next
+// start's bundle verification repairs the file itself). The module-graph test lists the rest.
+require('./quiesce');
+require('./wallet/ata');
+require('./wallet/token2022-mint');
 
 // ============================================================================
 // SECURITY (extracted to security.js — BAT-194)

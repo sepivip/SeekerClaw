@@ -123,6 +123,7 @@ jobs:
             reasoning-checkpoint-durability \
             reasoning-recovery \
             reasoning-pipeline \
+            module-paths-preamble \
             ci-coverage-manifest
           do
             echo "── $t ──"
