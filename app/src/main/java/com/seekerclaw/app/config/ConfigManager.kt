@@ -22,9 +22,13 @@ import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.SafeFs
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
@@ -3166,7 +3170,7 @@ object ConfigManager {
             }
         val stagingDir = File(parent, ".${workspaceSkillDir.name}.staging")
         // Clean any orphan staging from a prior failed run before we start.
-        stagingDir.deleteRecursively()
+        deleteNoFollow(context, stagingDir)
         if (!stagingDir.mkdirs()) {
             Log.e(TAG, "Failed to create staging dir ${stagingDir.path}")
             return false
@@ -3239,7 +3243,7 @@ object ConfigManager {
 
         if (!allOk) {
             // Walk failed — discard staging, live dir untouched.
-            stagingDir.deleteRecursively()
+            deleteNoFollow(context, stagingDir)
             return false
         }
 
@@ -3262,14 +3266,14 @@ object ConfigManager {
             // orphans on the user's device (e.g. v1.0.0 had foo.md, v1.1.0
             // doesn't — user keeps foo.md). Acceptable trade-off for V1;
             // bundled-file removals are rare and orphans are inert.
-            promoteStaging(stagingDir, workspaceSkillDir)
-            stagingDir.deleteRecursively()
+            promoteStaging(context.filesDir.toPath(), stagingDir, workspaceSkillDir)
+            deleteNoFollow(context, stagingDir)
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to promote staging into live skill dir; skill may be in mixed state", e)
             // Best-effort cleanup; live dir is in unknown state, but the
             // manifest won't advance so the next launch retries.
-            stagingDir.deleteRecursively()
+            deleteNoFollow(context, stagingDir)
             return false
         }
     }
@@ -3285,15 +3289,16 @@ object ConfigManager {
      * preserved untouched — these are user additions and must survive
      * skill upgrades. BAT-699 R8.
      */
-    private fun promoteStaging(staging: File, live: File) {
+    private fun promoteStaging(root: Path, staging: File, live: File) {
         live.mkdirs()
         staging.listFiles()?.forEach { src ->
             val dest = File(live, src.name)
-            if (src.isDirectory) {
-                promoteStaging(src, dest)
+            // BAT-1409 P1-M: lstat-based — a link in staging is never descended into.
+            if (SafeFs.isRealDir(src.toPath())) {
+                promoteStaging(root, src, dest)
                 src.delete()  // remove now-empty staging subdir
             } else {
-                if (dest.exists()) dest.deleteRecursively()
+                if (SafeFs.existsNoFollow(dest.toPath())) SafeFs.deleteTreeNoFollow(root, dest.toPath())
                 if (!src.renameTo(dest)) {
                     // Cross-device rename can fail; fall back to copy + delete.
                     src.copyTo(dest, overwrite = true)
@@ -3404,8 +3409,9 @@ object ConfigManager {
      */
     fun exportSkill(context: Context, uri: Uri, skillDirName: String): Boolean {
         val skillsDir = File(File(context.filesDir, "workspace"), "skills")
-        val skillFile = File(File(skillsDir, skillDirName), "SKILL.md").takeIf { it.exists() }
-            ?: File(skillsDir, "$skillDirName.md").takeIf { it.exists() }
+        // BAT-1409 P1-M: only a real (lstat) regular file is exported — never a link's target.
+        val skillFile = File(File(skillsDir, skillDirName), "SKILL.md").takeIf { isRegularNoFollow(it) }
+            ?: File(skillsDir, "$skillDirName.md").takeIf { isRegularNoFollow(it) }
 
         if (skillFile == null) {
             Log.e(TAG, "Skill file not found for: $skillDirName")
@@ -3419,7 +3425,7 @@ object ConfigManager {
                 return false
             }
             outputStream.use { out ->
-                skillFile.inputStream().use { it.copyTo(out) }
+                Files.newInputStream(skillFile.toPath(), LinkOption.NOFOLLOW_LINKS).use { it.copyTo(out) }
             }
             Log.i(TAG, "Skill $skillDirName exported as .md")
             true
@@ -3441,10 +3447,11 @@ object ConfigManager {
         val defaultNames = getDefaultSkillNames(context)
 
         // Pre-check: any user skills to export?
+        // BAT-1409 P1-M: lstat-based — a link at the top of skills/ is never exported.
         val userEntries = skillsDir.listFiles()?.filter { entry ->
             when {
-                entry.isDirectory && entry.name !in defaultNames -> true
-                entry.isFile && entry.name.endsWith(".md") -> true
+                SafeFs.isRealDir(entry.toPath()) && entry.name !in defaultNames -> true
+                isRegularNoFollow(entry) && entry.name.endsWith(".md") -> true
                 else -> false
             }
         } ?: emptyList()
@@ -3462,11 +3469,11 @@ object ConfigManager {
             outputStream.use { out ->
                 ZipOutputStream(out).use { zip ->
                     userEntries.forEach { entry ->
-                        if (entry.isDirectory) {
+                        if (SafeFs.isRealDir(entry.toPath())) {
                             addDirectoryToZip(zip, entry, skillsDir)
                         } else {
                             zip.putNextEntry(ZipEntry(entry.name))
-                            entry.inputStream().use { it.copyTo(zip) }
+                            Files.newInputStream(entry.toPath(), LinkOption.NOFOLLOW_LINKS).use { it.copyTo(zip) }
                             zip.closeEntry()
                         }
                     }
@@ -3481,10 +3488,13 @@ object ConfigManager {
     }
 
     private fun addDirectoryToZip(zip: ZipOutputStream, dir: File, baseDir: File) {
-        dir.walkTopDown().filter { it.isFile }.forEach { file ->
-            val relativePath = file.relativeTo(baseDir).path.replace("\\", "/")
+        // BAT-1409 P1-M: Files.walk never follows links, and only regular files (lstat) are
+        // exported, so a link inside a skill folder cannot pull outside files into the ZIP.
+        val base = baseDir.toPath()
+        SafeFs.forEachRegularFileNoFollow(dir.toPath()) { path, _ ->
+            val relativePath = base.relativize(path).toString().replace("\\", "/")
             zip.putNextEntry(ZipEntry(relativePath))
-            file.inputStream().use { it.copyTo(zip) }
+            Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use { it.copyTo(zip) }
             zip.closeEntry()
         }
     }
@@ -3718,10 +3728,33 @@ object ConfigManager {
             if (exists()) writeText("")
         }
         File(workspaceDir, "memory").apply {
-            if (exists()) deleteRecursively()
-            mkdirs()
+            // BAT-1409 P1-M: no-follow delete; a linked memory/ is unlinked, never descended.
+            deleteNoFollow(context, this)
+            try {
+                SafeFs.ensureRealDir(context.filesDir.toPath(), toPath())
+            } catch (e: Exception) {
+                Log.e(TAG, "Could not recreate memory/: ${e.message}")
+            }
         }
     }
+
+    /**
+     * BAT-1409 P1-M — the no-follow recursive delete for ConfigManager. Never follows a link at
+     * any depth (see [SafeFs.deleteTreeNoFollow]). Returns false, logged, when the ancestor rule
+     * refuses the path or entries remain.
+     */
+    private fun deleteNoFollow(context: Context, target: File): Boolean = try {
+        val result = SafeFs.deleteTreeNoFollow(context.filesDir.toPath(), target.toPath())
+        if (!result.clean) Log.w(TAG, "No-follow delete left ${result.residue} entries under ${target.name}")
+        result.clean
+    } catch (e: Exception) {
+        Log.e(TAG, "No-follow delete refused for ${target.name}: ${e.message}")
+        false
+    }
+
+    /** BAT-1409 P1-M: true only for a regular file at the final component (a link is false). */
+    private fun isRegularNoFollow(file: File): Boolean =
+        Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)
 
     // ==================== Memory Export/Import ====================
 
@@ -3785,6 +3818,8 @@ object ConfigManager {
     private fun addAllowedFilesToZip(zip: ZipOutputStream, dir: File, baseDir: File) {
         val files = dir.listFiles() ?: return
         for (file in files) {
+            // BAT-1409 P1-M: never follow a link out of the workspace into the export.
+            if (Files.isSymbolicLink(file.toPath())) continue
             val relativePath = file.relativeTo(baseDir).path.replace("\\", "/")
 
             if (file.isDirectory) {

@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.SafeFs
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import java.io.File
@@ -68,14 +69,23 @@ object NodeBridge {
         if (wasAPKUpdated(context) || !entryFile.isFile) {
             LogCollector.append("[Service] Copying assets/$NODE_DIR_NAME to $nodeDir")
             val nodeDirRef = File(nodeDir)
-            if (nodeDirRef.exists()) {
-                deleteFolderRecursively(nodeDirRef)
+            // BAT-1409 P1-M: the update-path delete never follows a link planted in the bundle.
+            try {
+                val res = SafeFs.deleteTreeNoFollow(context.filesDir.toPath(), nodeDirRef.toPath())
+                if (!res.clean) LogCollector.append("[Service] Bundle delete left ${res.residue} entries", LogLevel.WARN)
+            } catch (e: Exception) {
+                LogCollector.append("[Service] Bundle delete refused: ${e.message}", LogLevel.ERROR)
             }
             val result = copyAssetFolder(context.assets, NODE_DIR_NAME, nodeDir)
             LogCollector.append("[Service] copyAssetFolder result: $result")
             saveLastUpdateTime(context)
 
-            val fileCount = File(nodeDir).walk().count { it.isFile }
+            var fileCount = 0
+            try {
+                SafeFs.forEachRegularFileNoFollow(File(nodeDir).toPath()) { _, _ -> fileCount++ }
+            } catch (_: Exception) {
+                // count is informational; the main.js check below reports a broken extraction
+            }
             LogCollector.append("[Service] Claw Engine bundle extracted ($fileCount files)")
 
             if (!entryFile.isFile) {
@@ -189,23 +199,6 @@ object NodeBridge {
         prefs.edit().putLong("NODEJS_MOBILE_APK_LastUpdateTime", lastUpdateTime).apply()
     }
 
-    private fun deleteFolderRecursively(file: File): Boolean {
-        return try {
-            var res = true
-            val childFiles = file.listFiles() ?: return file.delete()
-            for (childFile in childFiles) {
-                res = if (childFile.isDirectory) {
-                    res and deleteFolderRecursively(childFile)
-                } else {
-                    res and childFile.delete()
-                }
-            }
-            res and file.delete()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
 
     private fun copyAssetFolder(assetManager: AssetManager, fromAssetPath: String, toPath: String): Boolean {
         return try {
