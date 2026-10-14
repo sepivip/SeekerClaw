@@ -86,13 +86,9 @@ class SeekerClawApplication : Application() {
         // init() is idempotent, so a second call is a no-op.
         XaiOAuthTokenStore.init(this)
 
-        // Firebase Analytics
-        Analytics.init(this)
-        ConfigManager.loadConfig(this)?.let { config ->
-            Analytics.setUserProperty("model", config.model)
-            Analytics.setUserProperty("auth_type", config.authType)
-        }
-        Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(this).isNullOrBlank()).toString())
+        // Firebase Analytics. In `:node` it initialises in the service's start continuation instead,
+        // after link hygiene step 2 has checked shared_prefs/ and databases/ (BAT-1409 P1-C, v3.3 M1).
+        if (!isNodeProcess) initAnalytics(this)
 
         // Start cross-process file watching so UI picks up state/logs from :node.
         // Guard: only the main UI process should attach observers. The :node
@@ -225,5 +221,15 @@ class SeekerClawApplication : Application() {
     companion object {
         const val CHANNEL_ID = "seekerclaw_service"
         const val ERROR_CHANNEL_ID = "seekerclaw_errors"
+
+        /** Firebase Analytics and its user properties (model, auth type, wallet presence). */
+        fun initAnalytics(context: Context) {
+            Analytics.init(context)
+            ConfigManager.loadConfig(context)?.let { config ->
+                Analytics.setUserProperty("model", config.model)
+                Analytics.setUserProperty("auth_type", config.authType)
+            }
+            Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(context).isNullOrBlank()).toString())
+        }
     }
 }

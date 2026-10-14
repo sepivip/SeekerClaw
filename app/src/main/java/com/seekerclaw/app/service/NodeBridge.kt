@@ -2,18 +2,14 @@ package com.seekerclaw.app.service
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.content.res.AssetManager
 import com.seekerclaw.app.config.PrefsNames
+import com.seekerclaw.app.util.BundleIntegrity
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
-import com.seekerclaw.app.util.SafeFs
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
 import java.io.InputStream
-import java.io.OutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -27,8 +23,6 @@ object NodeBridge {
     private val running = AtomicBoolean(false)
     private var _startedNodeAlready = false
     private val executor = Executors.newSingleThreadExecutor()
-
-    private const val NODE_DIR_NAME = "nodejs-project"
 
     @Volatile
     var lastHeartbeatResponse: Long = 0L
@@ -57,44 +51,26 @@ object NodeBridge {
     private external fun startNodeWithArguments(arguments: Array<String>): Int
 
     /**
-     * Copy bundled Node.js project from APK assets to internal storage.
-     * Only re-copies when APK is updated (new install or app update).
+     * BAT-1409 P1-A: verifies `filesDir/nodejs-project` byte for byte against the APK's
+     * `assets/nodejs-project` and repairs it when it differs (see [BundleIntegrity]). Runs on the
+     * start worker before any secret is written; Node starts only on `Verified` or `Repaired`.
+     * Replaces the old extraction, which re-copied only after an APK update.
      */
-    fun extractBundle(context: Context) {
-        LogCollector.append("[Service] Extracting Claw Engine bundle...")
-
-        val nodeDir = context.filesDir.absolutePath + "/" + NODE_DIR_NAME
-        val entryFile = File(nodeDir, "main.js")
-
-        // Re-extract if APK was updated OR if main.js is missing/corrupt (e.g. created as directory)
-        if (wasAPKUpdated(context) || !entryFile.isFile) {
-            LogCollector.append("[Service] Copying assets/$NODE_DIR_NAME to $nodeDir")
-            val nodeDirRef = File(nodeDir)
-            // BAT-1409 P1-M: the update-path delete never follows a link planted in the bundle.
-            try {
-                val res = SafeFs.deleteTreeNoFollow(context.filesDir.toPath(), nodeDirRef.toPath())
-                if (!res.clean) LogCollector.append("[Service] Bundle delete left ${res.residue} entries", LogLevel.WARN)
-            } catch (e: Exception) {
-                LogCollector.append("[Service] Bundle delete refused: ${e.message}", LogLevel.ERROR)
-            }
-            val result = copyAssetFolder(context.assets, NODE_DIR_NAME, nodeDir)
-            LogCollector.append("[Service] copyAssetFolder result: $result")
-            saveLastUpdateTime(context)
-
-            var fileCount = 0
-            try {
-                SafeFs.forEachRegularFileNoFollow(File(nodeDir).toPath()) { _, _ -> fileCount++ }
-            } catch (_: Exception) {
-                // count is informational; the main.js check below reports a broken extraction
-            }
-            LogCollector.append("[Service] Claw Engine bundle extracted ($fileCount files)")
-
-            if (!entryFile.isFile) {
-                LogCollector.append("[Service] WARNING: main.js still missing after extraction!", LogLevel.ERROR)
-            }
-        } else {
-            LogCollector.append("[Service] Bundle up to date, skipping extraction")
+    fun verifyBundle(context: Context): BundleIntegrity.Outcome {
+        val am = context.assets
+        val source = object : BundleIntegrity.AssetSource {
+            override fun list(dir: String): List<String> = am.list(dir)?.toList() ?: emptyList()
+            override fun open(path: String): InputStream = am.open(path)
         }
+        val files = context.filesDir
+        return BundleIntegrity(
+            assets = source,
+            filesDir = files.toPath(),
+            dataDir = context.dataDir.toPath(),
+            usableSpace = { files.usableSpace },
+            log = { level, msg -> LogCollector.append(msg, level) },
+            nlink = { p -> android.system.Os.lstat(p.toString()).st_nlink },
+        ).run(updated = wasAPKUpdated(context), persistUpdateTime = { saveLastUpdateTime(context) })
     }
 
     /**
@@ -115,7 +91,9 @@ object NodeBridge {
 
         _startedNodeAlready = true
         lastHeartbeatResponse = System.currentTimeMillis()
-        ServiceState.updateStatus(ServiceStatus.STARTING)
+        // BAT-1409 P1-A (v3.3 M2): the service writes the start status (STARTING in onStartCommand,
+        // RUNNING at the end of the start continuation); NodeBridge no longer does, so a start that
+        // is aborted or failed never shows RUNNING.
 
         LogCollector.append("[NodeBridge] Starting Node.js runtime...")
         LogCollector.append("[NodeBridge] workDir=$workDir")
@@ -133,8 +111,6 @@ object NodeBridge {
         executor.submit {
             try {
                 LogCollector.append("[NodeBridge] Entry: $entryPoint")
-
-                ServiceState.updateStatus(ServiceStatus.RUNNING)
 
                 // This call BLOCKS the thread until Node.js exits
                 val exitCode = startNodeWithArguments(
@@ -173,7 +149,7 @@ object NodeBridge {
         return running.get()
     }
 
-    // --- Asset extraction helpers ---
+    // --- APK update bookkeeping (BundleIntegrity logs a mismatch after an update as an update, not a tamper) ---
 
     private fun wasAPKUpdated(context: Context): Boolean {
         val prefs = context.getSharedPreferences(PrefsNames.NODEJS_MOBILE, Context.MODE_PRIVATE)
@@ -198,50 +174,5 @@ object NodeBridge {
             e.printStackTrace()
         }
         prefs.edit().putLong("NODEJS_MOBILE_APK_LastUpdateTime", lastUpdateTime).apply()
-    }
-
-
-    private fun copyAssetFolder(assetManager: AssetManager, fromAssetPath: String, toPath: String): Boolean {
-        return try {
-            val files = assetManager.list(fromAssetPath) ?: return false
-
-            if (files.isEmpty()) {
-                // It's a file, not a directory — copy it
-                copyAsset(assetManager, fromAssetPath, toPath)
-            } else {
-                // It's a directory — create it, then recurse
-                val toDir = File(toPath)
-                val success = toDir.mkdirs() || toDir.isDirectory
-                for (file in files) {
-                    copyAssetFolder(assetManager, "$fromAssetPath/$file", "$toPath/$file")
-                }
-                success
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
-    private fun copyAsset(assetManager: AssetManager, fromAssetPath: String, toPath: String): Boolean {
-        var inputStream: InputStream? = null
-        var outputStream: OutputStream? = null
-        return try {
-            inputStream = assetManager.open(fromAssetPath)
-            File(toPath).parentFile?.mkdirs()
-            outputStream = FileOutputStream(toPath)
-            val buffer = ByteArray(8192)
-            var read: Int
-            while (inputStream.read(buffer).also { read = it } != -1) {
-                outputStream.write(buffer, 0, read)
-            }
-            true
-        } catch (e: IOException) {
-            e.printStackTrace()
-            false
-        } finally {
-            inputStream?.close()
-            outputStream?.close()
-        }
     }
 }

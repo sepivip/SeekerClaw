@@ -208,6 +208,19 @@ object SafeFs {
         moveReplacing(src, dst)
     }
 
+    /**
+     * Creates [target], which must not exist, and streams its content (P1-A bundle extraction into
+     * a fresh tree). `CREATE_NEW` fails on any existing entry, a dangling link included, so nothing
+     * is ever written through a link. No fsync: the bundle is verified before every start instead.
+     */
+    fun createNewFrom(root: Path, target: Path, write: (OutputStream) -> Unit) {
+        checkAncestors(root, target, createParents = true)
+        Files.newOutputStream(
+            target,
+            StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS,
+        ).use { write(it) }
+    }
+
     /** Appends [bytes] to [target] (created if missing) without following a link at any depth. */
     fun appendNoFollow(root: Path, target: Path, bytes: ByteArray) {
         checkAncestors(root, target, createParents = true)

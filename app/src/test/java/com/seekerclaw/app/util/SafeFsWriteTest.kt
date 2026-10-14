@@ -211,7 +211,7 @@ class SafeFsWriteTest {
 
     /**
      * Source guard: raw Kotlin file writes are gone from app/src/main — every write goes through
-     * SafeFs. NodeBridge's asset copy is replaced by P1-A's verified extraction in its own commit.
+     * SafeFs (the bundle extraction too, since P1-A: SafeFs.createNewFrom).
      */
     @Test
     fun noRawFileWritesInMainSources() {
@@ -219,12 +219,11 @@ class SafeFsWriteTest {
         assertTrue("run from the app module", src.isDirectory)
         // Each banned form, with the only files allowed to use it:
         // - SafeFs.kt is the writer itself;
-        // - NodeBridge.kt's asset copy is replaced by P1-A's verified extraction;
         // - EncryptedPrefsKeyVault.wipe overwrites a regular file with NOFOLLOW;
         // - ProviderConfigScreen writes an HTTP request body (conn.outputStream), not a file.
         val rules = listOf(
             Regex("""\.writeText\(|\.writeBytes\(|\.appendText\(|\.appendBytes\(|\.renameTo\(|\.createNewFile\(""") to setOf("SafeFs.kt"),
-            Regex("""FileOutputStream\(|RandomAccessFile\(|FileWriter\(|PrintWriter\(|\.printWriter\(""") to setOf("SafeFs.kt", "NodeBridge.kt"),
+            Regex("""FileOutputStream\(|RandomAccessFile\(|FileWriter\(|PrintWriter\(|\.printWriter\(""") to setOf("SafeFs.kt"),
             Regex("""\.outputStream\(\)|\.bufferedWriter\(""") to setOf("SafeFs.kt", "ProviderConfigScreen.kt"),
             Regex("""Files\.write\(|Files\.copy\(|Files\.newOutputStream\(|Files\.newBufferedWriter\(|FileChannel\.open\(""") to
                 setOf("SafeFs.kt", "EncryptedPrefsKeyVault.kt"),
