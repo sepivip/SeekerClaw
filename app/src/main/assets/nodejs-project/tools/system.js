@@ -6,7 +6,9 @@ const { flattenForLog } = require('../log-safe');
 
 const {
     workDir, log, config, SECRETS_BLOCKED, SHELL_ALLOWLIST,
+    ROOT_SECRET_NAMES, SECRETS_ANYWHERE, WRITE_PROTECTED_ROOT,
 } = require('../config');
+const { createJsEvalGuards } = require('../js-eval-guard');
 
 const {
     redactSecrets, safePath,
@@ -55,7 +57,7 @@ const tools = [
     },
     {
         name: 'js_eval',
-        description: 'Execute JavaScript code in a sandboxed VM context. Use for math, JSON manipulation, data processing, date calculations, and string operations. Has access to: Math, JSON, Date, RegExp, Buffer, URL, parseInt/parseFloat, encode/decodeURIComponent, setTimeout, and require() for safe Node.js built-ins (fs, path, http, crypto — but NOT child_process, vm, worker_threads, or config files). All output is redacted for secrets. 30s timeout. Use for computation and data processing, NOT for accessing app internals.',
+        description: 'Execute JavaScript code in a sandboxed VM context. Use for math, JSON manipulation, data processing, date calculations, and string operations. Has access to: Math, JSON, Date, RegExp, Buffer, URL, parseInt/parseFloat, encode/decodeURIComponent, setTimeout, and require() for Node.js built-ins (fs, path, http, https, net, dns, crypto, zlib, os, util and similar — not child_process, vm or worker_threads, and no npm packages). fs works inside your workspace only (relative paths resolve there); app files, links and file descriptors are refused. All output is redacted for secrets. 30s timeout. Use for computation and data processing, NOT for accessing app internals.',
         input_schema: {
             type: 'object',
             properties: {
@@ -290,49 +292,6 @@ const handlers = {
             group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
         };
 
-        // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
-        const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks', 'module']);
-        // Create a guarded fs proxy that blocks reads AND writes to sensitive files
-        // promisesGuard: optional set of guarded methods for the .promises sub-property
-        const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {
-            return new Proxy(realModule, {
-                get(target, prop) {
-                    // Intercept fs.promises to return a guarded proxy too
-                    if (prop === 'promises' && promisesGuard && target[prop]) {
-                        return createGuardedFsProxy(target[prop], promisesGuard);
-                    }
-                    const original = target[prop];
-                    if (typeof original !== 'function') return original;
-                    if (guardedMethods.has(prop)) {
-                        return function(...args) {
-                            const filePath = String(args[0]);
-                            // Resolve symlinks to prevent alias bypass (symlink -> config.json)
-                            let resolvedPath = filePath;
-                            try { resolvedPath = fs.realpathSync(filePath); } catch (_) {}
-                            const basename = path.basename(resolvedPath);
-                            if (SECRETS_BLOCKED.has(basename)) {
-                                throw new Error(`Access to ${basename} is blocked for security.`);
-                            }
-                            // BAT-1087: agent_settings.json isn't in SECRETS_BLOCKED (masked
-                            // read is allowed via the read tool), but js_eval must not read it
-                            // raw — that would bypass masking for <7-char / corrupt-file secrets.
-                            if (basename === AGENT_SETTINGS_FILE) {
-                                throw new Error('Access to agent_settings.json via js_eval is blocked; use the read tool (secret values are masked).');
-                            }
-                            return original.apply(target, args);
-                        };
-                    }
-                    return original.bind(target);
-                }
-            });
-        };
-        const FS_GUARDED = new Set([
-            'readFileSync', 'readFile', 'createReadStream', 'openSync', 'open',
-            'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
-            'copyFileSync', 'copyFile', 'cpSync', 'cp',
-            'symlinkSync', 'symlink', 'linkSync', 'link',
-        ]);
-        const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
         // Safe process subset — env contains ONLY user-set BAT-495 env vars.
         // System secrets (bot tokens, provider API keys from config.json) stay hidden
         // because they live in the `config` object, not process.env (with the
@@ -347,59 +306,16 @@ const handlers = {
             }
         }
         const safeProcess = { env: userEnv, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
-        const sandboxedRequire = (mod) => {
-            if (typeof mod !== 'string') {
-                throw new Error('Module identifier must be a string in js_eval.');
-            }
-            // Normalize Node core specifiers like "node:fs" -> "fs"
-            let normalizedMod = mod.startsWith('node:') ? mod.slice(5) : mod;
-
-            // Block relative requires (including ".", "..") — prevents access to config.js (secrets), security.js, etc.
-            if (
-                normalizedMod === '.' ||
-                normalizedMod === '..' ||
-                normalizedMod.startsWith('./') ||
-                normalizedMod.startsWith('../') ||
-                normalizedMod.startsWith('.\\') ||
-                normalizedMod.startsWith('..\\')
-            ) {
-                throw new Error('Relative module imports are blocked in js_eval for security.');
-            }
-
-            // Block absolute paths into workspace or source directory
-            // Resolve both sides via realpathSync to defeat symlink aliases
-            // (Android: /data/user/0/... is a symlink to /data/data/...)
-            if (path.isAbsolute(normalizedMod)) {
-                let resolvedMod = path.resolve(normalizedMod);
-                try { resolvedMod = fs.realpathSync(resolvedMod); } catch (_) {}
-                let resolvedWork = path.resolve(workDir);
-                try { resolvedWork = fs.realpathSync(resolvedWork); } catch (_) {}
-                let resolvedSrc = path.resolve(__dirname, '..');
-                try { resolvedSrc = fs.realpathSync(resolvedSrc); } catch (_) {}
-                const inWorkDir = resolvedMod === resolvedWork || resolvedMod.startsWith(resolvedWork + path.sep);
-                const inSourceDir = resolvedMod === resolvedSrc || resolvedMod.startsWith(resolvedSrc + path.sep);
-                if (inWorkDir || inSourceDir) {
-                    throw new Error('Direct module imports from app directories are blocked in js_eval for security.');
-                }
-            }
-
-            if (BLOCKED_MODULES.has(normalizedMod)) {
-                throw new Error(`Module "${normalizedMod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
-            }
-
-            if (normalizedMod === 'fs') {
-                return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
-            }
-            if (normalizedMod === 'fs/promises') {
-                return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
-            }
-            // Return safe process stub instead of real process (blocks env, mainModule)
-            if (normalizedMod === 'process') {
-                return safeProcess;
-            }
-
-            return require(normalizedMod);
-        };
+        // BAT-1409 P1-F (amendment v3.3 M3): an explicit allowlist of Node built-ins; fs is a
+        // workspace-confined façade (P1-E path rule, no descriptors, no links, read-only flags on
+        // reads); net cannot wrap a descriptor. See js-eval-guard.js.
+        const guards = createJsEvalGuards({
+            workDir,
+            names: { ROOT_SECRET_NAMES, SECRETS_ANYWHERE, WRITE_PROTECTED_ROOT },
+            agentSettingsFile: AGENT_SETTINGS_FILE,
+            onRefuse: (msg) => log(`[Security] js_eval refused: ${flattenForLog(msg, 160)}`, 'WARN'),
+        });
+        const sandboxedRequire = (mod) => guards.requireModule(mod, safeProcess);
 
         let timerId;
         try {

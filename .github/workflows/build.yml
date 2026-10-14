@@ -125,6 +125,7 @@ jobs:
             reasoning-pipeline \
             module-paths-preamble \
             file-tools-confinement \
+            js-eval-confinement \
             ci-coverage-manifest
           do
             echo "── $t ──"

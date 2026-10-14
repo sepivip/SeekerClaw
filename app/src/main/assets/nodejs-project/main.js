@@ -58,6 +58,8 @@ process.on('unhandledRejection', (reason) => log('UNHANDLED: ' + reason, 'ERROR'
 require('./quiesce');
 require('./wallet/ata');
 require('./wallet/token2022-mint');
+// BAT-1409 P1-F: process-wide socket guards (no descriptor wrapping), before any tool can run.
+require('./net-guard').install({ log });
 
 // ============================================================================
 // SECURITY (extracted to security.js — BAT-194)
