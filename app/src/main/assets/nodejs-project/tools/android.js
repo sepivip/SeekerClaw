@@ -11,6 +11,29 @@ const { androidBridgeCall } = require('../bridge');
 
 const { visionAnalyzeImage } = require('../ai');
 
+// Moves a camera capture from the app's capture directory into workspace/media/inbound/ and
+// rewrites `result.path` to the workspace-relative path. Best effort: on failure the result keeps
+// the original path and a WARN is logged.
+function moveCaptureIntoWorkspace(result) {
+    if (!(result && result.success && result.path && fs.existsSync(result.path))) return;
+    try {
+        const filename = path.basename(result.path);
+        const inboundDir = path.join(workDir, 'media', 'inbound');
+        fs.mkdirSync(inboundDir, { recursive: true });
+        const dest = path.join(inboundDir, filename);
+        try {
+            fs.renameSync(result.path, dest);
+        } catch (e) {
+            // Cross-filesystem fallback: copy + delete
+            fs.copyFileSync(result.path, dest);
+            try { fs.unlinkSync(result.path); } catch (_) { /* ignore cleanup */ }
+        }
+        result.path = 'media/inbound/' + filename;
+    } catch (e) {
+        log(`Camera move to workspace failed: ${e.message}`, 'WARN');
+    }
+}
+
 const tools = [
     {
         name: 'android_battery',
@@ -197,24 +220,7 @@ const handlers = {
         const lens = input.lens === 'front' ? 'front' : 'back';
         const result = await androidBridgeCall('/camera/capture', { lens }, 45000);
         // Move capture into workspace so telegram_send_file can access it
-        if (result && result.success && result.path && fs.existsSync(result.path)) {
-            try {
-                const filename = path.basename(result.path);
-                const inboundDir = path.join(workDir, 'media', 'inbound');
-                fs.mkdirSync(inboundDir, { recursive: true });
-                const dest = path.join(inboundDir, filename);
-                try {
-                    fs.renameSync(result.path, dest);
-                } catch (e) {
-                    // Cross-filesystem fallback: copy + delete
-                    fs.copyFileSync(result.path, dest);
-                    try { fs.unlinkSync(result.path); } catch (_) { /* ignore cleanup */ }
-                }
-                result.path = 'media/inbound/' + filename;
-            } catch (e) {
-                log(`Camera move to workspace failed: ${e.message}`, 'WARN');
-            }
-        }
+        moveCaptureIntoWorkspace(result);
         return result;
     },
 
@@ -225,10 +231,13 @@ const handlers = {
             return { error: capture?.error || 'Camera capture failed' };
         }
 
-        const imagePath = capture.path;
-        if (!imagePath || !fs.existsSync(imagePath)) {
+        if (!capture.path || !fs.existsSync(capture.path)) {
             return { error: 'Captured image file not found on device' };
         }
+        // BAT-1409 P1-E: like android_camera_capture, the photo moves into media/inbound/, so the
+        // returned path is a workspace path the file tools accept.
+        moveCaptureIntoWorkspace(capture);
+        const imagePath = path.isAbsolute(capture.path) ? capture.path : path.join(workDir, capture.path);
 
         let imageBase64;
         try {
@@ -251,7 +260,7 @@ const handlers = {
             success: true,
             lens: capture.lens || lens,
             capturedAt: capture.capturedAt || null,
-            path: imagePath,
+            path: capture.path,
             analysis: vision.text
         };
     },

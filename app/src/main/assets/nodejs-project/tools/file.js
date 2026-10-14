@@ -4,19 +4,42 @@ const fs = require('fs');
 const path = require('path');
 
 const {
-    workDir, log, config, CHANNEL, SECRETS_BLOCKED,
+    workDir, log, config, CHANNEL,
     syncAgentApiKeys,
 } = require('../config');
 
 const channel = require('../channel');
 
 const {
-    redactSecrets, rebuildRedactPatterns, safePath, detectSuspiciousPatterns,
+    redactSecrets, rebuildRedactPatterns, detectSuspiciousPatterns,
     maskAgentSettings, registerAgentSettingsSecrets,
+    resolveWorkspacePath, readBlockedName, sendBlockedName, writeBlockedName, writeLinkOnPath,
 } = require('../security');
 
 // BAT-1087: filename whose contents carry provider/service secrets under apiKeys.*
 const AGENT_SETTINGS_FILE = 'agent_settings.json';
+
+// BAT-1409 P1-E: control characters and line separators never reach a log line.
+function logSafe(s) {
+    return String(s).replace(/[\x00-\x1f\x7f\u2028\u2029]/g, '_').slice(0, 200);
+}
+
+// BAT-1409 P1-E: the writer checks shared by write, edit and delete. Returns an error result, or
+// null when the write may go ahead.
+function refuseWrite(r, input) {
+    if (!r) return { error: 'Access denied: path outside workspace' };
+    const blocked = writeBlockedName(r);
+    if (blocked) {
+        log(`[Security] BLOCKED write to protected file: ${logSafe(blocked)}`, 'WARN');
+        return { error: `Writing ${blocked} is blocked: it is managed by the app.` };
+    }
+    const link = writeLinkOnPath(r);
+    if (link) {
+        log(`[Security] BLOCKED write through a link: ${logSafe(link)}`, 'WARN');
+        return { error: `Access denied: ${link} is a link; the file tools do not write through links.` };
+    }
+    return null;
+}
 
 // Helper to recursively list files in a directory (used by skill_read)
 function listFilesRecursive(dir, maxDepth = 3, currentDepth = 0) {
@@ -124,26 +147,21 @@ const tools = [
 
 const handlers = {
     async read(input, chatId) {
-        const filePath = safePath(input.path);
-        if (!filePath) return { error: 'Access denied: path outside workspace' };
-        // Check basename first, then resolve symlinks to catch aliased access
-        const readBasename = path.basename(filePath);
-        if (SECRETS_BLOCKED.has(readBasename)) {
-            log(`[Security] BLOCKED read of sensitive file: ${readBasename}`, 'WARN');
-            return { error: `Reading ${readBasename} is blocked for security.` };
+        // BAT-1409 P1-E: the real path must stay inside the workspace (a link cannot lead out),
+        // and the protected names are anchored at the workspace root on both layers.
+        const r = resolveWorkspacePath(input.path);
+        if (!r) return { error: 'Access denied: path outside workspace' };
+        const blocked = readBlockedName(r);
+        if (blocked) {
+            log(`[Security] BLOCKED read of sensitive file: ${logSafe(blocked)}`, 'WARN');
+            return { error: `Reading ${blocked} is blocked for security.` };
         }
+        const filePath = r.real;
         if (!fs.existsSync(filePath)) {
             return { error: `File not found: ${input.path}` };
         }
-        // Resolve symlinks and re-check basename (prevents symlink bypass)
-        let realBasename = readBasename;
-        try {
-            realBasename = path.basename(fs.realpathSync(filePath));
-            if (SECRETS_BLOCKED.has(realBasename)) {
-                log(`[Security] BLOCKED read via symlink to sensitive file: ${realBasename}`, 'WARN');
-                return { error: `Reading ${realBasename} is blocked for security.` };
-            }
-        } catch { /* realpathSync may fail on broken links — proceed to normal error */ }
+        const readBasename = path.basename(r.abs);
+        const realBasename = path.basename(r.real);
         const stat = fs.statSync(filePath);
         if (stat.isDirectory()) {
             return { error: 'Path is a directory, use ls tool instead' };
@@ -173,8 +191,10 @@ const handlers = {
     },
 
     async write(input, chatId) {
-        const filePath = safePath(input.path);
-        if (!filePath) return { error: 'Access denied: path outside workspace' };
+        const r = resolveWorkspacePath(input.path);
+        const refused = refuseWrite(r, input);
+        if (refused) return refused;
+        const filePath = r.abs;
 
         // Skill file write protection: writes to skills/ directory are blocked
         // when suspicious injection patterns are detected in the content (defense
@@ -213,8 +233,10 @@ const handlers = {
     },
 
     async edit(input, chatId) {
-        const filePath = safePath(input.path);
-        if (!filePath) return { error: 'Access denied: path outside workspace' };
+        const r = resolveWorkspacePath(input.path);
+        const refused = refuseWrite(r, input);
+        if (refused) return refused;
+        const filePath = r.abs;
         if (!fs.existsSync(filePath)) {
             return { error: `File not found: ${input.path}` };
         }
@@ -267,8 +289,9 @@ const handlers = {
     },
 
     async ls(input, chatId) {
-        const targetPath = safePath(input.path || '');
-        if (!targetPath) return { error: 'Access denied: path outside workspace' };
+        const r = resolveWorkspacePath(input.path || '');
+        if (!r) return { error: 'Access denied: path outside workspace' };
+        const targetPath = r.real;
         if (!fs.existsSync(targetPath)) {
             return { error: `Directory not found: ${input.path || '/'}` };
         }
@@ -282,7 +305,13 @@ const handlers = {
             const items = fs.readdirSync(dir);
             for (const item of items) {
                 const itemPath = path.join(dir, item);
-                const itemStat = fs.statSync(itemPath);
+                // BAT-1409 P1-E: lstat, so a link is listed as a link and never followed.
+                let itemStat;
+                try { itemStat = fs.lstatSync(itemPath); } catch (_) { continue; }
+                if (itemStat.isSymbolicLink()) {
+                    entries.push({ name: prefix + item, type: 'symlink', size: null });
+                    continue;
+                }
                 const entry = {
                     name: prefix + item,
                     type: itemStat.isDirectory() ? 'directory' : 'file',
@@ -303,15 +332,16 @@ const handlers = {
     },
 
     async delete(input, chatId) {
-        // Core identity files + secrets (uses shared SECRETS_BLOCKED for the latter)
-        const DELETE_PROTECTED = new Set([
-            'SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md', 'HEARTBEAT.md',
-            ...SECRETS_BLOCKED,
-        ]);
+        // Core identity files (any depth, as before); the app-managed files are refused at the
+        // workspace root by refuseWrite (BAT-1409 P1-E).
+        const DELETE_PROTECTED = new Set(['SOUL.md', 'MEMORY.md', 'IDENTITY.md', 'USER.md', 'HEARTBEAT.md']);
 
         if (!input.path) return { error: 'path is required' };
-        const filePath = safePath(input.path);
-        if (!filePath) return { error: 'Access denied: path outside workspace' };
+        const r = resolveWorkspacePath(input.path);
+        if (r && r.rel === '') return { error: 'Cannot delete the workspace itself.' };
+        const refused = refuseWrite(r, input);
+        if (refused) return refused;
+        const filePath = r.abs;
 
         // Check against protected files (compare basename for top-level, full relative for nested)
         const relativePath = path.relative(workDir, filePath);
@@ -361,8 +391,16 @@ const handlers = {
         if (!input.path) return { error: 'path is required' };
         if (!input.chat_id) return { error: 'chat_id is required' };
 
-        const filePath = safePath(input.path);
-        if (!filePath) return { error: 'Access denied: path outside workspace' };
+        const r = resolveWorkspacePath(input.path);
+        if (!r) return { error: 'Access denied: path outside workspace' };
+        // BAT-1409 P1-E: raw bytes leave the device here, so the secret names and
+        // agent_settings.json (only its masked form may leave, through read) are refused.
+        const blocked = sendBlockedName(r);
+        if (blocked) {
+            log(`[Security] BLOCKED send of sensitive file: ${logSafe(blocked)}`, 'WARN');
+            return { error: `Sending ${blocked} is blocked for security.` };
+        }
+        const filePath = r.real;
         if (!fs.existsSync(filePath)) return { error: `File not found: ${input.path}` };
 
         let stat;

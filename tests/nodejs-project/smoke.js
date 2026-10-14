@@ -65,6 +65,8 @@ const LOAD_TARGETS = [
     'log-safe.js',
     'loop-detector.js',
     'model-catalog.js',
+    // BAT-1409 P1-E: pure path rule (fs + path only, no config.js, no IO at load).
+    'workspace-path.js',
     'telegram-commands.js',
     // BAT-514: both modules are pure (functions only, no top-level
     // side effects). internal-control-server.js's HTTP listener is
