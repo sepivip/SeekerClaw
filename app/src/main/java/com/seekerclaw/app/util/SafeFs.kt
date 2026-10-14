@@ -1,6 +1,11 @@
 package com.seekerclaw.app.util
 
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileVisitOption
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
@@ -8,6 +13,8 @@ import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFilePermission
 import java.util.EnumSet
@@ -100,6 +107,159 @@ object SafeFs {
             throw UnsafePathException("helper directory is not a real directory: $dir")
         }
         return dir
+    }
+
+    // ---------------------------------------------------------------- P1-J: writes and reads
+
+    /** Name of the Kotlin-only staging directory, a direct child of the writer root. */
+    const val KWRITE_DIR = ".kwrite"
+
+    /**
+     * The app's `filesDir`, set once per process at startup (`SeekerClawApplication`). Writers
+     * that only know a target file use it as the ancestor-rule root via [rootFor]. Pure unit tests
+     * leave it null and pass roots explicitly.
+     */
+    @Volatile
+    var filesRoot: Path? = null
+
+    /**
+     * Directory fsync after a rename, for [writeAtomic] with `durable = true`. The JVM default
+     * opens the directory read-only and forces it; Android may replace it with an
+     * `Os.open(O_RDONLY | O_DIRECTORY)` + `Os.fsync` implementation. Failures are swallowed: the
+     * rename itself has already happened and is atomic.
+     */
+    @Volatile
+    var dirSync: (Path) -> Unit = { dir ->
+        try {
+            FileChannel.open(dir, StandardOpenOption.READ).use { it.force(true) }
+        } catch (_: Exception) {
+        }
+    }
+
+    /** The ancestor-rule root for [target]: [filesRoot] when it contains [target], else its parent. */
+    fun rootFor(target: Path): Path {
+        val t = target.toAbsolutePath().normalize()
+        val fr = filesRoot?.toAbsolutePath()?.normalize()
+        return if (fr != null && t.startsWith(fr) && t != fr) fr else t.parent
+    }
+
+    /**
+     * P1-J — the one Kotlin writer. Writes [bytes] to [target] without ever writing through a
+     * link:
+     * 1. the ancestor rule from [root] (missing parents are created, no-follow);
+     * 2. a temp file is created with `CREATE_NEW` (`O_CREAT | O_EXCL`, fails on any existing
+     *    entry, including a dangling link) in `<root>/.kwrite/`, validated on every use;
+     * 3. the bytes are written and forced;
+     * 4. `Files.move(tmp, target, ATOMIC_MOVE)`: `rename(2)` replaces a final-component link and
+     *    never follows it;
+     * 5. with [durable], the target's directory is fsynced ([dirSync]) for callers whose later
+     *    step depends on this write.
+     * The temp file is deleted on any failure.
+     */
+    fun writeAtomic(root: Path, target: Path, bytes: ByteArray, durable: Boolean = false) {
+        writeAtomicFrom(root, target, durable) { out -> out.write(bytes) }
+    }
+
+    fun writeAtomicText(root: Path, target: Path, text: String, durable: Boolean = false) =
+        writeAtomic(root, target, text.toByteArray(Charsets.UTF_8), durable)
+
+    /** Streaming form of [writeAtomic] (asset copies, ZIP extraction). */
+    fun writeAtomicFrom(root: Path, target: Path, durable: Boolean = false, write: (OutputStream) -> Unit) {
+        checkAncestors(root, target, createParents = true)
+        if (isRealDir(target)) throw UnsafePathException("target is a directory: $target")
+        val kwrite = ensureRealDir(root, root.resolve(KWRITE_DIR))
+        val tmp = Files.createTempFile(kwrite, ".sc-", ".tmp")
+        try {
+            FileChannel.open(tmp, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use { ch ->
+                val out = java.nio.channels.Channels.newOutputStream(ch)
+                write(out)
+                out.flush()
+                ch.force(true)
+            }
+            moveReplacing(tmp, target)
+            if (durable) dirSync(target.toAbsolutePath().parent)
+        } finally {
+            try {
+                Files.deleteIfExists(tmp)
+            } catch (_: IOException) {
+            }
+        }
+    }
+
+    /** `rename(2)` [src] over [dst], replacing a file or link at [dst] without following it. */
+    private fun moveReplacing(src: Path, dst: Path) {
+        try {
+            Files.move(src, dst, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (_: AtomicMoveNotSupportedException) {
+            // Same filesystem in practice; the non-atomic form is still a single rename.
+            Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    /**
+     * Moves a regular file [src] onto [dst] (staging promotion). Both paths obey the ancestor
+     * rule; [src] must be a regular file (`lstat`), and a link at [dst] is replaced, not followed.
+     */
+    fun moveNoFollow(root: Path, src: Path, dst: Path) {
+        checkAncestors(root, src)
+        checkAncestors(root, dst, createParents = true)
+        if (!Files.isRegularFile(src, *NOFOLLOW)) throw UnsafePathException("move source is not a regular file: $src")
+        if (isRealDir(dst)) throw UnsafePathException("move target is a directory: $dst")
+        moveReplacing(src, dst)
+    }
+
+    /** Appends [bytes] to [target] (created if missing) without following a link at any depth. */
+    fun appendNoFollow(root: Path, target: Path, bytes: ByteArray) {
+        checkAncestors(root, target, createParents = true)
+        Files.newOutputStream(
+            target,
+            StandardOpenOption.CREATE, StandardOpenOption.APPEND, StandardOpenOption.WRITE,
+            LinkOption.NOFOLLOW_LINKS,
+        ).use { it.write(bytes) }
+    }
+
+    /** Opens [target] for reading without following a link at any depth. */
+    fun openReadNoFollow(root: Path, target: Path): InputStream {
+        checkAncestors(root, target)
+        return Files.newInputStream(target, LinkOption.NOFOLLOW_LINKS)
+    }
+
+    /** Opens a read channel on [target] (seekable reads) without following a link at any depth. */
+    fun openReadChannelNoFollow(root: Path, target: Path): FileChannel {
+        checkAncestors(root, target)
+        return FileChannel.open(target, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+    }
+
+    /** Reads exactly [len] bytes at [pos] of [target] without following a link at any depth. */
+    fun readRangeNoFollow(root: Path, target: Path, pos: Long, len: Int): ByteArray =
+        openReadChannelNoFollow(root, target).use { ch ->
+            val buf = ByteBuffer.allocate(len)
+            var p = pos
+            while (buf.hasRemaining()) {
+                val n = ch.read(buf, p)
+                if (n < 0) throw java.io.EOFException("short read at $p")
+                p += n
+            }
+            buf.array()
+        }
+
+    fun readBytesNoFollow(root: Path, target: Path): ByteArray =
+        openReadNoFollow(root, target).use { it.readBytes() }
+
+    fun readTextNoFollow(root: Path, target: Path): String =
+        String(readBytesNoFollow(root, target), Charsets.UTF_8)
+
+    /**
+     * Opens (creating if missing) a lock file's channel without following a link at any depth.
+     * Replaces `RandomAccessFile(lockFile, "rw")`, which follows a link (Codex R3).
+     */
+    fun openLockChannelNoFollow(root: Path, target: Path): FileChannel {
+        checkAncestors(root, target, createParents = true)
+        return FileChannel.open(
+            target,
+            StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.CREATE,
+            LinkOption.NOFOLLOW_LINKS,
+        )
     }
 
     /**

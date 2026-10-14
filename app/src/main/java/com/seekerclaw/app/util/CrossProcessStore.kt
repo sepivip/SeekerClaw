@@ -64,14 +64,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * ## Atomicity
  *
- * Writes go through a `<filename>.tmp` and are then moved into place
- * with `java.nio.file.Files.move(..., REPLACE_EXISTING, ATOMIC_MOVE)`.
- * That move is atomic at the filesystem level on the filesystems
- * Android uses (ext4, F2FS), so a reader can never observe a half-
- * written file AND there is no DELETE-event window where observers
- * could briefly see `initial`. No fsync — Android-style mobile usage
- * doesn't justify the latency cost; if the device powers off mid-
- * write, the worst case is the previous good version stays on disk.
+ * Writes go through [SafeFs.writeAtomicText] (BAT-1409 P1-J): the bytes are
+ * staged in `filesDir/.kwrite/`, forced to disk, and moved into place with
+ * `java.nio.file.Files.move(..., REPLACE_EXISTING, ATOMIC_MOVE)`, never
+ * through a link. That move is atomic at the filesystem level on the
+ * filesystems Android uses (ext4, F2FS), so a reader can never observe a
+ * half-written file AND there is no DELETE-event window where observers
+ * could briefly see `initial`. The temp file's data is fsynced; the
+ * directory is not (no `durable` flag), so if the device powers off right
+ * after a write, the worst case is the previous good version stays on disk.
  *
  * ## Mutation safety (the boundary contract)
  *
@@ -216,7 +217,6 @@ class CrossProcessStore<T> private constructor(
         ?: CoroutineScope(Dispatchers.IO + ownedJob!!)
 
     private val file: File = File(filesDirRoot, fileName)
-    private val tmpFile: File = File(filesDirRoot, "$fileName.tmp")
     // BAT-513 round-13: writeLock now also serves as the read-modify-write
     // serialization point for [update]. The earlier design used a separate
     // kotlinx Mutex for update, which protected update-vs-update but
@@ -332,9 +332,11 @@ class CrossProcessStore<T> private constructor(
      * a WARN; in that scenario the caller MUST treat T as immutable.
      */
     fun read(): T {
-        if (!file.exists()) return cloneSafe(initialSnapshot)
+        // BAT-1409 P1-J: lstat-based existence and a no-follow read — a link at the store
+        // path decodes as a failure (initial), never as the link target's contents.
+        if (!SafeFs.existsNoFollow(file.toPath())) return cloneSafe(initialSnapshot)
         return try {
-            json.decodeFromString(serializer, file.readText())
+            json.decodeFromString(serializer, SafeFs.readTextNoFollow(filesDirRoot.toPath(), file.toPath()))
         } catch (e: Exception) {
             Log.w(TAG, "[$fileName] decode failed, returning initial: ${e.message}")
             cloneSafe(initialSnapshot)
@@ -436,41 +438,13 @@ class CrossProcessStore<T> private constructor(
     private fun persistLocked(snapshot: T): Boolean {
         return try {
             val text = json.encodeToString(serializer, snapshot)
-            tmpFile.writeText(text)
-            // BAT-512 (Copilot review fix): use NIO `Files.move`
-            // with REPLACE_EXISTING + ATOMIC_MOVE so the rename is
-            // atomic AT THE FILESYSTEM LEVEL even when the
-            // destination already exists. The earlier delete +
-            // renameTo fallback opened a window in which
-            // FileObserver fired DELETE, the corresponding reload
-            // landed `initial` in `_state`, and only the
-            // subsequent CREATE/MOVED_TO restored the correct
-            // value — observers briefly saw garbage.
-            //
-            // ATOMIC_MOVE + REPLACE_EXISTING is supported on the
-            // filesystems Android uses (ext4, F2FS). Min SDK 34 so
-            // java.nio.file is available. AtomicMoveNotSupported
-            // can occur on cross-device moves only, which doesn't
-            // happen here (both files are under filesDir on the
-            // same partition); we still degrade gracefully if it
-            // does.
-            try {
-                java.nio.file.Files.move(
-                    tmpFile.toPath(),
-                    file.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                // Fall back to non-atomic REPLACE_EXISTING — still
-                // single-syscall (no DELETE event), just not
-                // strictly atomic if the kernel decides otherwise.
-                java.nio.file.Files.move(
-                    tmpFile.toPath(),
-                    file.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                )
-            }
+            // BAT-512 + BAT-1409 P1-J: SafeFs.writeAtomicText stages the bytes in
+            // `filesDir/.kwrite/` (CREATE_NEW, never through a link) and publishes them with
+            // `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)` — the same single-rename, no-DELETE-
+            // window guarantee BAT-512 introduced, now also link-safe at every path depth.
+            // The rename lands MOVED_TO on `fileName` in this store's directory, which the
+            // FileObserver below already handles.
+            SafeFs.writeAtomicText(filesDirRoot.toPath(), file.toPath(), text)
             // BAT-512 (Copilot review fix #4 round-4 + round-7):
             // publish the same snapshot we just wrote to disk. A
             // caller mutating their `value` reference after this
@@ -483,11 +457,6 @@ class CrossProcessStore<T> private constructor(
         } catch (e: Exception) {
             Log.e(TAG, "[$fileName] write failed: ${e.message}", e)
             false
-        } finally {
-            // Defensive: clean up a leftover .tmp on the failure path
-            // so we don't accumulate cruft. No-op when the move
-            // succeeded (the source inode is gone).
-            if (tmpFile.exists()) tmpFile.delete()
         }
     }
 

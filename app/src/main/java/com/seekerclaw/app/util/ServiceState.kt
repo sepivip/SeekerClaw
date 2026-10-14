@@ -189,7 +189,9 @@ object ServiceState {
         bridgeToken = token
         val parent = stateFile?.parentFile ?: return
         try {
-            File(parent, "bridge_token").writeText(token)
+            // BAT-1409 P1-J: atomic, never written through a link (a planted link here would
+            // otherwise publish the token wherever it pointed).
+            SafeFs.writeAtomicText(parent.toPath(), File(parent, "bridge_token").toPath(), token)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to write bridge token file: ${e.message}")
         }
@@ -208,11 +210,11 @@ object ServiceState {
         val parent = stateFile?.parentFile ?: return
         try {
             val file = File(parent, "bridge_token")
-            if (!file.exists()) {
+            if (!SafeFs.existsNoFollow(file.toPath())) {
                 bridgeToken = null
                 return
             }
-            val token = file.readText().trim()
+            val token = SafeFs.readTextNoFollow(parent.toPath(), file.toPath()).trim()
             bridgeToken = token.ifEmpty { null }
         } catch (_: Exception) {}
     }
@@ -603,11 +605,12 @@ object ServiceState {
             val todayYear = Calendar.getInstance().get(Calendar.YEAR)
             val todayKey = "${todayYear}_${todayDay}"
 
-            val lastDay = if (dayFile.exists()) dayFile.readText().trim() else ""
+            val root = file.parentFile.toPath()
+            val lastDay = if (SafeFs.existsNoFollow(dayFile.toPath())) SafeFs.readTextNoFollow(root, dayFile.toPath()).trim() else ""
             if (lastDay != todayKey) {
                 _messagesToday.value = 0
                 _tokensToday.value = 0
-                dayFile.writeText(todayKey)
+                SafeFs.writeAtomicText(root, dayFile.toPath(), todayKey)
             }
         } catch (_: Exception) {}
     }
@@ -646,15 +649,16 @@ object ServiceState {
                 appendLine(_tokensTotal.value)
                 append(_serviceStartTimeMs.value)
             }
-            file.writeText(data)
+            // BAT-1409 P1-J: atomic rename (MOVED_TO is in the observer mask), link-safe.
+            SafeFs.writeAtomicText(file.parentFile.toPath(), file.toPath(), data)
         } catch (_: Exception) {}
     }
 
     private fun readFromFile() {
         val file = stateFile ?: return
         try {
-            if (!file.exists()) return
-            val lines = file.readLines()
+            if (!SafeFs.existsNoFollow(file.toPath())) return
+            val lines = SafeFs.readTextNoFollow(file.parentFile.toPath(), file.toPath()).lines()
             if (lines.size >= 5) {
                 val fileStatus = try { ServiceStatus.valueOf(lines[0]) } catch (_: Exception) { return }
                 // lines[1] is the deprecated uptime field — read but
@@ -694,7 +698,7 @@ object ServiceState {
         val parent = stateFile?.parentFile ?: return
         val file = File(parent, "workspace/agent_health_state")
         try {
-            if (!file.exists()) {
+            if (!SafeFs.existsNoFollow(file.toPath())) {
                 // File deleted (rotation, cleanup, user wipe, etc.). Reset
                 // to default AgentHealth with isStale=true rather than
                 // silently leaving the UI showing the last known status —
@@ -709,7 +713,7 @@ object ServiceState {
                 }
                 return
             }
-            val json = JSONObject(file.readText())
+            val json = JSONObject(SafeFs.readTextNoFollow(parent.toPath(), file.toPath()))
             val apiStatus = json.optString("apiStatus", "unknown")
             val updatedAt = json.optString("updatedAt", "")
 
@@ -756,14 +760,14 @@ object ServiceState {
         val parent = stateFile?.parentFile ?: return
         val file = File(parent, "workspace/api_usage_state")
         try {
-            if (!file.exists()) {
+            if (!SafeFs.existsNoFollow(file.toPath())) {
                 // File deleted (cleanup, rotation, user wipe). Clear
                 // the in-memory usage so the UI doesn't continue showing
                 // stale counts that no longer have a backing source.
                 if (_apiUsage.value != null) _apiUsage.value = null
                 return
             }
-            val json = JSONObject(file.readText())
+            val json = JSONObject(SafeFs.readTextNoFollow(parent.toPath(), file.toPath()))
             val type = json.optString("type", "")
             val updatedAt = try {
                 java.time.Instant.parse(json.optString("updated_at", "")).toEpochMilli()

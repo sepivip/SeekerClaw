@@ -15,12 +15,30 @@ import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.SafeFs
 import com.seekerclaw.app.util.ServiceState
 
 class SeekerClawApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // BAT-1409 P1-J: the link-safe filesystem helper needs this process's filesDir (the
+        // ancestor-rule root) and an Android directory fsync for durable writes. Set first, in
+        // EVERY process, before any store is constructed or any file is written.
+        SafeFs.filesRoot = filesDir.toPath()
+        SafeFs.dirSync = { dir ->
+            try {
+                // O_RDONLY on a directory is valid on Linux; OsConstants has no O_DIRECTORY.
+                val fd = android.system.Os.open(dir.toString(), android.system.OsConstants.O_RDONLY, 0)
+                try {
+                    android.system.Os.fsync(fd)
+                } finally {
+                    android.system.Os.close(fd)
+                }
+            } catch (_: Exception) {
+                // The rename already happened atomically; durability is best effort.
+            }
+        }
         createNotificationChannel()
 
         // BAT-517: load the shared provider+model registry FIRST,

@@ -258,6 +258,35 @@ class SeekerClawService : Service() {
     }
 
     /**
+     * BAT-1409 P1-J: opens [file] read-only with `O_NOFOLLOW`, so a link at the final component
+     * fails (`ELOOP`) instead of being followed. The workspace parent is checked at boot (P1-C).
+     */
+    private fun openNoFollowFd(file: java.io.File): java.io.FileDescriptor =
+        android.system.Os.open(
+            file.path,
+            android.system.OsConstants.O_RDONLY or android.system.OsConstants.O_NOFOLLOW,
+            0,
+        )
+
+    private inline fun <R> java.io.FileDescriptor.useFd(block: (java.io.FileDescriptor) -> R): R {
+        try {
+            return block(this)
+        } finally {
+            try { android.system.Os.close(this) } catch (_: Exception) {}
+        }
+    }
+
+    /** Reads exactly `buf.size` bytes at [pos], or throws [java.io.EOFException]. */
+    private fun preadFully(fd: java.io.FileDescriptor, buf: ByteArray, pos: Long) {
+        var off = 0
+        while (off < buf.size) {
+            val n = android.system.Os.pread(fd, buf, off, buf.size - off, pos + off)
+            if (n <= 0) throw java.io.EOFException("short read at ${pos + off}")
+            off += n
+        }
+    }
+
+    /**
      * BAT-1161 P1A gate 3: drain a ROTATED-OUT generation (node_debug.log.old) from `fromPos` to
      * EOF, holding ONE stable file descriptor for the whole drain — never reopening by path per
      * chunk (a later rotation could replace the path mid-drain). `.old` is immutable after the
@@ -265,26 +294,28 @@ class SeekerClawService : Service() {
      */
     private fun drainOldGeneration(oldFile: java.io.File, fromPos: Long, expectInode: Long) {
         try {
-            java.io.RandomAccessFile(oldFile, "r").use { raf ->
+            // BAT-1409 P1-J: opened with O_NOFOLLOW — a link at node_debug.log.old is refused,
+            // never followed into another file.
+            openNoFollowFd(oldFile).useFd { fd ->
                 // Bind identity to the OPEN HANDLE, not the path. The caller chose `fromPos` based
                 // on a path-based stat; if a second rotation replaced `.old` between that stat and
                 // this open, we would resume a DIFFERENT generation from a cursor that means
                 // nothing in it — forwarding misattributed bytes from an arbitrary offset, likely
                 // mid-line. fstat on the descriptor we are actually about to read closes that
                 // window: identity is now decided by the same object the reads come from.
-                val openInode = try { android.system.Os.fstat(raf.fd).st_ino } catch (_: Exception) { -1L }
+                val st = try { android.system.Os.fstat(fd) } catch (_: Exception) { null }
+                val openInode = st?.st_ino ?: -1L
                 if (openInode != expectInode) {
                     LogCollector.append("[Service] node_debug.log.old changed identity between stat and open — skipping drain to avoid forwarding misattributed bytes", LogLevel.WARN)
                     return
                 }
-                val end = raf.length()
+                val end = st?.st_size ?: 0L
                 var p = fromPos.coerceIn(0L, end)
                 var carry = ByteArray(0)
                 while (p < end) {
                     val readSize = minOf(end - p, nodeDebugMaxDeltaBytes).toInt()
-                    raf.seek(p)
                     val buf = ByteArray(readSize)
-                    raf.readFully(buf)
+                    preadFully(fd, buf, p)
                     p += readSize
                     val data = if (carry.isEmpty()) buf else carry + buf
                     var lastNl = -1
@@ -393,9 +424,8 @@ class SeekerClawService : Service() {
 
             val delta = length - pos
             val readSize = minOf(delta, nodeDebugMaxDeltaBytes).toInt()
-            val newBytes = java.io.RandomAccessFile(debugLogFile, "r").use { raf ->
-                raf.seek(pos)
-                ByteArray(readSize).also { raf.readFully(it) }
+            val newBytes = openNoFollowFd(debugLogFile).useFd { fd ->
+                ByteArray(readSize).also { preadFully(fd, it, pos) }
             }
 
             // Find the last complete line boundary. Newline is byte 0x0A

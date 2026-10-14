@@ -1338,9 +1338,10 @@ object ConfigManager {
         fromPrefs: AppConfig,
     ): AppConfig {
         val settingsFile = File(File(context.filesDir, "workspace"), "agent_settings.json")
-        if (!settingsFile.exists()) return fromPrefs
+        // BAT-1409 P1-C/P1-J: lstat + no-follow read — a link here is treated as unreadable.
+        if (!SafeFs.existsNoFollow(settingsFile.toPath())) return fromPrefs
         val json = try {
-            JSONObject(settingsFile.readText())
+            JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), settingsFile.toPath()))
         } catch (e: Exception) {
             LogCollector.append("[Config] agent_settings.json unreadable (${e.message}) — skipping reconciliation", LogLevel.WARN)
             return fromPrefs
@@ -1891,26 +1892,17 @@ object ConfigManager {
         // Atomically create the marker (verify-then-mark). Its existence — not
         // decoding the record — is what flips this install to store-only.
         val markerCreated = try {
-            val tmp = File(context.filesDir, "$XAI_OAUTH_MIGRATED_MARKER.tmp")
-            tmp.writeText("1")
-            java.nio.file.Files.move(
-                tmp.toPath(),
-                marker.toPath(),
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-            )
+            // BAT-1409 P1-J: staged in .kwrite, renamed into place, never through a link.
+            SafeFs.writeAtomicText(context.filesDir.toPath(), marker.toPath(), "1", durable = true)
             true
         } catch (e: Exception) {
-            // Fall back to a plain create; if even that fails, retry next call.
-            try {
-                marker.createNewFile() || marker.exists()
-            } catch (e2: Exception) {
-                LogCollector.append(
-                    "[Config] xAI OAuth migration marker create failed — retry next boot: ${e2.javaClass.simpleName}",
-                    LogLevel.WARN,
-                )
-                false
-            }
+            // No plain-create fallback (BAT-1409 P1-J: every write goes through SafeFs); the
+            // marker is retried on the next call.
+            LogCollector.append(
+                "[Config] xAI OAuth migration marker create failed — retry next boot: ${e.javaClass.simpleName}",
+                LogLevel.WARN,
+            )
+            false
         }
         if (!markerCreated) return
 
@@ -2064,17 +2056,16 @@ object ConfigManager {
             val file = File(workspaceDir, "owner_ids")
 
             // Read existing data
-            val existing = if (file.exists()) {
-                try { JSONObject(file.readText()) } catch (_: Exception) { JSONObject() }
+            val existing = if (SafeFs.existsNoFollow(file.toPath())) {
+                try { JSONObject(SafeFs.readTextNoFollow(filesDir.toPath(), file.toPath())) } catch (_: Exception) { JSONObject() }
             } else JSONObject()
 
             // Update the channel's owner ID
             existing.put(channel, ownerId)
 
-            // Atomic write: write to .tmp, then rename
-            val tmp = File(workspaceDir, "owner_ids.tmp")
-            tmp.writeText(existing.toString())
-            tmp.renameTo(file)
+            // BAT-1409 P1-J: atomic, never written through a link (owner_ids.tmp is no longer
+            // used — the temp file lives in filesDir/.kwrite).
+            SafeFs.writeAtomicText(filesDir.toPath(), file.toPath(), existing.toString())
 
             // Also update SharedPreferences for backward compatibility
             val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
@@ -2096,8 +2087,9 @@ object ConfigManager {
     fun loadOwnerIdFromFile(context: Context, channel: String): String {
         try {
             val file = File(context.filesDir, "workspace/owner_ids")
-            if (file.exists()) {
-                val json = JSONObject(file.readText())
+            // BAT-1409 P1-C/P1-J: lstat + no-follow read — a link here is never followed.
+            if (SafeFs.existsNoFollow(file.toPath())) {
+                val json = JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), file.toPath()))
                 // File is source of truth — return whatever is there (even empty = cleared)
                 if (json.has(channel)) return json.optString(channel, "")
             }
@@ -2173,7 +2165,7 @@ object ConfigManager {
             LogCollector.append("[Config] writeConfigJson: loadConfig returned null (cross-process?)", LogLevel.WARN)
             return
         }
-        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val workspaceDir = ensureWorkspaceDir(context)
         val json = JSONObject().apply {
             put("botToken", config.telegramBotToken)
             put("ownerId", config.telegramOwnerId)
@@ -2302,7 +2294,7 @@ object ConfigManager {
                 put("mcpServers", arr)
             }
         }
-        File(workspaceDir, "config.json").writeText(json.toString(2))
+        SafeFs.writeAtomicText(context.filesDir.toPath(), File(workspaceDir, "config.json").toPath(), json.toString(2))
     }
 
     /**
@@ -2324,12 +2316,14 @@ object ConfigManager {
             LogCollector.append("[Config] writeAgentSettingsJson: loadConfig returned null; skipping write", LogLevel.WARN)
             return
         }
-        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val workspaceDir = ensureWorkspaceDir(context)
         val settingsFile = File(workspaceDir, "agent_settings.json")
         try {
             // Read existing file to preserve agent-written fields (e.g. apiKeys)
-            val existing = if (settingsFile.exists()) {
-                try { JSONObject(settingsFile.readText()) } catch (_: Exception) { JSONObject() }
+            // BAT-1409 P1-J: lstat + no-follow read; a link here no longer counts as "no
+            // existing file" while the write below follows it.
+            val existing = if (SafeFs.existsNoFollow(settingsFile.toPath())) {
+                try { JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), settingsFile.toPath())) } catch (_: Exception) { JSONObject() }
             } else {
                 JSONObject()
             }
@@ -2346,7 +2340,7 @@ object ConfigManager {
             if (!existing.has("apiKeys")) {
                 existing.put("apiKeys", JSONObject())
             }
-            settingsFile.writeText(existing.toString(2))
+            SafeFs.writeAtomicText(context.filesDir.toPath(), settingsFile.toPath(), existing.toString(2))
         } catch (e: Exception) {
             LogCollector.append("[Config] Failed to write agent_settings.json: ${e.message}", LogLevel.WARN)
         }
@@ -2572,12 +2566,12 @@ object ConfigManager {
     private fun writeWalletConfig(context: Context) {
         val address = prefs(context).getString(KEY_WALLET_ADDRESS, null) ?: return
         val label = prefs(context).getString(KEY_WALLET_LABEL, "") ?: ""
-        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val workspaceDir = ensureWorkspaceDir(context)
         val json = JSONObject().apply {
             put("publicKey", address)
             put("label", label)
         }.toString(2)
-        File(workspaceDir, "solana_wallet.json").writeText(json)
+        SafeFs.writeAtomicText(context.filesDir.toPath(), File(workspaceDir, "solana_wallet.json").toPath(), json)
     }
 
     // ==================== Platform Info ====================
@@ -2595,7 +2589,7 @@ object ConfigManager {
     }
 
     private fun writePlatformMdInternal(context: Context) {
-        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val workspaceDir = ensureWorkspaceDir(context)
 
         // Device
         val deviceModel = Build.MODEL
@@ -2717,7 +2711,7 @@ object ConfigManager {
             append("Generated: $generated")
         }
 
-        File(workspaceDir, "PLATFORM.md").writeText(md)
+        SafeFs.writeAtomicText(context.filesDir.toPath(), File(workspaceDir, "PLATFORM.md").toPath(), md)
         LogCollector.append("[Service] PLATFORM.md written")
     }
 
@@ -2726,11 +2720,11 @@ object ConfigManager {
      * Uses the same SOUL.md template as OpenClaw.
      */
     fun seedWorkspace(context: Context) {
-        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val workspaceDir = ensureWorkspaceDir(context)
 
         val soulFile = File(workspaceDir, "SOUL.md")
-        if (!soulFile.exists()) {
-            soulFile.writeText(
+        if (!SafeFs.existsNoFollow(soulFile.toPath())) {
+            seedText(context, soulFile,
                 """
                 |# SOUL.md - Who You Are
                 |
@@ -2782,18 +2776,18 @@ object ConfigManager {
         }
 
         val memoryFile = File(workspaceDir, "MEMORY.md")
-        if (!memoryFile.exists()) {
-            memoryFile.writeText("")
+        if (!SafeFs.existsNoFollow(memoryFile.toPath())) {
+            seedText(context, memoryFile, "")
         }
 
-        // Create memory directory
-        File(workspaceDir, "memory").mkdirs()
+        // Create memory directory (no-follow)
+        SafeFs.ensureRealDir(context.filesDir.toPath(), File(workspaceDir, "memory").toPath())
 
         // BOOTSTRAP.md - One-time personality ritual (OpenClaw style)
         // Agent reads this on first message and guides user through setup
         val bootstrapFile = File(workspaceDir, "BOOTSTRAP.md")
-        if (!bootstrapFile.exists()) {
-            bootstrapFile.writeText(
+        if (!SafeFs.existsNoFollow(bootstrapFile.toPath())) {
+            seedText(context, bootstrapFile,
                 """
                 |# BOOTSTRAP.md - First Run Ritual
                 |
@@ -2858,8 +2852,8 @@ object ConfigManager {
 
         // IDENTITY.md - Agent metadata (starts empty, filled by bootstrap)
         val identityFile = File(workspaceDir, "IDENTITY.md")
-        if (!identityFile.exists()) {
-            identityFile.writeText(
+        if (!SafeFs.existsNoFollow(identityFile.toPath())) {
+            seedText(context, identityFile,
                 """
                 |# IDENTITY.md - Who I Am
                 |
@@ -2881,8 +2875,8 @@ object ConfigManager {
 
         // USER.md - Human profile (starts empty, filled by bootstrap)
         val userFile = File(workspaceDir, "USER.md")
-        if (!userFile.exists()) {
-            userFile.writeText(
+        if (!SafeFs.existsNoFollow(userFile.toPath())) {
+            seedText(context, userFile,
                 """
                 |# USER.md - About My Human
                 |
@@ -2918,39 +2912,20 @@ object ConfigManager {
         // users on 1.10.0 never received new entries (e.g. the SAB-AUDIT-v27
         // paysh-catalog section) added in later releases.
         //
-        // Atomic write via tmp-file + `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`
-        // — same pattern as McpTokenStore. File.renameTo is unreliable on Android
-        // when the destination already exists, and the older delete+rename
-        // fallback could blank the file if the second rename failed after delete.
-        // NIO `Files.move` handles overwrite atomically; falls back to
-        // REPLACE_EXISTING (still single-syscall) on the rare AtomicMoveNotSupported
-        // case. Tmp removed on any failure path so stale `.tmp` doesn't accumulate.
-        // On any error the existing DIAGNOSTICS.md is left in place — agent keeps
-        // the previous content rather than getting a blank or half-written file.
+        // Atomic write via SafeFs.writeAtomicText (temp in filesDir/.kwrite, then
+        // `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`). On any error the existing
+        // DIAGNOSTICS.md is left in place — agent keeps the previous content rather
+        // than getting a blank or half-written file.
         val diagFile = File(workspaceDir, "DIAGNOSTICS.md")
-        val diagTmp = File(workspaceDir, "DIAGNOSTICS.md.tmp")
         try {
             val newContent = context.assets.open("nodejs-project/DIAGNOSTICS.md").use { input ->
                 input.bufferedReader().readText()
             }
-            diagTmp.writeText(newContent)
-            try {
-                java.nio.file.Files.move(
-                    diagTmp.toPath(),
-                    diagFile.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                java.nio.file.Files.move(
-                    diagTmp.toPath(),
-                    diagFile.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                )
-            }
+            // BAT-1409 P1-J: the fixed `DIAGNOSTICS.md.tmp` name in the workspace was itself
+            // unsafe (a planted link there was written through). SafeFs stages in .kwrite.
+            SafeFs.writeAtomicText(context.filesDir.toPath(), diagFile.toPath(), newContent)
         } catch (e: Exception) {
             Log.w(TAG, "DIAGNOSTICS.md seed failed; existing file kept", e)
-            if (diagTmp.exists()) diagTmp.delete()
         }
 
         // Create skills directory and seed example skills
@@ -2979,9 +2954,9 @@ object ConfigManager {
      */
     private fun loadSkillManifest(file: File): MutableMap<String, SkillManifestEntry> {
         val manifest = mutableMapOf<String, SkillManifestEntry>()
-        if (!file.exists()) return manifest
+        if (!SafeFs.existsNoFollow(file.toPath())) return manifest
         return try {
-            val json = JSONObject(file.readText())
+            val json = JSONObject(SafeFs.readTextNoFollow(SafeFs.rootFor(file.toPath()), file.toPath()))
             for (key in json.keys()) {
                 val entry = json.getJSONObject(key)
                 manifest[key] = SkillManifestEntry(
@@ -3008,7 +2983,7 @@ object ConfigManager {
                 entryJson.put("hash", entry.hash)
                 json.put(name, entryJson)
             }
-            file.writeText(json.toString(2))
+            SafeFs.writeAtomicText(SafeFs.rootFor(file.toPath()), file.toPath(), json.toString(2))
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save skill manifest", e)
         }
@@ -3069,7 +3044,7 @@ object ConfigManager {
                 Log.w(TAG, "Skill $name: support-file copy failed; skipping seed, will retry on next launch")
                 return
             }
-            skillFile.writeText(content)
+            SafeFs.writeAtomicText(context.filesDir.toPath(), skillFile.toPath(), content)
             manifest[name] = SkillManifestEntry(version = version, hash = contentHash)
             Log.d(TAG, "Skill $name seeded at version $version")
             return
@@ -3079,7 +3054,7 @@ object ConfigManager {
             // File exists but no manifest entry (pre-versioning install).
             // Record current file hash in manifest at version "0.0.0" so next
             // update can detect user modifications. Do NOT overwrite on this run.
-            val installedHash = computeHash(skillFile.readText())
+            val installedHash = computeHash(SafeFs.readTextNoFollow(context.filesDir.toPath(), skillFile.toPath()))
             manifest[name] = SkillManifestEntry(version = "0.0.0", hash = installedHash)
             Log.d(TAG, "Skill $name has no manifest entry, recording installed hash at 0.0.0")
             return
@@ -3094,7 +3069,7 @@ object ConfigManager {
         }
 
         // Case 2: Bundled version > manifest version — check for user modifications
-        val installedHash = computeHash(skillFile.readText())
+        val installedHash = computeHash(SafeFs.readTextNoFollow(context.filesDir.toPath(), skillFile.toPath()))
         if (installedHash == currentEntry.hash) {
             // User hasn't modified — safe to overwrite.
             //
@@ -3113,7 +3088,7 @@ object ConfigManager {
                 Log.w(TAG, "Skill $name: support-file copy failed during upgrade ${currentEntry.version}→$version; postponing, will retry on next launch")
                 return
             }
-            skillFile.writeText(content)
+            SafeFs.writeAtomicText(context.filesDir.toPath(), skillFile.toPath(), content)
             manifest[name] = SkillManifestEntry(version = version, hash = contentHash)
             Log.d(TAG, "Skill $name updated from ${currentEntry.version} to $version")
         } else {
@@ -3171,7 +3146,7 @@ object ConfigManager {
         val stagingDir = File(parent, ".${workspaceSkillDir.name}.staging")
         // Clean any orphan staging from a prior failed run before we start.
         deleteNoFollow(context, stagingDir)
-        if (!stagingDir.mkdirs()) {
+        if (!ensureRealDirOk(context, stagingDir)) {
             Log.e(TAG, "Failed to create staging dir ${stagingDir.path}")
             return false
         }
@@ -3229,9 +3204,12 @@ object ConfigManager {
                 // Confirmed file — copy it.
                 val targetFile = File(targetDir, entry)
                 try {
-                    targetFile.parentFile?.mkdirs()
+                    // BAT-1409 P1-J: parents created and the file written without following
+                    // a link at any depth.
                     assetManager.open(childAssetPath).use { input ->
-                        targetFile.outputStream().use { output -> input.copyTo(output) }
+                        SafeFs.writeAtomicFrom(context.filesDir.toPath(), targetFile.toPath()) { output ->
+                            input.copyTo(output)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to copy support file $childAssetPath", e)
@@ -3254,7 +3232,7 @@ object ConfigManager {
         // into place. Per-file renames are atomic on POSIX-style FSes
         // including the app-private storage Android uses here.
         try {
-            workspaceSkillDir.mkdirs()
+            SafeFs.ensureRealDir(context.filesDir.toPath(), workspaceSkillDir.toPath())
             // BAT-699 R8: merge staging into live INSTEAD of blanket-deleting
             // every non-SKILL.md file. The previous approach would have
             // wiped user-added files (e.g. a user's own notes.md in a
@@ -3290,7 +3268,7 @@ object ConfigManager {
      * skill upgrades. BAT-699 R8.
      */
     private fun promoteStaging(root: Path, staging: File, live: File) {
-        live.mkdirs()
+        SafeFs.ensureRealDir(root, live.toPath())
         staging.listFiles()?.forEach { src ->
             val dest = File(live, src.name)
             // BAT-1409 P1-M: lstat-based — a link in staging is never descended into.
@@ -3299,11 +3277,8 @@ object ConfigManager {
                 src.delete()  // remove now-empty staging subdir
             } else {
                 if (SafeFs.existsNoFollow(dest.toPath())) SafeFs.deleteTreeNoFollow(root, dest.toPath())
-                if (!src.renameTo(dest)) {
-                    // Cross-device rename can fail; fall back to copy + delete.
-                    src.copyTo(dest, overwrite = true)
-                    src.delete()
-                }
+                // BAT-1409 P1-J: a link at dest is replaced by the rename, never followed.
+                SafeFs.moveNoFollow(root, src.toPath(), dest.toPath())
             }
         }
     }
@@ -3371,9 +3346,9 @@ object ConfigManager {
      */
     fun getDefaultSkillNames(context: Context): Set<String> {
         val manifestFile = File(File(context.filesDir, "workspace"), "skills-manifest.json")
-        if (!manifestFile.exists()) return emptySet()
+        if (!SafeFs.existsNoFollow(manifestFile.toPath())) return emptySet()
         return try {
-            val json = JSONObject(manifestFile.readText())
+            val json = JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), manifestFile.toPath()))
             json.keys().asSequence().toSet()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read skill manifest for default names", e)
@@ -3387,9 +3362,9 @@ object ConfigManager {
      */
     fun getDefaultSkillHashes(context: Context): Map<String, String> {
         val manifestFile = File(File(context.filesDir, "workspace"), "skills-manifest.json")
-        if (!manifestFile.exists()) return emptyMap()
+        if (!SafeFs.existsNoFollow(manifestFile.toPath())) return emptyMap()
         return try {
-            val json = JSONObject(manifestFile.readText())
+            val json = JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), manifestFile.toPath()))
             val result = mutableMapOf<String, String>()
             for (key in json.keys()) {
                 val entry = json.getJSONObject(key)
@@ -3592,21 +3567,20 @@ object ConfigManager {
                         // Track top-level skill name for count (after validation)
                         importedDirs.add(segments[0])
 
+                        // BAT-1409 P1-J: directories and files are created without following a
+                        // link at any depth; an over-limit entry never replaces the target (the
+                        // staged temp file is discarded).
                         if (entry.isDirectory) {
                             trackNewDirs(destFile, skillsDir, createdDirs)
-                            destFile.mkdirs()
+                            SafeFs.ensureRealDir(context.filesDir.toPath(), destFile.toPath())
                         } else {
-                            destFile.parentFile?.let { parent ->
-                                trackNewDirs(parent, skillsDir, createdDirs)
-                                parent.mkdirs()
-                            }
-                            destFile.outputStream().use { out ->
+                            destFile.parentFile?.let { parent -> trackNewDirs(parent, skillsDir, createdDirs) }
+                            SafeFs.writeAtomicFrom(context.filesDir.toPath(), destFile.toPath()) { out ->
                                 val buffer = ByteArray(8192)
                                 var read: Int
                                 while (zip.read(buffer).also { read = it } != -1) {
                                     totalExtracted += read
                                     if (totalExtracted > IMPORT_MAX_BYTES) {
-                                        destFile.delete()
                                         throw IllegalStateException("Import exceeds ${IMPORT_MAX_BYTES / 1024 / 1024}MB limit")
                                     }
                                     out.write(buffer, 0, read)
@@ -3667,12 +3641,12 @@ object ConfigManager {
 
             if (name != null) {
                 // Create directory-based skill: skills/<name>/SKILL.md
-                val skillDir = File(skillsDir, name).apply { mkdirs() }
-                File(skillDir, "SKILL.md").writeText(content)
+                val skillDir = File(skillsDir, name)
+                SafeFs.writeAtomicText(context.filesDir.toPath(), File(skillDir, "SKILL.md").toPath(), content)
             } else {
                 // Save as flat file: skills/imported_<timestamp>.md
                 val timestamp = System.currentTimeMillis()
-                File(skillsDir, "imported_$timestamp.md").writeText(content)
+                SafeFs.writeAtomicText(context.filesDir.toPath(), File(skillsDir, "imported_$timestamp.md").toPath(), content)
             }
 
             Log.i(TAG, "Imported 1 skill from .md file (name: ${name ?: "unnamed"})")
@@ -3725,7 +3699,14 @@ object ConfigManager {
     fun clearMemory(context: Context) {
         val workspaceDir = File(context.filesDir, "workspace")
         File(workspaceDir, "MEMORY.md").apply {
-            if (exists()) writeText("")
+            // BAT-1409 P1-J: rewritten atomically, never through a link.
+            if (SafeFs.existsNoFollow(toPath())) {
+                try {
+                    SafeFs.writeAtomicText(context.filesDir.toPath(), toPath(), "")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Could not clear MEMORY.md: ${e.message}")
+                }
+            }
         }
         File(workspaceDir, "memory").apply {
             // BAT-1409 P1-M: no-follow delete; a linked memory/ is unlinked, never descended.
@@ -3750,6 +3731,35 @@ object ConfigManager {
     } catch (e: Exception) {
         Log.e(TAG, "No-follow delete refused for ${target.name}: ${e.message}")
         false
+    }
+
+    /**
+     * BAT-1409 P1-J: the workspace directory, created and validated without following links.
+     * Never throws (like the `mkdirs()` it replaces): a refusal is logged, and the SafeFs write
+     * that follows enforces the ancestor rule again and fails on its own terms.
+     */
+    private fun ensureWorkspaceDir(context: Context): File {
+        val ws = File(context.filesDir, "workspace")
+        try {
+            SafeFs.ensureRealDir(context.filesDir.toPath(), ws.toPath())
+        } catch (e: Exception) {
+            LogCollector.append("[Config] workspace directory refused: ${e.message}", LogLevel.ERROR)
+        }
+        return ws
+    }
+
+    /** BAT-1409 P1-J: [SafeFs.ensureRealDir] as a boolean, logged on refusal. */
+    private fun ensureRealDirOk(context: Context, dir: File): Boolean = try {
+        SafeFs.ensureRealDir(context.filesDir.toPath(), dir.toPath())
+        true
+    } catch (e: Exception) {
+        Log.e(TAG, "Could not create ${dir.name}: ${e.message}")
+        false
+    }
+
+    /** BAT-1409 P1-J: writes a seed file atomically, never through a link. */
+    private fun seedText(context: Context, file: File, text: String) {
+        SafeFs.writeAtomicText(context.filesDir.toPath(), file.toPath(), text)
     }
 
     /** BAT-1409 P1-M: true only for a regular file at the final component (a link is false). */
@@ -3845,16 +3855,16 @@ object ConfigManager {
      * Only extracts allowlisted paths; enforces 50 MB total size cap.
      */
     fun importMemory(context: Context, uri: Uri): Boolean {
-        val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
+        val workspaceDir = ensureWorkspaceDir(context)
 
         // Auto-backup current state before overwriting (keeps last backup only)
         try {
-            val backupDir = File(context.filesDir, "backup").apply { mkdirs() }
-            val backupFile = File(backupDir, "pre_import_backup.zip")
-            backupFile.outputStream().use { outputStream ->
-                ZipOutputStream(outputStream).use { zip ->
-                    addAllowedFilesToZip(zip, workspaceDir, workspaceDir)
-                }
+            val backupFile = File(File(context.filesDir, "backup"), "pre_import_backup.zip")
+            // BAT-1409 P1-J: the backup is written without following a link at any depth.
+            SafeFs.writeAtomicFrom(context.filesDir.toPath(), backupFile.toPath()) { outputStream ->
+                val zip = ZipOutputStream(outputStream)
+                addAllowedFilesToZip(zip, workspaceDir, workspaceDir)
+                zip.finish()
             }
             Log.i(TAG, "Pre-import backup created: ${backupFile.absolutePath}")
         } catch (e: Exception) {
@@ -3913,18 +3923,18 @@ object ConfigManager {
                             continue
                         }
 
+                        // BAT-1409 P1-J: no-follow directory creation and atomic file writes; an
+                        // over-limit entry never replaces the target.
                         if (entry.isDirectory) {
-                            destFile.mkdirs()
+                            SafeFs.ensureRealDir(context.filesDir.toPath(), destFile.toPath())
                         } else {
                             // Enforce total size cap
-                            destFile.parentFile?.mkdirs()
-                            destFile.outputStream().use { out ->
+                            SafeFs.writeAtomicFrom(context.filesDir.toPath(), destFile.toPath()) { out ->
                                 val buffer = ByteArray(8192)
                                 var bytesRead: Int
                                 while (zip.read(buffer).also { bytesRead = it } != -1) {
                                     totalExtracted += bytesRead
                                     if (totalExtracted > IMPORT_MAX_BYTES) {
-                                        destFile.delete()
                                         throw IllegalStateException(
                                             "Backup exceeds ${IMPORT_MAX_BYTES / 1024 / 1024}MB limit"
                                         )

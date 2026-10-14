@@ -3,13 +3,13 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.util.Log
 import com.seekerclaw.app.util.CrossProcessStore
+import com.seekerclaw.app.util.SafeFs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.nio.channels.FileLock
 import java.util.concurrent.TimeUnit
@@ -191,13 +191,13 @@ object XaiOAuthTokenStore {
             false
         }
         if (!gotJvm) return Result.Failed("jvm lock timeout")
-        var raf: RandomAccessFile? = null
         var chan: FileChannel? = null
         var lock: FileLock? = null
         try {
             val lockFile = File(dir, LOCK_NAME)
-            raf = RandomAccessFile(lockFile, "rw")
-            chan = raf.channel
+            // BAT-1409 P1-J: opened with NOFOLLOW_LINKS after the ancestor rule — a link at the
+            // lock path is refused, never followed (RandomAccessFile "rw" followed it).
+            chan = SafeFs.openLockChannelNoFollow(dir.toPath(), lockFile.toPath())
             // Bounded cross-process acquisition: tryLock + brief retries instead of a
             // blocking lock() that could hang forever on a stuck other-process holder.
             while (lock == null) {
@@ -225,7 +225,6 @@ object XaiOAuthTokenStore {
         } finally {
             try { lock?.release() } catch (_: Exception) {}
             try { chan?.close() } catch (_: Exception) {}
-            try { raf?.close() } catch (_: Exception) {}
             jvmLock.unlock()
         }
     }

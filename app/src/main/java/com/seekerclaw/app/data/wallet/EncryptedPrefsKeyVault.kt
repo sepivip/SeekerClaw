@@ -3,6 +3,7 @@ package com.seekerclaw.app.data.wallet
 import android.content.Context
 import android.util.Log
 import com.seekerclaw.app.config.KeystoreHelper
+import com.seekerclaw.app.util.SafeFs
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.io.File
@@ -104,21 +105,35 @@ class EncryptedPrefsKeyVault(
          */
         internal fun isConfiguredAt(filesDir: File, id: String): Boolean {
             if (!ID_REGEX.matches(id)) return false
+            // BAT-1409 P1-J: lstat-based — a link is not a configured key.
             val parent = File(filesDir, DIR_NAME)
-            if (!parent.exists()) return false
-            return File(parent, id).exists()
+            if (!SafeFs.isRealDir(parent.toPath())) return false
+            return java.nio.file.Files.isRegularFile(
+                File(parent, id).toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS,
+            )
         }
     }
 
+    private fun root() = context.applicationContext.filesDir.toPath()
+
+    // BAT-1409 P1-J: created and validated without following links.
     private fun dir(): File {
         val d = File(context.applicationContext.filesDir, DIR_NAME)
-        if (!d.exists()) d.mkdirs()
+        SafeFs.ensureRealDir(root(), d.toPath())
         return d
     }
 
     private fun fileFor(id: String): File? {
         if (!ID_REGEX.matches(id)) return null
         return File(dir(), id)
+    }
+
+    /** BAT-1409 P1-J: [fileFor] for readers — an unsafe directory reads as "not configured". */
+    private fun fileForOrNull(id: String): File? = try {
+        fileFor(id)
+    } catch (e: Exception) {
+        Log.w(TAG, "burner_keys directory unavailable: ${e.message}")
+        null
     }
 
     /**
@@ -152,7 +167,6 @@ class EncryptedPrefsKeyVault(
     override suspend fun store(id: String, expanded64: ByteArray) {
         require(expanded64.size == 64) { "expanded64 must be 64 bytes" }
         val file = fileFor(id) ?: throw IllegalArgumentException("invalid id")
-        val tmp = File(file.parentFile, "${file.name}.tmp")
         // BAT-582 R4 (CRITICAL CORRECTNESS): KeystoreHelper.encrypt operates
         // on String and INTERNALLY encodes via UTF-8. Earlier rounds used
         // `String(bytes, ISO_8859_1)` here, relying on a two-charset hop
@@ -180,21 +194,9 @@ class EncryptedPrefsKeyVault(
         val encoded = encodeForVault(expanded64)
         try {
             val enc = KeystoreHelper.encrypt(encoded)
-            tmp.writeBytes(enc)
-            try {
-                java.nio.file.Files.move(
-                    tmp.toPath(),
-                    file.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                java.nio.file.Files.move(
-                    tmp.toPath(),
-                    file.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                )
-            }
+            // BAT-1409 P1-J: staged in filesDir/.kwrite, renamed into place, never written
+            // through a link; durable because a stored key must survive a crash.
+            SafeFs.writeAtomic(root(), file.toPath(), enc, durable = true)
         } catch (e: Exception) {
             Log.e(TAG, "store($id) failed: ${e.message}", e)
             // BAT-582 R1: surface the actual failure class. The key has
@@ -207,7 +209,6 @@ class EncryptedPrefsKeyVault(
             // secret in the thrown msg.
             throw SigningException("storage_failure", "Failed to persist key")
         } finally {
-            if (tmp.exists()) tmp.delete()
             // Best-effort scrub of the encoded string is impossible
             // (Strings are immutable), but the ENCRYPTED bytes are
             // what land on disk; the plaintext String only lived in
@@ -225,10 +226,10 @@ class EncryptedPrefsKeyVault(
      * MUST be zeroed by the caller after use.
      */
     private fun loadKey(id: String): ByteArray? {
-        val file = fileFor(id) ?: return null
-        if (!file.exists()) return null
+        val file = fileForOrNull(id) ?: return null
+        if (!SafeFs.existsNoFollow(file.toPath())) return null
         return try {
-            val plain = KeystoreHelper.decrypt(file.readBytes())
+            val plain = KeystoreHelper.decrypt(SafeFs.readBytesNoFollow(root(), file.toPath()))
             // Reverse of the Base64 encoding in [store]. See R4 comment
             // there for why we use Base64 instead of ISO-8859-1.
             decodeFromVault(plain)
@@ -285,15 +286,24 @@ class EncryptedPrefsKeyVault(
     }
 
     override suspend fun wipe(id: String) {
-        val file = fileFor(id) ?: return
-        if (file.exists()) {
+        val file = fileForOrNull(id) ?: return
+        if (SafeFs.existsNoFollow(file.toPath())) {
             try {
                 // Overwrite then delete — defense-in-depth against undeleted
                 // sectors. The file content is ciphertext + GCM tag, so this
                 // is moderately paranoid; do it anyway.
-                val len = file.length().toInt().coerceAtLeast(0)
-                if (len > 0) {
-                    file.writeBytes(ByteArray(len))
+                // BAT-1409 P1-J: only a regular file is overwritten, opened with NOFOLLOW, so
+                // a link here can never zero its target.
+                val p = file.toPath()
+                if (java.nio.file.Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    val len = file.length().toInt().coerceAtLeast(0)
+                    if (len > 0) {
+                        java.nio.file.Files.newOutputStream(
+                            p,
+                            java.nio.file.StandardOpenOption.WRITE,
+                            java.nio.file.LinkOption.NOFOLLOW_LINKS,
+                        ).use { it.write(ByteArray(len)) }
+                    }
                 }
             } catch (_: Exception) {
                 // Best-effort; the delete below is the actual erase.
