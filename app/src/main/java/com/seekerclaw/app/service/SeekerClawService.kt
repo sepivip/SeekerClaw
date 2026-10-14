@@ -18,8 +18,10 @@ import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.state.XaiOAuthDurabilityGate
 import com.seekerclaw.app.state.XaiOAuthTokenStore
+import com.seekerclaw.app.util.BootHygiene
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.ServiceState
@@ -476,9 +478,14 @@ class SeekerClawService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // BAT-1409 P1-C (amendment v3.3 M1, correction v3.4): boot link hygiene could not verify
+        // a critical path. Nothing here may touch a store, status, token or crash prefs.
+        if (BootHygiene.unsafe.isNotEmpty()) return failLinkHygiene()
+
         // Init cross-process file bridge (this runs in :node process)
         ServiceState.init(applicationContext)
         LogCollector.init(applicationContext)
+        BootHygiene.flushLog() // BAT-1409 P1-C: step 1's lines from Application.onCreate
 
         val notification = createNotification("SeekerClaw is running")
         startForeground(NOTIFICATION_ID, notification)
@@ -551,7 +558,7 @@ class SeekerClawService : Service() {
         }
 
         // Crash loop protection: if we've restarted too many times quickly, stop trying
-        val prefs = getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
+        val prefs = getSharedPreferences(PrefsNames.CRASH, MODE_PRIVATE)
         val lastStart = prefs.getLong("last_start", 0L)
         val crashCount = prefs.getInt("crash_count", 0)
         val now = System.currentTimeMillis()
@@ -858,7 +865,34 @@ class SeekerClawService : Service() {
         return START_STICKY
     }
 
+    /**
+     * BAT-1409 P1-C — `Failed(LINK_HYGIENE)`. `startForeground` (Android requires it), step 2's
+     * retry of the unsafe paths so the next start can proceed, logcat only (`service_logs` and
+     * `service_state` may be among the unsafe paths), and stop. No secret, status, token or prefs
+     * write; Node never starts. `onDestroy` then kills the process, so the next start re-runs
+     * step 1 in a fresh one.
+     */
+    private fun failLinkHygiene(): Int {
+        startForeground(NOTIFICATION_ID, createNotification("SeekerClaw could not start"))
+        val still = BootHygiene.retryUnsafe(dataDir)
+        android.util.Log.e(
+            "LinkHygiene",
+            "Failed(LINK_HYGIENE): ${BootHygiene.unsafe.size} critical path(s) unverified, " +
+                "${still.size} still after retry; the next start retries",
+        )
+        stopSelf()
+        return START_NOT_STICKY
+    }
+
     override fun onDestroy() {
+        if (BootHygiene.unsafe.isNotEmpty()) {
+            // BAT-1409 P1-C (correction v3.4): this process never initialised its stores, so the
+            // teardown writes (status, bridge-token clear, crash prefs) are skipped with them.
+            scopeJob.cancel()
+            super.onDestroy()
+            android.os.Process.killProcess(android.os.Process.myPid())
+            return
+        }
         LogCollector.append("[Service] Stopping Claw Engine...")
         // BAT-525 / BAT-1155: flush Node BEFORE everything else — the bridge token + Node process
         // must both still be alive for the loopback POST /shutdown/flush to land, and it precedes
@@ -914,7 +948,7 @@ class SeekerClawService : Service() {
         // bricking the agent until the user restarts the app manually. commit() blocks
         // until the disk write completes, guaranteeing the reset persists across the
         // process kill.
-        getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
+        getSharedPreferences(PrefsNames.CRASH, MODE_PRIVATE)
 .edit()
 .putLong("last_start", 0L)
 .putInt("crash_count", 0)

@@ -3,6 +3,7 @@ package com.seekerclaw.app.service
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.AssetManager
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.util.SafeFs
@@ -175,7 +176,7 @@ object NodeBridge {
     // --- Asset extraction helpers ---
 
     private fun wasAPKUpdated(context: Context): Boolean {
-        val prefs = context.getSharedPreferences("NODEJS_MOBILE_PREFS", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PrefsNames.NODEJS_MOBILE, Context.MODE_PRIVATE)
         val previousLastUpdateTime = prefs.getLong("NODEJS_MOBILE_APK_LastUpdateTime", 0)
         var lastUpdateTime: Long = 1
         try {
@@ -188,7 +189,7 @@ object NodeBridge {
     }
 
     private fun saveLastUpdateTime(context: Context) {
-        val prefs = context.getSharedPreferences("NODEJS_MOBILE_PREFS", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PrefsNames.NODEJS_MOBILE, Context.MODE_PRIVATE)
         var lastUpdateTime: Long = 1
         try {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)

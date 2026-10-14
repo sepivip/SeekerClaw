@@ -21,6 +21,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.BuildProvenance
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
@@ -270,7 +271,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // Remember per-provider last-used model and authType (similar to lastModel_*)
         // so explicit choices survive a round-trip through another provider. These are
         // cheap prefs-only writes, not full config saves.
-        val prefs = context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PrefsNames.MAIN, android.content.Context.MODE_PRIVATE)
         prefs.edit()
             .putString("lastModel_$oldProviderId", currentModel)
             .putString("lastAuthType_$oldProviderId", oldAuthType)
@@ -854,7 +855,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // work on the hot path). Keyed to context — stable for the Activity
         // lifetime, so the handle is effectively cached once.
         val localPrefs = remember(context) {
-            context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+            context.getSharedPreferences(PrefsNames.MAIN, android.content.Context.MODE_PRIVATE)
         }
         // Re-read only when the per-provider key changes, not every recomposition.
         val rememberedCustom = remember(localPrefs, customPrefsKey) {
@@ -1107,7 +1108,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             // lastAuthType_* seeds future provider switches, so writing
                             // it on a failed save would drift UI defaults away from
                             // the real config state.
-                            context.getSharedPreferences("seekerclaw_prefs", android.content.Context.MODE_PRIVATE)
+                            context.getSharedPreferences(PrefsNames.MAIN, android.content.Context.MODE_PRIVATE)
                                 .edit()
                                 .putString("lastAuthType_$activeProvider", selectedAuth)
                                 .apply()

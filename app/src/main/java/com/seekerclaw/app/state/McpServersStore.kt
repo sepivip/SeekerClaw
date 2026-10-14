@@ -7,6 +7,7 @@ import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.config.McpServerConfig
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,7 +79,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 object McpServersStore {
     private const val TAG = "McpServersStore"
     private const val FILE_NAME = "mcp_servers.json"
-    private const val PREFS_NAME = "seekerclaw_prefs"
     private const val KEY_MCP_SERVERS_ENC = "mcp_servers_enc"
 
     /**
@@ -789,7 +789,7 @@ object McpServersStore {
             // for the user without any diagnostic trail. (Copilot
             // R11 PR #352 finding.)
             val committed = context.applicationContext
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_MCP_SERVERS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
                 .commit()

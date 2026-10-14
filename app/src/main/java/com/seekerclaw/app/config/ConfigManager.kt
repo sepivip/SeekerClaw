@@ -230,7 +230,6 @@ object ConfigManager {
     // RPC URLs).
     private const val PUBLIC_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
-    private const val PREFS_NAME = "seekerclaw_prefs"
     private const val KEY_API_KEY_ENC = "api_key_enc"
     private const val KEY_BOT_TOKEN_ENC = "bot_token_enc"
     private const val KEY_OWNER_ID = "owner_id"
@@ -331,7 +330,7 @@ object ConfigManager {
     private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
 
     private fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
 
     fun isSetupComplete(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SETUP_COMPLETE, false)

@@ -45,6 +45,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import com.seekerclaw.app.config.BuildProvenance
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1821,7 +1822,7 @@ private fun requestPermissionOrOpenSettings(
     if (ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)) {
         launcher.launch(permission)
     } else {
-        val prefs = context.getSharedPreferences("seekerclaw_prefs", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
         val askedKey = "permission_asked_$permission"
         if (prefs.getBoolean(askedKey, false)) {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {

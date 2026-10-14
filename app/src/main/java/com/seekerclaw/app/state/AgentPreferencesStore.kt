@@ -3,6 +3,7 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,7 +76,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 object AgentPreferencesStore {
 
     private const val TAG = "AgentPreferencesStore"
-    // PREFS_NAME and the legacy keys MUST match
+    // The prefs file name comes from [PrefsNames] (BAT-1409 P1-C). The legacy keys MUST match
     // [com.seekerclaw.app.config.ConfigManager]. They are duplicated
     // here so AgentPreferencesStore stays self-contained for tests
     // (no Context required to resolve the constants). If ConfigManager
@@ -88,7 +89,6 @@ object AgentPreferencesStore {
     // pulls the keys into a shared object on [AgentPreferences] (the
     // schema) would let both files reference one source of truth and
     // make the drift impossible.
-    private const val PREFS_NAME = "seekerclaw_prefs"
     private const val FILE_NAME = "agent_preferences.json"
     private const val KEY_AGENT_NAME = "agent_name"
     private const val KEY_SEARCH_PROVIDER = "search_provider"
@@ -129,7 +129,7 @@ object AgentPreferencesStore {
         if (!initialized.compareAndSet(false, true)) return
         val app = context.applicationContext
         appContext = app
-        val sp = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val sp = app.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
         val seeded = seedFromPrefs(sp)
         _state.value = seeded
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
