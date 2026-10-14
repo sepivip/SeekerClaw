@@ -323,7 +323,7 @@ class BurnerBridgeEndpoints internal constructor(
     private fun handleReserve(params: JSONObject): EndpointResult {
         val name = params.optString("name", "").trim()
         val atomicAmountStr = params.optString("atomicAmount", "").trim()
-        val ttlMs = params.optLong("ttlMs", 60_000L)
+        val requestedTtlMs = params.optLong("ttlMs", 60_000L)
         if (name.isEmpty() || atomicAmountStr.isEmpty()) {
             return invalidInput("name and atomicAmount required")
         }
@@ -340,9 +340,8 @@ class BurnerBridgeEndpoints internal constructor(
         if (atomicAmount < BigInteger.ZERO) {
             return invalidInput("atomicAmount must be >= 0")
         }
-        if (ttlMs <= 0 || ttlMs > 10 * 60_000L) {
-            return invalidInput("ttlMs out of range")
-        }
+        // BAT-1409 P1-K: clamped to MAX_RESERVATION_TTL_MS.
+        val ttlMs = reservationTtlMs(requestedTtlMs) ?: return invalidInput("ttlMs out of range")
 
         return runBlocking {
             when (val r = capEnforcer.reserve(name, atomicAmount, ttlMs)) {
@@ -682,5 +681,19 @@ class BurnerBridgeEndpoints internal constructor(
     companion object {
         private const val TAG = "BurnerBridge"
         const val BURNER_ID = "burner"
+
+        /** BAT-1409 P1-K: the longest a bridge reservation may live. The default stays 60 s. */
+        const val MAX_RESERVATION_TTL_MS = 120_000L
+
+        /**
+         * BAT-1409 P1-K: the reservation lifetime for a caller-supplied [ttlMs]. Null for an
+         * invalid value (≤ 0 or over 10 minutes, as before); otherwise clamped to
+         * [MAX_RESERVATION_TTL_MS]. This shortens how long one reservation lives; it does not bound
+         * signing (S6′).
+         */
+        fun reservationTtlMs(ttlMs: Long): Long? {
+            if (ttlMs <= 0 || ttlMs > 10 * 60_000L) return null
+            return minOf(ttlMs, MAX_RESERVATION_TTL_MS)
+        }
     }
 }
