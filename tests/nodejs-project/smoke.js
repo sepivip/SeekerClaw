@@ -71,6 +71,10 @@ const LOAD_TARGETS = [
     // socket guards (patches only when install() is called).
     'js-eval-guard.js',
     'net-guard.js',
+    // BAT-1409 P1-G: shell_exec tokenizer, grammar and validator (no config.js, no IO at load).
+    'tools/shell-args.js',
+    'tools/shell-grammar.js',
+    'tools/shell-validate.js',
     'telegram-commands.js',
     // BAT-514: both modules are pure (functions only, no top-level
     // side effects). internal-control-server.js's HTTP listener is
