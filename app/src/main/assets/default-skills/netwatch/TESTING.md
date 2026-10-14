@@ -1,4 +1,4 @@
-# NetWatch v2.3.1 — Testing Guide
+# NetWatch v2.3.2 — Testing Guide
 
 ## Test Prompts
 
@@ -85,7 +85,7 @@ scan my network
 
 📋 **Services**
 • `WiFi` `HomeNetwork` • `192.168.1.42`
-• Bridge `:8765` ✅ • Telegram ✅ • DNS ✅
+• Bridge ✅ • Telegram ✅ • DNS ✅
 • 🔋 85% charging
 
 👉 Reply:
@@ -110,7 +110,7 @@ scan my network
 
 📋 **Services**
 • `WiFi` `HomeNetwork` • `192.168.1.42`
-• Bridge `:8765` ✅ • Telegram ✅
+• Bridge ✅ • Telegram ✅
 • 🔋 42% not charging
 
 👉 Reply:
@@ -122,12 +122,11 @@ scan my network
 ### Port Watch — Compact
 
 ```
-🔍 **Ports** • 9 scanned
+🔍 **Ports** • 8 scanned
 
-✅ `8765` bridge
 ❌ `5555` ADB open!
 
-1 flagged — 1 open, 8 closed
+1 flagged — 1 open, 7 closed
 
 👉 Reply:
 • `deep scan .1`
@@ -205,7 +204,7 @@ May be offline, firewalled, or wrong subnet
 📊 **Risk Score: 15/100 (LOW)**
 
 ℹ️ **Info**
-• `localhost:8765` bridge responding ✅
+• Android bridge responding ✅
 • DNS resolving normally ✅
 • All critical APIs reachable ✅
 
@@ -219,7 +218,7 @@ May be offline, firewalled, or wrong subnet
 • Anthropic API: ✅ reachable (89ms)
 
 🔌 **Local Services**
-• `localhost:8765` (bridge): ✅
+• Android bridge: ✅ responding
 • `localhost:3000`: not running
 • `localhost:8080`: not running
 

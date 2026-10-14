@@ -337,7 +337,8 @@ function createJsEvalGuards({ workDir, names, agentSettingsFile, onRefuse }) {
         if ((own(c, 'fd') && c.fd !== undefined) || (own(c, 'handle') && c.handle !== undefined)) {
             throw refuse(`js_eval: ${what} cannot wrap an existing descriptor or handle.`);
         }
-        if (pathKeys.some((k) => own(c, k) && c[k] !== undefined)) {
+        // Truthy, as Node decides (`pipe = !!options.path`; http checks `if (options.socketPath)`).
+        if (pathKeys.some((k) => own(c, k) && !!c[k])) {
             throw refuse(`js_eval: ${what} cannot use a Unix socket path.`);
         }
         return c;
@@ -378,8 +379,17 @@ function createJsEvalGuards({ workDir, names, agentSettingsFile, onRefuse }) {
     function buildHttp(name) {
         const mod = require(name);
         const agent = new mod.Agent();
+        // Every request uses this run's own agent unless it names one, so a js_eval request can
+        // never ride on a pooled socket the app opened (keep-alive agents on newer Node).
         const wrap = (fn) => sever((...args) => {
             const out = args.map((a) => (isOptionsObject(a) && !(a instanceof URL) ? checkSocketOptions(a, `${name}.${fn}`, ['socketPath']) : a));
+            const optIndex = out.findIndex((a) => isOptionsObject(a) && !(a instanceof URL));
+            if (optIndex >= 0) {
+                if (out[optIndex].agent === undefined) out[optIndex].agent = agent;
+            } else {
+                const at = typeof out[0] === 'string' || out[0] instanceof URL ? 1 : 0;
+                out.splice(at, 0, { agent });
+            }
             return mod[fn](...out);
         });
         return readOnlyModule(name, mod, {
