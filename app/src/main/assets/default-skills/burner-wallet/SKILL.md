@@ -1,7 +1,7 @@
 ---
 name: burner-wallet
 description: "Operate the burner wallet — a small, app-managed Solana wallet that signs autonomously within caps. Use when: user asks about the burner, autonomous payments, x402, raising/lowering caps, funding the burner, or wiping/swapping the key (paste-only — the app never generates keys). Don't use when: user wants a regular MWA-popup transfer (just call solana_send / solana_swap and let routing decide)."
-version: "1.1.0"
+version: "1.2.0"
 metadata:
   openclaw:
     emoji: "🔥"
@@ -31,7 +31,7 @@ The agent does **not** decide routing — `caps/preflight.js` does, based on cap
 
 > "I'll send 0.001 SOL from your **Burner wallet** — that's under your 0.05 per-tx cap, so it goes through silently."
 
-> "0.5 SOL is over your burner per-tx cap. I can either raise the cap (let me know your new limit) or send it from your **Main wallet** (that'll pop your wallet app for approval)."
+> "0.5 SOL is over your burner per-tx cap. You can raise the cap in the SeekerClaw app (Settings → Burner Wallet), or I can send it from your **Main wallet** (that'll pop your wallet app for approval)."
 
 Never paraphrase as "your wallet" — always say "Burner wallet" or "Main wallet" so the user knows which is signing.
 
@@ -44,23 +44,19 @@ The burner has four caps, all stored as atomic units (lamports for SOL, microuni
 - **daily_sol**: max SOL spent in a 24-hour window (UTC midnight rollover)
 - **daily_usdc**: max USDC spent in a 24-hour window (UTC midnight rollover)
 
-A transaction must pass BOTH per-tx AND daily checks to route through the burner. Above either cap, the agent gets a "block" decision and must propose either a cap raise or a main-wallet fallback.
+A transaction must pass BOTH per-tx AND daily checks to route through the burner. Above either cap, the agent gets a "block" decision and must propose either a cap raise (in the SeekerClaw app: Settings → Burner Wallet) or a main-wallet fallback.
 
 Daily windows reset at **00:00 UTC**. If the user is in a different timezone, mention this — "daily caps reset at midnight UTC, which is X your local time."
 
-## Suggesting cap raises
+## Raising and lowering caps
 
-When a transaction is blocked by the burner cap, ALWAYS confirm with the user before raising. Use `wallet_set_caps` — the confirmation gate auto-shows an old → new diff.
+**Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet.** The agent cannot raise a cap: `wallet_set_caps` refuses any raise (`cap_raise_settings_only`). It can lower caps or leave them as they are, always with a confirmation showing the old → new diff.
 
-Good pattern:
+Good pattern when a transaction is blocked by a cap:
 
-> "0.2 SOL is over your burner per-tx cap of 0.05 SOL. Want me to raise per_tx_sol to 0.25 SOL so this can go through silently? Or should I send it from your Main wallet (popup required)?"
+> "0.2 SOL is over your burner per-tx cap of 0.05 SOL. If you want this to go through silently, raise the per-tx cap in the SeekerClaw app (Settings → Burner Wallet). Or I can send it from your Main wallet now (popup required)."
 
-After approval:
-
-> "Raised per_tx_sol from 0.05 → 0.25 SOL. Now sending 0.2 SOL from your Burner wallet."
-
-Never raise caps without showing the diff. Never lower-then-raise to bypass a refusal — the user controls caps, period.
+Never try to work around a cap refusal — the user controls caps, period.
 
 ## Funding the burner
 
@@ -99,8 +95,11 @@ V1 supports **Solana mainnet only**. Devnet is deferred to V2. Caps + the design
 **User: "What's my burner balance?"**
 → `wallet_status` returns caps + today's spend + remaining daily for the burner. The burner's BALANCE field is currently `null` / "unavailable" (RPC balance fetch is a known follow-up). Tell the user "burner balance is temporarily unavailable" rather than reporting "0". Main-wallet balance is fetched live and is real.
 
-**User: "Raise my daily SOL cap to 0.5"**
-→ `wallet_set_caps({daily_sol: "0.5"})`. The confirmation card auto-shows the old → new diff.
+**User: "Raise my daily SOL cap to 0.5"** (a raise: Settings → Burner Wallet only)
+→ Explain that raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet. Do not call `wallet_set_caps` for a raise.
+
+**User: "Lower my daily SOL cap to 0.1"**
+→ `wallet_set_caps({daily_sol: "0.1"})`. The confirmation card auto-shows the old → new diff.
 
 **User: "Cancel my limit order #abc"**
 → `jupiter_trigger_cancel({orderId: "abc"})`. Ownership lookup decides routing — burner-created → silent, main-created → MWA popup. The agent should NOT pick a wallet for cancels; the bridge map is the source of truth.

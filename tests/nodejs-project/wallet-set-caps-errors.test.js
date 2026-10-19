@@ -194,6 +194,17 @@ function assertStructuredError(r, expectedCode) {
         assert.strictEqual(r.reason, 'unauthorized');
     });
 
+    // ── BAT-1409 P1-I: a raise refused by the app ───────────────────────────
+    await check('wallet_set_caps raise refused by the app → {error: "cap_raise_settings_only", reason: Settings pointer, fields}', async () => {
+        bridgeCalls.length = 0;
+        bridgeMode = 'response';
+        bridgeResponse = { error: 'cap_raise_settings_only', reason: 'Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet.', fields: ['capDailySol'] };
+        const r = await setCaps({ daily_sol: '9' });
+        assertStructuredError(r, 'cap_raise_settings_only');
+        assert.ok(r.reason.includes('Settings → Burner Wallet'), r.reason);
+        assert.deepStrictEqual(r.fields, ['capDailySol']);
+    });
+
     // ── happy path still works (sanity) ──────────────────────────────────────
     await check('wallet_set_caps success unchanged: {ok: true, applied: ...}', async () => {
         bridgeCalls.length = 0;

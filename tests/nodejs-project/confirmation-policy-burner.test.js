@@ -35,23 +35,38 @@ expect('wallet_status', {}, {}, 'none', 'wallet_status, no state');
 expect('wallet_status', {}, { burnerConfigured: true }, 'none', 'wallet_status, burner configured');
 expect('wallet_status', {}, { burnerConfigured: false }, 'none', 'wallet_status, burner unconfigured');
 
-// ── wallet_set_caps — always "confirm" with diff message ────────────────────
+// ── wallet_set_caps — lower/keep confirms with a diff; a visible raise blocks ─
+// BAT-1409 P1-I: raising caps is Settings-only. A raise the gate can see from the
+// known caps is blocked up front with the Settings pointer (no confirm-then-fail).
 {
     const r = expect(
         'wallet_set_caps',
         { per_tx_sol: '0.10' },
         { burnerConfigured: true, burnerCaps: { capPerTxSol: '50000000' } },
-        'confirm',
+        'block',
         'wallet_set_caps, raise per_tx_sol'
+    );
+    if (r.reason !== 'cap_raise_settings_only') fail(`raise reason: ${r.reason}`);
+    if (!r.message || !r.message.includes('Settings → Burner Wallet') || !r.message.includes('per-tx SOL')) {
+        fail(`raise message must point to Settings and name the field: ${r.message}`);
+    }
+}
+{
+    const r = expect(
+        'wallet_set_caps',
+        { per_tx_sol: '0.02' },
+        { burnerConfigured: true, burnerCaps: { capPerTxSol: '50000000' } },
+        'confirm',
+        'wallet_set_caps, lower per_tx_sol'
     );
     if (!r.message || !r.message.includes('per-tx SOL')) {
         fail(`wallet_set_caps confirm message missing 'per-tx SOL' label: ${r.message}`);
     }
-    if (!r.message.includes('0.05') || !r.message.includes('0.10')) {
-        fail(`wallet_set_caps confirm message missing 0.05 → 0.10 diff: ${r.message}`);
+    if (!r.message.includes('0.05') || !r.message.includes('0.02')) {
+        fail(`wallet_set_caps confirm message missing 0.05 → 0.02 diff: ${r.message}`);
     }
 }
-// Lower also confirms.
+// Lower also confirms; equal confirms.
 expect(
     'wallet_set_caps',
     { daily_usdc: '5' },
@@ -59,6 +74,21 @@ expect(
     'confirm',
     'wallet_set_caps, lower daily_usdc'
 );
+expect(
+    'wallet_set_caps',
+    { daily_usdc: '20' },
+    { burnerConfigured: true, burnerCaps: { capDailyUsdc: '20000000' } },
+    'confirm',
+    'wallet_set_caps, equal daily_usdc'
+);
+// Any positive value over a 0/blank cap is a raise; integer (not text) comparison.
+expect('wallet_set_caps', { daily_sol: '0.001' }, { burnerConfigured: true, burnerCaps: { capDailySol: '0' } }, 'block', 'raise over a zero cap');
+expect('wallet_set_caps', { per_tx_usdc: '10' }, { burnerConfigured: true, burnerCaps: { capPerTxUsdc: '9000000' } }, 'block', 'raise 9 → 10 USDC');
+// Unknown current caps raise nothing at the gate (the bridge still refuses a raise).
+expect('wallet_set_caps', { per_tx_sol: '5' }, { burnerConfigured: true }, 'confirm', 'no known caps → confirm, bridge decides');
+// One raising field blocks the whole request.
+expect('wallet_set_caps', { per_tx_sol: '0.01', daily_sol: '9' },
+    { burnerConfigured: true, burnerCaps: { capPerTxSol: '50000000', capDailySol: '1000000000' } }, 'block', 'mixed lower+raise');
 
 // ── solana_send routing matrix ─────────────────────────────────────────────
 

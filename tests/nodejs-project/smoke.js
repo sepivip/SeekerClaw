@@ -75,6 +75,8 @@ const LOAD_TARGETS = [
     'tools/shell-args.js',
     'tools/shell-grammar.js',
     'tools/shell-validate.js',
+    // BAT-1409 P1-I: the shared Settings pointer for cap raises (a constant).
+    'wallet/cap-hint.js',
     'telegram-commands.js',
     // BAT-514: both modules are pure (functions only, no top-level
     // side effects). internal-control-server.js's HTTP listener is

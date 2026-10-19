@@ -736,7 +736,7 @@ grep -iE "MCP.*reconcile|MCP.*Failed to" node_debug.log
 **Symptoms:** Tool result includes `error: "burner_cap_exceeded"` or `over_per_tx_cap`. Agent tells the user "this is over your burner per-tx cap."
 **Diagnosis:** The principal (lamports for SOL, microunits for USDC) of the tx exceeds the configured `capPerTxSol` / `capPerTxUsdc`.
 **Fix:**
-1. Use `wallet_set_caps` to raise the per-tx cap (confirmation popup shows old → new diff).
+1. Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet. `wallet_set_caps` can only lower or keep caps; a raise is refused with `cap_raise_settings_only`.
 2. Or pass `_allowMainFallback: true` in the tool args to retry through the main MWA wallet (popup required).
 3. Or split the spend into smaller chunks if appropriate.
 
@@ -745,7 +745,7 @@ grep -iE "MCP.*reconcile|MCP.*Failed to" node_debug.log
 **Diagnosis:** `spentTodaySol + atomicAmount > capDailySol` (or USDC equivalent). The 24-hour window resets at 00:00 UTC.
 **Fix:**
 1. Wait for the daily reset (00:00 UTC).
-2. Raise the daily cap via `wallet_set_caps`.
+2. Raise the daily cap in the SeekerClaw app: Settings → Burner Wallet (`wallet_set_caps` cannot raise caps).
 3. Use the main wallet (popup) for the over-cap portion.
 
 ### `burner: no burner configured`
@@ -891,7 +891,7 @@ Both were red herrings — root cause was always "not enough USDC at the source.
 **Diagnosis:** Two different ceilings: `max_usdc` is the agent-side cap (per-call), `burner.pertx.usdc` and `burner.daily.usdc` are user-controlled caps (per-burner). Both must allow the demand.
 **Fix:**
 1. Run `wallet_status` to show the current caps + remaining daily.
-2. Suggest `wallet_set_caps({per_tx_usdc: "..."})` (always with user confirmation) OR wait for daily reset at 00:00 UTC.
+2. Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet. Otherwise wait for the daily reset at 00:00 UTC or lower `max_usdc`.
 
 ## paysh-catalog (BAT-704/761/768/766/769)
 
@@ -1010,7 +1010,7 @@ The confirmation gate (`confirmation/policy.js getConfirmationPolicy`, called in
 | Action | Gate outcome |
 |---|---|
 | Burner SPENDS USDC or native SOL, routes to burner, **under cap** | **Silent** (no prompt) — the cap pre-authorizes it |
-| Burner spend of USDC/SOL **over cap** | Default/auto flow falls back to the **main wallet (MWA) confirmation**. A *forced* burner (`source="burner"`, or a swap that doesn't opt into main fallback) returns `burner_cap_exceeded` instead → raise caps, lower amount, or use main. |
+| Burner spend of USDC/SOL **over cap** | Default/auto flow falls back to the **main wallet (MWA) confirmation**. A *forced* burner (`source="burner"`, or a swap that doesn't opt into main fallback) returns `burner_cap_exceeded` instead → raise caps in Settings → Burner Wallet, lower amount, or use main. |
 | Spend any **non-USDC/SOL token** (e.g. PYUSD, BONK) — including **converting a held token back** to USDC/SOL (BAT-1057) | **Confirm** — disposing of a non-cap asset is not pre-authorized by the USDC/SOL caps |
 | **Main-routed** (MWA) action | **Confirm** (the wallet app's own approval) |
 | `wallet_set_caps`, `agent_pay` POST, android_sms/call/camera/location | **Confirm** (always) |

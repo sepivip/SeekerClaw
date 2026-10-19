@@ -130,9 +130,9 @@ class AndroidBridge(
         //     30/min still leaves 1 tx every 2s headroom which exceeds any
         //     realistic agent autonomy. A misbehaving caller hits this
         //     before it hits the cap state machine.
-        //   - Config write (config/burner-caps): 10/min — settings UI
-        //     writes are infrequent; 10/min is plenty for a human user
-        //     plus an agent-driven cap-raise flow.
+        //   - Config write (config/burner-caps): 10/min — the agent's
+        //     cap writes (lower or keep only since BAT-1409 P1-I; raising
+        //     is Settings-only and does not use this route).
         // All limits throttle abusers without blocking realistic loops.
         "/burner/status" to Pair(60, 60_000L),
         "/burner/reserve" to Pair(30, 60_000L),

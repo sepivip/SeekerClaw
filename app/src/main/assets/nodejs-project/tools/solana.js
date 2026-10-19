@@ -8,6 +8,7 @@ const {
 } = require('../config');
 
 const { androidBridgeCall } = require('../bridge');
+const { CAP_RAISE_HINT } = require('../wallet/cap-hint');
 
 // BAT-1037: native-SOL-only denomination guard (pure, dependency-free module
 // so it is unit-testable without config). See tools/solana-send-guard.js.
@@ -619,7 +620,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
                     error: 'burner_over_cap',
                     reason:
                         `Burner over cap (${routingHint.reason || 'unknown'}). ` +
-                        'Raise the cap with wallet_set_caps, or retry with _allowMainFallback: true to use the main wallet (popup required).',
+                        `${CAP_RAISE_HINT} Or retry with _allowMainFallback: true to use the main wallet (popup required).`,
                     capName: routingHint.capName,
                 };
             }

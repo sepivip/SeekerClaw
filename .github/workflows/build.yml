@@ -138,6 +138,7 @@ jobs:
             shell-recipes \
             shell-args-mksh \
             owner-claim-refused \
+            cap-raise-hints \
             ci-coverage-manifest
           do
             echo "── $t ──"
