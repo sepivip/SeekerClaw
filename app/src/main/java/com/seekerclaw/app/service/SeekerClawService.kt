@@ -623,16 +623,20 @@ class SeekerClawService : Service() {
     private val startEffects = object : StartCoordinator.Effects {
         override fun proceed(fence: StartCoordinator.Fence) = continueStart(fence)
 
-        override fun fail(fence: StartCoordinator.Fence, reason: String) {
-            // The existing error path: ERROR log and status, then stop. Normally no config.json
-            // exists yet (verification runs first); a leftover from an earlier run is removed.
-            LogCollector.append("[Service] Start failed before Node: $reason", LogLevel.ERROR)
-            ServiceState.updateStatus(ServiceStatus.ERROR)
-            deleteEphemeralConfig()
-            stopSelf()
-        }
+        override fun fail(fence: StartCoordinator.Fence, reason: String) = failBeforeNode(reason)
 
         override fun abort(fence: StartCoordinator.Fence) = abortStart()
+    }
+
+    /**
+     * The existing error path: ERROR log and status, then stop. Normally no config.json exists yet
+     * (verification runs first); a leftover from an earlier run, or a partial write, is removed.
+     */
+    private fun failBeforeNode(reason: String) {
+        LogCollector.append("[Service] Start failed before Node: $reason", LogLevel.ERROR)
+        ServiceState.updateStatus(ServiceStatus.ERROR)
+        deleteEphemeralConfig()
+        stopSelf()
     }
 
     /** A stop began after this start (or the service is gone): stop, with no other effect. */
@@ -681,7 +685,13 @@ class SeekerClawService : Service() {
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
         // but writeConfigJson reads the XML file fresh on first access per process.
         // BAT-1409 P1-D: the channel written for this boot is the one the bridge's owner claim checks.
-        val bootChannel = ConfigManager.writeConfigJson(this, bridgeToken).orEmpty()
+        // BAT-1409 P1-J (R3): a refused or failed write ends the start on the error path, never in
+        // a crash of this process. writeAgentSettingsJson and writePlatformMd log their own failures.
+        val bootChannel = try {
+            ConfigManager.writeConfigJson(this, bridgeToken).orEmpty()
+        } catch (e: java.io.IOException) {
+            return failBeforeNode("CONFIG_WRITE (${e.javaClass.simpleName}: ${e.message})")
+        }
         ConfigManager.writeAgentSettingsJson(this) // non-ephemeral settings for live Node.js reads
 
         // Validate by checking the written file — more reliable than cross-process SharedPreferences
@@ -695,7 +705,11 @@ class SeekerClawService : Service() {
         }
 
         // Seed workspace if first run
-        ConfigManager.seedWorkspace(this)
+        try {
+            ConfigManager.seedWorkspace(this)
+        } catch (e: java.io.IOException) {
+            return failBeforeNode("WORKSPACE_SEED (${e.javaClass.simpleName}: ${e.message})")
+        }
 
         // Generate PLATFORM.md with current device state (fresh every boot)
         ConfigManager.writePlatformMd(this)

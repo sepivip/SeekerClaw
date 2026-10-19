@@ -242,4 +242,33 @@ class SafeFsWriteTest {
         }
         assertTrue("raw file writes found:\n" + offenders.joinToString("\n"), offenders.isEmpty())
     }
+
+    /**
+     * R3: a refused write ends in "the caller's existing failure path… Never a crash." The two
+     * pre-Node writers that throw (writeConfigJson, seedWorkspace) run on the service's main looper,
+     * where an uncaught IOException would kill `:node` with no Logs-screen line; the start
+     * continuation catches it and ends the start through failBeforeNode. (writeAgentSettingsJson
+     * and writePlatformMd catch their own failures.)
+     */
+    @Test
+    fun startPathWriteFailuresEndOnTheErrorPathNotACrash() {
+        val service = File("src/main/java/com/seekerclaw/app/service/SeekerClawService.kt").readText()
+            .replace("\r\n", "\n")
+        val body = service.substringAfter("private fun continueStart(").substringBefore("\n    private fun ")
+        for ((call, reason) in listOf("ConfigManager.writeConfigJson(" to "CONFIG_WRITE", "ConfigManager.seedWorkspace(" to "WORKSPACE_SEED")) {
+            val at = body.indexOf(call)
+            assertTrue("continueStart calls $call", at >= 0)
+            val tryAt = body.lastIndexOf("try {", at)
+            assertTrue("$call is inside a try block", tryAt >= 0 && body.substring(tryAt, at).none { it == '}' })
+            val catchAt = body.indexOf("catch (e: java.io.IOException)", at)
+            assertTrue("$call has an IOException handler", catchAt > at)
+            val handler = body.substring(catchAt, body.indexOf("\n        }", catchAt))
+            assertTrue("$call failure goes to failBeforeNode($reason)", handler.contains("return failBeforeNode(\"$reason"))
+        }
+        val config = File("src/main/java/com/seekerclaw/app/config/ConfigManager.kt").readText().replace("\r\n", "\n")
+        for (fn in listOf("fun writeAgentSettingsJson(", "fun writePlatformMd(")) {
+            val fnBody = config.substringAfter(fn).substringBefore("\n    fun ")
+            assertTrue("$fn catches its own failures", fnBody.contains("catch (e: Exception)"))
+        }
+    }
 }
