@@ -52,8 +52,9 @@ function mkshArgv(line) {
     return out;
 }
 
-// The harness itself: mksh's dump must split a known line into exactly these words.
-assert.deepStrictEqual(mkshArgv(`x "a b" c '' d\ e`), ['a b', 'c', '', 'd e']);
+// The harness itself: mksh's dump must split a known line into exactly these words. (In a template
+// literal `\ ` is just a space, so the escaped space is written `\\ `, as in FORMS.)
+assert.deepStrictEqual(mkshArgv(`x "a b" c '' d\\ e`), ['a b', 'c', '', 'd e']);
 
 let failures = 0;
 const corpus = [...extractRecipes(new Set(['cat', 'ls', 'mkdir', 'cp', 'mv', 'echo', 'pwd', 'which', 'head', 'tail', 'wc', 'sort', 'uniq',
