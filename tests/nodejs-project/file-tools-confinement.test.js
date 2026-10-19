@@ -64,6 +64,22 @@ const fileTool = require(path.join(BUNDLE, 'tools', 'file.js'));
 const memoryTool = require(path.join(BUNDLE, 'tools', 'memory.js'));
 const H = fileTool.handlers;
 const sentinel = () => fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8');
+const { config } = require(path.join(BUNDLE, 'config.js'));
+
+// Spies on the two raw-byte send paths, installed before any handler runs: a send that is not
+// refused becomes a recorded call (and never reaches a network), so a refusal cannot pass by way
+// of a transport error. file.js calls channel.sendFile at call time; tools/telegram.js destructures
+// telegramSendFile when it is first loaded, so that spy goes in before anything loads it.
+const sendCalls = [];
+require(path.join(BUNDLE, 'channel.js')).sendFile = async (chatId, filePath, caption) => {
+    sendCalls.push({ chatId, filePath, caption });
+    return { messageId: 42 };
+};
+const tgSendCalls = [];
+require(path.join(BUNDLE, 'telegram.js')).telegramSendFile = async (method, params, field, filePath) => {
+    tgSendCalls.push({ method, chatId: params.chat_id, filePath });
+    return { ok: true, result: { message_id: 43 } };
+};
 
 (async () => {
     await check('negative control: the workspace alias differs from its realpath', () => {
@@ -124,6 +140,71 @@ const sentinel = () => fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8
         assert.ok((await H.send_file({ path: 'agent_settings.json', chat_id: '1' })).error);
         const w = await H.write({ path: 'agent_settings.json', content: JSON.stringify({ apiKeys: {} }) });
         assert.ok(w.success, JSON.stringify(w));
+    });
+    await check('BAT-236 key sync: a root agent_settings.json write or edit through the aliased workDir re-syncs config.braveApiKey; a nested one does not', async () => {
+        // config.js synced the fixture's key at startup (config.json has no braveApiKey of its own).
+        assert.strictEqual(config.braveApiKey, 'SENTINEL_BRAVE_VALUE_123', 'fixture: startup sync');
+        // Negative control: the root file changes on disk behind the tools' back, then a NESTED
+        // agent_settings.json is written through the tool. A re-sync would pick up the disk value
+        // (syncAgentApiKeys always reads the root file), so an unchanged key proves none ran.
+        fs.writeFileSync(path.join(realWs, 'agent_settings.json'), JSON.stringify({ apiKeys: { brave: 'DISK_ONLY_KEY' } }));
+        const nested = await H.write({ path: 'sub/agent_settings.json', content: JSON.stringify({ apiKeys: { brave: 'NESTED_KEY' } }) });
+        assert.ok(nested.success, JSON.stringify(nested));
+        assert.strictEqual(config.braveApiKey, 'SENTINEL_BRAVE_VALUE_123', 'a nested agent_settings.json write must not re-sync');
+        // The root write (tools/file.js write: filePath === path.join(workDir, 'agent_settings.json')).
+        const w = await H.write({ path: 'agent_settings.json', content: JSON.stringify({ apiKeys: { brave: 'NEW_KEY' } }) });
+        assert.ok(w.success, JSON.stringify(w));
+        assert.strictEqual(config.braveApiKey, 'NEW_KEY');
+        // The same re-sync on the edit path.
+        const e = await H.edit({ path: 'agent_settings.json', operation: 'replace', search: 'NEW_KEY', content: 'EDITED_KEY' });
+        assert.ok(e.success, JSON.stringify(e));
+        assert.strictEqual(config.braveApiKey, 'EDITED_KEY');
+    });
+    await check('memory_get of root config.json is refused and returns no secret value', async () => {
+        for (const file of ['config.json', './sub/../config.json', path.join(fs.realpathSync(aliasWs), 'config.json')]) {
+            const r = await memoryTool.handlers.memory_get({ file, start_line: 1, end_line: 50 });
+            assert.strictEqual(r.error, 'Reading config.json is blocked for security.', file + ': ' + JSON.stringify(r));
+            const out = JSON.stringify(r);
+            for (const secret of ['placeholder-not-a-real-bot-token', 'placeholder-not-a-real-api-key']) {
+                assert.ok(!out.includes(secret), file + ' leaked ' + secret);
+            }
+        }
+    });
+    await check('send_file and telegram_send_file: allowed files reach the sender exactly once each; refused names never do', async () => {
+        fs.mkdirSync(path.join(realWs, 'media', 'inbound'), { recursive: true });
+        fs.writeFileSync(path.join(realWs, 'media', 'inbound', 'photo.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+        fs.mkdirSync(path.join(realWs, 'nutrition'), { recursive: true });
+        fs.writeFileSync(path.join(realWs, 'nutrition', 'config.json'), '{"goal":2000}');
+        sendCalls.length = 0;
+        tgSendCalls.length = 0;
+        const photo = await H.send_file({ path: 'media/inbound/photo.jpg', chat_id: '777', caption: 'pic' });
+        assert.deepStrictEqual(photo, { success: true, file: 'media/inbound/photo.jpg', size: 4, messageId: 42 });
+        // Root-anchored: a skill's own nested config.json is an ordinary file for sending too.
+        const nested = await H.send_file({ path: 'nutrition/config.json', chat_id: '777' });
+        assert.ok(nested.success, JSON.stringify(nested));
+        // Contract ruling S3: sending root seekerclaw.db is not newly restricted (read still refuses it).
+        fs.writeFileSync(path.join(realWs, 'seekerclaw.db'), 'SQLite format 3');
+        const db = await H.send_file({ path: 'seekerclaw.db', chat_id: '777' });
+        assert.ok(db.success, 'S3: send_file of seekerclaw.db: ' + JSON.stringify(db));
+        assert.match(String((await H.read({ path: 'seekerclaw.db' })).error), /seekerclaw\.db is blocked for security/, 'read still refuses it');
+        for (const p of ['agent_settings.json', 'config.json', './nutrition/../config.json', 'sub/agent_settings.json']) {
+            const r = await H.send_file({ path: p, chat_id: '777' });
+            assert.match(String(r.error), /^Sending (agent_settings|config)\.json is blocked for security\.$/, p);
+        }
+        assert.deepStrictEqual(sendCalls, [
+            { chatId: '777', filePath: fs.realpathSync(path.join(realWs, 'media', 'inbound', 'photo.jpg')), caption: 'pic' },
+            { chatId: '777', filePath: fs.realpathSync(path.join(realWs, 'nutrition', 'config.json')), caption: undefined },
+            { chatId: '777', filePath: fs.realpathSync(path.join(realWs, 'seekerclaw.db')), caption: undefined },
+        ]);
+        // The telegram spy is wired (one allowed send), so its zero-call checks below mean something.
+        const tg = require(path.join(BUNDLE, 'tools', 'telegram.js')).handlers;
+        assert.ok((await tg.telegram_send_file({ path: 'media/inbound/photo.jpg', chat_id: 777 })).success);
+        for (const p of ['agent_settings.json', 'config.json']) {
+            assert.match(String((await tg.telegram_send_file({ path: p, chat_id: 777 })).error), /is blocked for security\.$/, p);
+        }
+        assert.deepStrictEqual(tgSendCalls, [
+            { method: 'sendPhoto', chatId: '777', filePath: fs.realpathSync(path.join(realWs, 'media', 'inbound', 'photo.jpg')) },
+        ]);
     });
     await check('a root name that starts with .. is an ordinary file', async () => {
         const w = await H.write({ path: '..notes', content: 'x' });
@@ -195,6 +276,31 @@ const sentinel = () => fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8
             assert.ok((await H.send_file({ path: 'loop/config.json', chat_id: '1' })).error, 'send by real name');
             assert.ok((await H.write({ path: 'loop/config.json', content: '{}' })).error, 'write through a link');
             assert.ok(fs.readFileSync(path.join(realWs, 'config.json'), 'utf8').includes('placeholder'));
+        });
+        await check('file links tok -> ../bridge_token and x -> ../xai_oauth.json are refused by read, memory_get, send_file and telegram_send_file', async () => {
+            // The device layout: both secrets are siblings of the workspace (filesDir/bridge_token,
+            // filesDir/xai_oauth.json). The link names are innocent, so only the real path refuses them.
+            fs.writeFileSync(path.join(tmp, 'bridge_token'), 'SECRET_BRIDGE_TOKEN_VALUE');
+            fs.writeFileSync(path.join(tmp, 'xai_oauth.json'), '{"access_token":"SECRET_XAI_TOKEN_VALUE"}');
+            fs.symlinkSync(path.join('..', 'bridge_token'), path.join(realWs, 'tok'));
+            fs.symlinkSync(path.join('..', 'xai_oauth.json'), path.join(realWs, 'x'));
+            assert.strictEqual(fs.readFileSync(path.join(realWs, 'tok'), 'utf8'), 'SECRET_BRIDGE_TOKEN_VALUE', 'fixture: the link resolves');
+            const tg = require(path.join(BUNDLE, 'tools', 'telegram.js')).handlers;
+            sendCalls.length = 0;
+            tgSendCalls.length = 0;
+            for (const name of ['tok', 'x', './tok', 'sub/../x']) {
+                const results = {
+                    read: await H.read({ path: name }),
+                    memory_get: await memoryTool.handlers.memory_get({ file: name, start_line: 1 }),
+                    send_file: await H.send_file({ path: name, chat_id: '777' }),
+                    telegram_send_file: await tg.telegram_send_file({ path: name, chat_id: 777 }),
+                };
+                for (const [tool, r] of Object.entries(results)) {
+                    assert.deepStrictEqual(r, { error: 'Access denied: path outside workspace' }, `${tool}(${name})`);
+                }
+            }
+            assert.deepStrictEqual(sendCalls, [], 'send_file never reached the sender');
+            assert.deepStrictEqual(tgSendCalls, [], 'telegram_send_file never reached the sender');
         });
         await check('ls reports links as symlink and does not follow them', async () => {
             const r = await H.ls({ path: '', recursive: true });

@@ -15,7 +15,8 @@
 //       bridge (before P1-H their confirmation step always refused SMS and calls);
 //     - the tool descriptions describe drafts, not sending or dialling, and claim no confirmation.
 //   Drift guard against the PRODUCER: every code in the Kotlin DraftNotifier.Outcome enum (plus
-//     rate_limited) has its own branch in draftResult and its own row in DIAGNOSTICS.md.
+//     rate_limited) has its own branch in draftResult and its own row in DIAGNOSTICS.md, and the
+//     bridge's 429 for /sms and /call (AndroidBridge.serve) carries code "rate_limited".
 //   tool-rate-limit.js
 //     - drafts run without confirmation but keep their 1-per-60s limit, and only a posted draft
 //       counts, so a refused draft can be retried at once;
@@ -56,6 +57,20 @@ const { tools, handlers, draftResult } = require(path.join(BUNDLE, 'tools', 'and
 const { RATE_LIMITED_WITHOUT_CONFIRM, rateLimitRefusal, runWithoutConfirm } = require(path.join(BUNDLE, 'tool-rate-limit.js'));
 
 const FORBIDDEN = /\b(sent|opened|calling|called)\b/i;
+// A description must not claim that the tool itself sends or dials. It may name the words in its
+// instruction to the model (never say "sent") and in its explicit negation ("Nothing is sent by
+// this tool"); those two are removed first, and whatever remains must not match FORBIDDEN or a
+// claiming verb (the pre-P1-H wording was "Send an SMS message." / "Place a phone call.").
+const CLAIM_VERBS = /\b(sends|dials|send (an?|the) (sms|text|message)|(place|places|make|makes) (a|the) (phone )?call)\b/i;
+function claimsSendingOrDialling(description) {
+    const rest = description
+        .replace(/\bnever say[^.]*/gi, '')
+        .replace(/\bNothing is (sent|dialled|dialed) by this tool\b/g, '');
+    return FORBIDDEN.test(rest) || CLAIM_VERBS.test(rest);
+}
+// The bridge's 429 answer for /sms, as AndroidBridge.serve() builds it (pinned against the Kotlin
+// source below, so this fixture follows the producer).
+const BRIDGE_429_SMS = { error: 'Rate limit exceeded for /sms', code: 'rate_limited' };
 const SETTINGS = 'SeekerClaw → Settings → Notifications';
 const SMS_POSTED = "I've put the message in the notifications on the phone running SeekerClaw — tap it to open your SMS app and send.";
 const CALL_POSTED = "I've put the call in the notifications on the phone running SeekerClaw — tap it to dial.";
@@ -120,10 +135,28 @@ const ALL_OUTCOMES = [...KOTLIN_OUTCOMES, 'rate_limited', 'unattended'];
     });
 
     await test('the bridge 429 (code rate_limited) maps to outcome rate_limited', () => {
-        const r = draftResult('sms', { error: 'Rate limit exceeded for /sms', code: 'rate_limited' });
+        const r = draftResult('sms', BRIDGE_429_SMS);
         assert.strictEqual(r.outcome, 'rate_limited');
         assert.strictEqual(r.error, 'rate_limited');
         assert.match(r.message, /^No message draft was created: too many drafts/);
+    });
+
+    await test('producer pin: AndroidBridge answers a rate-limited /sms or /call with 429 and code "rate_limited"', () => {
+        const bridgeSrc = fs.readFileSync(path.join(ROOT, 'app/src/main/java/com/seekerclaw/app/bridge/AndroidBridge.kt'), 'utf8');
+        // /sms and /call are rate-limited endpoints, so serve() can answer them with the 429.
+        assert.match(bridgeSrc, /^\s*"\/sms" to Pair\(\d+, [\d_]+L\),$/m, '/sms is in rateLimits');
+        assert.match(bridgeSrc, /^\s*"\/call" to Pair\(\d+, [\d_]+L\),$/m, '/call is in rateLimits');
+        const sites = [...bridgeSrc.matchAll(/jsonResponse\(429, mapOf\((.*)\)\)/g)];
+        assert.strictEqual(sites.length, 1, 'exactly one 429 response in AndroidBridge.kt');
+        const fields = Object.fromEntries([...sites[0][1].matchAll(/"([a-z]+)" to "([^"]*)"/g)].map((m) => [m[1], m[2]]));
+        assert.deepStrictEqual(Object.keys(fields).sort(), ['code', 'error'], JSON.stringify(fields));
+        assert.strictEqual(fields.code, 'rate_limited');
+        // The Node fixture is what the producer emits for /sms, and both kinds map it to rate_limited.
+        assert.deepStrictEqual({ error: fields.error.replace('$uri', '/sms'), code: fields.code }, BRIDGE_429_SMS);
+        for (const [kind, uri] of [['sms', '/sms'], ['call', '/call']]) {
+            const r = draftResult(kind, { error: fields.error.replace('$uri', uri), code: fields.code });
+            assert.strictEqual(r.outcome, 'rate_limited', kind);
+        }
     });
 
     await test('a transport failure is not a draft outcome: no outcome, bridge error kept', () => {
@@ -185,6 +218,26 @@ const ALL_OUTCOMES = [...KOTLIN_OUTCOMES, 'rate_limited', 'unattended'];
             assert.match(t.description, /^Draft /, name);
             assert.ok(t.description.includes('notifications on the phone running SeekerClaw'), name);
             assert.ok(!/Confirmation-gated|SEND_SMS|CALL_PHONE|Send an SMS|Place a phone call/.test(t.description), name);
+        }
+    });
+
+    await test('tool descriptions never claim the tool sends or dials (FORBIDDEN and claiming verbs)', () => {
+        // The check can fail: it flags the pre-P1-H descriptions and plain claims.
+        for (const claim of [
+            'Send an SMS message. Requires SEND_SMS permission. Confirmation-gated: the runtime asks the user before this executes, so do not ask separately.',
+            'Place a phone call. Requires CALL_PHONE permission. Confirmation-gated: the runtime asks the user before this executes, so do not ask separately.',
+            'Draft a text message. Sends it when the user taps the notification.',
+            'Draft a phone call. Dials the number at once.',
+            'Draft a text message. The SMS is sent right away.',
+            'Draft a phone call. The dialer is opened and calling starts.',
+            'Nothing is sent by this tool until the number is called.',
+            'Never say "sent". It makes a phone call.',
+        ]) {
+            assert.ok(claimsSendingOrDialling(claim), 'the check misses: ' + claim);
+        }
+        for (const name of ['android_sms', 'android_call']) {
+            const { description } = tools.find((x) => x.name === name);
+            assert.ok(!claimsSendingOrDialling(description), `${name} claims sending or dialling: ${description}`);
         }
     });
 

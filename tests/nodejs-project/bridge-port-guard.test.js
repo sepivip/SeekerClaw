@@ -18,6 +18,7 @@ const http = require('http');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BUNDLE = path.join(ROOT, 'app', 'src', 'main', 'assets', 'nodejs-project');
@@ -34,6 +35,11 @@ async function check(label, fn) {
     }
 }
 
+// Node's own NODE_* switches a user env var could try to set. config.js must drop all of them.
+const NODE_NAMES = ['NODE_ENV', 'NODE_OPTIONS', 'NODE_TLS_REJECT_UNAUTHORIZED', 'NODE_EXTRA_CA_CERTS'];
+// The environment this test was started with, before config.js merges user env vars.
+const BASE_ENV = Object.assign({}, process.env);
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'p1l-'));
 const ws = path.join(tmp, 'workspace');
 fs.mkdirSync(ws);
@@ -42,23 +48,54 @@ fs.writeFileSync(path.join(ws, 'config.json'), JSON.stringify({
     anthropicApiKey: 'placeholder-not-a-real-api-key',
     ownerId: '111',
     channel: 'telegram',
-    envVars: { NODE_ENV: 'development', MY_FLAG: 'on' },
+    envVars: {
+        NODE_ENV: 'development',
+        NODE_OPTIONS: '--max-old-space-size=64',
+        NODE_TLS_REJECT_UNAUTHORIZED: '0',
+        NODE_EXTRA_CA_CERTS: '/sdcard/Download/p1l-test.pem',
+        NODEJS_FLAG: 'on', // no underscore after NODE: an ordinary name
+        MY_FLAG: 'on',
+    },
 }));
 fs.writeFileSync(path.join(tmp, 'bridge_token'), '00000000-0000-0000-0000-000000000000');
 process.argv[2] = ws;
-delete process.env.NODE_ENV;
+// Start clean so the process.env checks below see only what config.js merged.
+for (const k of NODE_NAMES) delete process.env[k];
 process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {} });
 
 const guard = require(path.join(BUNDLE, 'net-guard.js'));
 guard.install();
 
 /** Resolves 'connected' or the error code/message of a raw TCP attempt. */
-function tcp(opts) {
+function tcp(opts, timeoutMs = 3000) {
     return new Promise((resolve) => {
         const s = net.connect(opts, () => { s.destroy(); resolve('connected'); });
         s.on('error', (e) => resolve(e.code || e.message));
-        setTimeout(() => { s.destroy(); resolve('timeout'); }, 3000);
+        setTimeout(() => { s.destroy(); resolve('timeout'); }, timeoutMs);
     });
+}
+/** A dns.lookup stand-in that answers [address] for every name (both lookup call shapes). */
+function lookupTo(address) {
+    return (h, o, cb) => {
+        const done = typeof o === 'function' ? o : cb;
+        return o && o.all ? done(null, [{ address, family: 4 }]) : done(null, address, 4);
+    };
+}
+/** Runs [code] in a fresh Node with [env]; returns the JSON on its last stdout line. */
+function runChild(code, env) {
+    const r = spawnSync(process.execPath, ['-e', code], { cwd: tmp, env, encoding: 'utf8', timeout: 30000 });
+    if (r.status !== 0) throw new Error(`child failed (${r.status}): ${r.stderr}`);
+    return JSON.parse(r.stdout.trim().split('\n').pop());
+}
+/** Every file under [dir] (skipping node_modules) whose name ends with one of [exts]. */
+function filesUnder(dir, exts) {
+    const out = [];
+    if (!fs.existsSync(dir)) return out;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) { if (e.name !== 'node_modules') out.push(...filesUnder(f, exts)); } else if (exts.some((x) => e.name.endsWith(x))) out.push(f);
+    }
+    return out;
 }
 function httpGet(urlOrOpts) {
     return new Promise((resolve) => {
@@ -88,14 +125,70 @@ const REFUSED = 'ERR_SEEKERCLAW_SOCKET_REFUSED';
             assert.ok(!/8765|8766/.test(text), `${f} still mentions an internal port`);
         }
     });
-    await check("agent_pay's localhost exception is off: NODE_ENV is unset and reserved", () => {
+    // agent_pay's localhost exception needs NODE_ENV=development|test. Three facts keep it off in
+    // the release build: nothing in the build sets NODE_ENV, a user env var cannot set any NODE_*
+    // name, and with NODE_ENV unset the bridge URL is refused.
+    await check('nothing in the native code, Gradle build, Kotlin or the JS bundle assigns NODE_ENV', () => {
+        const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/');
+        // Native, Gradle and Kotlin: the name does not appear at all.
+        const build = [
+            ...filesUnder(path.join(ROOT, 'app', 'src', 'main', 'cpp'), ['.cpp', '.cc', '.c', '.h', '.hpp', 'CMakeLists.txt']),
+            ...filesUnder(path.join(ROOT, 'app', 'src', 'main', 'java'), ['.kt', '.java']),
+            ...filesUnder(path.join(ROOT, 'app', 'src', 'googlePlay'), ['.kt', '.java']),
+            path.join(ROOT, 'app', 'build.gradle.kts'),
+        ];
+        assert.ok(build.some((f) => f.endsWith('native-lib.cpp')), 'the scan must cover native-lib.cpp');
+        assert.deepStrictEqual(build.filter((f) => fs.readFileSync(f, 'utf8').includes('NODE_ENV')).map(rel), []);
+        // The JS bundle: outside comments, every mention is a strict comparison of process.env.NODE_ENV.
+        const writes = [];
+        let reads = 0;
+        for (const f of filesUnder(BUNDLE, ['.js'])) {
+            const code = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1'));
+            code.forEach((line, i) => {
+                for (const m of line.matchAll(/NODE_ENV/g)) {
+                    const read = /process\.env\.$/.test(line.slice(0, m.index)) && /^\s*[!=]==/.test(line.slice(m.index + 8));
+                    if (read) reads++;
+                    else writes.push(`${rel(f)}:${i + 1}: ${line.trim()}`);
+                }
+            });
+        }
+        assert.deepStrictEqual(writes, [], 'a NODE_ENV mention that is not a comparison');
+        assert.ok(reads >= 2, 'the scan sees the agent_pay and confirmation-policy reads');
+    });
+    await check('config.js drops every NODE_* user env var (the NODE_ prefix rule), ordinary names still apply', () => {
         const cfg = require(path.join(BUNDLE, 'config.js'));
-        assert.ok(!cfg.USER_ENV_KEYS.includes('NODE_ENV'), 'a user env var cannot set NODE_ENV');
+        for (const k of NODE_NAMES) {
+            assert.ok(!cfg.USER_ENV_KEYS.includes(k), `${k} became a user env var`);
+            assert.strictEqual(process.env[k], undefined, `${k} reached process.env`);
+        }
+        // The rule is the `NODE_` prefix: NODEJS_FLAG is an ordinary name.
+        assert.ok(cfg.USER_ENV_KEYS.includes('NODEJS_FLAG'), 'NODEJS_FLAG is not a NODE_ name');
         assert.ok(cfg.USER_ENV_KEYS.includes('MY_FLAG'), 'negative control: ordinary user env vars apply');
-        assert.strictEqual(process.env.NODE_ENV, undefined);
-        const pay = require(path.join(BUNDLE, 'tools', 'agent_pay.js'));
-        const r = pay.preflightUrlSync('http://127.0.0.1:8765/x', 'GET');
-        assert.strictEqual(r.error, 'non_https', JSON.stringify(r));
+        assert.strictEqual(process.env.MY_FLAG, 'on');
+    });
+    await check("agent_pay refuses the bridge URL in a process with no NODE_ENV (as in the release build)", () => {
+        const probe = `
+            process.argv[2] = ${JSON.stringify(ws)};
+            const pay = require(${JSON.stringify(path.join(BUNDLE, 'tools', 'agent_pay.js'))});
+            const r = pay.preflightUrlSync('http://127.0.0.1:8765/x', 'GET');
+            process.stdout.write('\\n' + JSON.stringify({ env: process.env.NODE_ENV === undefined ? null : process.env.NODE_ENV, ok: r.ok === true, error: r.error || null }) + '\\n');`;
+        const env = Object.assign({}, BASE_ENV);
+        for (const k of NODE_NAMES) delete env[k];
+        const release = runChild(probe, env);
+        assert.deepStrictEqual(release, { env: null, ok: false, error: 'non_https' });
+        // Paired control: the same child with NODE_ENV=development takes the localhost exception.
+        const dev = runChild(probe, Object.assign({}, env, { NODE_ENV: 'development' }));
+        assert.deepStrictEqual(dev, { env: 'development', ok: true, error: null });
+    });
+    await check('an external host on a bridge port is allowed (resolved address is not loopback)', async () => {
+        // ext.example resolves to TEST-NET-1, so the guard lets the connect go ahead; it then ends
+        // on its own (timeout or unreachable), never with the guard's refusal.
+        const viaName = await tcp({ host: 'ext.example', port: 8765, lookup: lookupTo('192.0.2.1') }, 500);
+        assert.notStrictEqual(viaName, REFUSED, 'host name resolving to 192.0.2.1: ' + viaName);
+        const viaLiteral = await tcp({ host: '192.0.2.1', port: 8765 }, 500);
+        assert.notStrictEqual(viaLiteral, REFUSED, '192.0.2.1 literal: ' + viaLiteral);
+        // Paired control: the same name resolving to loopback is refused (no server needed).
+        assert.strictEqual(await tcp({ host: 'ext.example', port: 8765, lookup: lookupTo('127.0.0.1') }, 500), REFUSED);
     });
 
     // ---- P1-F: no Unix-socket connect, by any route (no server needed: the refusal comes first)

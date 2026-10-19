@@ -140,6 +140,8 @@ jobs:
             owner-claim-refused \
             cap-raise-hints \
             draft-outcomes \
+            boot-module-graph \
+            js-eval-snippets \
             ci-coverage-manifest
           do
             echo "── $t ──"

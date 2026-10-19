@@ -13,6 +13,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 const BUNDLE = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
 
@@ -212,9 +213,112 @@ const sentinel = () => fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8
             await refused("return require('fs').readFileSync('/proc/self/environ', 'utf8')", /outside the workspace/);
             await refused("require('fs').writeFileSync('/proc/meminfo', 'x')", /outside the workspace/);
         });
+        await check('/proc/<pid>/environ by number is refused (the parent and this process)', async () => {
+            // The js_eval `process` stub has no pid/ppid, so the real numbers are put in from here.
+            for (const pid of [process.ppid, process.pid]) {
+                assert.ok(fs.existsSync(`/proc/${pid}/environ`), `fixture: /proc/${pid}/environ exists`);
+                await refused(`return require('fs').readFileSync('/proc/' + ${pid} + '/environ', 'utf8')`, /outside the workspace/);
+            }
+        });
     } else {
         console.log('SKIP: /proc cases (no /proc on this platform)');
     }
+
+    // ---- contract test-plan gaps (P1-F)
+    await check('refused: rm outside, fd and URL write targets, cp in every form, a read stream outside; the outside sentinel is byte-identical', async () => {
+        const before = fs.readFileSync(path.join(outside, 'sentinel.txt'));
+        await refused("require('fs').rmSync('../outside/sentinel.txt')", /outside the workspace/);
+        await refused("require('fs').rmSync('../outside', { recursive: true, force: true })", /outside the workspace/);
+        await refused("require('fs').writeFileSync(1, 'x')", /string or Buffer/);
+        await refused(`require('fs').writeFileSync(new URL(${JSON.stringify(pathToFileURL(path.join(outside, 'sentinel.txt')).href)}), 'x')`, /string or Buffer/);
+        // v3.3: cp is refused in every form, recursive or not, sync, callback or promise.
+        await refused("require('fs').cpSync('data.txt', 'c.txt')", /fs\.cpSync is not available/);
+        await refused("require('fs').cp('data.txt', 'c.txt', () => {})", /fs\.cp is not available/);
+        await refused("return await require('fs').promises.cp('data.txt', 'c.txt')", /fs\.promises\.cp is not available/);
+        await refused("return require('fs').createReadStream('../outside/sentinel.txt')", /outside the workspace/);
+        assert.ok(!fs.existsSync(path.join(ws, 'c.txt')), 'no copy was made');
+        assert.ok(fs.existsSync(path.join(outside, 'sentinel.txt')), 'the sentinel was not removed');
+        assert.ok(fs.readFileSync(path.join(outside, 'sentinel.txt')).equals(before), 'the sentinel is byte-identical');
+    });
+    await check('every host fs / fs.promises member off the façade allowlist is absent or a refusing function', async () => {
+        // The design (js-eval-guard.js buildFs/buildPromises): the façade holds the FS_SPEC/FSP_SPEC
+        // members (path-checked), the two stream factories, constants, promises and the F_OK family;
+        // the FS_REFUSED/FSP_REFUSED names are functions that throw "... is not available"; nothing else.
+        const allowFs = new Set([...Object.keys(guard.FS_SPEC), 'createReadStream', 'createWriteStream',
+            'constants', 'promises', 'F_OK', 'R_OK', 'W_OK', 'X_OK']);
+        const allowFsp = new Set([...Object.keys(guard.FSP_SPEC), 'constants']);
+        const offFs = Object.getOwnPropertyNames(fs).filter((k) => !allowFs.has(k));
+        const offFsp = Object.getOwnPropertyNames(fs.promises).filter((k) => !allowFsp.has(k));
+        // Not vacuous: the host really has descriptor, copy-tree, link and class members off the list.
+        for (const k of ['openSync', 'writeSync', 'fstatSync', 'cpSync', 'symlinkSync', 'opendirSync', 'ReadStream', 'Dirent', 'Stats']) {
+            assert.ok(offFs.includes(k), 'host fs.' + k + ' is off the allowlist');
+        }
+        for (const k of ['open', 'cp', 'opendir', 'symlink', 'link']) assert.ok(offFsp.includes(k), 'host fs.promises.' + k);
+        // The named refusals are always probed too, whatever this Node version's fs happens to export.
+        const probeFs = [...new Set([...offFs, ...guard.FS_REFUSED])];
+        const probeFsp = [...new Set([...offFsp, ...guard.FSP_REFUSED])];
+        const code = `
+            const fs = require('fs');
+            const bad = [];
+            const refusing = [];
+            async function probe(where, obj, keys) {
+                for (const k of keys) {
+                    const v = obj[k];
+                    if (v === undefined) continue;
+                    if (typeof v !== 'function') { bad.push(where + k + ' is a ' + typeof v); continue; }
+                    let msg = null;
+                    try { await v(); } catch (e) { msg = String(e && e.message); }
+                    if (msg && msg.startsWith('js_eval: ' + where + k + ' is not available')) refusing.push(where + k);
+                    else bad.push(where + k + ' does not refuse: ' + msg);
+                }
+            }
+            await probe('fs.', fs, ${JSON.stringify(probeFs)});
+            await probe('fs.promises.', fs.promises, ${JSON.stringify(probeFsp)});
+            return JSON.stringify({ bad, refusing });`;
+        const report = JSON.parse(await ok(code));
+        assert.deepStrictEqual(report.bad, [], 'off-list members that are present but do not refuse');
+        assert.deepStrictEqual(report.refusing.sort(), [
+            ...guard.FS_REFUSED.map((k) => 'fs.' + k), ...guard.FSP_REFUSED.map((k) => 'fs.promises.' + k),
+        ].sort(), 'exactly the named refusals refuse; every other off-list member is absent');
+    });
+    await check('the fs façades refuse delete, defineProperty, new members and a new prototype', async () => {
+        const code = `
+            const fs = require('fs');
+            const fsp = require('fs/promises');
+            const attempts = {
+                delete: () => { delete fs.readFileSync; },
+                define: () => Object.defineProperty(fs, 'readFileSync', { value: () => 'x' }),
+                add: () => { fs.extra = 1; },
+                proto: () => Object.setPrototypeOf(fs, {}),
+                deletePromises: () => { delete fs.promises.readFile; },
+                definePromises: () => Object.defineProperty(fsp, 'readFile', { value: () => 'x' }),
+            };
+            const out = [];
+            for (const [name, f] of Object.entries(attempts)) {
+                try { f(); out.push(name + ':no-throw'); } catch (e) { out.push(name + ':' + e.name); }
+            }
+            out.push(fs.readFileSync('data.txt', 'utf8'), typeof fsp.readFile, String(fs.extra));
+            return out.join(',');`;
+        assert.strictEqual(await ok(code), 'delete:TypeError,define:TypeError,add:TypeError,proto:TypeError,' +
+            'deletePromises:TypeError,definePromises:TypeError,hello,function,undefined');
+    });
+    await check("stream 'open' and 'ready' events carry no descriptor", async () => {
+        const code = `
+            const fs = require('fs');
+            const seen = [];
+            const note = (tag) => (...args) => seen.push(tag + ':' + args.some((a) => typeof a === 'number'));
+            const r = fs.createReadStream('data.txt');
+            r.on('open', note('read-open'));
+            r.on('ready', note('read-ready'));
+            for await (const chunk of r) { /* drain */ }
+            const w = fs.createWriteStream('events.txt');
+            w.on('open', note('write-open'));
+            w.on('ready', note('write-ready'));
+            await new Promise((resolve, reject) => { w.on('error', reject); w.end('x', resolve); });
+            return seen.sort().join(',');`;
+        // Every event fired (so the check is not vacuous), and none carried a number.
+        assert.strictEqual(await ok(code), 'read-open:false,read-ready:false,write-open:false,write-ready:false');
+    });
 
     // ---- links
     if (!canLink) {
