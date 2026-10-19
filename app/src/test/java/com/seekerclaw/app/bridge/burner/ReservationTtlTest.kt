@@ -49,7 +49,7 @@ class ReservationTtlTest {
             val text = f.readText()
             Regex("""ttlMs:\s*([^,}\n]+)""").findAll(text).map { nodeTtl(text, it.groupValues[1].trim(), f.name) }.toList()
         }
-        assertTrue("one TTL per reserve call ($reserveCalls calls): $asks", asks.size >= reserveCalls)
+        assertEquals("exactly one TTL per reserve call: $asks", reserveCalls, asks.size)
         assertTrue("every Node caller asks for <= 120 s: $asks", asks.all { it <= 120_000L })
     }
 

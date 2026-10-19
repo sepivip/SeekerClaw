@@ -118,6 +118,29 @@ const REFUSED = 'ERR_SEEKERCLAW_SOCKET_REFUSED';
         const tcpNullPath = await settle(net.connect({ host: '127.0.0.1', port: 9, path: null }));
         assert.notStrictEqual(tcpNullPath, REFUSED, 'path: null is a TCP connect');
     });
+    await check('an array first argument is checked as the options object Node reads it as', async () => {
+        // A caller's array has no net-internal marker, so Node normalizes it again and reads the
+        // array itself as options. Both the socket-path and the bridge-port checks must see it.
+        const sock = os.platform() === 'win32' ? '\\\\.\\pipe\\seekerclaw-p1f-array' : path.join(tmp, 'p1f-array.sock');
+        const settle = (s) => new Promise((resolve) => {
+            s.on('error', (e) => resolve(e.code || e.message));
+            s.on('connect', () => { s.destroy(); resolve('connected'); });
+            setTimeout(() => { s.destroy(); resolve('timeout'); }, 3000);
+        });
+        assert.strictEqual(await settle(new net.Socket().connect(Object.assign([], { path: sock }))), REFUSED, 'array with path');
+        assert.strictEqual(await settle(new net.Socket().connect(Object.assign([], { port: 8765, host: '127.0.0.1' }))), REFUSED, 'array with the bridge port');
+        assert.strictEqual(await settle(new net.Socket().connect([{ port: 8765, host: '127.0.0.1' }])), REFUSED, '[options] array');
+        // js_eval reaches a real net.Socket through its facade's factory.
+        const sys = require(path.join(BUNDLE, 'tools', 'system.js'));
+        const r = await sys.handlers.js_eval({ code: `
+            return await new Promise((resolve) => {
+                const s = new (require('net').Socket)().connect(Object.assign([], { port: 8765, host: '127.0.0.1' }));
+                s.on('error', (e) => resolve(e.code || e.message));
+                s.on('connect', () => { s.destroy(); resolve('connected'); });
+                setTimeout(() => resolve('timeout'), 2000);
+            });` }, 'chat');
+        assert.strictEqual(r.result, REFUSED, 'js_eval array with the bridge port: ' + r.result);
+    });
     await check('js_eval cannot open a Unix socket through tls, an agent or a plain Socket', async () => {
         const sys = require(path.join(BUNDLE, 'tools', 'system.js'));
         const run = async (code) => (await sys.handlers.js_eval({ code }, 'chat')).result;

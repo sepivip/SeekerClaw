@@ -63,10 +63,18 @@ function isLoopbackAddress(addr) {
     return false;
 }
 
-/** The options a Socket#connect call carries: `{ options, positional }`, or null for a pipe path. */
+/**
+ * The options a Socket#connect call carries: `{ options, positional, normalized }`, or null for a
+ * pipe path. net passes its own normalized `[options, cb]` array (marked with an internal symbol);
+ * any other array is one Node reads as the options object itself (it normalizes it again), so it is
+ * checked as one — otherwise `connect(Object.assign([], { port: 8765 }))` would skip every check.
+ */
 function connectOptions(args) {
     const first = args[0];
-    if (Array.isArray(first)) return { options: first[0], positional: false }; // net's normalized [options, cb]
+    if (Array.isArray(first)) {
+        if (first[0] !== null && typeof first[0] === 'object') return { options: first[0], positional: false, normalized: true };
+        return { options: first, positional: false, normalized: false };
+    }
     if (first !== null && typeof first === 'object') return { options: first, positional: false };
     if (typeof first === 'number' || (typeof first === 'string' && /^\d+$/.test(first))) {
         return { options: { port: first, host: typeof args[1] === 'string' ? args[1] : undefined }, positional: true };
@@ -128,9 +136,9 @@ function install({ log } = {}) {
         // One snapshot of the caller's options (getters run once, symbols kept): every check below
         // and the real connect see the same values, and the caller's object is never changed.
         const o = Object.assign(Object.create(null), c.options);
-        const cb = c.positional
-            ? args.find((a) => typeof a === 'function')
-            : (Array.isArray(args[0]) ? args[0][1] : args.find((a) => typeof a === 'function'));
+        const cb = c.normalized
+            ? (typeof args[0][1] === 'function' ? args[0][1] : undefined)
+            : args.find((a) => typeof a === 'function');
         const port = Number(o.port);
         // P1-F: a Unix-socket connect is exactly what net treats as one (`pipe = !!options.path`);
         // http passes `path: null` on every TCP request. Reached through tls.connect, an agent's
