@@ -71,6 +71,8 @@ const LOAD_TARGETS = [
     // socket guards (patches only when install() is called).
     'js-eval-guard.js',
     'net-guard.js',
+    // BAT-1409 P1-H: tool-loop rate limits (no deps, no IO at load).
+    'tool-rate-limit.js',
     // BAT-1409 P1-G: shell_exec tokenizer, grammar and validator (no config.js, no IO at load).
     'tools/shell-args.js',
     'tools/shell-grammar.js',

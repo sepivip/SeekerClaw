@@ -94,8 +94,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Device info** — Battery level/charging, storage stats
 - **Clipboard** — Read and write
 - **Contacts** — Search by name (requires READ_CONTACTS)
-- **SMS** — Send messages (SEND_SMS on dApp Store; intent handoff on Google Play — no SEND_SMS permission required, uses system SMS app)
-- **Phone calls** — Dial numbers (requires CALL_PHONE, user confirmation)
+- **SMS** — Message drafts: the agent puts a draft in the notifications on the phone running SeekerClaw; the user taps it to open their SMS app and presses Send (both editions; no SMS permission; live chat only)
+- **Phone calls** — Call drafts: the user taps the notification to open the dialer with the number filled in, then presses Dial (no phone permission; live chat only)
 - **GPS location** — Current coordinates (requires ACCESS_FINE_LOCATION)
 - **Text-to-speech** — Speak text with configurable speed/pitch
 - **Camera** — Capture photos (front/back) + vision analysis via the active AI provider
@@ -189,7 +189,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ### Security
 - **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
 - **Skill file protection** — Writes/edits to `skills/` blocked when suspicious injection patterns detected in content
-- **Tool confirmation gates** — `android_sms`, `android_call`, `android_camera_capture`, `android_location`, `solana_send`, `solana_send_token`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES in chat before execution (with a burner wallet configured, under-cap burner spends skip the prompt — see Burner Wallet). The runtime gate is the only prompt: the SMS and call tool descriptions tell the model not to ask separately, so the user confirms once, not twice (BAT-1306). 60s timeout auto-cancels; unavailable in scheduled-task and heartbeat turns. Rate limited (SMS/call 1 per 60s; camera, location, `solana_send`, `solana_swap` 1 per 15s; Jupiter order creation 1 per 30s)
+- **Tool confirmation gates** — `android_camera_capture`, `android_location`, `solana_send`, `solana_send_token`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES in chat before execution (with a burner wallet configured, under-cap burner spends skip the prompt — see Burner Wallet). The runtime gate is the only prompt. 60s timeout auto-cancels; unavailable in scheduled-task and heartbeat turns. Message and call drafts (`android_sms`, `android_call`) ask nothing in chat, because the user confirms on the phone by tapping the draft and pressing Send or Dial; they are also unavailable in scheduled-task and heartbeat turns (BAT-1409). Rate limited (SMS/call drafts 1 per 60s; camera, location, `solana_send`, `solana_swap` 1 per 15s; Jupiter order creation 1 per 30s)
 - **Jupiter API hardening** — 7 fixes from official skill audit (BAT-151-157): no retry for non-idempotent POSTs, amount validation, slippage bounds, error message sanitization
 - **Secrets blocklist** — `config.js`, `config.json`, `config.yaml`, `seekerclaw.db`, `xai_oauth.json` blocked from `read` tool (with symlink resolution) and `js_eval` fs access (proxied `fs`/`fs.promises` modules)
 - **Swap transaction verification** — `verifySwapTransaction()` checks the fee payer and required signers; programs are labelled for logs, not allowlisted, and Address Lookup Tables are accepted (BAT-1013). Autonomous burner signing adds drainer-instruction blocking, a per-account loss invariant and simulate-vs-quote enforcement (`wallet/burner-policy.js`); main-wallet transactions still require approval in the wallet app
@@ -268,7 +268,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 - **No browser/screen/canvas skills** — Can't be ported from OpenClaw (requires desktop environment)
 - **Ephemeral context** — Conversation history is held in memory and resets on Node.js restart (mitigated by session summaries, and by on-disk checkpoints of an interrupted task — its last 8 messages, kept up to 7 days — which resume automatically after a restart if under 5 minutes old, otherwise via `/resume`)
 - **Two channels** — Telegram and Discord supported; WhatsApp and others not yet implemented
-- **Google Play build: SMS is hand-off only** — the Google Play build has no `SEND_SMS` permission, so the agent opens the system SMS app with the message pre-filled and the user taps Send; the dApp Store build sends directly
+- **SMS and calls are drafts** — in both editions the agent puts a draft in the notifications; the user taps it and presses Send or Dial. Agent actions that open a screen (camera, app launch, main-wallet signing, adding a contact) need SeekerClaw in front, and otherwise ask the user to open it first (BAT-1409)
 - **No light theme** — Dark only (DarkOps single theme)
 
 ## Stats

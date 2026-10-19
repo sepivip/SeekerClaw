@@ -216,11 +216,25 @@ class SeekerClawApplication : Application() {
             setShowBadge(true)
         }
         manager.createNotificationChannel(errorChannel)
+
+        // BAT-1409 P1-H: the agent's SMS and calls are drafts the user taps to send or dial.
+        // High importance so they are seen; no group, so a blocked group can never hide them.
+        // Created in every process (`:node` posts them).
+        val draftsChannel = NotificationChannel(
+            DRAFTS_CHANNEL_ID,
+            "Message & call drafts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Messages and calls your agent prepared: tap one to review, then send or dial it yourself"
+            setShowBadge(true)
+        }
+        manager.createNotificationChannel(draftsChannel)
     }
 
     companion object {
         const val CHANNEL_ID = "seekerclaw_service"
         const val ERROR_CHANNEL_ID = "seekerclaw_errors"
+        const val DRAFTS_CHANNEL_ID = "seekerclaw_drafts"
 
         /** Firebase Analytics and its user properties (model, auth type, wallet presence). */
         fun initAnalytics(context: Context) {

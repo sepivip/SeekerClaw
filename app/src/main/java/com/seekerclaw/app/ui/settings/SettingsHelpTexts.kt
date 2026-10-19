@@ -135,15 +135,10 @@ object SettingsHelpTexts {
         "This allows it to look up names and phone numbers when you ask, for example \"text Mom\" or \"call John\". " +
         "Your contacts are never sent to the cloud — only used on-device to resolve names."
 
-    const val SMS =
-        "Lets the agent send text messages on your behalf. " +
-        "The agent will always tell you who it's texting and what it's sending before it acts. " +
-        "Standard carrier SMS rates may apply."
-
-    const val PHONE_CALLS =
-        "Lets the agent make phone calls for you. " +
-        "It will always confirm the number with you before dialing. " +
-        "Useful for quick calls like \"call the pizza place\"."
+    const val NOTIFICATIONS =
+        "Needed for message and call drafts. " +
+        "When you ask the agent to text or call someone, it puts a draft in the notifications on this phone. " +
+        "Tap it to open your SMS app or dialer, then send or dial it yourself — the agent never sends or calls on its own."
 
     // ── MCP Servers ─────────────────────────────────────────────────
 

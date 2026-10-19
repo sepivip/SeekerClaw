@@ -2632,8 +2632,6 @@ object ConfigManager {
             if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) "granted" else "denied"
 
         val permCamera = perm(Manifest.permission.CAMERA)
-        val permSms = perm(Manifest.permission.SEND_SMS)
-        val permPhone = perm(Manifest.permission.CALL_PHONE)
         val permContacts = perm(Manifest.permission.READ_CONTACTS)
         val permLocation = perm(Manifest.permission.ACCESS_FINE_LOCATION)
         val permNotifications = perm(Manifest.permission.POST_NOTIFICATIONS)
@@ -2687,8 +2685,6 @@ object ConfigManager {
             appendLine()
             appendLine("## Permissions")
             appendLine("- Camera: $permCamera")
-            appendLine("- SMS: $permSms")
-            appendLine("- Phone: $permPhone")
             appendLine("- Contacts: $permContacts")
             appendLine("- Location: $permLocation")
             appendLine("- Notifications: $permNotifications")

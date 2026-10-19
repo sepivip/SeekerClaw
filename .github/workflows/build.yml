@@ -139,6 +139,7 @@ jobs:
             shell-args-mksh \
             owner-claim-refused \
             cap-raise-hints \
+            draft-outcomes \
             ci-coverage-manifest
           do
             echo "── $t ──"

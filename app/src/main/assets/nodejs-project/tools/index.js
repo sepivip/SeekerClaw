@@ -295,12 +295,6 @@ function formatConfirmationMessage(toolName, input, policyMessage) {
         details = `**${esc(toolName)}** — ${escPolicy(policyMessage)}`;
     } else {
         switch (toolName) {
-            case 'android_sms':
-                details = `📱 **Send SMS**\n  To: \`${esc(input.phone)}\`\n  Message: "${esc(input.message)}"`;
-                break;
-            case 'android_call':
-                details = `📞 **Make Phone Call**\n  To: \`${esc(input.phone)}\``;
-                break;
             case 'solana_send':
                 details = `💸 **Send SOL**\n  To: \`${esc(input.to)}\`\n  Amount: ${esc(input.amount)} SOL`;
                 break;

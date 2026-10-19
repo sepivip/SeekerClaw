@@ -18,7 +18,6 @@ import android.os.Environment
 import android.os.StatFs
 import android.provider.ContactsContract
 import android.speech.tts.TextToSpeech
-import android.telephony.SmsManager
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -190,7 +189,7 @@ class AndroidBridge(
 
         // Rate limiting for sensitive endpoints
         if (isRateLimited(uri)) {
-            return jsonResponse(429, mapOf("error" to "Rate limit exceeded for $uri"))
+            return jsonResponse(429, mapOf("error" to "Rate limit exceeded for $uri", "code" to "rate_limited"))
         }
 
         // Parse body
@@ -561,6 +560,9 @@ class AndroidBridge(
     }
 
     private fun handleContactsAdd(params: JSONObject): Response {
+        // BAT-1409 P1-H: a screen can only open while SeekerClaw is in front (see requireForegroundUi).
+        requireForegroundUi()?.let { return it }
+
         if (!hasPermission(Manifest.permission.WRITE_CONTACTS)) {
             return jsonResponse(403, mapOf("error" to "WRITE_CONTACTS permission not granted"))
         }
@@ -584,7 +586,37 @@ class AndroidBridge(
         return jsonResponse(200, mapOf("success" to true, "message" to "Contact add dialog opened"))
     }
 
-    // ==================== SMS ====================
+    // ==================== Foreground check (BAT-1409 P1-H) ====================
+
+    /**
+     * A route that opens a screen calls this first. Unless the MAIN (UI) process is FOREGROUND or
+     * VISIBLE ([UiForeground]), it returns 409 `needs_foreground` and the route never calls
+     * startActivity — a blocked background start is silent on Android 14+, so the agent asks the
+     * user to open SeekerClaw first instead. Returns null when the screen may open.
+     */
+    private fun requireForegroundUi(): Response? {
+        val am = context.getSystemService(android.app.ActivityManager::class.java)
+        val processes = am?.runningAppProcesses?.map { UiForeground.Proc(it.processName, it.importance) }
+        if (UiForeground.isVisible(processes, context.packageName)) return null
+        return jsonResponse(
+            409,
+            mapOf(
+                "error" to "needs_foreground",
+                "code" to "needs_foreground",
+                "message" to "Open SeekerClaw on the phone first, then ask again: Android only lets an app open a screen while it is in front.",
+            ),
+        )
+    }
+
+    // ==================== SMS / Phone call drafts (BAT-1409 P1-H) ====================
+
+    private val draftNotifier by lazy { DraftNotifier(context) }
+
+    /** The bridge response for a draft outcome ([DraftNotifier.reply]). */
+    private fun draftResponse(outcome: DraftNotifier.Outcome): Response {
+        val (status, body) = DraftNotifier.reply(outcome)
+        return jsonResponse(status, body)
+    }
 
     private fun handleSms(params: JSONObject): Response {
         val phone = params.optString("phone", "")
@@ -593,54 +625,25 @@ class AndroidBridge(
         if (phone.isBlank() || message.isBlank()) {
             return jsonResponse(400, mapOf("error" to "phone and message are required"))
         }
-
-        // If SEND_SMS permission is available (dappStore), send directly.
-        // Otherwise (googlePlay), hand off to system messaging app via intent.
-        if (hasPermission(Manifest.permission.SEND_SMS)) {
-            try {
-                val smsManager = context.getSystemService(SmsManager::class.java)
-                val parts = smsManager.divideMessage(message)
-                smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
-                return jsonResponse(200, mapOf("success" to true, "phone" to phone, "parts" to parts.size))
-            } catch (e: Exception) {
-                return jsonResponse(500, mapOf("error" to "Failed to send SMS: ${e.message}"))
-            }
-        } else {
-            // Intent handoff — opens system messaging app with message pre-filled
-            try {
-                val intent = Intent(Intent.ACTION_SENDTO).apply {
-                    data = Uri.parse("smsto:$phone")
-                    putExtra("sms_body", message)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-                return jsonResponse(200, mapOf("success" to true, "handoff" to true, "phone" to phone,
-                    "note" to "SMS app opened with message pre-filled. User must tap Send."))
-            } catch (e: Exception) {
-                return jsonResponse(500, mapOf("error" to "Failed to open SMS app: ${e.message}"))
-            }
+        return try {
+            draftResponse(draftNotifier.post(DraftNotifier.Kind.SMS, phone, message))
+        } catch (e: Exception) {
+            jsonResponse(500, mapOf("error" to "Failed to create the message draft: ${e.javaClass.simpleName}"))
         }
     }
 
     // ==================== Phone Call ====================
 
     private fun handleCall(params: JSONObject): Response {
-        if (!hasPermission(Manifest.permission.CALL_PHONE)) {
-            return jsonResponse(403, mapOf("error" to "CALL_PHONE permission not granted"))
-        }
-
         val phone = params.optString("phone", "")
         if (phone.isBlank()) {
             return jsonResponse(400, mapOf("error" to "phone is required"))
         }
-
-        val intent = Intent(Intent.ACTION_CALL).apply {
-            data = Uri.parse("tel:$phone")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            draftResponse(draftNotifier.post(DraftNotifier.Kind.CALL, phone))
+        } catch (e: Exception) {
+            jsonResponse(500, mapOf("error" to "Failed to create the call draft: ${e.javaClass.simpleName}"))
         }
-        context.startActivity(intent)
-
-        return jsonResponse(200, mapOf("success" to true, "phone" to phone))
     }
 
     // ==================== Location ====================
@@ -708,6 +711,9 @@ class AndroidBridge(
     // ==================== Camera ====================
 
     private fun handleCameraCapture(params: JSONObject): Response {
+        // BAT-1409 P1-H: a screen can only open while SeekerClaw is in front (see requireForegroundUi).
+        requireForegroundUi()?.let { return it }
+
         if (!hasPermission(Manifest.permission.CAMERA)) {
             return jsonResponse(403, mapOf("error" to "CAMERA permission not granted"))
         }
@@ -771,6 +777,9 @@ class AndroidBridge(
     }
 
     private fun handleAppsLaunch(params: JSONObject): Response {
+        // BAT-1409 P1-H: a screen can only open while SeekerClaw is in front (see requireForegroundUi).
+        requireForegroundUi()?.let { return it }
+
         val packageName = params.optString("package", "")
         if (packageName.isBlank()) {
             return jsonResponse(400, mapOf("error" to "package is required"))
@@ -809,6 +818,9 @@ class AndroidBridge(
     // ==================== Solana ====================
 
     private fun handleSolanaAuthorize(): Response {
+        // BAT-1409 P1-H: a screen can only open while SeekerClaw is in front (see requireForegroundUi).
+        requireForegroundUi()?.let { return it }
+
         val requestId = java.util.UUID.randomUUID().toString()
         val intent = Intent(context, com.seekerclaw.app.solana.SolanaAuthActivity::class.java).apply {
             putExtra("action", "authorize")
@@ -848,6 +860,9 @@ class AndroidBridge(
     }
 
     private fun handleSolanaSign(params: JSONObject): Response {
+        // BAT-1409 P1-H: a screen can only open while SeekerClaw is in front (see requireForegroundUi).
+        requireForegroundUi()?.let { return it }
+
         val txBase64 = params.optString("transaction", "")
         if (txBase64.isBlank()) {
             return jsonResponse(400, mapOf("error" to "transaction (base64) is required"))
@@ -890,6 +905,9 @@ class AndroidBridge(
      * Jupiter Ultra handles broadcasting via /execute.
      */
     private fun handleSolanaSignOnly(params: JSONObject): Response {
+        // BAT-1409 P1-H: a screen can only open while SeekerClaw is in front (see requireForegroundUi).
+        requireForegroundUi()?.let { return it }
+
         val txBase64 = params.optString("transaction", "")
         if (txBase64.isBlank()) {
             return jsonResponse(400, mapOf("error" to "transaction (base64) is required"))

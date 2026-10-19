@@ -404,13 +404,32 @@ grep -iE "bridge|ECONNREFUSED|8765" node_debug.log
 ### Permission-Specific Errors
 **Symptoms:** An `android_*` tool returns a generic error without specifying which permission is missing.
 **Common permission mappings:**
-- `android_sms` → SEND_SMS permission
-- `android_call` → CALL_PHONE permission
 - `android_location` → ACCESS_FINE_LOCATION permission
 - `android_camera_check` → CAMERA permission
 - `android_contacts` → READ_CONTACTS permission
+- `android_sms` / `android_call` → no SMS or phone permission at all: they need SeekerClaw's notifications (see "Message & call drafts" below)
 **Check:** Read PLATFORM.md — it lists all granted permissions under the "Permissions" section.
 **Fix:** Tell the user which specific permission is needed: "To use [feature], grant [permission] in SeekerClaw Settings > Permissions."
+
+### Message & call drafts (`android_sms` / `android_call`, BAT-1409)
+These tools never send a text or dial a number, in either app flavour. They put a draft in the notifications on the phone running SeekerClaw. The user taps it, which opens their SMS app or dialer with everything filled in, and presses Send or Dial there. There is no chat confirmation: the user confirms on the phone. The notification shows only "Message draft · <time> — tap to review" (or "Call draft"), never the number or the text, and it expires after 15 minutes.
+Each result has one `outcome` and a `message` to relay:
+
+| `outcome` | What happened | What to tell the user |
+|---|---|---|
+| `posted` | The draft is in the notifications (Do Not Disturb can still hide it). | "I've put the message in the notifications on the phone running SeekerClaw — tap it to open your SMS app and send." / "I've put the call in the notifications on the phone running SeekerClaw — tap it to dial." Never "sent", "opened", "calling" or "called". |
+| `notifications_disabled` | SeekerClaw's notifications are off. No draft exists. | Turn them on in SeekerClaw → Settings → Notifications. |
+| `notifications_paused` | SeekerClaw is paused (Digital Wellbeing or a focus mode). No draft exists. | Unpause the app, then ask again. |
+| `channel_blocked` | The "Message & call drafts" notification category is off. No draft exists. | SeekerClaw → Settings → Notifications opens that category. |
+| `no_handler` | No SMS app or dialer is installed or enabled. No draft exists. | Install or enable one. |
+| `invalid_recipient` | The number failed the check: one number, 3–15 digits with an optional leading `+`, after spaces, dashes, dots, brackets and `/` are removed. Letters, `*`, `#`, pause characters, `,` and `;` are refused. No draft exists. | Ask for a plain phone number. |
+| `unattended` | The request came from a scheduled task or a heartbeat check. Drafts are made only when the user asks in chat. No draft exists. | Explain that it can't be scheduled; the user can ask in chat when they want it. |
+| `rate_limited` | Too many drafts: the agent may post one per 60 s per tool (a refused draft doesn't count), and the app allows 5 message and 3 call drafts per 60 s. No draft exists. | Wait a minute, then ask again. |
+
+### `needs_foreground` (BAT-1409)
+**Symptoms:** a tool that opens a screen on the phone returns `needs_foreground` as its `error` or `reason`: `android_camera_capture` / `android_camera_check`, `android_apps_launch`, or a main-wallet (MWA) approval or signature (`Wallet authorization failed: needs_foreground`).
+**Diagnosis:** Android lets SeekerClaw open a screen only while SeekerClaw itself is on the phone's screen. While it is in the background (the usual case when the user chats from Telegram or Discord) the screen would be blocked silently, so the app refuses at once instead of waiting for a screen that never appears.
+**Fix:** ask the user to open SeekerClaw on the phone, then try again. Message and call drafts don't need this: they go through notifications.
 
 ---
 
@@ -1013,7 +1032,9 @@ The confirmation gate (`confirmation/policy.js getConfirmationPolicy`, called in
 | Burner spend of USDC/SOL **over cap** | Default/auto flow falls back to the **main wallet (MWA) confirmation**. A *forced* burner (`source="burner"`, or a swap that doesn't opt into main fallback) returns `burner_cap_exceeded` instead → raise caps in Settings → Burner Wallet, lower amount, or use main. |
 | Spend any **non-USDC/SOL token** (e.g. PYUSD, BONK) — including **converting a held token back** to USDC/SOL (BAT-1057) | **Confirm** — disposing of a non-cap asset is not pre-authorized by the USDC/SOL caps |
 | **Main-routed** (MWA) action | **Confirm** (the wallet app's own approval) |
-| `wallet_set_caps`, `agent_pay` POST, android_sms/call/camera/location | **Confirm** (always) |
+| `wallet_set_caps` lowering or keeping caps, `agent_pay` POST, `android_camera_capture` / `android_location` | **Confirm** (always) |
+| `wallet_set_caps` raising a cap | **Blocked** with `cap_raise_settings_only`: caps are raised only in the SeekerClaw app, Settings → Burner Wallet |
+| `android_sms` / `android_call` | **No prompt**: they only put a draft in the phone's notifications, and the user presses Send or Dial themselves (see "Message & call drafts") |
 | `agent_pay` GET (with max_usdc), `wallet_status` | **Silent** (read / GET-side, not cap-related) |
 
 This is intended product behavior, not a bug or a "PYUSD/Token-2022 limitation." So "buy PYUSD with USDC under cap" signs silently, but "sell that PYUSD back to USDC" asks for one confirmation — because the second spends a non-cap asset. Never promise silent held-token conversions, and never tell the user a confirmed conversion is a defect.

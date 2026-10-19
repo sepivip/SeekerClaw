@@ -17,7 +17,7 @@
 // WHAT THIS ASSERTS
 // -----------------
 //   1. V1_STATIC_CONFIRM matches the documented v1.0 contract — exactly
-//      these 8 tools (no more, no less). Drift here means we either added
+//      the EXPECTED_V1 tools (no more, no less). Drift here means we either added
 //      a v1.0-style "always confirm" tool without updating the snapshot,
 //      or removed one without auditing the regression case.
 //
@@ -58,14 +58,16 @@ function fail(msg) {
 
 // ── 1. Snapshot matches the documented v1.0 contract ────────────────────────
 //
-// The 8 tools below ARE the v1.0 contract. If you change either side, you
+// The tools below ARE the v1.0 contract. If you change either side, you
 // must update the contract docs (BAT-582 Phase 4 spec — Confirmation policy)
 // AND walk through the regression case in your PR description.
+//
+// BAT-1409 P1-H (owner- and Codex-approved, contract v3.2) removed android_sms and
+// android_call ON PURPOSE: they now only put a draft in the phone's notifications, and
+// the user taps it and presses Send or Dial in their own app. See section 5 below.
 const EXPECTED_V1 = [
-    'android_call',
     'android_camera_capture',
     'android_location',
-    'android_sms',
     'jupiter_dca_create',
     'jupiter_trigger_create',
     'solana_send',
@@ -105,6 +107,20 @@ for (const tool of sampleNone) {
 {
     const r = normalizePolicy(getConfirmationPolicy('wallet_status', {}, { burnerConfigured: true }));
     assert.strictEqual(r.policy, 'none', 'wallet_status must always be "none"');
+}
+
+// ── 5. Drafts are not chat-confirmed: the user already confirms twice on the phone ─
+// Decision record (BAT-1409 P1-H): a draft sends nothing by itself — the user must tap the
+// notification, then press Send or Dial in their own app — so a chat YES would be a third
+// confirmation. Their rate limit is kept separately (tool-rate-limit.js RATE_LIMITED_WITHOUT_CONFIRM,
+// pinned by draft-outcomes.test.js), and so is the refusal in unattended turns (tools/android.js). Re-adding them here needs a new owner decision, not a test edit.
+for (const tool of ['android_sms', 'android_call']) {
+    for (const walletState of [{ burnerConfigured: false }, { burnerConfigured: true }]) {
+        const r = normalizePolicy(getConfirmationPolicy(tool, { phone: '+15551234567', message: 'hi' }, walletState));
+        if (r.policy !== 'none') {
+            fail(`drafts_are_not_chat_confirmed_because_the_user_taps_send_or_dial: getConfirmationPolicy("${tool}") returned "${r.policy}" (burnerConfigured=${walletState.burnerConfigured}), expected "none"`);
+        }
+    }
 }
 
 // ── 4. config.js no longer exports CONFIRM_REQUIRED (guard against regress) ─

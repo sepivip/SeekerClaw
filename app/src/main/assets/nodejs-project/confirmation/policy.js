@@ -48,9 +48,12 @@ const { CAP_RAISE_HINT } = require('../wallet/cap-hint');
 // IF YOU ADD a tool that should always require confirmation regardless of
 // burner state, append it here AND wire the burner-specific override below
 // (or accept the v1.0 default of "always confirm").
+//
+// BAT-1409 P1-H: android_sms / android_call left this set. They only put a draft in the phone's
+// notifications; the user taps it and presses Send or Dial in their own app, so a chat YES on top
+// would be a third confirmation. Their rate limit stays (tool-rate-limit.js), and scheduled tasks and
+// heartbeat probes still can't use them (tools/android.js).
 const V1_STATIC_CONFIRM = new Set([
-    'android_sms',
-    'android_call',
     'android_camera_capture',
     'android_location',
     'solana_send',
