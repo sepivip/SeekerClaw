@@ -132,7 +132,7 @@ const tools = [
     },
     {
         name: 'send_file',
-        description: `Send a workspace file to the user via ${CHANNEL === 'discord' ? 'Discord DM' : 'Telegram chat'}. Auto-detects type from extension. Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs (app secret files — agent_settings.json, config.json, seekerclaw.db, tokens — are refused). Max ${CHANNEL === 'discord' ? '25MB (Discord limit)' : '50MB (Telegram limit), photos max 10MB'}.`,
+        description: `Send a workspace file to the user via ${CHANNEL === 'discord' ? 'Discord DM' : 'Telegram chat'}. Auto-detects type from extension. Use for sharing reports, camera captures, exported CSVs, generated images, or any file the user needs (app secret files — agent_settings.json, config.json, tokens — are refused). Max ${CHANNEL === 'discord' ? '25MB (Discord limit)' : '50MB (Telegram limit), photos max 10MB'}.`,
         input_schema: {
             type: 'object',
             properties: {

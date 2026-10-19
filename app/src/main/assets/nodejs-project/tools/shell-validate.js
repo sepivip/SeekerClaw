@@ -417,7 +417,7 @@ const CURL_LONG_FLAGS = new Set(['silent', 'show-error', 'location', 'head', 'in
     'remove-on-error', 'no-sessionid', 'tcp-nodelay', 'tcp-fastopen']);
 // value options: role 'plain' | 'url' | 'write' | 'data' (@file) | 'header' (@file) | 'writeout' | 'urlencode' | 'form' | 'upload' | 'cookie' | 'read'
 const CURL_SHORT_VALUES = {
-    X: 'plain', A: 'plain', e: 'plain', m: 'plain', u: 'plain', r: 'plain', y: 'plain', Y: 'plain', C: 'plain', z: 'plain',
+    X: 'plain', A: 'plain', e: 'plain', m: 'plain', u: 'plain', r: 'plain', y: 'plain', Y: 'plain', C: 'plain', z: 'meta',
     d: 'data', H: 'header', w: 'writeout', F: 'form', T: 'upload', b: 'cookie', o: 'write', c: 'write', D: 'write',
 };
 const CURL_LONG_VALUES = {
@@ -425,7 +425,7 @@ const CURL_LONG_VALUES = {
     'retry-delay': 'plain', 'retry-max-time': 'plain', 'max-redirs': 'plain', user: 'plain', 'limit-rate': 'plain', range: 'plain',
     'speed-time': 'plain', 'speed-limit': 'plain', 'continue-at': 'plain', 'max-filesize': 'plain', 'oauth2-bearer': 'plain',
     'data-raw': 'plain', 'form-string': 'plain', 'request-target': 'plain', 'expect100-timeout': 'plain', 'keepalive-time': 'plain',
-    'time-cond': 'plain', 'aws-sigv4': 'plain', 'retry-all-errors': null,
+    'time-cond': 'meta', 'aws-sigv4': 'plain', 'retry-all-errors': null,
     url: 'url', data: 'data', 'data-ascii': 'data', 'data-binary': 'data', json: 'data', header: 'header', 'write-out': 'writeout',
     'data-urlencode': 'urlencode', 'url-query': 'urlencode', form: 'form', 'upload-file': 'upload', cookie: 'cookie',
     output: 'write', 'cookie-jar': 'write', 'dump-header': 'write', trace: 'write', 'trace-ascii': 'write',
@@ -490,6 +490,13 @@ function curlValue(role, v, chk, what, urls) {
         case 'cookie':
             if (!v.includes('=')) chk.read(v, what);
             return;
+        case 'meta': {
+            // -z / --time-cond: curl skips a leading + or -, and when the rest is not a date it
+            // stat()s it as a file name (sending its mtime), so the name obeys the metadata rule.
+            const name = v.replace(/^[+-]/, '');
+            if (name) chk.meta(name, what);
+            return;
+        }
         default:
             throw new GrammarError(`${what}: not allowed.`);
     }

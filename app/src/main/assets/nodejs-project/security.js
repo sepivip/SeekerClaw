@@ -287,12 +287,19 @@ function readBlockedName(r) {
     return null;
 }
 
-// Send-side refusals (send_file, telegram_send_file send raw bytes): the read refusals, plus
-// agent_settings.json anywhere (only its masked form may leave through read).
+// Send-side refusals (send_file, telegram_send_file send raw bytes): SECRETS_ANYWHERE at any depth,
+// the root config files, and agent_settings.json anywhere (only its masked form may leave through
+// read). Root seekerclaw.db is NOT refused here — contract ruling S3: sending it is not newly
+// restricted (the user may ask for their own data); it stays unreadable through read, shell and
+// js_eval.
 function sendBlockedName(r) {
-    const hit = readBlockedName(r);
+    const hit = _basenames(r).find((b) => SECRETS_ANYWHERE.has(b) || b === _AGENT_SETTINGS_FILE);
     if (hit) return hit;
-    return _basenames(r).find((b) => b === _AGENT_SETTINGS_FILE) || null;
+    // Built per call, like the other checks read the sets per call (some test stubs of config.js
+    // leave them out, and nothing here may run at module load).
+    const sendBlockedRoot = new Set([...ROOT_SECRET_NAMES].filter((n) => n !== 'seekerclaw.db'));
+    if (isProtectedRootName(workDir, r, sendBlockedRoot)) return path.basename(r.abs);
+    return null;
 }
 
 // Write-side refusals (write, edit, delete): WRITE_PROTECTED_ROOT at the workspace root (lexical
