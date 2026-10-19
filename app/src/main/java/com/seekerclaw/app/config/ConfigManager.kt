@@ -2041,6 +2041,16 @@ object ConfigManager {
     }
 
     /**
+     * BAT-1409 P1-D: the owner held in SharedPreferences for [channel], read raw (no file
+     * fallback). Not an independent record — every saveConfig re-derives it from `owner_ids` — so
+     * the bridge's owner-claim check only compares and logs it.
+     */
+    fun prefsOwnerId(context: Context, channel: String): String {
+        val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
+        return prefs(context).getString(key, "") ?: ""
+    }
+
+    /**
      * Save owner ID to file-based IPC (cross-process safe).
      * File: workspace/owner_ids (JSON: {"telegram": "123", "discord": "456"})
      *
@@ -2153,7 +2163,12 @@ object ConfigManager {
         _bootId ?: java.util.UUID.randomUUID().toString().replace("-", "").take(8).also { _bootId = it }
     }
 
-    fun writeConfigJson(context: Context, bridgeToken: String) {
+    /**
+     * Writes `workspace/config.json` for the `:node` boot. Returns the channel it wrote (BAT-1409
+     * P1-D: the bridge's owner-claim check compares against this boot channel), or null when no
+     * config could be loaded.
+     */
+    fun writeConfigJson(context: Context, bridgeToken: String): String? {
         // BAT-1155 §4: ensure the xAI OAuth record is adopted into the store
         // BEFORE this (the `:node`-boot) config emit — so `:node` never emits
         // an empty store on the first boot after upgrade. loadConfig() also
@@ -2162,7 +2177,7 @@ object ConfigManager {
         val config = loadConfig(context)
         if (config == null) {
             LogCollector.append("[Config] writeConfigJson: loadConfig returned null (cross-process?)", LogLevel.WARN)
-            return
+            return null
         }
         val workspaceDir = ensureWorkspaceDir(context)
         val json = JSONObject().apply {
@@ -2294,6 +2309,7 @@ object ConfigManager {
             }
         }
         SafeFs.writeAtomicText(context.filesDir.toPath(), File(workspaceDir, "config.json").toPath(), json.toString(2))
+        return config.channel
     }
 
     /**

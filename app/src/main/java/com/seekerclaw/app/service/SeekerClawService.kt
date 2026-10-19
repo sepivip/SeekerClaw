@@ -680,7 +680,8 @@ class SeekerClawService : Service() {
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
         // but writeConfigJson reads the XML file fresh on first access per process.
-        ConfigManager.writeConfigJson(this, bridgeToken)
+        // BAT-1409 P1-D: the channel written for this boot is the one the bridge's owner claim checks.
+        val bootChannel = ConfigManager.writeConfigJson(this, bridgeToken).orEmpty()
         ConfigManager.writeAgentSettingsJson(this) // non-ephemeral settings for live Node.js reads
 
         // Validate by checking the written file — more reliable than cross-process SharedPreferences
@@ -737,7 +738,7 @@ class SeekerClawService : Service() {
         // Start Android Bridge (HTTP server for Node.js <-> Kotlin IPC)
         // Bound to 127.0.0.1 only, requires per-boot auth token
         try {
-            androidBridge = AndroidBridge(applicationContext, bridgeToken)
+            androidBridge = AndroidBridge(applicationContext, bridgeToken, bootChannel = bootChannel)
             androidBridge?.start()
             LogCollector.append("[Service] AndroidBridge started on 127.0.0.1:8765 (auth required)")
         } catch (e: Exception) {

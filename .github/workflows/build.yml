@@ -137,6 +137,7 @@ jobs:
             shell-grammar \
             shell-recipes \
             shell-args-mksh \
+            owner-claim-refused \
             ci-coverage-manifest
           do
             echo "── $t ──"

@@ -29,6 +29,9 @@ import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.Analytics
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.SafeFs
 import com.seekerclaw.app.util.ServiceState
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
@@ -45,7 +48,10 @@ import java.util.concurrent.ConcurrentHashMap
 class AndroidBridge(
     private val context: Context,
     private val authToken: String,
-    port: Int = 8765
+    port: Int = 8765,
+    // BAT-1409 P1-D: the channel this `:node` booted with, from the config written to config.json
+    // at start (never a fresh prefs read: Settings may change it while the agent runs).
+    private val bootChannel: String = "",
 ) : NanoHTTPD("127.0.0.1", port) {
 
     companion object {
@@ -937,17 +943,44 @@ class AndroidBridge(
         if (ownerId.isBlank()) {
             return jsonResponse(400, mapOf("error" to "ownerId is required"))
         }
-        // Node.js tells us which channel this owner belongs to — no guessing
+        // BAT-1409 P1-D: the bridge may only claim an UNSET owner, on the channel :node booted with.
         val channel = params.optString("channel", "")
-        val persisted = if (channel.isNotBlank()) {
-            ConfigManager.saveOwnerIdForChannel(context, ownerId, channel)
-        } else {
-            ConfigManager.saveOwnerId(context, ownerId)
+        val ownerFile = java.io.File(context.filesDir, "workspace/owner_ids").toPath()
+        val ownerJson = try {
+            if (SafeFs.existsNoFollow(ownerFile)) SafeFs.readTextNoFollow(context.filesDir.toPath(), ownerFile) else null
+        } catch (e: Exception) {
+            LogCollector.append("[Bridge] owner claim: owner_ids unreadable (${e.javaClass.simpleName})", LogLevel.WARN)
+            return jsonResponse(500, mapOf("error" to "Owner record unreadable", "code" to "owner_unreadable"))
         }
-        return if (persisted) {
-            jsonResponse(200, mapOf("success" to true))
-        } else {
-            jsonResponse(500, mapOf("error" to "Failed to persist owner ID"))
+        return when (val d = OwnerClaimPolicy.decide(ownerJson, ownerId, channel, bootChannel)) {
+            is OwnerClaimPolicy.Decision.BadChannel ->
+                jsonResponse(400, mapOf("error" to "unknown channel", "code" to "bad_channel"))
+            is OwnerClaimPolicy.Decision.InactiveChannel -> {
+                LogCollector.append("[Bridge] owner claim refused: channel ${d.channel} is not the active channel (${d.bootChannel})", LogLevel.WARN)
+                jsonResponse(409, mapOf("error" to "channel changed; restart required", "code" to "inactive_channel"))
+            }
+            OwnerClaimPolicy.Decision.DifferentOwner -> {
+                LogCollector.append("[Bridge] owner claim refused: a different owner is already set for $channel", LogLevel.WARN)
+                jsonResponse(409, mapOf("error" to "owner already set", "code" to "owner_already_set"))
+            }
+            OwnerClaimPolicy.Decision.Unreadable -> {
+                LogCollector.append("[Bridge] owner claim refused: owner_ids cannot be parsed", LogLevel.WARN)
+                jsonResponse(500, mapOf("error" to "Owner record unreadable", "code" to "owner_unreadable"))
+            }
+            OwnerClaimPolicy.Decision.AlreadyOwner -> jsonResponse(200, mapOf("success" to true))
+            OwnerClaimPolicy.Decision.Save -> {
+                // The SharedPreferences owner is re-derived from the file on every saveConfig, so it
+                // is not an independent record: compared and logged only (P1-D), never a lock-out.
+                val prefsOwner = ConfigManager.prefsOwnerId(context, channel)
+                if (prefsOwner.isNotBlank() && prefsOwner != ownerId) {
+                    LogCollector.append("[Bridge] owner claim: settings hold a different owner for $channel than the claim (file entry was empty)", LogLevel.WARN)
+                }
+                if (ConfigManager.saveOwnerIdForChannel(context, ownerId, channel)) {
+                    jsonResponse(200, mapOf("success" to true))
+                } else {
+                    jsonResponse(500, mapOf("error" to "Failed to persist owner ID"))
+                }
+            }
         }
     }
 
