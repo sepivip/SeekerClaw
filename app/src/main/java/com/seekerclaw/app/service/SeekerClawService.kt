@@ -113,6 +113,25 @@ internal fun nodeDebugRotateAction(oldInode: Long, trackedInode: Long): NodeLogR
     else -> NodeLogRotateAction.GAP_EVICTED                        // `.old` is a newer gen (≥2 rotations)
 }
 
+// ── BAT-1409 P1-A: start-path cleanup, pure (no android.*) so it is unit-tested ──
+
+internal object StartCleanup {
+    /**
+     * `workspace/config.json` and the legacy `workspace/config.json.tmp` under [filesRoot], removed
+     * without following a link (a link is unlinked, its target untouched). A refusal or I/O error is
+     * passed to [log] and never thrown.
+     */
+    fun deleteEphemeralConfig(filesRoot: java.nio.file.Path, log: (String) -> Unit) {
+        for (name in listOf("config.json", "config.json.tmp")) {
+            try {
+                SafeFs.deleteTreeNoFollow(filesRoot, filesRoot.resolve("workspace").resolve(name))
+            } catch (e: Exception) {
+                log("[Service] Could not remove workspace/$name: ${e.javaClass.simpleName}")
+            }
+        }
+    }
+}
+
 class SeekerClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
@@ -647,14 +666,7 @@ class SeekerClawService : Service() {
 
     /** `workspace/config.json` and the legacy `config.json.tmp`, removed without following a link. */
     private fun deleteEphemeralConfig() {
-        val root = filesDir.toPath()
-        for (name in listOf("config.json", "config.json.tmp")) {
-            try {
-                SafeFs.deleteTreeNoFollow(root, root.resolve("workspace").resolve(name))
-            } catch (e: Exception) {
-                LogCollector.append("[Service] Could not remove workspace/$name: ${e.javaClass.simpleName}", LogLevel.WARN)
-            }
-        }
+        StartCleanup.deleteEphemeralConfig(filesDir.toPath()) { LogCollector.append(it, LogLevel.WARN) }
     }
 
     /**

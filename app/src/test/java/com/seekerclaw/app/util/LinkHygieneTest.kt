@@ -363,19 +363,35 @@ class LinkHygieneTest {
         assertWriterAndDeleteRefused(s)
     }
 
-    private fun assertWriterAndDeleteRefused(s: Path) {
+    @Test
+    fun hygieneErrorInStep1LeavesALinkedMemoryDirUnsafeAndWritersAndDeletesRefuse() {
+        assumeTrue(canLink())
+        val s = sentinel()
+        val memory = ws.resolve("memory")
+        Files.createSymbolicLink(memory, outside)
+        val r = LinkHygiene(TestOps(failLstat = { it == memory })).step1(critical(), data)
+        assertTrue("an unchecked critical path is unsafe: ${r.unsafe}", memory in r.unsafe)
+        assertTrue("step 1 left it in place", Files.isSymbolicLink(memory))
+        assertWriterAndDeleteRefused(s, memory, removeAfter = memory)
+    }
+
+    private fun assertWriterAndDeleteRefused(
+        s: Path,
+        linkedDir: Path = ws.resolve("deep/dirlink"),
+        removeAfter: Path = ws.resolve("deep"),
+    ) {
         try {
-            SafeFs.writeAtomicText(files, ws.resolve("deep/dirlink/sentinel.txt"), "pwned")
+            SafeFs.writeAtomicText(files, linkedDir.resolve("sentinel.txt"), "pwned")
             fail("the writer must refuse a linked parent")
         } catch (_: SafeFs.UnsafePathException) {
         }
         try {
-            SafeFs.deleteTreeNoFollow(files, ws.resolve("deep/dirlink/sentinel.txt"))
+            SafeFs.deleteTreeNoFollow(files, linkedDir.resolve("sentinel.txt"))
             fail("the delete must refuse a linked parent")
         } catch (_: SafeFs.UnsafePathException) {
         }
-        SafeFs.deleteTreeNoFollow(files, ws.resolve("deep")) // removes the link itself
-        assertFalse(SafeFs.existsNoFollow(ws.resolve("deep")))
+        SafeFs.deleteTreeNoFollow(files, removeAfter) // removes the link itself
+        assertFalse(SafeFs.existsNoFollow(removeAfter))
         assertSentinel(s)
     }
 

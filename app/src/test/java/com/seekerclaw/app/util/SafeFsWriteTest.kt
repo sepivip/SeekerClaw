@@ -129,6 +129,55 @@ class SafeFsWriteTest {
     }
 
     @Test
+    fun durableWriteSyncsTheParentDirectoryAfterTheMove() {
+        val t = root.resolve("workspace/skill_state.json")
+        SafeFs.writeAtomicText(root, t, "old")
+        val saved = SafeFs.dirSync
+        // What each directory sync sees: the directory, and the target's bytes at that moment.
+        val syncs = mutableListOf<Pair<Path, String>>()
+        SafeFs.dirSync = { dir -> syncs += dir to SafeFs.readTextNoFollow(root, t) }
+        try {
+            SafeFs.writeAtomicText(root, t, "new", durable = true)
+            assertEquals("exactly the parent, after the rename landed", listOf(t.parent to "new"), syncs)
+            syncs.clear()
+            SafeFs.writeAtomicText(root, t, "newer")
+            assertEquals("a non-durable write syncs nothing", emptyList<Pair<Path, String>>(), syncs)
+        } finally {
+            SafeFs.dirSync = saved
+        }
+        assertEquals("newer", SafeFs.readTextNoFollow(root, t))
+    }
+
+    @Test
+    fun moveFailureLeavesNoConfigOrSettingsLeftoversAndThePriorTargetUnchanged() {
+        val ws = root.resolve("workspace")
+        val settings = ws.resolve("agent_settings.json")
+        SafeFs.writeAtomicText(root, settings, "{\"prior\":true}")
+        val saved = SafeFs.beforeMove
+        SafeFs.beforeMove = { _, target ->
+            if (target.fileName.toString() in setOf("config.json", "agent_settings.json")) {
+                throw java.io.IOException("injected move failure")
+            }
+        }
+        try {
+            for (name in listOf("config.json", "agent_settings.json")) {
+                try {
+                    SafeFs.writeAtomicText(root, ws.resolve(name), "{\"botToken\":\"secret\"}")
+                    fail("the injected move failure must surface: $name")
+                } catch (e: java.io.IOException) {
+                    assertEquals("injected move failure", e.message)
+                }
+            }
+        } finally {
+            SafeFs.beforeMove = saved
+        }
+        val names = Files.list(ws).use { s -> s.map { it.fileName.toString() }.sorted().toList() }
+        assertEquals("no config.json* and no agent_settings.json* leftovers", listOf("agent_settings.json"), names)
+        assertEquals("{\"prior\":true}", SafeFs.readTextNoFollow(root, settings))
+        noTempLeft()
+    }
+
+    @Test
     fun appendDoesNotFollowAFinalLink() {
         assumeTrue(canLink())
         val s = sentinel()

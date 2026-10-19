@@ -122,6 +122,22 @@ class StartCoordinatorTest {
     }
 
     @Test
+    fun tokenChangedToAnotherTokenAborts() {
+        stop() // an earlier stop: this start's baseline is Token(v)
+        val baseline = StopToken.read(files)
+        assertTrue(baseline is StopToken.State.Token)
+        val c = coordinator()
+        val gate = startHeld(c)
+        stop() // a stop while verification is held: Token(w)
+        val now = StopToken.read(files)
+        assertTrue(now is StopToken.State.Token && now != baseline)
+        gate.countDown()
+        drainOne()
+        assertEquals(listOf("abort"), events)
+        assertFalse(c.startInProgress)
+    }
+
+    @Test
     fun tokenUnreadableAtContinuationAborts() {
         val c = coordinator()
         val gate = startHeld(c)

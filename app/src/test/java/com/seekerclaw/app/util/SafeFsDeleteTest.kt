@@ -150,6 +150,48 @@ class SafeFsDeleteTest {
     }
 
     @Test
+    fun readOnlySubdirIsResidueNotACrash() {
+        assumeTrue(PosixTestSupport.permissionsEnforced(tmp))
+        val t = Files.createDirectories(root.resolve("ws/memory"))
+        val ro = Files.createDirectories(t.resolve("ro"))
+        Files.write(ro.resolve("f.md"), byteArrayOf(1))
+        Files.write(t.resolve("other.md"), byteArrayOf(2))
+        PosixTestSupport.setMode(ro, "r-x------") // listable, but its entries cannot be removed
+        try {
+            val res = SafeFs.deleteTreeNoFollow(root, t)
+            assertFalse(res.clean)
+            assertTrue("residue=${res.residue}", res.residue > 0)
+            assertTrue("the walk finished; only removal failed", res.completed)
+            assertTrue(Files.exists(ro.resolve("f.md")))
+            assertFalse("the rest of the tree is removed", Files.exists(t.resolve("other.md")))
+        } finally {
+            PosixTestSupport.setMode(ro, "rwx------")
+        }
+    }
+
+    @Test
+    fun unopenableDirectoryWhoseModeCannotBeRestoredIsResidueNotACrash() {
+        assumeTrue(PosixTestSupport.permissionsEnforced(tmp))
+        val t = Files.createDirectories(root.resolve("ws/memory"))
+        val locked = Files.createDirectories(t.resolve("locked"))
+        Files.write(locked.resolve("f.md"), byteArrayOf(1))
+        PosixTestSupport.setMode(locked, "---------")
+        val saved = SafeFs.restoreOwnerRwx
+        val asked = mutableListOf<Path>()
+        SafeFs.restoreOwnerRwx = { dir -> asked.add(dir) } // the chmod has no effect
+        try {
+            val res = SafeFs.deleteTreeNoFollow(root, t)
+            assertEquals("the restore is tried once, on the unopenable dir", listOf(locked), asked)
+            assertFalse(res.clean)
+            assertTrue("residue=${res.residue}", res.residue > 0)
+            assertTrue(SafeFs.isRealDir(locked))
+        } finally {
+            SafeFs.restoreOwnerRwx = saved
+            PosixTestSupport.setMode(locked, "rwx------")
+        }
+    }
+
+    @Test
     fun boundStopsWithoutThrowing() {
         val t = Files.createDirectories(root.resolve("ws/big"))
         repeat(50) { Files.write(t.resolve("f$it"), byteArrayOf(1)) }
@@ -171,12 +213,23 @@ class SafeFsDeleteTest {
         assertEquals("sentinel", String(Files.readAllBytes(s.resolve("keep.txt"))))
     }
 
+    /** Following deletes and walks, and any `FileVisitOption.FOLLOW_LINKS` (`Files.walk`/`find`/`walkFileTree`). */
+    private val followingWalk = Regex("""\.deleteRecursively\(|walkBottomUp\(|walkTopDown\(|[^s]\.walk\(|\bFOLLOW_LINKS\b""")
+
+    @Test
+    fun followingWalkPatternCatchesFollowLinksButNotNoFollow() {
+        assertTrue(followingWalk.containsMatchIn("Files.walk(p, FileVisitOption.FOLLOW_LINKS)"))
+        assertTrue(followingWalk.containsMatchIn("Files.walkFileTree(p, EnumSet.of(FOLLOW_LINKS), 8, v)"))
+        assertFalse(followingWalk.containsMatchIn("Files.readAttributes(p, A::class.java, LinkOption.NOFOLLOW_LINKS)"))
+        assertFalse(followingWalk.containsMatchIn("Files.walkFileTree(p, EnumSet.noneOf(FileVisitOption::class.java), 8, v)"))
+    }
+
     /** Source guard: no link-following recursive delete or walk remains in app/src/main. */
     @Test
     fun noLinkFollowingRecursiveDeleteOrWalkInMainSources() {
         val src = File("src/main/java")
         assertTrue("run from the app module", src.isDirectory)
-        val banned = Regex("""\.deleteRecursively\(|walkBottomUp\(|walkTopDown\(|[^s]\.walk\(""")
+        val banned = followingWalk
         val offenders = src.walkTopDown()
             .filter { it.isFile && it.name.endsWith(".kt") }
             .flatMap { f ->

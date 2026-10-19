@@ -136,6 +136,30 @@ object SafeFs {
         }
     }
 
+    /**
+     * Runs in [writeAtomicFrom] after the temp file is written and forced, right before it is
+     * renamed onto the target. A no-op in production; tests make it throw to check that a failed
+     * move leaves no temp and no partial target.
+     */
+    @Volatile
+    internal var beforeMove: (tmp: Path, target: Path) -> Unit = { _, _ -> }
+
+    /**
+     * [deleteTreeNoFollow]'s second pass: restores owner `rwx` on a real directory that could not
+     * be opened. Tests replace it to exercise the "still cannot open it" residue path.
+     */
+    @Volatile
+    internal var restoreOwnerRwx: (Path) -> Unit = { dir ->
+        Files.setPosixFilePermissions(
+            dir,
+            EnumSet.of(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE,
+            ),
+        )
+    }
+
     /** The ancestor-rule root for [target]: [filesRoot] when it contains [target], else its parent. */
     fun rootFor(target: Path): Path {
         val t = target.toAbsolutePath().normalize()
@@ -176,6 +200,7 @@ object SafeFs {
                 out.flush()
                 ch.force(true)
             }
+            beforeMove(tmp, target)
             moveReplacing(tmp, target)
             if (durable) dirSync(target.toAbsolutePath().parent)
         } finally {
@@ -343,14 +368,7 @@ object SafeFs {
         for (dir in walker.unopened) {
             if (Files.isSymbolicLink(dir) || !isRealDir(dir)) continue
             try {
-                Files.setPosixFilePermissions(
-                    dir,
-                    EnumSet.of(
-                        PosixFilePermission.OWNER_READ,
-                        PosixFilePermission.OWNER_WRITE,
-                        PosixFilePermission.OWNER_EXECUTE,
-                    ),
-                )
+                restoreOwnerRwx(dir)
             } catch (_: Exception) {
                 // the second walk records it as residue
             }

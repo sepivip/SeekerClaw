@@ -34,6 +34,8 @@ class BundleIntegrity(
     private val wallClockMs: () -> Long = System::currentTimeMillis,
     private val nonce: () -> String = { java.util.UUID.randomUUID().toString().substring(0, 8) },
     private val budgets: Budgets = Budgets(),
+    /** Every rename this unit makes (ancestor quarantine, both swap renames). Tests inject failures. */
+    private val move: (Path, Path) -> Unit = { src, dst -> Files.move(src, dst, StandardCopyOption.ATOMIC_MOVE) },
 ) {
     /** The APK's `assets/` tree, read-only. Paths are `/`-separated and relative to `assets/`. */
     interface AssetSource {
@@ -147,7 +149,7 @@ class BundleIntegrity(
                 val q = filesDir.resolve(QUARANTINE)
                 SafeFs.ensureRealDir(filesDir, q)
                 val dir = SafeFs.ensureRealDir(filesDir, q.resolve(String.format(Locale.ROOT, "%013d-modules", wallClockMs())))
-                Files.move(p, dir.resolve("${p.parent.fileName}-$NODE_MODULES"), StandardCopyOption.ATOMIC_MOVE)
+                move(p, dir.resolve("${p.parent.fileName}-$NODE_MODULES"))
                 true
             } catch (_: Exception) {
                 false
@@ -386,8 +388,8 @@ class BundleIntegrity(
             return TmpResult.Done(Outcome.Failed("tmp-copy", Reason.REPAIR_IO))
         }
         try {
-            if (existsNoFollow(live)) Files.move(live, old, StandardCopyOption.ATOMIC_MOVE)
-            Files.move(tmp, live, StandardCopyOption.ATOMIC_MOVE)
+            if (existsNoFollow(live)) move(live, old)
+            move(tmp, live)
         } catch (e: Exception) {
             log(LogLevel.ERROR, "[Bundle] swap failed: ${e.javaClass.simpleName}")
             deleteQuietly(tmp)

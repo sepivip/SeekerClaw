@@ -2092,21 +2092,72 @@ object ConfigManager {
     /**
      * Load owner ID from file-based IPC (cross-process safe).
      * Falls back to SharedPreferences if file doesn't exist (migration for existing users).
+     *
+     * BAT-1409 P1-C: an unreadable `owner_ids` (a link, an I/O or parse error) also falls back to
+     * SharedPreferences, deliberately: treating it as "no owner" would reopen Node's first-sender
+     * auto-claim. It is logged.
      */
     fun loadOwnerIdFromFile(context: Context, channel: String): String {
-        try {
-            val file = File(context.filesDir, "workspace/owner_ids")
-            // BAT-1409 P1-C/P1-J: lstat + no-follow read — a link here is never followed.
-            if (SafeFs.existsNoFollow(file.toPath())) {
-                val json = JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), file.toPath()))
-                // File is source of truth — return whatever is there (even empty = cleared)
-                if (json.has(channel)) return json.optString(channel, "")
-            }
-        } catch (_: Exception) {}
+        val file = try {
+            ownerIdFromFile(context.filesDir.toPath(), channel)
+        } catch (_: Exception) {
+            OwnerIdFile.Unreadable
+        }
+        when (val r = file) {
+            // File is source of truth — return whatever is there (even empty = cleared)
+            is OwnerIdFile.Found -> return r.id
+            OwnerIdFile.Unreadable -> LogCollector.append(
+                "[Config] owner_ids unreadable (link, I/O or parse error); using the owner from Settings",
+                LogLevel.WARN,
+            )
+            OwnerIdFile.Absent -> Unit
+        }
 
         // Fallback to SharedPreferences only if file doesn't exist yet (migration)
         val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
         return prefs(context).getString(key, "") ?: ""
+    }
+
+    /** What `workspace/owner_ids` holds for one channel ([ownerIdFromFile]). */
+    internal sealed class OwnerIdFile {
+        data class Found(val id: String) : OwnerIdFile()
+
+        /** No file, or no entry for the channel. */
+        object Absent : OwnerIdFile() {
+            override fun toString() = "Absent"
+        }
+
+        /** A link, a non-regular file, an I/O error or content that does not parse. */
+        object Unreadable : OwnerIdFile() {
+            override fun toString() = "Unreadable"
+        }
+    }
+
+    /**
+     * The file part of [loadOwnerIdFromFile], Context-free. [entry] is the JSON lookup (the
+     * channel's value, or null when it has no entry); tests replace it because org.json is a stub
+     * on the JVM.
+     */
+    internal fun ownerIdFromFile(
+        filesRoot: Path,
+        channel: String,
+        entry: (json: String, channel: String) -> String? = ::ownerIdsEntry,
+    ): OwnerIdFile = try {
+        val file = filesRoot.resolve("workspace").resolve("owner_ids")
+        // BAT-1409 P1-C/P1-J: lstat + no-follow read — a link here is never followed.
+        if (!SafeFs.existsNoFollow(file)) {
+            OwnerIdFile.Absent
+        } else {
+            val id = entry(SafeFs.readTextNoFollow(filesRoot, file), channel)
+            if (id != null) OwnerIdFile.Found(id) else OwnerIdFile.Absent
+        }
+    } catch (_: Exception) {
+        OwnerIdFile.Unreadable
+    }
+
+    private fun ownerIdsEntry(json: String, channel: String): String? {
+        val o = JSONObject(json)
+        return if (o.has(channel)) o.optString(channel, "") else null
     }
 
     fun clearConfig(context: Context) {
@@ -3278,7 +3329,7 @@ object ConfigManager {
      * preserved untouched — these are user additions and must survive
      * skill upgrades. BAT-699 R8.
      */
-    private fun promoteStaging(root: Path, staging: File, live: File) {
+    internal fun promoteStaging(root: Path, staging: File, live: File) {
         SafeFs.ensureRealDir(root, live.toPath())
         staging.listFiles()?.forEach { src ->
             val dest = File(live, src.name)
@@ -3707,23 +3758,26 @@ object ConfigManager {
     /**
      * Delete workspace memory files (MEMORY.md + memory/ directory).
      */
-    fun clearMemory(context: Context) {
-        val workspaceDir = File(context.filesDir, "workspace")
-        File(workspaceDir, "MEMORY.md").apply {
+    fun clearMemory(context: Context) = clearMemory(context.filesDir.toPath())
+
+    /** [clearMemory] on the app's `filesDir` ([filesRoot]): the filesystem part, Context-free. */
+    internal fun clearMemory(filesRoot: Path) {
+        val workspaceDir = filesRoot.resolve("workspace")
+        workspaceDir.resolve("MEMORY.md").apply {
             // BAT-1409 P1-J: rewritten atomically, never through a link.
-            if (SafeFs.existsNoFollow(toPath())) {
+            if (SafeFs.existsNoFollow(this)) {
                 try {
-                    SafeFs.writeAtomicText(context.filesDir.toPath(), toPath(), "")
+                    SafeFs.writeAtomicText(filesRoot, this, "")
                 } catch (e: Exception) {
                     Log.e(TAG, "Could not clear MEMORY.md: ${e.message}")
                 }
             }
         }
-        File(workspaceDir, "memory").apply {
+        workspaceDir.resolve("memory").apply {
             // BAT-1409 P1-M: no-follow delete; a linked memory/ is unlinked, never descended.
-            deleteNoFollow(context, this)
+            deleteNoFollow(filesRoot, this)
             try {
-                SafeFs.ensureRealDir(context.filesDir.toPath(), toPath())
+                SafeFs.ensureRealDir(filesRoot, this)
             } catch (e: Exception) {
                 Log.e(TAG, "Could not recreate memory/: ${e.message}")
             }
@@ -3735,12 +3789,15 @@ object ConfigManager {
      * any depth (see [SafeFs.deleteTreeNoFollow]). Returns false, logged, when the ancestor rule
      * refuses the path or entries remain.
      */
-    private fun deleteNoFollow(context: Context, target: File): Boolean = try {
-        val result = SafeFs.deleteTreeNoFollow(context.filesDir.toPath(), target.toPath())
-        if (!result.clean) Log.w(TAG, "No-follow delete left ${result.residue} entries under ${target.name}")
+    private fun deleteNoFollow(context: Context, target: File): Boolean =
+        deleteNoFollow(context.filesDir.toPath(), target.toPath())
+
+    private fun deleteNoFollow(root: Path, target: Path): Boolean = try {
+        val result = SafeFs.deleteTreeNoFollow(root, target)
+        if (!result.clean) Log.w(TAG, "No-follow delete left ${result.residue} entries under ${target.fileName}")
         result.clean
     } catch (e: Exception) {
-        Log.e(TAG, "No-follow delete refused for ${target.name}: ${e.message}")
+        Log.e(TAG, "No-follow delete refused for ${target.fileName}: ${e.message}")
         false
     }
 
