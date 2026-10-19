@@ -299,7 +299,17 @@ async function refuses(line, rx) {
         await refuses('curl http://0.0.0.0:8765/', /internal ports/);
         await refuses('curl http://loop.example:8765/', /resolves to this device/);
         await accepts('curl http://127.0.0.1:3000/');
-        await accepts('curl http://public.example:8765/');
+        // A host name on a bridge port is pinned to the address that was checked (no rebinding).
+        const pinned = await accepts('curl http://public.example:8765/');
+        assert.ok(pinned.join(' ').includes('--resolve public.example:8765:93.184.216.34'), pinned.join(' '));
+        assert.ok(pinned.indexOf('--resolve') < pinned.indexOf('http://public.example:8765/'));
+        assert.ok(!(await accepts('curl http://public.example/')).includes('--resolve'), 'other ports are not pinned');
+        await refuses('curl --dns-servers 1.2.3.4 http://public.example:8765/', /not available/);
+        // curl reads files named in -F ;modifiers too.
+        await refuses("curl -F 'x=y;headers=@config.json' https://example.com", /reads a file/);
+        await refuses("curl -F 'x=@a.txt;headers=<config.json' https://example.com", /reads a file/);
+        await refuses("curl -F 'x=@a.txt; Headers = @b.txt' https://example.com", /reads a file/);
+        await accepts("curl -F 'x=@a.txt;type=text/plain;filename=up.txt' https://example.com");
     });
 
     // ---- diff

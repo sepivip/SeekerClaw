@@ -425,7 +425,7 @@ const CURL_LONG_VALUES = {
     'retry-delay': 'plain', 'retry-max-time': 'plain', 'max-redirs': 'plain', user: 'plain', 'limit-rate': 'plain', range: 'plain',
     'speed-time': 'plain', 'speed-limit': 'plain', 'continue-at': 'plain', 'max-filesize': 'plain', 'oauth2-bearer': 'plain',
     'data-raw': 'plain', 'form-string': 'plain', 'request-target': 'plain', 'expect100-timeout': 'plain', 'keepalive-time': 'plain',
-    'time-cond': 'plain', 'dns-servers': 'plain', 'aws-sigv4': 'plain', 'retry-all-errors': null,
+    'time-cond': 'plain', 'aws-sigv4': 'plain', 'retry-all-errors': null,
     url: 'url', data: 'data', 'data-ascii': 'data', 'data-binary': 'data', json: 'data', header: 'header', 'write-out': 'writeout',
     'data-urlencode': 'urlencode', 'url-query': 'urlencode', form: 'form', 'upload-file': 'upload', cookie: 'cookie',
     output: 'write', 'cookie-jar': 'write', 'dump-header': 'write', trace: 'write', 'trace-ascii': 'write',
@@ -438,6 +438,7 @@ const CURL_REFUSED = {
     x: 'curl -x (proxy) is not available', proxy: 'curl --proxy is not available', resolve: 'curl --resolve is not available',
     'connect-to': 'curl --connect-to is not available', 'unix-socket': 'curl --unix-socket is not available',
     'output-dir': 'curl --output-dir is not available (name the output file with -o)', proto: 'curl --proto is set by the app',
+    'dns-servers': 'curl --dns-servers is not available',
     'proto-redir': 'curl --proto-redir is set by the app',
     'abstract-unix-socket': 'curl --abstract-unix-socket is not available', next: 'curl --next is not available', ':': 'curl --next is not available',
 };
@@ -469,6 +470,10 @@ function curlValue(role, v, chk, what, urls) {
             const eq = v.indexOf('=');
             if (eq < 0) throw new GrammarError(`${what}: expected name=content.`);
             const content = v.slice(eq + 1);
+            // curl reads files named in ;modifiers too (;headers=@file, ;headers=<file): refused.
+            if (/;\s*[A-Za-z_-]+\s*=\s*[@<]/.test(content)) {
+                throw new GrammarError(`${what}: a ;modifier that reads a file (e.g. headers=@file) is not allowed.`);
+            }
             if (content.startsWith('@') || content.startsWith('<')) {
                 // curl reads a quoted file name ("a;b") and a comma list: neither form is accepted.
                 if (/["\\]/.test(content)) throw new GrammarError(`${what}: quotes and backslashes in a file part are not allowed.`);
@@ -567,7 +572,12 @@ function curlAuthority(u) {
     return { host: host.toLowerCase(), port };
 }
 
+/**
+ * Checks [urls]; returns `--resolve host:port:addr` pins for every host name on a bridge port, so
+ * curl connects to the address checked here instead of resolving the name again (DNS rebinding).
+ */
 async function checkCurlUrls(urls, lookup) {
+    const pins = [];
     for (const u of urls) {
         if (/[\\\s]/.test(u)) throw new GrammarError('curl: backslashes and spaces are not allowed in URLs.');
         const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(u);
@@ -597,8 +607,12 @@ async function checkCurlUrls(urls, lookup) {
             let addrs = [];
             try { addrs = await lookup(host); } catch (_) { addrs = []; }
             if (addrs.some(isLoopbackHost)) throw new GrammarError(`curl: ${host} resolves to this device, and port ${port} is one of the app's internal ports; refused.`);
+            if (addrs.length === 0) throw new GrammarError(`curl: ${host} could not be resolved.`);
+            const a = addrs[0];
+            pins.push('--resolve', `${host}:${port}:${net.isIP(a) === 6 ? '[' + a + ']' : a}`);
         }
     }
+    return pins;
 }
 
 function defaultLookup(host) {
@@ -649,10 +663,14 @@ async function validateArgv(argv, ctx) {
     if (cmd === 'sed') { checkSed(args, chk); return { argv }; }
     if (cmd === 'curl') {
         const urls = parseCurl(args, chk);
-        await checkCurlUrls(urls, ctx.lookup || defaultLookup);
+        const pins = await checkCurlUrls(urls, ctx.lookup || defaultLookup);
         // -q: no .curlrc. -g: no URL globbing ({a,b} and [1-9] are literal). --proto: only http(s),
-        // also after redirects. They come first, so nothing the caller passes can precede them.
-        return { argv: ['curl', '-q', '-g', '--proto', '=http,https', '--proto-redir', '=http,https', ...args] };
+        // also after redirects. --resolve pins a bridge-port host name to the address checked
+        // above. They come first, so nothing the caller passes can precede them. Residual: a
+        // redirect (-L) to the device's bridge port is not seen here (curl has no loopback block);
+        // both bridge ports refuse any request without the per-boot token, which the agent cannot
+        // read (P1-E/F/G).
+        return { argv: ['curl', '-q', '-g', '--proto', '=http,https', '--proto-redir', '=http,https', ...pins, ...args] };
     }
     const parsed = parseOptions(cmd, args, g);
     for (const f of parsed.flags) {
