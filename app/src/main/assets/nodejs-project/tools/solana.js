@@ -315,7 +315,7 @@ const tools = [
     },
     {
         name: 'jupiter_dca_create',
-        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key. **Routing (BAT-582)**: total committed amount (amountPerCycle x cycles) is checked against burner caps; under cap -> silent burner sign; burner not configured -> Main wallet popup; over cap -> refused (`burner_cap_exceeded`): lower the amount, or the user raises caps in Settings → Burner Wallet.',
+        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key. **Signing**: the order is always signed by the **Main wallet** (MWA popup) — the burner never signs DCA orders. With a burner configured, the total committed amount (amountPerCycle x cycles) is still checked against the burner caps, and over the cap the request is refused (`burner_cap_exceeded`): lower the amount, or the user raises caps in Settings → Burner Wallet.',
         input_schema: {
             type: 'object',
             properties: {

@@ -98,6 +98,47 @@ const REFUSED = 'ERR_SEEKERCLAW_SOCKET_REFUSED';
         assert.strictEqual(r.error, 'non_https', JSON.stringify(r));
     });
 
+    // ---- P1-F: no Unix-socket connect, by any route (no server needed: the refusal comes first)
+    await check('Unix-socket connects are refused on every route (net, plain Socket, tls, agent)', async () => {
+        const sock = os.platform() === 'win32' ? '\\\\.\\pipe\\seekerclaw-p1f-test' : path.join(tmp, 'p1f.sock');
+        const settle = (s) => new Promise((resolve) => {
+            s.on('error', (e) => resolve(e.code || e.message));
+            s.on('connect', () => { s.destroy(); resolve('connected'); });
+            setTimeout(() => { s.destroy(); resolve('timeout'); }, 3000);
+        });
+        assert.strictEqual(await settle(net.connect({ path: sock })), REFUSED, 'net.connect({ path })');
+        assert.strictEqual(await settle(net.connect(sock)), REFUSED, 'net.connect(path)');
+        assert.strictEqual(await settle(new net.Socket().connect(sock)), REFUSED, 'new net.Socket().connect(path)');
+        assert.strictEqual(await settle(new net.Socket().connect({ path: sock })), REFUSED, 'Socket#connect({ path })');
+        assert.strictEqual(await settle(require('tls').connect({ path: sock })), REFUSED, 'tls.connect({ path })');
+        assert.strictEqual(await settle(new http.Agent().createConnection({ path: sock })), REFUSED, 'Agent#createConnection({ path })');
+        assert.strictEqual(await httpGet({ socketPath: sock, path: '/' }), REFUSED, 'http.get({ socketPath })');
+        // Negative control: a TCP connect whose http options carry `path: null` (the URL-path slot)
+        // is not mistaken for a pipe — it fails for its own reason, not ours.
+        const tcpNullPath = await settle(net.connect({ host: '127.0.0.1', port: 9, path: null }));
+        assert.notStrictEqual(tcpNullPath, REFUSED, 'path: null is a TCP connect');
+    });
+    await check('js_eval cannot open a Unix socket through tls, an agent or a plain Socket', async () => {
+        const sys = require(path.join(BUNDLE, 'tools', 'system.js'));
+        const run = async (code) => (await sys.handlers.js_eval({ code }, 'chat')).result;
+        const sock = os.platform() === 'win32' ? '\\\\\\\\.\\\\pipe\\\\x' : '/tmp/x.sock';
+        const settle = (expr) => `
+            return await new Promise((resolve) => {
+                const s = ${expr};
+                s.on('error', (e) => resolve(e.code || e.message));
+                s.on('connect', () => { s.destroy(); resolve('connected'); });
+                setTimeout(() => resolve('timeout'), 2000);
+            });`;
+        for (const expr of [
+            `require('tls').connect({ path: '${sock}' })`,
+            `new (require('http').Agent)().createConnection({ path: '${sock}' })`,
+            `new (require('net').Socket)().connect('${sock}')`,
+        ]) {
+            const r = await run(settle(expr));
+            assert.strictEqual(r, REFUSED, `${expr} → ${r}`);
+        }
+    });
+
     // ---- behaviour against a stand-in bridge
     const bridge = http.createServer((req, res) => res.end('bridge')).on('error', () => {});
     const listening = await new Promise((resolve) => {

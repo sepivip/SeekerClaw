@@ -1,10 +1,11 @@
 // net-guard.js — BAT-1409: process-wide socket guards, installed once at boot (main.js).
 //
 // P1-F (amendment v3.3 M3): no code in this process may wrap a descriptor it did not open through
-// these APIs, or listen on a Unix-socket path. js_eval's own `net`/`http`/`https` views refuse
-// these options (js-eval-guard.js), but servers and the default HTTP agents are reachable from
-// any `http`/`https`/`net` object, so their entry points are guarded here for every caller. The
-// app itself never passes a descriptor, a handle or a socket path to either.
+// these APIs, or listen on or connect to a Unix-socket path. js_eval's own `net`/`http`/`https`
+// views refuse these options (js-eval-guard.js), but servers, agents, `tls` and a plain
+// `new net.Socket()` are reachable from any `http`/`https`/`net`/`tls` object, so their entry
+// points are guarded here for every caller. The app itself never passes a descriptor, a handle or
+// a socket path to any of them.
 //
 // P1-L: no code in this process connects to a loopback address on the app's internal ports (8765,
 // the Android bridge; 8766, the control server Kotlin calls into) except bridge.js, which marks its
@@ -114,8 +115,15 @@ function install({ log } = {}) {
     // P1-L: loopback connections to the bridge ports, checked on the resolved address. A refusal
     // surfaces as the socket's 'error' event (like a refused connection), never as a throw.
     const realConnect = net.Socket.prototype.connect;
+    const refuseConnect = (socket, what) => {
+        const err = refusal(what);
+        process.nextTick(() => socket.destroy(err));
+        return socket;
+    };
     net.Socket.prototype.connect = function guardedConnect(...args) {
         const c = connectOptions(args);
+        // P1-F: `socket.connect('/path')` — a pipe path given as a string (a numeric string is a port).
+        if (!c && typeof args[0] === 'string') return refuseConnect(this, 'Connecting to a Unix socket path');
         if (!c || !c.options || typeof c.options !== 'object') return realConnect.apply(this, args);
         // One snapshot of the caller's options (getters run once, symbols kept): every check below
         // and the real connect see the same values, and the caller's object is never changed.
@@ -124,17 +132,17 @@ function install({ log } = {}) {
             ? args.find((a) => typeof a === 'function')
             : (Array.isArray(args[0]) ? args[0][1] : args.find((a) => typeof a === 'function'));
         const port = Number(o.port);
-        // A Unix-socket connect is exactly what net treats as one (`pipe = !!options.path`); http
-        // passes `path: null` on every TCP request.
-        if (!BRIDGE_PORTS.has(port) || o[APP_BRIDGE_CONNECT] === true || !!o.path) {
+        // P1-F: a Unix-socket connect is exactly what net treats as one (`pipe = !!options.path`);
+        // http passes `path: null` on every TCP request. Reached through tls.connect, an agent's
+        // createConnection or a plain Socket, so it is refused here for every caller.
+        if (o.path && o[APP_BRIDGE_CONNECT] !== true) return refuseConnect(this, 'Connecting to a Unix socket path');
+        if (!BRIDGE_PORTS.has(port) || o[APP_BRIDGE_CONNECT] === true) {
             return cb ? realConnect.call(this, o, cb) : realConnect.call(this, o);
         }
         const host = o.host || 'localhost';
         if (net.isIP(stripAddress(host))) {
             if (isLoopbackAddress(host)) {
-                const err = refusal(`Connecting to port ${port} on this device (an internal app port)`);
-                process.nextTick(() => this.destroy(err));
-                return this;
+                return refuseConnect(this, `Connecting to port ${port} on this device (an internal app port)`);
             }
             return cb ? realConnect.call(this, o, cb) : realConnect.call(this, o);
         }
