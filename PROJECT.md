@@ -269,6 +269,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 - **Ephemeral context** — Conversation history is held in memory and resets on Node.js restart (mitigated by session summaries, and by on-disk checkpoints of an interrupted task — its last 8 messages, kept up to 7 days — which resume automatically after a restart if under 5 minutes old, otherwise via `/resume`)
 - **Two channels** — Telegram and Discord supported; WhatsApp and others not yet implemented
 - **SMS and calls are drafts** — in both editions the agent puts a draft in the notifications; the user taps it and presses Send or Dial. Agent actions that open a screen (camera, app launch, main-wallet signing, adding a contact) need SeekerClaw in front, and otherwise ask the user to open it first (BAT-1409)
+- **js_eval is a guardrail, not an isolation boundary** — it runs in Node's `vm` module, which is not a security boundary. The workspace, module, socket and port guards hold for code that stays inside it; full isolation of `js_eval` is planned (BAT-1409 Phase 2)
 - **No light theme** — Dark only (DarkOps single theme)
 
 ## Stats
