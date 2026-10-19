@@ -146,8 +146,8 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
             wallet: 'burner',
             error: 'burner_over_cap',
             reason:
-                'Burner over cap; the confirmation gate should have blocked this. ' +
-                `${CAP_RAISE_HINT} Or pass _allowMainFallback: true.`,
+                'Burner over cap, so nothing was signed. Lower the amount. ' +
+                `${CAP_RAISE_HINT}`,
         };
     }
 

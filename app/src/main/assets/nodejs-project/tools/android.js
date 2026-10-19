@@ -179,7 +179,7 @@ const tools = [
     },
     {
         name: 'android_camera_capture',
-        description: 'Capture a photo from the device camera. Requires CAMERA permission. Returns a workspace-relative path (media/inbound/) that can be used directly with send_file.',
+        description: 'Capture a photo from the device camera. Requires CAMERA permission. Returns a workspace-relative path (media/inbound/) that can be used directly with send_file. Opens a screen on the phone, so it works only while SeekerClaw is open on the phone\'s screen; otherwise it returns `needs_foreground` — ask the user to open SeekerClaw, then try again.',
         input_schema: {
             type: 'object',
             properties: {
@@ -189,7 +189,7 @@ const tools = [
     },
     {
         name: 'android_camera_check',
-        description: 'Capture a photo and analyze it with Claude vision. Use only when the user explicitly asks what the camera sees (e.g. "check my dog").',
+        description: 'Capture a photo and analyze it with Claude vision. Use only when the user explicitly asks what the camera sees (e.g. "check my dog"). Opens a screen on the phone, so it works only while SeekerClaw is open on the phone\'s screen; otherwise it returns `needs_foreground` — ask the user to open SeekerClaw, then try again.',
         input_schema: {
             type: 'object',
             properties: {
@@ -209,7 +209,7 @@ const tools = [
     },
     {
         name: 'android_apps_launch',
-        description: 'Launch an app by package name.',
+        description: 'Launch an app by package name. Opens a screen on the phone, so it works only while SeekerClaw is open on the phone\'s screen; otherwise it returns `needs_foreground` — ask the user to open SeekerClaw, then try again.',
         input_schema: {
             type: 'object',
             properties: {

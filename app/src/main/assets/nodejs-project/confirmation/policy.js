@@ -63,6 +63,26 @@ const V1_STATIC_CONFIRM = new Set([
     'jupiter_dca_create',
 ]);
 
+// The retry that actually reaches the main wallet after an over-cap block:
+// - solana_send_token: source="main", which the gate honours (wallet/index.js getWalletState);
+// - solana_send: source="main" (its handler forces main) plus _allowMainFallback (this gate);
+// - jupiter_trigger_create on the V2 path (ws.triggerV2, set by ai.js): _allowMainFallback, which
+//   the V2 handler turns into a main route.
+// Swaps, DCA and V1 limit orders route by cap again in their handler, so a YES there would only be
+// refused afterwards (wallet/dispatch.js) — they are told to lower the amount instead.
+function _overCapRetryHint(toolName, ws) {
+    if (toolName === 'jupiter_trigger_create' && ws && ws.triggerV2 === true) {
+        return 'Or retry with _allowMainFallback: true to use the main wallet (popup required).';
+    }
+    if (toolName === 'solana_send_token') {
+        return 'Or retry with source: "main" to send from the main wallet (popup required).';
+    }
+    if (toolName === 'solana_send') {
+        return 'Or retry with source: "main" and _allowMainFallback: true to send from the main wallet (popup required).';
+    }
+    return 'Or lower the amount.';
+}
+
 // Tools that participate in burner routing for write actions.
 const SOLANA_WRITE_TOOLS = new Set([
     'solana_send',
@@ -486,9 +506,7 @@ function getConfirmationPolicy(toolName, args, walletState) {
         return {
             policy: 'block',
             reason: 'burner_cap_exceeded',
-            message:
-                `Burner cap exceeded. ${CAP_RAISE_HINT} ` +
-                'Or retry with _allowMainFallback: true to use the main wallet (popup required).',
+            message: `Burner cap exceeded. ${CAP_RAISE_HINT} ${_overCapRetryHint(toolName, ws)}`,
         };
     }
 

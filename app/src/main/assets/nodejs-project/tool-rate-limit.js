@@ -42,7 +42,10 @@ async function runWithoutConfirm(toolName, execute, { limits, lastToolUseTime, l
     const draftTool = RATE_LIMITED_WITHOUT_CONFIRM.has(toolName);
     if (draftTool) {
         const limited = rateLimitRefusal(toolName, limits, lastToolUseTime, log);
-        if (limited) return { ...limited, outcome: 'rate_limited' };
+        if (limited) {
+            const noun = toolName === 'android_sms' ? 'message' : 'call';
+            return { ...limited, outcome: 'rate_limited', message: `No ${noun} draft was created: too many drafts in a short time. ${limited.error}` };
+        }
     }
     const result = await execute();
     if (draftTool && result && result.outcome === 'posted' && lastToolUseTime) {

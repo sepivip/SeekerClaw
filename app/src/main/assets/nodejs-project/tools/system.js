@@ -40,7 +40,7 @@ const tools = [
         input_schema: {
             type: 'object',
             properties: {
-                command: { type: 'string', description: 'Shell command to execute (e.g., "ls -la", "cat file.txt", "curl https://example.com", "grep pattern README.md")' },
+                command: { type: 'string', description: 'One command to run, without a shell (e.g., "ls -la", "cat file.txt", "curl https://example.com", "grep pattern README.md")' },
                 cwd: { type: 'string', description: 'Working directory relative to workspace (default: workspace root). Must be within workspace.' },
                 timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
             },

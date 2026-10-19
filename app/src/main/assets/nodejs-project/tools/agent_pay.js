@@ -813,7 +813,7 @@ async function _handle(input /* , chatId */) {
     if (!perTx.wouldAllow) {
         return {
             error: 'burner_cap_exceeded',
-            reason: `per-tx USDC cap insufficient (${perTx.reason}). Lower max_usdc. ${CAP_RAISE_HINT}`,
+            reason: `per-tx USDC cap insufficient (${perTx.reason}): the endpoint's price is above the burner per-tx cap (lowering max_usdc does not help). ${CAP_RAISE_HINT}`,
         };
     }
     const daily = await wouldReserve('burner.daily.usdc', demandAtomic);

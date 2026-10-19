@@ -63,7 +63,7 @@ function extractRecipes(allowlist, files = sources()) {
             const candidates = [];
             if (inFence) candidates.push(raw.trim());
             for (const m of raw.matchAll(/`([^`\n]+)`/g)) candidates.push(m[1].trim());
-            if (isJs && /shell_exec|Shell command to execute/.test(raw)) {
+            if (isJs && /shell_exec|One command to run/.test(raw)) {
                 for (const m of raw.matchAll(/"([^"\n]+)"/g)) candidates.push(m[1].trim());
             }
             for (const c of candidates) {

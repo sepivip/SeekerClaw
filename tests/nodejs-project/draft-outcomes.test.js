@@ -211,6 +211,9 @@ const ALL_OUTCOMES = [...KOTLIN_OUTCOMES, 'rate_limited', 'unattended'];
         assert.strictEqual(r.outcome, 'rate_limited');
         assert.strictEqual(r.code, 'rate_limited');
         assert.match(r.error, /^Rate limited: android_sms can only be used once per 60s\. Try again in \d+s\.$/);
+        // Like every other draft outcome, the refusal carries a message to relay.
+        assert.ok(r.message.startsWith('No message draft was created: too many drafts in a short time. Rate limited:'), r.message);
+        assert.ok(!FORBIDDEN.test(r.message), r.message);
         assert.ok(logs.some((l) => l.level === 'WARN' && l.msg.startsWith('[RateLimit] android_sms blocked')));
         // The call window is separate.
         assert.strictEqual((await runWithoutConfirm('android_call', exec, { limits, lastToolUseTime: last, log })).outcome, 'posted');

@@ -168,7 +168,7 @@ const tools = [
     },
     {
         name: 'solana_send',
-        description: 'Send **native SOL only** to a Solana address. This tool does NOT send SPL tokens (USDC, BONK, PYUSD, …) and does NOT take a fiat amount — do not supply ANY denomination field (`token` / `mint` / `asset` / `symbol` / `currency` / `coin` / `denom`); pass only `to` + `amount` (in SOL). For an SPL token transfer (USDC, BONK, any classic SPL mint) use the `solana_send_token` tool instead. For a USD amount, call `solana_price` to get SOL/USD and compute the SOL amount yourself (solana_price does not convert non-USD currencies). **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); over cap or burner not configured -> prompts the **Main wallet** for approval (MWA popup). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces MWA popup regardless of cap. Use `source="burner"` to force burner (rare; usually unnecessary). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
+        description: 'Send **native SOL only** to a Solana address. This tool does NOT send SPL tokens (USDC, BONK, PYUSD, …) and does NOT take a fiat amount — do not supply ANY denomination field (`token` / `mint` / `asset` / `symbol` / `currency` / `coin` / `denom`); pass only `to` + `amount` (in SOL). For an SPL token transfer (USDC, BONK, any classic SPL mint) use the `solana_send_token` tool instead. For a USD amount, call `solana_price` to get SOL/USD and compute the SOL amount yourself (solana_price does not convert non-USD currencies). **Routing (BAT-582)**: by default (source="auto" or omitted) routes by cap — under burner per-tx + daily SOL caps -> signs silently from the **Burner wallet** (no popup); burner not configured -> prompts the **Main wallet** for approval (MWA popup); over cap -> refused (`burner_cap_exceeded`). Use `source="main"` when the user EXPLICITLY says "from main" / "from my main wallet" — forces the MWA popup (over the burner cap, also pass `_allowMainFallback: true` or the gate refuses it). Use `source="burner"` to force burner (rare; usually unnecessary). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
         input_schema: {
             type: 'object',
             properties: {
@@ -181,7 +181,7 @@ const tools = [
     },
     {
         name: 'solana_send_token',
-        description: 'Send an SPL token (USDC, USDT, BONK, any classic SPL mint) from the Burner OR Main wallet. Use this for ANY non-SOL token transfer — `solana_send` is native-SOL only. Provide the token `mint` (base58) and `amount` as a decimal STRING in token units (e.g. "1.5"). Token-2022 mints are not supported autonomously yet (they route to the main wallet / wallet app). **Routing (BAT-582 caps)**: source="auto" (default) — USDC under the burner per-tx + daily cap signs silently from the **Burner** (no popup); over cap, or ANY non-USDC token, prompts the **Main wallet** (MWA popup). Use source="main" to force MWA. Use source="burner" to force the burner (USDC only — other tokens are rejected). The recipient\'s associated token account is created automatically if missing (the sending wallet pays the ~0.002 SOL rent). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
+        description: 'Send an SPL token (USDC, USDT, BONK, any classic SPL mint) from the Burner OR Main wallet. Use this for ANY non-SOL token transfer — `solana_send` is native-SOL only. Provide the token `mint` (base58) and `amount` as a decimal STRING in token units (e.g. "1.5"). Token-2022 mints are not supported autonomously yet (they route to the main wallet / wallet app). **Routing (BAT-582 caps)**: source="auto" (default) — USDC under the burner per-tx + daily cap signs silently from the **Burner** (no popup); ANY non-USDC token prompts the **Main wallet** (MWA popup); USDC over the cap is refused (`burner_cap_exceeded`) — retry with source="main". Use source="main" to force MWA. Use source="burner" to force the burner (USDC only — other tokens are rejected). The recipient\'s associated token account is created automatically if missing (the sending wallet pays the ~0.002 SOL rent). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
         input_schema: {
             type: 'object',
             properties: {
@@ -224,7 +224,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; over cap or burner not configured -> Main wallet popup. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it, then call solana_swap — the system gate handles approval per policy) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. **Conversion quote flakiness (BAT-1062)**: error:"conversion_quote_unverifiable" with retryable:true means Jupiter returned routes without a readable price-impact/minOut (intermittent, NOT high impact) — also auto-re-quoted internally; if still returned, ask the user to retry, do NOT route to main. (A genuine readable >1% impact stays terminal → main wallet.) Always show the quote first; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; burner not configured -> Main wallet popup; over cap -> refused (`burner_cap_exceeded`): lower the amount, or the user raises caps in Settings → Burner Wallet. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it, then call solana_swap — the system gate handles approval per policy) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. **Conversion quote flakiness (BAT-1062)**: error:"conversion_quote_unverifiable" with retryable:true means Jupiter returned routes without a readable price-impact/minOut (intermittent, NOT high impact) — also auto-re-quoted internally; if still returned, ask the user to retry, do NOT route to main. (A genuine readable >1% impact stays terminal → main wallet.) Always show the quote first; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
         input_schema: {
             type: 'object',
             properties: {
@@ -285,8 +285,8 @@ const tools = [
         return {
             name: 'jupiter_trigger_create',
             description: v2Enabled
-                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.'
-                : 'Create a trigger (limit) order on Jupiter (V1 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the output/input price ratio reaches `triggerPrice`. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
+                ? 'Create a trigger (limit) order on Jupiter (V2 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the USD price reaches `triggerPriceUsd`. **Routing (BAT-582)**: under burner caps -> silent burner sign; burner not configured -> Main wallet popup; over cap -> refused unless you retry with `_allowMainFallback: true` (Main wallet popup).'
+                : 'Create a trigger (limit) order on Jupiter (V1 API). Requires Jupiter API key (get free at portal.jup.ag). Order executes automatically when the output/input price ratio reaches `triggerPrice`. Use for: buy at lower price (limit buy) or sell at higher price (limit sell). **Routing (BAT-582)**: under burner caps -> silent burner sign; burner not configured -> Main wallet popup; over cap -> refused (`burner_cap_exceeded`): lower the amount, or the user raises caps in Settings → Burner Wallet.',
             input_schema: v2Enabled ? v2Schema : v1Schema,
         };
     })(),
@@ -315,7 +315,7 @@ const tools = [
     },
     {
         name: 'jupiter_dca_create',
-        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key. **Routing (BAT-582)**: total committed amount (amountPerCycle x cycles) is checked against burner caps; under cap -> silent burner sign; over cap or burner not configured -> Main wallet popup.',
+        description: 'Create a recurring DCA (Dollar Cost Averaging) order on Jupiter. Automatically buys tokens on a schedule to average out price. Perfect for building positions over time. Requires Jupiter API key. **Routing (BAT-582)**: total committed amount (amountPerCycle x cycles) is checked against burner caps; under cap -> silent burner sign; burner not configured -> Main wallet popup; over cap -> refused (`burner_cap_exceeded`): lower the amount, or the user raises caps in Settings → Burner Wallet.',
         input_schema: {
             type: 'object',
             properties: {
@@ -544,7 +544,7 @@ async function _jupiterTriggerCreateV2(input, _chatId) {
     if (!config.jupiterApiKey) {
         return {
             error: 'Jupiter API key required',
-            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key',
         };
     }
     try {
@@ -1007,7 +1007,7 @@ async function _jupiterTriggerListV2(input, _chatId) {
     if (!config.jupiterApiKey) {
         return {
             error: 'Jupiter API key required',
-            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key',
         };
     }
     try {
@@ -1093,7 +1093,7 @@ async function _jupiterTriggerCancelV2(input, _chatId) {
     if (!config.jupiterApiKey) {
         return {
             error: 'Jupiter API key required',
-            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key',
+            guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key',
         };
     }
     try {
@@ -2472,7 +2472,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -2802,7 +2802,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -2889,7 +2889,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -3033,7 +3033,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -3312,7 +3312,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -3407,7 +3407,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -3545,7 +3545,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -3628,7 +3628,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 
@@ -3717,7 +3717,7 @@ const handlers = {
         if (!config.jupiterApiKey) {
             return {
                 error: 'Jupiter API key required',
-                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Configuration > Jupiter API Key'
+                guide: 'Get a free API key at portal.jup.ag, then add it in SeekerClaw Settings > Solana Wallet > Jupiter API Key'
             };
         }
 

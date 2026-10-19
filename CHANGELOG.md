@@ -5,6 +5,66 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+> **A security release.** The agent now works inside clearer limits: texts and
+> calls become drafts you send yourself, files and shell commands stay inside
+> the agent's workspace, and the app's internal connections are closed to agent
+> code. Everyday use is unchanged — `js_eval`, the file tools, shell commands
+> and the burner wallet work as before for normal tasks, with no new prompts.
+> Agent memory, skills, settings, wallets and provider setups carry over
+> untouched.
+
+### Changed
+
+- **Texts and calls are drafts you send yourself.** When you ask the agent to
+  text or call someone, it puts a draft in the notifications on the phone
+  running SeekerClaw. Tapping it opens your SMS app or dialer with everything
+  filled in; you press Send or Dial. The notification shows no message text or
+  number, and expires after 15 minutes. The agent no longer asks for a YES in
+  chat first, since you confirm on the phone, and it drafts only when you ask
+  in chat (not from scheduled tasks). This is the same in both app editions,
+  and the app no longer requests the SMS or phone-call permissions.
+- **New Notifications row in Settings.** Drafts need notifications, so Settings
+  → Preferences & Permissions now has a Notifications row in place of the SMS
+  and Phone Calls rows. If notifications are off, the agent says so and points
+  to this row.
+- **Actions that open a screen ask you to open SeekerClaw first.** Taking a
+  photo, launching an app and main-wallet approvals can only open a screen
+  while SeekerClaw is in front. When it is in the background, the agent now
+  says so at once instead of waiting for a screen that never appears.
+- **Raising burner wallet caps happens in Settings.** The agent can still lower
+  or keep caps from chat; to raise one, it points you to Settings → Burner
+  Wallet.
+- **File tools, `js_eval` and shell commands stay inside the workspace.** Paths
+  that lead outside it, including through links, are refused with a message
+  that names the reason. `js_eval` loads Node's built-in modules only. Shell
+  commands run one at a time without a shell — no pipes, redirection or
+  variables — and each command accepts the flags it needs for everyday use;
+  others are refused with the reason.
+- **The app's internal connections are closed to agent code.** Code the agent
+  runs can no longer reach the ports the app uses internally. The netwatch
+  skill checks the app's bridge through a normal status call. A netwatch copy
+  you edited yourself keeps its old check, which now reports the bridge as
+  unreachable; the agent's diagnostics guide explains why.
+
+### Fixed
+
+- **Safer start-up and storage.** The app verifies its agent bundle before each
+  start, repairs it when needed, and never starts an agent that a Stop has
+  already cancelled. Storage writes and deletes never follow links, and
+  unexpected links in the app's storage are removed at start-up. A start that
+  cannot write its configuration now stops with a clear error on the Logs
+  screen instead of restarting repeatedly.
+- **Owner pairing.** The owner can only be set on the active channel, and only
+  while no owner is set.
+- **Burner wallet reservations** expire after at most two minutes.
+- **Over-cap burner actions are explained correctly.** When a burner wallet
+  action is over its cap, the agent now says so and offers only a retry that
+  can succeed, instead of asking for a YES that was then refused.
+- **The agent's directions match the app.** It points to the Jupiter API key
+  under Settings → Solana Wallet and the steps-per-turn limit under Settings →
+  Configuration, and when device features stop responding it suggests Stop
+  Agent, then Deploy Agent, which restarts them.
+
 ## [2.3.1] - 2026-09-10
 
 > **A packaging release — no functional changes from 2.3.0.** Both store builds

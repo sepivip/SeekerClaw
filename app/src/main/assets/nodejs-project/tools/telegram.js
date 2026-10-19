@@ -73,7 +73,7 @@ const tools = [
     },
     {
         name: 'telegram_send_file',
-        description: 'Send a file from the workspace to the current Telegram chat. Auto-detects type from extension (photo, video, audio, voice, document). Use for sharing reports, images, exported files, camera captures, or any workspace file with the user. Telegram bot limit: 50MB. Photos up to 10MB are sent as photos; larger images are automatically sent as documents.',
+        description: 'Send a file from the workspace to the current Telegram chat. Auto-detects type from extension (photo, video, audio, voice, document). Use for sharing reports, images, exported files, camera captures, or any workspace file with the user (app secret files — agent_settings.json, config.json, seekerclaw.db, tokens — are refused). Telegram bot limit: 50MB. Photos up to 10MB are sent as photos; larger images are automatically sent as documents.',
         input_schema: {
             type: 'object',
             properties: {
