@@ -391,7 +391,11 @@ const REFUSED = 'ERR_SEEKERCLAW_SOCKET_REFUSED';
                             s.on('connect', () => { s.destroy(); resolve('connected'); });
                             setTimeout(() => { s.destroy(); resolve('timeout'); }, 1200);
                         });` }, 'chat');
-                    assert.notStrictEqual(viaEval.result, 'connected', 'js_eval getter: ' + JSON.stringify(viaEval));
+                    // The snippet must have run (an error shape has no result and would pass vacuously):
+                    // the guard read the getter once, saw 192.0.2.1 and let net try that address,
+                    // which times out or fails with a network error — never a connection.
+                    assert.strictEqual(viaEval.success, true, 'js_eval snippet did not run: ' + JSON.stringify(viaEval));
+                    assert.match(String(viaEval.result), /^(timeout|E[A-Z]+)$/, 'js_eval getter: ' + JSON.stringify(viaEval));
                     assert.deepStrictEqual(accepted, { 8765: 0, 8766: 0 }, 'js_eval reached no bridge-port stand-in');
                 } finally {
                     bridge.removeListener('connection', onConn8765);
