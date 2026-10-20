@@ -114,14 +114,16 @@ async function message(senderId) {
         assert.strictEqual(s.owner, 'u7');
         assert.strictEqual(s.sent.filter((t) => t.startsWith('Owner set')).length, 1);
     });
-    await check('every refusal code Node reverts on is one AndroidBridge.kt returns', () => {
-        const kt = fs.readFileSync(path.resolve(BUNDLE, '..', '..', 'java', 'com', 'seekerclaw', 'app', 'bridge', 'AndroidBridge.kt'), 'utf8');
+    await check('every refusal code Node reverts on is one the bridge returns (OwnerClaimPolicy.response)', () => {
+        // The bridge's reply for each decision lives in OwnerClaimPolicy.response, which
+        // AndroidBridge.handleConfigSaveOwner returns (pinned by OwnerClaimPolicyTest).
+        const kt = fs.readFileSync(path.resolve(BUNDLE, '..', '..', 'java', 'com', 'seekerclaw', 'app', 'bridge', 'OwnerClaimPolicy.kt'), 'utf8');
         const js = fs.readFileSync(path.join(BUNDLE, 'message-handler.js'), 'utf8');
         const set = js.match(/OWNER_CLAIM_REFUSED = new Set\(\[([^\]]*)\]\)/);
         assert.ok(set, 'OWNER_CLAIM_REFUSED found');
         const codes = [...set[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
         assert.deepStrictEqual(codes.sort(), ['bad_channel', 'inactive_channel', 'owner_already_set', 'owner_unreadable']);
-        for (const c of codes) assert.ok(kt.includes(`"code" to "${c}"`), `AndroidBridge.kt returns ${c}`);
+        for (const c of codes) assert.ok(kt.includes(`"code" to "${c}"`), `OwnerClaimPolicy.response returns ${c}`);
     });
     await check('negative control: an unavailable bridge keeps the claim and says persistence failed', async () => {
         const s = harness({ error: 'Android Bridge unavailable: connect ECONNREFUSED' });

@@ -161,8 +161,17 @@ class SmsCallDraftsTest {
         for (call in listOf("setContentText", "setStyle", "setTicker", "setPublicVersion", "setSubText", "setLargeIcon")) {
             assertTrue("DraftNotifier must not call $call", !notifier.contains(".$call("))
         }
-        assertTrue(notifier.contains(".setContentTitle(label)"))
-        assertTrue(notifier.contains(".setLocalOnly(true)"))
+        // The notification is built only from the spec, whose values DraftNotifierTest pins.
+        for (call in listOf(
+            ".setContentTitle(spec.title)", ".setLocalOnly(spec.localOnly)", ".setTimeoutAfter(spec.timeoutMs)",
+            ".setAutoCancel(spec.autoCancel)", ".setPriority(spec.priority)", "NotificationCompat.Builder(context, spec.channelId)",
+            "PendingIntent.getActivity(context, spec.requestCode, intentFor(spec), spec.pendingIntentFlags)",
+            "nm.notify(id, notification)", "system.notify(draft.id, draft)",
+            "Intent(spec.action, Uri.fromParts(spec.uriScheme, spec.number, null))", ".addFlags(spec.intentFlags)",
+        )) {
+            assertTrue("DraftNotifier must build with $call", notifier.contains(call))
+        }
+        assertEquals("one notification title, from the spec", 1, Regex("""\.setContentTitle\(""").findAll(notifier).count())
         assertTrue(notifier.contains("PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_CANCEL_CURRENT"))
     }
 

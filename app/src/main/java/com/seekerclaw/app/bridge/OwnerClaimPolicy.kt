@@ -53,6 +53,28 @@ object OwnerClaimPolicy {
     }
 
     /**
+     * The bridge's reply to [decision]: HTTP status and JSON body. [saved] is whether persisting a
+     * [Decision.Save] succeeded and is ignored for every other decision. A refusal carries a
+     * `code` that `message-handler.js` (`OWNER_CLAIM_REFUSED`) reads as "not the owner"; a success
+     * or a failed save carries none, so Node keeps the claim for this run.
+     */
+    fun response(decision: Decision, saved: Boolean = true): Pair<Int, Map<String, Any>> = when (decision) {
+        is Decision.BadChannel -> 400 to mapOf("error" to "unknown channel", "code" to "bad_channel")
+        is Decision.InactiveChannel -> 409 to mapOf("error" to "channel changed; restart required", "code" to "inactive_channel")
+        Decision.DifferentOwner -> 409 to mapOf("error" to "owner already set", "code" to "owner_already_set")
+        Decision.Unreadable -> 500 to mapOf("error" to "Owner record unreadable", "code" to "owner_unreadable")
+        Decision.AlreadyOwner -> 200 to mapOf("success" to true)
+        Decision.Save -> if (saved) 200 to mapOf("success" to true) else 500 to mapOf("error" to "Failed to persist owner ID")
+    }
+
+    /**
+     * True when the SharedPreferences owner [prefsOwner] is set and differs from the [claimed] id.
+     * That record is re-derived from the file on every saveConfig, so it is compared and logged
+     * only (P1-D), never a lock-out.
+     */
+    fun prefsMismatch(prefsOwner: String, claimed: String): Boolean = prefsOwner.isNotBlank() && prefsOwner != claimed
+
+    /**
      * The owner for [channel] in [ownerFileJson]: "" when the file or the entry is absent, blank or
      * null; a number reads as its text (as the loader's `optString` does); null when the file is not
      * a JSON object or the entry is not a plain value.

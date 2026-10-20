@@ -604,6 +604,21 @@ class BurnerBridgeEndpoints internal constructor(
         val capPerTxUsdc = params.optStringOrNull("capPerTxUsdc")
         val capDailySol = params.optStringOrNull("capDailySol")
         val capDailyUsdc = params.optStringOrNull("capDailyUsdc")
+        return handleConfigBurnerCapsInternal(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc)
+    }
+
+    /**
+     * `/config/burner-caps` core, exposed for unit tests (the production caller is
+     * [handleConfigBurnerCaps], which reads the fields off a JSONObject — trimmed, blank as null;
+     * pure-JVM tests can't build that, so they call this directly). Null = leave unchanged.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun handleConfigBurnerCapsInternal(
+        capPerTxSol: String?,
+        capPerTxUsdc: String?,
+        capDailySol: String?,
+        capDailyUsdc: String?,
+    ): EndpointResult {
         val anyProvided = listOfNotNull(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc).isNotEmpty()
         if (!anyProvided) {
             return invalidInput("at least one cap field required")

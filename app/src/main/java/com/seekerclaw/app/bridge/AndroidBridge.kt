@@ -968,38 +968,32 @@ class AndroidBridge(
             if (SafeFs.existsNoFollow(ownerFile)) SafeFs.readTextNoFollow(context.filesDir.toPath(), ownerFile) else null
         } catch (e: Exception) {
             LogCollector.append("[Bridge] owner claim: owner_ids unreadable (${e.javaClass.simpleName})", LogLevel.WARN)
-            return jsonResponse(500, mapOf("error" to "Owner record unreadable", "code" to "owner_unreadable"))
+            val (status, body) = OwnerClaimPolicy.response(OwnerClaimPolicy.Decision.Unreadable)
+            return jsonResponse(status, body)
         }
-        return when (val d = OwnerClaimPolicy.decide(ownerJson, ownerId, channel, bootChannel)) {
-            is OwnerClaimPolicy.Decision.BadChannel ->
-                jsonResponse(400, mapOf("error" to "unknown channel", "code" to "bad_channel"))
-            is OwnerClaimPolicy.Decision.InactiveChannel -> {
+        val d = OwnerClaimPolicy.decide(ownerJson, ownerId, channel, bootChannel)
+        var saved = true
+        when (d) {
+            is OwnerClaimPolicy.Decision.BadChannel -> Unit
+            is OwnerClaimPolicy.Decision.InactiveChannel ->
                 LogCollector.append("[Bridge] owner claim refused: channel ${d.channel} is not the active channel (${d.bootChannel})", LogLevel.WARN)
-                jsonResponse(409, mapOf("error" to "channel changed; restart required", "code" to "inactive_channel"))
-            }
-            OwnerClaimPolicy.Decision.DifferentOwner -> {
+            OwnerClaimPolicy.Decision.DifferentOwner ->
                 LogCollector.append("[Bridge] owner claim refused: a different owner is already set for $channel", LogLevel.WARN)
-                jsonResponse(409, mapOf("error" to "owner already set", "code" to "owner_already_set"))
-            }
-            OwnerClaimPolicy.Decision.Unreadable -> {
+            OwnerClaimPolicy.Decision.Unreadable ->
                 LogCollector.append("[Bridge] owner claim refused: owner_ids cannot be parsed", LogLevel.WARN)
-                jsonResponse(500, mapOf("error" to "Owner record unreadable", "code" to "owner_unreadable"))
-            }
-            OwnerClaimPolicy.Decision.AlreadyOwner -> jsonResponse(200, mapOf("success" to true))
+            OwnerClaimPolicy.Decision.AlreadyOwner -> Unit
             OwnerClaimPolicy.Decision.Save -> {
                 // The SharedPreferences owner is re-derived from the file on every saveConfig, so it
                 // is not an independent record: compared and logged only (P1-D), never a lock-out.
-                val prefsOwner = ConfigManager.prefsOwnerId(context, channel)
-                if (prefsOwner.isNotBlank() && prefsOwner != ownerId) {
+                if (OwnerClaimPolicy.prefsMismatch(ConfigManager.prefsOwnerId(context, channel), ownerId)) {
                     LogCollector.append("[Bridge] owner claim: settings hold a different owner for $channel than the claim (file entry was empty)", LogLevel.WARN)
                 }
-                if (ConfigManager.saveOwnerIdForChannel(context, ownerId, channel)) {
-                    jsonResponse(200, mapOf("success" to true))
-                } else {
-                    jsonResponse(500, mapOf("error" to "Failed to persist owner ID"))
-                }
+                saved = ConfigManager.saveOwnerIdForChannel(context, ownerId, channel)
             }
         }
+        // The status and body for each decision live in OwnerClaimPolicy.response (unit-tested).
+        val (status, body) = OwnerClaimPolicy.response(d, saved)
+        return jsonResponse(status, body)
     }
 
     // ==================== OpenAI OAuth ====================
