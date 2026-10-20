@@ -82,6 +82,32 @@ function connectOptions(args) {
     return null;
 }
 
+/**
+ * A lookup answer as plain records the guard owns: `{ all: [{ address, family }] }` for an
+ * `all: true` answer, or `{ address, family }`. Each value is read exactly once and must be a
+ * primitive (address a string; family a number or string), so a getter, a proxy or an array with
+ * overridden methods cannot show the check one answer and net another. Null for anything else.
+ */
+function snapshotAnswer(address, family) {
+    const familyOk = (f) => f === undefined || typeof f === 'number' || typeof f === 'string';
+    if (Array.isArray(address)) {
+        const len = address.length;
+        if (!Number.isSafeInteger(len) || len < 0 || len > 256) return null;
+        const all = [];
+        for (let i = 0; i < len; i++) {
+            const rec = address[i];
+            if (rec === null || typeof rec !== 'object') return null;
+            const a = rec.address;
+            const f = rec.family;
+            if (typeof a !== 'string' || !familyOk(f)) return null;
+            all.push({ address: a, family: f });
+        }
+        return { all };
+    }
+    if (typeof address !== 'string' || !familyOk(family)) return null;
+    return { address, family };
+}
+
 function hasDescriptor(o) {
     if (o === null || typeof o !== 'object') return false;
     return (('fd' in o) && o.fd !== undefined) || (('handle' in o) && o.handle !== undefined) || ('_handle' in o);
@@ -148,6 +174,8 @@ function install({ log } = {}) {
             return cb ? realConnect.call(this, o, cb) : realConnect.call(this, o);
         }
         const host = o.host || 'localhost';
+        // A string only: an object's toString() could show the check one address and net another.
+        if (typeof host !== 'string') return refuseConnect(this, `Connecting to port ${port} with a host that is not a string`);
         if (net.isIP(stripAddress(host))) {
             if (isLoopbackAddress(host)) {
                 return refuseConnect(this, `Connecting to port ${port} on this device (an internal app port)`);
@@ -161,11 +189,16 @@ function install({ log } = {}) {
             const lookupOpts = typeof opts === 'function' ? {} : opts;
             lookup(hostname, lookupOpts, (err, address, family) => {
                 if (err) return done(err);
-                const all = Array.isArray(address) ? address.map((a) => a.address) : [address];
-                if (all.some(isLoopbackAddress)) {
+                // The caller's answer is read once into plain records the guard owns; only that
+                // snapshot is checked and handed to net (Codex R2 on #459: a getter or an
+                // overridden map() showed the check one address and net another).
+                const snap = snapshotAnswer(address, family);
+                if (!snap) return done(refusal(`Connecting to port ${port} with an unusual DNS answer`));
+                const addresses = snap.all ? snap.all.map((r) => r.address) : [snap.address];
+                if (addresses.some(isLoopbackAddress)) {
                     return done(refusal(`Connecting to port ${port} on this device (an internal app port)`));
                 }
-                return done(null, address, family);
+                return snap.all ? done(null, snap.all) : done(null, snap.address, snap.family);
             });
         };
         o.host = host;

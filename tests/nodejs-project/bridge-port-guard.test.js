@@ -314,6 +314,77 @@ const REFUSED = 'ERR_SEEKERCLAW_SOCKET_REFUSED';
                 assert.strictEqual(await tcp(opts), REFUSED);
                 assert.strictEqual(Object.getOwnPropertyDescriptor(opts, 'lookup').set !== undefined, true, "the caller's object is not changed");
             });
+            await check('a lookup answer is read once: getters, proxies, an overridden map() and a non-string host never reach a bridge port (Codex R2 on #459)', async () => {
+                // A stand-in on 8766 too (both bridge ports); every case asserts the stand-in for
+                // that port accepted no connection, not only that the result was an error.
+                const ctl = http.createServer((q, r) => r.end('control')).on('error', () => {});
+                const ctlUp = await new Promise((res) => { ctl.once('error', () => res(false)); ctl.listen(8766, '127.0.0.1', () => res(true)); });
+                const accepted = { 8765: 0, 8766: 0 };
+                const onConn8765 = () => accepted[8765]++;
+                const onConn8766 = () => accepted[8766]++;
+                bridge.on('connection', onConn8765);
+                if (ctlUp) ctl.on('connection', onConn8766);
+                // 192.0.2.1 (TEST-NET-1) never answers, so a connect there just times out.
+                const attempt = (opts) => new Promise((resolve) => {
+                    const s = net.connect(opts);
+                    s.on('error', (e) => resolve(e.code || e.message));
+                    s.on('connect', () => { const r = 'connected ' + s.remoteAddress; s.destroy(); resolve(r); });
+                    setTimeout(() => { s.destroy(); resolve('timeout'); }, 1200);
+                });
+                try {
+                    for (const port of ctlUp ? [8765, 8766] : [8765]) {
+                        for (const autoSelectFamily of [true, false]) {
+                            let reads = 0;
+                            const getter = (h, o, cb) => {
+                                const rec = { family: 4, get address() { return ++reads === 1 ? '192.0.2.1' : '127.0.0.1'; } };
+                                return o && o.all ? cb(null, [rec]) : cb(null, rec.address, 4);
+                            };
+                            const r1 = await attempt({ host: 'r2.invalid', port, autoSelectFamily, lookup: getter });
+                            assert.ok(!String(r1).startsWith('connected'), `getter, port ${port}, autoSelectFamily ${autoSelectFamily}: ${r1}`);
+                            const proxied = (h, o, cb) => {
+                                let n = 0;
+                                const p = new Proxy([{ family: 4, address: '192.0.2.1' }], {
+                                    get: (t, k) => (k === '0' ? (++n === 1 ? t[0] : { family: 4, address: '127.0.0.1' }) : t[k]),
+                                });
+                                return o && o.all ? cb(null, p) : cb(null, '192.0.2.1', 4);
+                            };
+                            const r2 = await attempt({ host: 'r2.invalid', port, autoSelectFamily, lookup: proxied });
+                            assert.ok(!String(r2).startsWith('connected'), `proxy, port ${port}: ${r2}`);
+                        }
+                        const arr = [{ family: 4, address: '127.0.0.1' }];
+                        arr.map = () => ['192.0.2.1'];
+                        const overridden = (h, o, cb) => (o && o.all ? cb(null, arr) : cb(null, '127.0.0.1', 4));
+                        assert.strictEqual(await attempt({ host: 'r2.invalid', port, autoSelectFamily: true, lookup: overridden }), REFUSED, `overridden map, port ${port}`);
+                        let hreads = 0;
+                        const hostObj = { toString() { return ++hreads <= 2 ? '192.0.2.1' : '127.0.0.1'; } };
+                        const r3 = await attempt({ host: hostObj, port });
+                        assert.ok(r3 === REFUSED || r3 === 'ERR_INVALID_ARG_TYPE', `non-string host, port ${port}: ${r3}`);
+                    }
+                    assert.deepStrictEqual(accepted, { 8765: 0, 8766: 0 }, 'no connection reached a bridge-port stand-in');
+                    // Controls: a custom lookup with a plain answer still works for another loopback
+                    // port, and a plain external answer on a bridge port is not refused.
+                    const plain = (h, o, cb) => (o && o.all ? cb(null, [{ family: 4, address: '127.0.0.1' }]) : cb(null, '127.0.0.1', 4));
+                    assert.strictEqual(await attempt({ host: 'ok.invalid', port: otherPort, autoSelectFamily: true, lookup: plain }), 'connected 127.0.0.1');
+                    const external = (h, o, cb) => (o && o.all ? cb(null, [{ family: 4, address: '192.0.2.1' }]) : cb(null, '192.0.2.1', 4));
+                    assert.notStrictEqual(await attempt({ host: 'ext.invalid', port: 8765, autoSelectFamily: true, lookup: external }), REFUSED);
+                    // js_eval reaches the same guard through its net façade.
+                    const sys = require(path.join(BUNDLE, 'tools', 'system.js'));
+                    const viaEval = await sys.handlers.js_eval({ code: `
+                        let reads = 0;
+                        const lookup = (h, o, cb) => cb(null, [{ family: 4, get address() { return ++reads === 1 ? '192.0.2.1' : '127.0.0.1'; } }]);
+                        return await new Promise((resolve) => {
+                            const s = require('net').connect({ host: 'r2.invalid', port: 8765, autoSelectFamily: true, lookup });
+                            s.on('error', (e) => resolve(e.code || e.message));
+                            s.on('connect', () => { s.destroy(); resolve('connected'); });
+                            setTimeout(() => { s.destroy(); resolve('timeout'); }, 1200);
+                        });` }, 'chat');
+                    assert.notStrictEqual(viaEval.result, 'connected', 'js_eval getter: ' + JSON.stringify(viaEval));
+                    assert.deepStrictEqual(accepted, { 8765: 0, 8766: 0 }, 'js_eval reached no bridge-port stand-in');
+                } finally {
+                    bridge.removeListener('connection', onConn8765);
+                    ctl.close();
+                }
+            });
             await check('negative control: other loopback ports still work', async () => {
                 assert.strictEqual(await tcp({ host: '127.0.0.1', port: otherPort }), 'connected');
                 assert.strictEqual(await httpGet(`http://127.0.0.1:${otherPort}/`), 'status 200');
