@@ -333,6 +333,9 @@ const REFUSED = 'ERR_SEEKERCLAW_SOCKET_REFUSED';
                 });
                 try {
                     for (const port of ctlUp ? [8765, 8766] : [8765]) {
+                        // autoSelectFamily: true makes net ask for every address (an array of
+                        // records: the shape a getter or proxy can hide in); false asks for one
+                        // address, a plain string with nothing mutable — kept as a control.
                         for (const autoSelectFamily of [true, false]) {
                             let reads = 0;
                             const getter = (h, o, cb) => {
@@ -357,8 +360,18 @@ const REFUSED = 'ERR_SEEKERCLAW_SOCKET_REFUSED';
                         assert.strictEqual(await attempt({ host: 'r2.invalid', port, autoSelectFamily: true, lookup: overridden }), REFUSED, `overridden map, port ${port}`);
                         let hreads = 0;
                         const hostObj = { toString() { return ++hreads <= 2 ? '192.0.2.1' : '127.0.0.1'; } };
-                        const r3 = await attempt({ host: hostObj, port });
-                        assert.ok(r3 === REFUSED || r3 === 'ERR_INVALID_ARG_TYPE', `non-string host, port ${port}: ${r3}`);
+                        // The guard refuses it before net (Node 22 would also reject it; Node 18 may not).
+                        assert.strictEqual(await attempt({ host: hostObj, port }), REFUSED, `non-string host, port ${port}`);
+                        // A length that changes between reads: read once, so the hidden loopback
+                        // record at index 1 is never part of the answer net receives.
+                        const growing = (h, o, cb) => {
+                            let lenReads = 0;
+                            const recs = [{ family: 4, address: '192.0.2.1' }, { family: 4, address: '127.0.0.1' }];
+                            const p = new Proxy(recs, { get: (t, k) => (k === 'length' ? (++lenReads === 1 ? 1 : 2) : t[k]) });
+                            return o && o.all ? cb(null, p) : cb(null, '192.0.2.1', 4);
+                        };
+                        const r4 = await attempt({ host: 'r2.invalid', port, autoSelectFamily: true, lookup: growing });
+                        assert.ok(!String(r4).startsWith('connected'), `length proxy, port ${port}: ${r4}`);
                     }
                     assert.deepStrictEqual(accepted, { 8765: 0, 8766: 0 }, 'no connection reached a bridge-port stand-in');
                     // Controls: a custom lookup with a plain answer still works for another loopback
