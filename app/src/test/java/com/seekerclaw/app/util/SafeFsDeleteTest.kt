@@ -214,10 +214,17 @@ class SafeFsDeleteTest {
     }
 
     /** Following deletes and walks, and any `FileVisitOption.FOLLOW_LINKS` (`Files.walk`/`find`/`walkFileTree`). */
-    private val followingWalk = Regex("""\.deleteRecursively\(|walkBottomUp\(|walkTopDown\(|[^s]\.walk\(|\bFOLLOW_LINKS\b""")
+    // `.walk(` on any receiver except `Files` (Kotlin's File.walk() follows directory links;
+    // Files.walk does not unless given FOLLOW_LINKS, which the last alternative catches).
+    private val followingWalk = Regex("""\.deleteRecursively\(|walkBottomUp\(|walkTopDown\(|(?<!\bFiles)\.walk\(|\bFOLLOW_LINKS\b""")
 
     @Test
     fun followingWalkPatternCatchesFollowLinksButNotNoFollow() {
+        // Kotlin File.walk() on any receiver name, including ones ending in "s" (CodeRabbit on #459).
+        assertTrue(followingWalk.containsMatchIn("dirs.walk().forEach { }"))
+        assertTrue(followingWalk.containsMatchIn("dir.walk().forEach { }"))
+        assertTrue(followingWalk.containsMatchIn("File(x).walk()"))
+        assertFalse(followingWalk.containsMatchIn("Files.walk(p).use { }"))
         assertTrue(followingWalk.containsMatchIn("Files.walk(p, FileVisitOption.FOLLOW_LINKS)"))
         assertTrue(followingWalk.containsMatchIn("Files.walkFileTree(p, EnumSet.of(FOLLOW_LINKS), 8, v)"))
         assertFalse(followingWalk.containsMatchIn("Files.readAttributes(p, A::class.java, LinkOption.NOFOLLOW_LINKS)"))
