@@ -12,7 +12,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent that can pa
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **22 bundled skills (incl. burner-wallet + paysh-catalog) + 13 workspace examples**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + xAI/Grok + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **22 bundled skills (incl. burner-wallet + paysh-catalog)**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + xAI/Grok + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
 
 ## What It Is
 
@@ -177,9 +177,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | `/resume` | Resume an interrupted task |
 | `/commands` | Alias for `/help` |
 
-### Skills (22 bundled + 13 workspace, version-aware seeding)
+### Skills (22 bundled, version-aware seeding)
 **Bundled skills (OpenClaw format, seeded by ConfigManager.kt with SHA-256 integrity + version tracking):** bookmark, briefing, burner-wallet, calclaw (AI calorie tracker), calculator, crypto-prices, define, github, joke, movie-tv, netwatch (network monitoring & security audit), news, notes, paysh-catalog, quote, reminders, research, summarize, timer, todo, translate, weather
-**Workspace skills (agent-usable examples):** crypto-prices, device-status, dictionary, exchange-rates, github, location, movie-tv, phone-call, recipe, sms, solana-dapp, solana-wallet, speak
 **Skill format:** YAML frontmatter (name, description, version, emoji, requires) — see `SKILL-FORMAT.md`
 **Skill install** — `skill_install` tool to install skills from URL or Telegram file attachment, with diagnostics via `/skills` command
 **Skill export/import** — Export individual skills as .md or bulk export user-added skills as ZIP; import from ZIP or .md file with path traversal protection, bundled skill overwrite prevention, size caps, and rollback on failure
@@ -280,7 +279,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 | PRs merged | 364 (of 407 opened) |
 | AI Providers | 5 (Claude, OpenAI, OpenRouter, xAI/Grok, Custom) |
 | Tools | 64 built-in on Telegram, 60 on Discord (18 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram [Telegram channel only], 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
-| Skills | 22 bundled (incl. paysh-catalog + burner-wallet) + 13 workspace examples; user-installed skills live on the device and are not counted |
+| Skills | 22 bundled (incl. paysh-catalog + burner-wallet); user-installed skills live on the device and are not counted |
 | Paysh-catalog entries | 44 across 10 services (OPT-IN only; 63 unsupported with structured "why not" reasons) |
 | Android Bridge endpoints | 42 (33 core routes in `AndroidBridge.kt` incl. `/ping`, plus 9 burner-wallet and Jupiter order-ownership routes in `BurnerBridgeEndpoints.kt`) |
 | Telegram commands | 17 (`/start` + 16 `/`-menu commands; aliases `/commands` → `/help` and `/skills` → `/skill` not counted) |
