@@ -491,9 +491,10 @@ function curlValue(role, v, chk, what, urls) {
             if (!v.includes('=')) chk.read(v, what);
             return;
         case 'meta': {
-            // -z / --time-cond: curl skips a leading + or -, and when the rest is not a date it
-            // stat()s it as a file name (sending its mtime), so the name obeys the metadata rule.
-            const name = v.replace(/^[+-]/, '');
+            // -z / --time-cond: curl skips one leading +, - or = (If-Modified-Since,
+            // If-Unmodified-Since, Last-Modified), and when the rest is not a date it stat()s it as
+            // a file name (sending its mtime), so the name obeys the metadata rule.
+            const name = v.replace(/^[+=-]/, '');
             if (name) chk.meta(name, what);
             return;
         }

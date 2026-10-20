@@ -441,7 +441,9 @@ async function refuses(line, rx) {
         await refuses(`curl -z../outside/x ${U}`, /outside the workspace/); // value attached to the flag
         await refuses(`curl -z -../outside/x ${U}`, /outside the workspace/); // curl strips the - first
         await refuses(`curl --time-cond +../outside/x ${U}`, /outside the workspace/);
+        await refuses(`curl -z =../outside/x ${U}`, /outside the workspace/); // = (Last-Modified), verified with curl 8.16
         await accepts(`curl -z -20010203 ${U}`); // curl's "older than" prefix
+        await accepts(`curl -z =20010203 ${U}`);
     });
     await check('G1 write options refuse outside paths and protected names; a workspace file is accepted', async () => {
         await refuses('sort --output=../outside/y a.txt', /outside the workspace/);

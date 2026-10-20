@@ -235,9 +235,12 @@ class ConfigManagerFsTest {
         }
     }
 
-    private fun unreadableWarnings() = LogCollector.logs.value.count {
-        it.level == LogLevel.WARN && it.message.startsWith("[Config] owner_ids unreadable")
-    }
+    // The log is a 300-line ring shared with every other test in this JVM, so counting entries can
+    // be thrown off by an eviction; the newest entry (compared by identity) cannot.
+    private fun lastLog() = LogCollector.logs.value.lastOrNull()
+
+    private fun isUnreadableWarning(e: Any?) =
+        e is com.seekerclaw.app.util.LogEntry && e.level == LogLevel.WARN && e.message.startsWith("[Config] owner_ids unreadable")
 
     /**
      * The deliberate decision (P1-C): an unreadable `owner_ids` falls back to the owner in Settings,
@@ -249,19 +252,21 @@ class ConfigManagerFsTest {
         val target = sentinelFile("o.json", "{\"telegram\": \"999\"}")
         Files.createSymbolicLink(ws.resolve("owner_ids"), target)
         val ctx = FakeContext(files.toFile(), mapOf("owner_id" to "4242"))
-        val before = unreadableWarnings()
+        val before = lastLog()
         assertEquals("4242", ConfigManager.loadOwnerIdFromFile(ctx, "telegram"))
-        assertEquals(before + 1, unreadableWarnings())
+        val after = lastLog()
+        assertTrue("a new entry was logged", after !== before)
+        assertTrue("it is the unreadable-owner WARN: $after", isUnreadableWarning(after))
         assertEquals("{\"telegram\": \"999\"}", text(target))
     }
 
     @Test
     fun absentOwnerIdsFallsBackToTheSettingsOwnerSilently() {
         val ctx = FakeContext(files.toFile(), mapOf("owner_id" to "4242", "discord_owner_id" to "77"))
-        val before = unreadableWarnings()
+        val before = lastLog()
         assertEquals("4242", ConfigManager.loadOwnerIdFromFile(ctx, "telegram"))
         assertEquals("77", ConfigManager.loadOwnerIdFromFile(ctx, "discord"))
-        assertEquals("a missing file is not a warning", before, unreadableWarnings())
+        assertTrue("a missing file logs nothing", lastLog() === before)
     }
 
     // ------------------------------------------------------------------------- owner_ids.tmp
