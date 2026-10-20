@@ -145,8 +145,14 @@ function checkCpMv(cmd, parsed, chk, ctx) {
     if (flags.some((f) => f.name === 'preserve' && /links|all/.test(String(f.value)))) {
         throw new GrammarError(`${cmd}: --preserve=links copies links as links; refused.`);
     }
-    const tFlag = flags.find((f) => f.name === 't' || f.name === 'target-directory');
+    // One destination selector. toybox keeps the LAST value of a string option, so with several
+    // -t / --target-directory the checked destination need not be the one written (Codex R1 on
+    // #459: `cp -t safe -t . staged/owner_ids`). -t with -T is contradictory: refused too.
+    const tFlags = flags.filter((f) => f.name === 't' || f.name === 'target-directory');
+    if (tFlags.length > 1) throw new GrammarError(`${cmd}: give one destination (-t or --target-directory once).`);
+    const tFlag = tFlags[0];
     const noTargetDir = has(flags, 'T', 'no-target-directory');
+    if (tFlag && noTargetDir) throw new GrammarError(`${cmd}: -t and -T cannot be combined.`);
     let dst;
     let sources;
     if (tFlag) {

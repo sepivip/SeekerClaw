@@ -445,6 +445,33 @@ async function refuses(line, rx) {
         await accepts(`curl -z -20010203 ${U}`); // curl's "older than" prefix
         await accepts(`curl -z =20010203 ${U}`);
     });
+    await check('cp/mv take one destination: a repeated -t (toybox keeps the last) or -t with -T is refused (Codex R1 on #459)', async () => {
+        // Each of these named a checked destination first and a protected or outside one last.
+        for (const line of [
+            'cp -t dir -t . staged/owner_ids',
+            'mv -t dir -t .. staged/owner_ids',
+            'cp -t dir --target-directory=. staged/owner_ids',
+            'cp --target-directory=dir --target-directory=.. staged/owner_ids',
+            'cp -tdir -t. staged/owner_ids',
+            'cp -rLt dir -t . staged',
+            `mv -t dir -t '${outside}' staged/owner_ids`,
+        ]) await refuses(line, /give one destination/);
+        await refuses('cp -t dir -T staged/owner_ids x', /-t and -T cannot be combined/);
+        // One destination keeps working, and one protected destination is still refused by its target check.
+        await accepts('cp -t dir notes.txt');
+        await accepts('mv -t dir a.txt');
+        await accepts('cp --target-directory=dir notes.txt');
+        await accepts('cp -rLt dir src');
+        await refuses('cp -t . staged/owner_ids', /owner_ids is blocked/);
+        await refuses('mv -t .. staged/owner_ids', /outside the workspace/);
+        // A destination link as the last -t (where links can be made here; CI on Linux always can).
+        let linked = false;
+        try { fs.symlinkSync(path.join(ws, 'dir'), path.join(ws, 'r1-dirlink'), 'dir'); linked = true; } catch (_) {}
+        if (linked) {
+            await refuses('cp -t dir -t r1-dirlink notes.txt', /give one destination/);
+            await refuses('cp -t r1-dirlink notes.txt', /link/);
+        }
+    });
     await check('G1 write options refuse outside paths and protected names; a workspace file is accepted', async () => {
         await refuses('sort --output=../outside/y a.txt', /outside the workspace/);
         await refuses(`sort --output=${OUT_ABS_Y} a.txt`, /outside the workspace/);
