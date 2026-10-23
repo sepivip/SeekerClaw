@@ -136,7 +136,7 @@ object LogCollector {
         // and discards its stale entries.
         synchronized(readLock) {
             try {
-                logFile?.writeText("")
+                logFile?.let { SafeFs.writeAtomic(it.parentFile.toPath(), it.toPath(), ByteArray(0)) }
                 lastReadPosition = 0L
                 clearGeneration++
             } catch (e: Exception) {
@@ -394,7 +394,11 @@ object LogCollector {
         synchronized(readLock) {
             val file = logFile ?: return
             try {
-                file.appendText("${entry.timestamp}|${entry.level.name}|${entry.message}\n")
+                // BAT-1409 P1-J: no-follow append (ancestor rule + O_NOFOLLOW).
+                SafeFs.appendNoFollow(
+                    file.parentFile.toPath(), file.toPath(),
+                    "${entry.timestamp}|${entry.level.name}|${entry.message}\n".toByteArray(Charsets.UTF_8),
+                )
                 compactLogFileIfNeededLocked(file)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to write log entry to file", e)
@@ -406,15 +410,13 @@ object LogCollector {
         if (!file.exists() || file.length() <= MAX_LOG_FILE_BYTES) return
 
         val keepBytes = minOf(file.length(), COMPACT_LOG_FILE_BYTES)
-        val tail = java.io.RandomAccessFile(file, "r").use { raf ->
-            raf.seek(file.length() - keepBytes)
-            ByteArray(keepBytes.toInt()).also { raf.readFully(it) }
-        }
+        val root = file.parentFile.toPath()
+        val tail = SafeFs.readRangeNoFollow(root, file.toPath(), file.length() - keepBytes, keepBytes.toInt())
 
         var start = 0
         while (start < tail.size && tail[start] != 0x0A.toByte()) start++
         val compacted = if (start < tail.size) tail.copyOfRange(start + 1, tail.size) else tail
-        file.writeBytes(compacted)
+        SafeFs.writeAtomic(root, file.toPath(), compacted)
         if (lastReadPosition > file.length()) {
             lastReadPosition = file.length()
         }
@@ -446,10 +448,9 @@ object LogCollector {
                 // Only read the tail of the file to avoid OOM on large logs
                 // ~200 bytes per log line × MAX_LINES = ~60KB is plenty
                 val tailBytes = minOf(fileLength, MAX_LINES * 200L)
-                val bytes = java.io.RandomAccessFile(file, "r").use { raf ->
-                    raf.seek(fileLength - tailBytes)
-                    ByteArray(tailBytes.toInt()).also { raf.readFully(it) }
-                }
+                val bytes = SafeFs.readRangeNoFollow(
+                    file.parentFile.toPath(), file.toPath(), fileLength - tailBytes, tailBytes.toInt(),
+                )
                 val seekedMidFile = tailBytes < fileLength
 
                 // Line-boundary safety: same three-case logic as
@@ -561,10 +562,7 @@ object LogCollector {
                 }
 
                 // Read only new bytes (still under readLock; logsLock NOT held)
-                val newBytes = java.io.RandomAccessFile(file, "r").use { raf ->
-                    raf.seek(pos)
-                    ByteArray(delta.toInt()).also { raf.readFully(it) }
-                }
+                val newBytes = SafeFs.readRangeNoFollow(file.parentFile.toPath(), file.toPath(), pos, delta.toInt())
 
                 // Line-boundary safety : if a CLOSE_WRITE event
                 // arrives mid-write, the trailing bytes may be a partial

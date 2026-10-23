@@ -8,7 +8,7 @@ const {
 } = require('../config');
 
 const {
-    redactSecrets, safePath,
+    redactSecrets, resolveWorkspacePath, readBlockedName, maskAgentSettings,
 } = require('../security');
 
 const {
@@ -149,12 +149,27 @@ const handlers = {
     },
 
     async memory_get(input, chatId) {
-        const filePath = safePath(input.file);
-        if (!filePath) return { error: 'Access denied: path outside workspace' };
+        // BAT-1409 P1-E: the same rule as the read tool — the real path stays inside the
+        // workspace, the protected names are refused, and agent_settings.json is masked.
+        const r = resolveWorkspacePath(input.file);
+        if (!r) return { error: 'Access denied: path outside workspace' };
+        const blocked = readBlockedName(r);
+        if (blocked) {
+            log(`[Security] BLOCKED memory_get of sensitive file: ${String(blocked).replace(/[\x00-\x1f\x7f\u2028\u2029]/g, '_')}`, 'WARN');
+            return { error: `Reading ${blocked} is blocked for security.` };
+        }
+        const filePath = r.real;
         if (!fs.existsSync(filePath)) {
             return { error: `File not found: ${input.file}` };
         }
-        const content = fs.readFileSync(filePath, 'utf8');
+        let content = fs.readFileSync(filePath, 'utf8');
+        if (path.basename(r.abs) === 'agent_settings.json' || path.basename(r.real) === 'agent_settings.json') {
+            const masked = maskAgentSettings(content);
+            if (masked === null) {
+                return { error: 'agent_settings.json is unparseable; contents withheld to avoid leaking secrets' };
+            }
+            content = masked;
+        }
         const lines = content.split('\n');
         const startLine = Math.max(1, input.start_line) - 1;
         const endLine = Math.min(lines.length, input.end_line || startLine + 11) - 1;

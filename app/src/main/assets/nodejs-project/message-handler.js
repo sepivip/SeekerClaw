@@ -31,6 +31,10 @@ let initialized = false;
 //     but not the new one, corrupting post-restart state.
 // Naturally reset on process death (new process, fresh flag).
 let _restartPending = false;
+// BAT-1409 P1-D: bridge codes that refuse an owner claim, and the one-per-process notice.
+const OWNER_CLAIM_REFUSED = new Set(['owner_already_set', 'inactive_channel', 'bad_channel', 'owner_unreadable']);
+let _inactiveChannelNotified = false;
+let _ownerClaim = null;
 
 function init(d) {
     deps = d;
@@ -1028,6 +1032,31 @@ async function handleProviderCommand(chatId, args, messageId = null) {
 // MESSAGE HANDLER
 // ============================================================================
 
+/** BAT-1409 P1-D: asks the app to record [senderId] as owner; sets the in-memory owner on success. */
+async function claimOwner(senderId, chatId) {
+    // Persist to Android encrypted storage via bridge (await so write completes before confirming)
+    const { CHANNEL } = require('./config');
+    const saveResult = await deps.androidBridgeCall('/config/save-owner', { ownerId: senderId, channel: CHANNEL });
+    // The app refuses a claim when an owner is already set, the channel is not the active one or
+    // the owner record cannot be read: this sender is not the owner.
+    if (OWNER_CLAIM_REFUSED.has(saveResult.code)) {
+        deps.log(`Owner claim by ${senderId} refused by the app (${saveResult.code})`, 'WARN');
+        if (saveResult.code === 'inactive_channel' && !_inactiveChannelNotified) {
+            await deps.sendMessage(chatId, 'Channel changed in Settings — restart SeekerClaw to finish.');
+            _inactiveChannelNotified = true;
+        }
+        return;
+    }
+    deps.setOwnerId(senderId);
+    deps.log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
+    if (saveResult.error) {
+        deps.log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
+        await deps.sendMessage(chatId, `Owner set to your account (${senderId}), but persistence failed — may reset on restart.`);
+    } else {
+        await deps.sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
+    }
+}
+
 async function handleMessage(normalized) {
     assertInit();
     // BAT-1155 Codex re-review blocker: refuse NEW turns while the process is quiesced for a
@@ -1049,19 +1078,17 @@ async function handleMessage(normalized) {
         text = `[Replying to ${quotedFrom}: "${replyTo.text}"]\n\n${combinedText}`;
     }
 
-    // Owner auto-detect: first person to message claims ownership
+    // Owner auto-detect: first person to message claims ownership.
+    // BAT-1409 P1-D: the app decides first; the in-memory owner is set only once the claim is
+    // accepted (or the bridge is merely unavailable, as before). A claim already in flight is
+    // awaited, so a quick second message neither claims twice nor slips past the owner gate.
+    if (!deps.getOwnerId() && _ownerClaim) await _ownerClaim;
     if (!deps.getOwnerId()) {
-        deps.setOwnerId(senderId);
-        deps.log(`Owner claimed by ${senderId} (auto-detect)`, 'INFO');
-
-        // Persist to Android encrypted storage via bridge (await so write completes before confirming)
-        const { CHANNEL } = require('./config');
-        const saveResult = await deps.androidBridgeCall('/config/save-owner', { ownerId: senderId, channel: CHANNEL });
-        if (saveResult.error) {
-            deps.log(`Bridge save-owner failed: ${saveResult.error}`, 'WARN');
-            await deps.sendMessage(chatId, `Owner set to your account (${senderId}), but persistence failed — may reset on restart.`);
-        } else {
-            await deps.sendMessage(chatId, `Owner set to your account (${senderId}). Only you can use this bot.`);
+        _ownerClaim = claimOwner(senderId, chatId);
+        try {
+            await _ownerClaim;
+        } finally {
+            _ownerClaim = null;
         }
     }
 

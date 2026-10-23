@@ -2,6 +2,7 @@ package com.seekerclaw.app.ui.settings
 
 import android.Manifest
 import android.app.Activity
+import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -45,6 +46,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import com.seekerclaw.app.config.BuildProvenance
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -103,6 +105,7 @@ import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
 import com.seekerclaw.app.BuildConfig
+import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.burner.BurnerBridgeEndpoints
 import com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault
 import com.seekerclaw.app.ui.components.CardSurface
@@ -222,18 +225,16 @@ fun SettingsScreen(
     var hasContactsPermission by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
     }
-    var hasSmsPermission by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED)
-    }
-    var hasCallPermission by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED)
-    }
+    // BAT-1409 P1-H: the agent's SMS and calls are notification drafts, so notifications replace
+    // the old SMS / Phone Calls permission rows.
+    var draftNotificationsOn by remember { mutableStateOf(draftNotificationsReady(context)) }
 
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasLocationPermission = it }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCameraPermission = it }
     val contactsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasContactsPermission = it }
-    val smsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasSmsPermission = it }
-    val callLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCallPermission = it }
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        draftNotificationsOn = draftNotificationsReady(context)
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -245,8 +246,7 @@ fun SettingsScreen(
                 hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                 hasContactsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
-                hasSmsPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
-                hasCallPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+                draftNotificationsOn = draftNotificationsReady(context)
                 // BAT-681: re-probe the burner pubkey on resume so the
                 // Set Up / Manage label flips immediately after the user
                 // imports a key or wipes it in the BurnerWalletScreen
@@ -645,10 +645,10 @@ fun SettingsScreen(
                     info = SettingsHelpTexts.SERVER_MODE,
                 )
                 val allPermissionsOff = !hasCameraPermission && !hasLocationPermission &&
-                    !hasContactsPermission && !hasSmsPermission && !hasCallPermission
+                    !hasContactsPermission && !draftNotificationsOn
                 if (allPermissionsOff) {
                     Text(
-                        text = "Enable permissions to unlock device features (camera, GPS, SMS, etc.)",
+                        text = "Enable permissions to unlock device features (camera, GPS, contacts, message and call drafts)",
                         fontFamily = RethinkSans,
                         fontSize = 12.sp,
                         color = SeekerClawColors.TextSecondary,
@@ -683,26 +683,13 @@ fun SettingsScreen(
                     onOpenSettings = { openAppSettings(context) },
                     info = SettingsHelpTexts.CONTACTS,
                 )
-                // SMS permission only on dappStore — googlePlay uses intent handoff (no permission needed)
-                if (BuildConfig.DISTRIBUTION == "dappStore") {
-                    PermissionRow(
-                        label = "SMS",
-                        granted = hasSmsPermission,
-                        onRequest = {
-                            requestPermissionOrOpenSettings(context, Manifest.permission.SEND_SMS, smsLauncher)
-                        },
-                        onOpenSettings = { openAppSettings(context) },
-                        info = SettingsHelpTexts.SMS,
-                    )
-                }
                 PermissionRow(
-                    label = "Phone Calls",
-                    granted = hasCallPermission,
-                    onRequest = {
-                        requestPermissionOrOpenSettings(context, Manifest.permission.CALL_PHONE, callLauncher)
-                    },
-                    onOpenSettings = { openAppSettings(context) },
-                    info = SettingsHelpTexts.PHONE_CALLS,
+                    label = "Notifications",
+                    granted = draftNotificationsOn,
+                    onRequest = { requestDraftNotifications(context, notificationLauncher) },
+                    onOpenSettings = { openNotificationSettings(context) },
+                    info = SettingsHelpTexts.NOTIFICATIONS,
+                    settingsPath = "Notifications",
                 )
             }
         }
@@ -1756,6 +1743,7 @@ private fun PermissionRow(
     onRequest: () -> Unit,
     onOpenSettings: () -> Unit = {},
     info: String? = null,
+    settingsPath: String = "Permissions",
 ) {
     val haptic = LocalHapticFeedback.current
     var showInfo by remember { mutableStateOf(false) }
@@ -1806,6 +1794,7 @@ private fun PermissionRow(
     if (showRevokeDialog) {
         RevokePermissionDialog(
             permissionLabel = label,
+            settingsPath = settingsPath,
             onOpenSettings = { showRevokeDialog = false; onOpenSettings() },
             onDismiss = { showRevokeDialog = false },
         )
@@ -1821,7 +1810,7 @@ private fun requestPermissionOrOpenSettings(
     if (ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)) {
         launcher.launch(permission)
     } else {
-        val prefs = context.getSharedPreferences("seekerclaw_prefs", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
         val askedKey = "permission_asked_$permission"
         if (prefs.getBoolean(askedKey, false)) {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -1835,6 +1824,49 @@ private fun requestPermissionOrOpenSettings(
     }
 }
 
+/**
+ * BAT-1409 P1-H: true when a message or call draft can be shown — the app's notifications are on,
+ * the app is not paused, and the drafts channel is not blocked. Mirrors the notification checks
+ * `DraftNotifier.post` makes.
+ */
+private fun draftNotificationsReady(context: Context): Boolean {
+    val nm = context.getSystemService(NotificationManager::class.java) ?: return false
+    if (!nm.areNotificationsEnabled() || nm.areNotificationsPaused()) return false
+    val channel = nm.getNotificationChannel(SeekerClawApplication.DRAFTS_CHANNEL_ID)
+    return channel != null && channel.importance != NotificationManager.IMPORTANCE_NONE
+}
+
+/**
+ * Turns draft notifications on: asks for POST_NOTIFICATIONS when it was never granted, otherwise
+ * opens the system page that controls what is off (the app's notifications or the drafts channel).
+ */
+private fun requestDraftNotifications(
+    context: Context,
+    launcher: ManagedActivityResultLauncher<String, Boolean>,
+) {
+    val nm = context.getSystemService(NotificationManager::class.java)
+    val permissionGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+    when {
+        !permissionGranted -> requestPermissionOrOpenSettings(context, Manifest.permission.POST_NOTIFICATIONS, launcher)
+        nm != null && !nm.areNotificationsEnabled() -> openNotificationSettings(context)
+        else -> {
+            val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                putExtra(Settings.EXTRA_CHANNEL_ID, SeekerClawApplication.DRAFTS_CHANNEL_ID)
+            }
+            context.startActivity(intent)
+        }
+    }
+}
+
+private fun openNotificationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    }
+    context.startActivity(intent)
+}
+
 private fun openAppSettings(context: Context) {
     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
         data = Uri.parse("package:${context.packageName}")
@@ -1845,6 +1877,7 @@ private fun openAppSettings(context: Context) {
 @Composable
 private fun RevokePermissionDialog(
     permissionLabel: String,
+    settingsPath: String,
     onOpenSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1862,7 +1895,7 @@ private fun RevokePermissionDialog(
         },
         text = {
             Text(
-                text = "Android doesn't allow apps to revoke their own permissions.\n\nTo disable $permissionLabel, go to:\nSystem Settings \u2192 Apps \u2192 SeekerClaw \u2192 Permissions",
+                text = "Android doesn't allow apps to revoke their own permissions.\n\nTo disable $permissionLabel, go to:\nSystem Settings \u2192 Apps \u2192 SeekerClaw \u2192 $settingsPath",
                 fontFamily = RethinkSans,
                 fontSize = 14.sp,
                 color = SeekerClawColors.TextSecondary,

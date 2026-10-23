@@ -11,6 +11,7 @@ const http = require('http');
 // Pre-fix, a long-lived `:node` process that survived a service
 // toggle held the stale token forever and every bridge call 403'd.
 const { getBridgeToken, log } = require('./config');
+const { APP_BRIDGE_CONNECT } = require('./net-guard');
 
 // ============================================================================
 // ANDROID BRIDGE HTTP CLIENT
@@ -40,6 +41,8 @@ function _sendOnce(endpoint, postData, timeoutMs, allowRetry) {
         // and the auth-refresh semantics REQUIRE the live value.
         const token = getBridgeToken();
         const req = http.request({
+            // BAT-1409 P1-L: the one caller allowed to connect to the bridge port (net-guard.js).
+            [APP_BRIDGE_CONNECT]: true,
             hostname: '127.0.0.1',
             port: 8765,
             path: endpoint,

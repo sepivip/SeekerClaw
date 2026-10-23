@@ -35,23 +35,38 @@ expect('wallet_status', {}, {}, 'none', 'wallet_status, no state');
 expect('wallet_status', {}, { burnerConfigured: true }, 'none', 'wallet_status, burner configured');
 expect('wallet_status', {}, { burnerConfigured: false }, 'none', 'wallet_status, burner unconfigured');
 
-// ── wallet_set_caps — always "confirm" with diff message ────────────────────
+// ── wallet_set_caps — lower/keep confirms with a diff; a visible raise blocks ─
+// BAT-1409 P1-I: raising caps is Settings-only. A raise the gate can see from the
+// known caps is blocked up front with the Settings pointer (no confirm-then-fail).
 {
     const r = expect(
         'wallet_set_caps',
         { per_tx_sol: '0.10' },
         { burnerConfigured: true, burnerCaps: { capPerTxSol: '50000000' } },
-        'confirm',
+        'block',
         'wallet_set_caps, raise per_tx_sol'
+    );
+    if (r.reason !== 'cap_raise_settings_only') fail(`raise reason: ${r.reason}`);
+    if (!r.message || !r.message.includes('Settings → Burner Wallet') || !r.message.includes('per-tx SOL')) {
+        fail(`raise message must point to Settings and name the field: ${r.message}`);
+    }
+}
+{
+    const r = expect(
+        'wallet_set_caps',
+        { per_tx_sol: '0.02' },
+        { burnerConfigured: true, burnerCaps: { capPerTxSol: '50000000' } },
+        'confirm',
+        'wallet_set_caps, lower per_tx_sol'
     );
     if (!r.message || !r.message.includes('per-tx SOL')) {
         fail(`wallet_set_caps confirm message missing 'per-tx SOL' label: ${r.message}`);
     }
-    if (!r.message.includes('0.05') || !r.message.includes('0.10')) {
-        fail(`wallet_set_caps confirm message missing 0.05 → 0.10 diff: ${r.message}`);
+    if (!r.message.includes('0.05') || !r.message.includes('0.02')) {
+        fail(`wallet_set_caps confirm message missing 0.05 → 0.02 diff: ${r.message}`);
     }
 }
-// Lower also confirms.
+// Lower also confirms; equal confirms.
 expect(
     'wallet_set_caps',
     { daily_usdc: '5' },
@@ -59,6 +74,21 @@ expect(
     'confirm',
     'wallet_set_caps, lower daily_usdc'
 );
+expect(
+    'wallet_set_caps',
+    { daily_usdc: '20' },
+    { burnerConfigured: true, burnerCaps: { capDailyUsdc: '20000000' } },
+    'confirm',
+    'wallet_set_caps, equal daily_usdc'
+);
+// Any positive value over a 0/blank cap is a raise; integer (not text) comparison.
+expect('wallet_set_caps', { daily_sol: '0.001' }, { burnerConfigured: true, burnerCaps: { capDailySol: '0' } }, 'block', 'raise over a zero cap');
+expect('wallet_set_caps', { per_tx_usdc: '10' }, { burnerConfigured: true, burnerCaps: { capPerTxUsdc: '9000000' } }, 'block', 'raise 9 → 10 USDC');
+// Unknown current caps raise nothing at the gate (the bridge still refuses a raise).
+expect('wallet_set_caps', { per_tx_sol: '5' }, { burnerConfigured: true }, 'confirm', 'no known caps → confirm, bridge decides');
+// One raising field blocks the whole request.
+expect('wallet_set_caps', { per_tx_sol: '0.01', daily_sol: '9' },
+    { burnerConfigured: true, burnerCaps: { capPerTxSol: '50000000', capDailySol: '1000000000' } }, 'block', 'mixed lower+raise');
 
 // ── solana_send routing matrix ─────────────────────────────────────────────
 
@@ -166,6 +196,38 @@ expect(
 //    no-confirm fast path (Codex BAT-1057 v2 #1).
 expect('solana_swap', { inputToken: 'PYUSD', outputToken: 'USDC', amount: 0.5 }, { burnerConfigured: true }, 'confirm', 'BAT-1057 PYUSD→USDC conversion still confirms (burner on)');
 expect('solana_swap', { inputToken: 'PYUSD', outputToken: 'SOL', amount: 0.5 }, { burnerConfigured: true }, 'confirm', 'BAT-1057 PYUSD→SOL conversion still confirms');
+
+// ── Over-cap block: the retry hint must name a retry that reaches the main wallet ──
+// SAB-AUDIT-v48: the block used to tell every tool to "retry with _allowMainFallback: true". That
+// only reaches main for solana_send (with source="main", whose handler forces main). For
+// solana_send_token the gate honours source="main" (wallet/index.js); swaps, DCA and V1 limit
+// orders route by cap again in their handler, so a YES there was refused afterwards
+// (wallet/dispatch.js). A hint that leads to "YES, then refused" must not come back.
+{
+    const overCap = { burnerConfigured: true, routingDecision: 'burner', underCap: false };
+    const msg = (tool, extra = {}) => normalizePolicy(getConfirmationPolicy(tool, {}, { ...overCap, ...extra })).message || '';
+    assert.ok(/source: "main"/.test(msg('solana_send_token')) && !/_allowMainFallback/.test(msg('solana_send_token')),
+        'solana_send_token over cap → retry with source: "main"');
+    assert.ok(/source: "main" and _allowMainFallback: true/.test(msg('solana_send')),
+        'solana_send over cap → source: "main" plus _allowMainFallback');
+    for (const tool of ['solana_swap', 'jupiter_trigger_create', 'jupiter_dca_create']) {
+        assert.ok(!/_allowMainFallback|source:/.test(msg(tool)), `${tool} over cap offers no main-wallet retry: ${msg(tool)}`);
+        assert.ok(/lower the amount/i.test(msg(tool)), `${tool} over cap → lower the amount`);
+    }
+    // The V2 limit-order handler turns _allowMainFallback into a main route (tools/solana.js), so
+    // only there does the trigger hint offer it; ai.js sets ws.triggerV2 from config.useTriggerV2.
+    assert.ok(/_allowMainFallback: true/.test(msg('jupiter_trigger_create', { triggerV2: true })),
+        'jupiter_trigger_create on the V2 path over cap → _allowMainFallback');
+    assert.ok(!/_allowMainFallback/.test(msg('jupiter_trigger_create', { triggerV2: false })),
+        'jupiter_trigger_create on the V1 path over cap → no main-wallet retry');
+    for (const tool of ['solana_send', 'solana_send_token', 'solana_swap', 'jupiter_trigger_create', 'jupiter_dca_create']) {
+        assert.ok(msg(tool).includes('Settings → Burner Wallet'), `${tool} over cap keeps the Settings pointer`);
+    }
+    // ai.js passes the active trigger path to the gate.
+    const aiSrc = require('fs').readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
+    assert.ok(/if \(toolUse\.name === 'jupiter_trigger_create'\) walletState\.triggerV2 = _config\.useTriggerV2 === true;/.test(aiSrc),
+        'ai.js sets walletState.triggerV2 for jupiter_trigger_create');
+}
 
 if (failures > 0) {
     console.error(`\n${failures} failure(s).`);

@@ -8,7 +8,7 @@ const { USER_ENV_KEYS } = require('../config');
 const tools = [
     {
         name: 'env_list',
-        description: 'List names of user-set environment variables. Returns KEYS ONLY, never values. Use this to check whether a credential (e.g. GITHUB_TOKEN, DATABASE_URL) is available before suggesting or attempting an action that requires it. Values are available to shell_exec, js_eval, and skills via process.env — you just cannot read them yourself. If a variable you need is not in the list, tell the user to add it in Settings → Env Vars.',
+        description: 'List names of user-set environment variables. Returns KEYS ONLY, never values. Use this to check whether a credential (e.g. GITHUB_TOKEN, DATABASE_URL) is available before suggesting or attempting an action that requires it. Values are available to js_eval and skills via process.env (shell_exec does not expand $VARS) — you just cannot read them yourself. If a variable you need is not in the list, tell the user to add it in Settings → Env Vars.',
         input_schema: {
             type: 'object',
             properties: {},

@@ -14,6 +14,7 @@ import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.service.OAuthKeepAliveService
 import com.seekerclaw.app.service.SeekerClawService
 import com.seekerclaw.app.state.XaiOAuthTokenStore
+import com.seekerclaw.app.util.SafeFs
 import fi.iki.elonen.NanoHTTPD
 import android.content.Context
 import java.lang.ref.WeakReference
@@ -314,24 +315,21 @@ class XaiOAuthActivity : ComponentActivity() {
                 } catch (retry: Exception) {
                     Log.e(TAG, "Retry also failed, writing minimal fallback", retry)
                     try {
-                        File(appCtx.filesDir, RESULTS_DIR).apply { mkdirs() }
-                            .resolve("$requestId.json")
-                            .writeText("""{"status":"error","message":"Failed to persist OAuth result"}""")
+                        SafeFs.writeAtomicText(
+                            appCtx.filesDir.toPath(),
+                            File(File(appCtx.filesDir, RESULTS_DIR), "$requestId.json").toPath(),
+                            """{"status":"error","message":"Failed to persist OAuth result"}""",
+                        )
                     } catch (_: Exception) { /* nothing more we can do */ }
                 }
             }
         }
 
         private fun doWriteResultFile(appCtx: Context, requestId: String, result: JSONObject) {
-            val resultDir = File(appCtx.filesDir, RESULTS_DIR).apply { mkdirs() }
-            val tmpFile = File(resultDir, "$requestId.tmp")
-            val jsonFile = File(resultDir, "$requestId.json")
-            tmpFile.writeText(result.toString())
-            jsonFile.delete()
-            if (!tmpFile.renameTo(jsonFile)) {
-                tmpFile.copyTo(jsonFile, overwrite = true)
-                tmpFile.delete()
-            }
+            // BAT-1409 P1-J: staged in filesDir/.kwrite and renamed into place — never written
+            // through a link (the old fixed `<id>.tmp` name in this directory was unsafe).
+            val jsonFile = File(File(appCtx.filesDir, RESULTS_DIR), "$requestId.json")
+            SafeFs.writeAtomicText(appCtx.filesDir.toPath(), jsonFile.toPath(), result.toString())
             Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
         }
 

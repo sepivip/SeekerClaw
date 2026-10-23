@@ -88,8 +88,10 @@ object DeviceInfoProvider {
     private fun dirSizeMb(dir: File): Float {
         if (!dir.exists()) return 0f
         return try {
+            // BAT-1409 P1-M: never follows links; a file that vanishes mid-walk (the agent is
+            // running) or an unreadable directory is skipped rather than zeroing the total.
             var size = 0L
-            dir.walkTopDown().filter { it.isFile }.forEach { size += it.length() }
+            SafeFs.forEachRegularFileNoFollow(dir.toPath()) { _, attrs -> size += attrs.size() }
             size / (1024f * 1024f)
         } catch (_: Exception) {
             0f

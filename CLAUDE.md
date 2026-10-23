@@ -776,8 +776,8 @@ Node.js (main.js)  ──HTTP POST──►  AndroidBridge.kt (port 8765)  ─�
 | `/clipboard/set` | Write clipboard | None |
 | `/contacts/search` | Search contacts | READ_CONTACTS |
 | `/contacts/add` | Add contact | WRITE_CONTACTS |
-| `/sms` | Send SMS | SEND_SMS |
-| `/call` | Make phone call | CALL_PHONE |
+| `/sms` | Message draft: a notification the user taps to open their SMS app and send | None (needs notifications) |
+| `/call` | Call draft: a notification the user taps to open the dialer and dial | None (needs notifications) |
 | `/location` | Get GPS location | ACCESS_FINE_LOCATION |
 | `/tts` | Text-to-speech | None |
 | `/apps/list` | List installed apps | None |

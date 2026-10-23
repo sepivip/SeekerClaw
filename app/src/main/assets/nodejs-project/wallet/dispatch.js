@@ -51,6 +51,7 @@
 const { getWallet } = require('./index');
 const { routeFor } = require('../caps/preflight');
 const { androidBridgeCall } = require('../bridge');
+const { CAP_RAISE_HINT } = require('./cap-hint');
 const { log } = require('../config');
 
 /**
@@ -145,8 +146,8 @@ async function routeAndSign({ toolName, toolArgs, unsignedTxBase64, broadcastVia
             wallet: 'burner',
             error: 'burner_over_cap',
             reason:
-                'Burner over cap; the confirmation gate should have blocked this. ' +
-                'Raise the cap with wallet_set_caps or pass _allowMainFallback: true.',
+                'Burner over cap, so nothing was signed. Lower the amount. ' +
+                `${CAP_RAISE_HINT}`,
         };
     }
 

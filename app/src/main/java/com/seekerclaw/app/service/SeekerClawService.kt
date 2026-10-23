@@ -18,12 +18,17 @@ import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.state.XaiOAuthDurabilityGate
 import com.seekerclaw.app.state.XaiOAuthTokenStore
+import com.seekerclaw.app.util.BootHygiene
+import com.seekerclaw.app.util.BundleIntegrity
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.SafeFs
 import com.seekerclaw.app.util.ServiceState
 import com.seekerclaw.app.util.ServiceStatus
+import com.seekerclaw.app.util.StopToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -108,6 +113,25 @@ internal fun nodeDebugRotateAction(oldInode: Long, trackedInode: Long): NodeLogR
     else -> NodeLogRotateAction.GAP_EVICTED                        // `.old` is a newer gen (≥2 rotations)
 }
 
+// ── BAT-1409 P1-A: start-path cleanup, pure (no android.*) so it is unit-tested ──
+
+internal object StartCleanup {
+    /**
+     * `workspace/config.json` and the legacy `workspace/config.json.tmp` under [filesRoot], removed
+     * without following a link (a link is unlinked, its target untouched). A refusal or I/O error is
+     * passed to [log] and never thrown.
+     */
+    fun deleteEphemeralConfig(filesRoot: java.nio.file.Path, log: (String) -> Unit) {
+        for (name in listOf("config.json", "config.json.tmp")) {
+            try {
+                SafeFs.deleteTreeNoFollow(filesRoot, filesRoot.resolve("workspace").resolve(name))
+            } catch (e: Exception) {
+                log("[Service] Could not remove workspace/$name: ${e.javaClass.simpleName}")
+            }
+        }
+    }
+}
+
 class SeekerClawService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenWakeLock: PowerManager.WakeLock? = null
@@ -152,6 +176,19 @@ class SeekerClawService : Service() {
     private val scopeJob = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.IO + scopeJob)
     private var androidBridge: AndroidBridge? = null
+
+    // BAT-1409 P1-A (amendment v3.3 M2, correction v3.4): start sequencing. Verification runs on a
+    // worker; the rest of the start is posted back through a dedicated Handler that no other code
+    // clears. `destroyed` is the in-process fence, set first in onDestroy.
+    @Volatile private var destroyed = false
+    private val startHandler = Handler(Looper.getMainLooper())
+    private val starter = StartCoordinator(
+        readToken = { StopToken.read(filesDir.toPath()) },
+        repairToken = { StopToken.writeFresh(filesDir.toPath()) },
+        startWorker = { r -> Thread(r, "node-start-verify").apply { isDaemon = true }.start() },
+        postToMain = { r -> startHandler.post(r) },
+        destroyed = { destroyed },
+    )
 
     /**
      * Read any bytes appended to `node_debug.log` since `nodeDebugLastPos`,
@@ -258,6 +295,35 @@ class SeekerClawService : Service() {
     }
 
     /**
+     * BAT-1409 P1-J: opens [file] read-only with `O_NOFOLLOW`, so a link at the final component
+     * fails (`ELOOP`) instead of being followed. The workspace parent is checked at boot (P1-C).
+     */
+    private fun openNoFollowFd(file: java.io.File): java.io.FileDescriptor =
+        android.system.Os.open(
+            file.path,
+            android.system.OsConstants.O_RDONLY or android.system.OsConstants.O_NOFOLLOW,
+            0,
+        )
+
+    private inline fun <R> java.io.FileDescriptor.useFd(block: (java.io.FileDescriptor) -> R): R {
+        try {
+            return block(this)
+        } finally {
+            try { android.system.Os.close(this) } catch (_: Exception) {}
+        }
+    }
+
+    /** Reads exactly `buf.size` bytes at [pos], or throws [java.io.EOFException]. */
+    private fun preadFully(fd: java.io.FileDescriptor, buf: ByteArray, pos: Long) {
+        var off = 0
+        while (off < buf.size) {
+            val n = android.system.Os.pread(fd, buf, off, buf.size - off, pos + off)
+            if (n <= 0) throw java.io.EOFException("short read at ${pos + off}")
+            off += n
+        }
+    }
+
+    /**
      * BAT-1161 P1A gate 3: drain a ROTATED-OUT generation (node_debug.log.old) from `fromPos` to
      * EOF, holding ONE stable file descriptor for the whole drain — never reopening by path per
      * chunk (a later rotation could replace the path mid-drain). `.old` is immutable after the
@@ -265,26 +331,28 @@ class SeekerClawService : Service() {
      */
     private fun drainOldGeneration(oldFile: java.io.File, fromPos: Long, expectInode: Long) {
         try {
-            java.io.RandomAccessFile(oldFile, "r").use { raf ->
+            // BAT-1409 P1-J: opened with O_NOFOLLOW — a link at node_debug.log.old is refused,
+            // never followed into another file.
+            openNoFollowFd(oldFile).useFd { fd ->
                 // Bind identity to the OPEN HANDLE, not the path. The caller chose `fromPos` based
                 // on a path-based stat; if a second rotation replaced `.old` between that stat and
                 // this open, we would resume a DIFFERENT generation from a cursor that means
                 // nothing in it — forwarding misattributed bytes from an arbitrary offset, likely
                 // mid-line. fstat on the descriptor we are actually about to read closes that
                 // window: identity is now decided by the same object the reads come from.
-                val openInode = try { android.system.Os.fstat(raf.fd).st_ino } catch (_: Exception) { -1L }
+                val st = try { android.system.Os.fstat(fd) } catch (_: Exception) { null }
+                val openInode = st?.st_ino ?: -1L
                 if (openInode != expectInode) {
                     LogCollector.append("[Service] node_debug.log.old changed identity between stat and open — skipping drain to avoid forwarding misattributed bytes", LogLevel.WARN)
                     return
                 }
-                val end = raf.length()
+                val end = st?.st_size ?: 0L
                 var p = fromPos.coerceIn(0L, end)
                 var carry = ByteArray(0)
                 while (p < end) {
                     val readSize = minOf(end - p, nodeDebugMaxDeltaBytes).toInt()
-                    raf.seek(p)
                     val buf = ByteArray(readSize)
-                    raf.readFully(buf)
+                    preadFully(fd, buf, p)
                     p += readSize
                     val data = if (carry.isEmpty()) buf else carry + buf
                     var lastNl = -1
@@ -393,9 +461,8 @@ class SeekerClawService : Service() {
 
             val delta = length - pos
             val readSize = minOf(delta, nodeDebugMaxDeltaBytes).toInt()
-            val newBytes = java.io.RandomAccessFile(debugLogFile, "r").use { raf ->
-                raf.seek(pos)
-                ByteArray(readSize).also { raf.readFully(it) }
+            val newBytes = openNoFollowFd(debugLogFile).useFd { fd ->
+                ByteArray(readSize).also { preadFully(fd, it, pos) }
             }
 
             // Find the last complete line boundary. Newline is byte 0x0A
@@ -446,9 +513,14 @@ class SeekerClawService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // BAT-1409 P1-C (amendment v3.3 M1, correction v3.4): boot link hygiene could not verify
+        // a critical path. Nothing here may touch a store, status, token or crash prefs.
+        if (BootHygiene.unsafe.isNotEmpty()) return failLinkHygiene()
+
         // Init cross-process file bridge (this runs in :node process)
         ServiceState.init(applicationContext)
         LogCollector.init(applicationContext)
+        BootHygiene.flushLog() // BAT-1409 P1-C: step 1's lines from Application.onCreate
 
         val notification = createNotification("SeekerClaw is running")
         startForeground(NOTIFICATION_ID, notification)
@@ -490,6 +562,13 @@ class SeekerClawService : Service() {
             return START_STICKY
         }
 
+        // BAT-1409 P1-A (v3.3 M2): single flight. A repeated start during the pre-Node window (a
+        // BootReceiver re-fire, a second tap) returns here and changes no state.
+        if (!starter.tryAcquire()) {
+            LogCollector.append("[Service] Start already in progress; ignoring this request")
+            return START_STICKY
+        }
+
         // Owner ID may be blank on first run — this is expected. Node.js auto-detects
         // it from the first Telegram message and persists it via the /config/save-owner
         // bridge callback; the service logs a warning here rather than blocking startup.
@@ -521,13 +600,14 @@ class SeekerClawService : Service() {
         }
 
         // Crash loop protection: if we've restarted too many times quickly, stop trying
-        val prefs = getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
+        val prefs = getSharedPreferences(PrefsNames.CRASH, MODE_PRIVATE)
         val lastStart = prefs.getLong("last_start", 0L)
         val crashCount = prefs.getInt("crash_count", 0)
         val now = System.currentTimeMillis()
         if (now - lastStart < 30_000 && crashCount >= 3) {
             LogCollector.append("[Service] Crash loop detected ($crashCount restarts in 30s) — stopping", LogLevel.ERROR)
             ServiceState.updateStatus(ServiceStatus.ERROR)
+            starter.release()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -537,6 +617,67 @@ class SeekerClawService : Service() {
         LogCollector.append("[Service] Starting Claw Engine... (attempt ${newCrashCount + 1})")
         ServiceState.updateStatus(ServiceStatus.STARTING)
 
+        // BAT-1409 P1-A: link hygiene step 2 and the bundle check run on a worker (this returns at
+        // once, well inside the ~20 s onStartCommand window); the rest of the start runs in the
+        // fenced continuation on this main looper. No secret is written before verification.
+        starter.launch(::verifyBeforeStart, startEffects)
+        return START_STICKY
+    }
+
+    /**
+     * BAT-1409 P1-A worker: P1-C step 2 (link quarantine), then the bundle verify and repair. No
+     * other side effect. Bounded at about 14 s (step 2's walk and prune, then P1-A's 10 s budget).
+     */
+    private fun verifyBeforeStart(): StartCoordinator.Verification {
+        val hygiene = BootHygiene.hygiene().step2(filesDir.toPath(), dataDir.toPath())
+        hygiene.log.forEach { LogCollector.append(it.message, it.level) }
+        if (hygiene.unsafe.isNotEmpty()) return StartCoordinator.Verification.Failed("LINK_HYGIENE")
+        return when (val bundle = NodeBridge.verifyBundle(applicationContext)) {
+            is BundleIntegrity.Outcome.Failed ->
+                StartCoordinator.Verification.Failed("BUNDLE_${bundle.reason}_AT_${bundle.stage}")
+            else -> StartCoordinator.Verification.Ok
+        }
+    }
+
+    private val startEffects = object : StartCoordinator.Effects {
+        override fun proceed(fence: StartCoordinator.Fence) = continueStart(fence)
+
+        override fun fail(fence: StartCoordinator.Fence, reason: String) = failBeforeNode(reason)
+
+        override fun abort(fence: StartCoordinator.Fence) = abortStart()
+    }
+
+    /**
+     * The existing error path: ERROR log and status, then stop. Normally no config.json exists yet
+     * (verification runs first); a leftover from an earlier run, or a partial write, is removed.
+     */
+    private fun failBeforeNode(reason: String) {
+        LogCollector.append("[Service] Start failed before Node: $reason", LogLevel.ERROR)
+        ServiceState.updateStatus(ServiceStatus.ERROR)
+        deleteEphemeralConfig()
+        stopSelf()
+    }
+
+    /** A stop began after this start (or the service is gone): stop, with no other effect. */
+    private fun abortStart() {
+        LogCollector.append("[Service] Start superseded by a stop request; not starting")
+        stopSelf()
+    }
+
+    /** `workspace/config.json` and the legacy `config.json.tmp`, removed without following a link. */
+    private fun deleteEphemeralConfig() {
+        StartCleanup.deleteEphemeralConfig(filesDir.toPath()) { LogCollector.append(it, LogLevel.WARN) }
+    }
+
+    /**
+     * BAT-1409 P1-A continuation, on the main looper after verification passed and [fence] held:
+     * today's start sequence. The stop token is checked again before the xAI reconcile and before
+     * Node starts.
+     */
+    private fun continueStart(fence: StartCoordinator.Fence) {
+        // BAT-1409 P1-C (v3.3 M1): in :node, Analytics initialises after link hygiene step 2.
+        SeekerClawApplication.initAnalytics(this)
+
         // Generate per-boot auth token for bridge security
         val bridgeToken = UUID.randomUUID().toString()
         ServiceState.writeBridgeToken(bridgeToken)
@@ -545,15 +686,24 @@ class SeekerClawService : Service() {
         val staleConfig = File(File(filesDir, "workspace"), "config.json")
         if (staleConfig.exists()) staleConfig.delete()
 
+        if (!fence.holds()) return abortStart()
+
         // BAT-1155 boot reconcile (amendment 3): convert an armed rotation marker to durable reauth
         // and clear a stale stop fence — MUST run BEFORE writeConfigJson so the emitted token reflects
         // the conversion (a potentially-consumed refresh token is never handed to the provider).
-        reconcileXaiOAuthOnBoot()
+        reconcileXaiOAuthOnBoot(fence.baseline)
 
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
         // but writeConfigJson reads the XML file fresh on first access per process.
-        ConfigManager.writeConfigJson(this, bridgeToken)
+        // BAT-1409 P1-D: the channel written for this boot is the one the bridge's owner claim checks.
+        // BAT-1409 P1-J (R3): a refused or failed write ends the start on the error path, never in
+        // a crash of this process. writeAgentSettingsJson and writePlatformMd log their own failures.
+        val bootChannel = try {
+            ConfigManager.writeConfigJson(this, bridgeToken).orEmpty()
+        } catch (e: java.io.IOException) {
+            return failBeforeNode("CONFIG_WRITE (${e.javaClass.simpleName}: ${e.message})")
+        }
         ConfigManager.writeAgentSettingsJson(this) // non-ephemeral settings for live Node.js reads
 
         // Validate by checking the written file — more reliable than cross-process SharedPreferences
@@ -563,18 +713,20 @@ class SeekerClawService : Service() {
             LogCollector.append("[Service] Config not available (config.json not written) — cannot start", LogLevel.ERROR)
             ServiceState.updateStatus(ServiceStatus.ERROR)
             stopSelf()
-            return START_NOT_STICKY
+            return
         }
 
         // Seed workspace if first run
-        ConfigManager.seedWorkspace(this)
+        try {
+            ConfigManager.seedWorkspace(this)
+        } catch (e: java.io.IOException) {
+            return failBeforeNode("WORKSPACE_SEED (${e.javaClass.simpleName}: ${e.message})")
+        }
 
         // Generate PLATFORM.md with current device state (fresh every boot)
         ConfigManager.writePlatformMd(this)
 
-        // Extract nodejs-project assets to internal storage
-        NodeBridge.extractBundle(applicationContext)
-
+        // The bundle was verified (and repaired if needed) by the worker before this point.
         // Setup node project directory (workDir already created above)
         val nodeProjectDir = filesDir.absolutePath + "/nodejs-project"
 
@@ -588,13 +740,15 @@ class SeekerClawService : Service() {
         nodeDebugInode = statInode(nodeDebugAtStart.path)
         nodeDebugLastPos = if (nodeDebugAtStart.exists()) nodeDebugAtStart.length() else 0L
 
+        if (!fence.holds()) return abortStart()
+
         // Start Node.js runtime
         NodeBridge.start(workDir = workDir.absolutePath, openclawDir = nodeProjectDir)
         if (!NodeBridge.isAlive()) {
             LogCollector.append("[Service] Node runtime failed to initialize", LogLevel.ERROR)
             ServiceState.updateStatus(ServiceStatus.ERROR)
             stopSelf()
-            return START_NOT_STICKY
+            return
         }
 
         // Delete config.json after Node.js has had time to read it (ephemeral credentials)
@@ -610,7 +764,7 @@ class SeekerClawService : Service() {
         // Start Android Bridge (HTTP server for Node.js <-> Kotlin IPC)
         // Bound to 127.0.0.1 only, requires per-boot auth token
         try {
-            androidBridge = AndroidBridge(applicationContext, bridgeToken)
+            androidBridge = AndroidBridge(applicationContext, bridgeToken, bootChannel = bootChannel)
             androidBridge?.start()
             LogCollector.append("[Service] AndroidBridge started on 127.0.0.1:8765 (auth required)")
         } catch (e: Exception) {
@@ -824,11 +978,39 @@ class SeekerClawService : Service() {
         ServiceState.setServiceStartTimeMs(System.currentTimeMillis())
 
         LogCollector.append("[Service] Claw Engine started")
+    }
 
-        return START_STICKY
+    /**
+     * BAT-1409 P1-C — `Failed(LINK_HYGIENE)`. `startForeground` (Android requires it), step 2's
+     * retry of the unsafe paths so the next start can proceed, logcat only (`service_logs` and
+     * `service_state` may be among the unsafe paths), and stop. No secret, status, token or prefs
+     * write; Node never starts. `onDestroy` then kills the process, so the next start re-runs
+     * step 1 in a fresh one.
+     */
+    private fun failLinkHygiene(): Int {
+        startForeground(NOTIFICATION_ID, createNotification("SeekerClaw could not start"))
+        val still = BootHygiene.retryUnsafe(dataDir)
+        android.util.Log.e(
+            "LinkHygiene",
+            "Failed(LINK_HYGIENE): ${BootHygiene.unsafe.size} critical path(s) unverified, " +
+                "${still.size} still after retry; the next start retries",
+        )
+        stopSelf()
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        // BAT-1409 P1-A (v3.3 M2): the in-process fence. A start continuation still queued on
+        // startHandler sees it and aborts.
+        destroyed = true
+        if (BootHygiene.unsafe.isNotEmpty()) {
+            // BAT-1409 P1-C (correction v3.4): this process never initialised its stores, so the
+            // teardown writes (status, bridge-token clear, crash prefs) are skipped with them.
+            scopeJob.cancel()
+            super.onDestroy()
+            android.os.Process.killProcess(android.os.Process.myPid())
+            return
+        }
         LogCollector.append("[Service] Stopping Claw Engine...")
         // BAT-525 / BAT-1155: flush Node BEFORE everything else — the bridge token + Node process
         // must both still be alive for the loopback POST /shutdown/flush to land, and it precedes
@@ -866,6 +1048,9 @@ class SeekerClawService : Service() {
             if (it.isHeld) it.release()
         }
         ServiceState.clearBridgeToken()
+        // BAT-1409 P1-A (v3.3 M2): the ephemeral config never outlives the service; the 5 s
+        // post-start delete is a scope coroutine that the cancel above may have dropped.
+        deleteEphemeralConfig()
         // Preserve ERROR status (e.g., owner not configured) — only reset to STOPPED on clean exits.
         if (ServiceState.status.value != ServiceStatus.ERROR) {
             ServiceState.updateStatus(ServiceStatus.STOPPED)
@@ -884,7 +1069,7 @@ class SeekerClawService : Service() {
         // bricking the agent until the user restarts the app manually. commit() blocks
         // until the disk write completes, guaranteeing the reset persists across the
         // process kill.
-        getSharedPreferences("seekerclaw_crash", MODE_PRIVATE)
+        getSharedPreferences(PrefsNames.CRASH, MODE_PRIVATE)
 .edit()
 .putLong("last_start", 0L)
 .putInt("crash_count", 0)
@@ -945,9 +1130,10 @@ class SeekerClawService : Service() {
      *     (Belt: `ConfigManager.loadConfig` also blanks the token when the marker is armed, so even a
      *     failed conversion emits no usable token this boot; the next boot re-tries.)
      *  2. Clear a stale stop fence left by the prior stop generation so the reborn process is never
-     *     wedged (fences never carry across a process boundary).
+     *     wedged (fences never carry across a process boundary) — but only while the stop token
+     *     still equals [baseline] (BAT-1409 P1-A), so a stop that began during this start keeps it.
      */
-    private fun reconcileXaiOAuthOnBoot() {
+    private fun reconcileXaiOAuthOnBoot(baseline: StopToken.State) {
         if (!XaiOAuthTokenStore.isInitialized) return
         val rec = XaiOAuthTokenStore.read()
         val live = !rec.tombstone && !rec.reauthRequired && rec.accessTokenEnc.isNotEmpty()
@@ -961,7 +1147,15 @@ class SeekerClawService : Service() {
                     LogCollector.append("[Boot] xAI rotation marker conversion could not persist ($r) — loadConfig will still blank the token this boot", LogLevel.WARN)
             }
         }
-        XaiOAuthTokenStore.clearStopFence()
+        // BAT-1409 P1-A (v3.3 M2, v3.4): clear the fence only if no stop began since this start
+        // recorded its stop token, checked inside the store lock.
+        when (val r = XaiOAuthTokenStore.clearStopFenceIfUnchanged(baseline)) {
+            is XaiOAuthTokenStore.Result.Conflict ->
+                LogCollector.append("[Boot] xAI stop fence kept: a stop began during this start")
+            is XaiOAuthTokenStore.Result.Failed ->
+                LogCollector.append("[Boot] xAI stop fence clear failed (${r.reason})", LogLevel.WARN)
+            else -> Unit
+        }
     }
 
     private fun createNotification(text: String): Notification {
@@ -1091,6 +1285,13 @@ class SeekerClawService : Service() {
          */
         private fun stopWithDurability(appCtx: Context, attempt: Int, onStopped: (() -> Unit)?) {
             stopExecutor.execute {
+                // BAT-1409 P1-A (v3.3 M2): every Stop/Restart writes a fresh stop token, durably,
+                // BEFORE the gate arms the xAI fence. A :node start whose baseline differs aborts
+                // its continuation, and its boot reconcile never clears this stop's fence. If the
+                // write fails the stop proceeds as before; onDestroy's terminal gate still holds.
+                if (attempt == 0 && !StopToken.writeFresh(appCtx.filesDir.toPath())) {
+                    LogCollector.append("[Shutdown] stop token could not be written; stopping anyway", LogLevel.WARN)
+                }
                 val durable = try {
                     XaiOAuthDurabilityGate.ensureDurableBeforeStop()
                 } catch (e: Exception) {

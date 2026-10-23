@@ -91,7 +91,7 @@ function _ensureApiKey() {
     if (!config.jupiterApiKey) {
         return {
             error: 'jupiter_api_key_required',
-            reason: 'Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key',
+            reason: 'Get a free key at portal.jup.ag and add it in Settings > Solana Wallet > Jupiter API Key',
         };
     }
     return null;

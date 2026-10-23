@@ -136,6 +136,63 @@ class ReservationLedger(
         }
     }
 
+    /** BAT-1409 P1-I: the outcome of [updateCapsNoRaise]. */
+    sealed class NoRaiseResult {
+        object Applied : NoRaiseResult()
+
+        /** One or more fields would raise a cap: nothing was written. */
+        data class Raised(val fields: List<String>) : NoRaiseResult()
+
+        object Failed : NoRaiseResult()
+    }
+
+    /**
+     * BAT-1409 P1-I — the bridge's cap write: like [updateCaps], but a request that would RAISE
+     * any cap changes nothing. The comparison runs inside `store.update` on the current value, in
+     * atomic BigInteger units; any positive value over a current 0 / blank / malformed cap counts
+     * as a raise; equal and lower values are allowed. Raising caps is Settings-only.
+     */
+    suspend fun updateCapsNoRaise(
+        capPerTxSol: String? = null,
+        capPerTxUsdc: String? = null,
+        capDailySol: String? = null,
+        capDailyUsdc: String? = null,
+    ): NoRaiseResult {
+        var raised: List<String> = emptyList()
+        val ok = store.update { current ->
+            val r = mutableListOf<String>()
+            if (isRaise(capPerTxSol, current.capPerTxSol)) r += "capPerTxSol"
+            if (isRaise(capPerTxUsdc, current.capPerTxUsdc)) r += "capPerTxUsdc"
+            if (isRaise(capDailySol, current.capDailySol)) r += "capDailySol"
+            if (isRaise(capDailyUsdc, current.capDailyUsdc)) r += "capDailyUsdc"
+            raised = r
+            if (r.isNotEmpty()) {
+                current
+            } else {
+                current.copy(
+                    capPerTxSol = capPerTxSol ?: current.capPerTxSol,
+                    capPerTxUsdc = capPerTxUsdc ?: current.capPerTxUsdc,
+                    capDailySol = capDailySol ?: current.capDailySol,
+                    capDailyUsdc = capDailyUsdc ?: current.capDailyUsdc,
+                )
+            }
+        }
+        return when {
+            raised.isNotEmpty() -> NoRaiseResult.Raised(raised)
+            ok -> NoRaiseResult.Applied
+            else -> NoRaiseResult.Failed
+        }
+    }
+
+    /** True when [requested] (null = unchanged) is above [current]; see [updateCapsNoRaise]. */
+    private fun isRaise(requested: String?, current: String): Boolean {
+        if (requested == null) return false
+        val next = try { BigInteger(requested) } catch (_: Exception) { return true }
+        val cur = try { if (current.isBlank()) null else BigInteger(current) } catch (_: Exception) { null }
+        if (cur == null || cur.signum() <= 0) return next.signum() > 0
+        return next > cur
+    }
+
     /**
      * Sum of pending + committed amounts in the current 24h window for
      * the given cap [name]. The Node-side preflight uses similar math

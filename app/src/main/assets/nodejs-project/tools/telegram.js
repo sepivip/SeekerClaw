@@ -8,7 +8,7 @@ const {
 } = require('../config');
 
 const {
-    safePath, redactSecrets,
+    resolveWorkspacePath, sendBlockedName, redactSecrets,
 } = require('../security');
 
 const {
@@ -73,7 +73,7 @@ const tools = [
     },
     {
         name: 'telegram_send_file',
-        description: 'Send a file from the workspace to the current Telegram chat. Auto-detects type from extension (photo, video, audio, voice, document). Use for sharing reports, images, exported files, camera captures, or any workspace file with the user. Telegram bot limit: 50MB. Photos up to 10MB are sent as photos; larger images are automatically sent as documents.',
+        description: 'Send a file from the workspace to the current Telegram chat. Auto-detects type from extension (photo, video, audio, voice, document). Use for sharing reports, images, exported files, camera captures, or any workspace file with the user (app secret files — agent_settings.json, config.json, tokens — are refused). Telegram bot limit: 50MB. Photos up to 10MB are sent as photos; larger images are automatically sent as documents.',
         input_schema: {
             type: 'object',
             properties: {
@@ -263,8 +263,16 @@ const handlers = {
         if (!input.path) return { error: 'path is required' };
         if (!input.chat_id) return { error: 'chat_id is required' };
 
-        const filePath = safePath(input.path);
-        if (!filePath) return { error: 'Access denied: path outside workspace' };
+        const r = resolveWorkspacePath(input.path);
+        if (!r) return { error: 'Access denied: path outside workspace' };
+        // BAT-1409 P1-E: raw bytes leave the device, so the secret names and agent_settings.json
+        // are refused (same rule as send_file).
+        const blocked = sendBlockedName(r);
+        if (blocked) {
+            log(`[Security] BLOCKED send of sensitive file: ${String(blocked).replace(/[\x00-\x1f\x7f\u2028\u2029]/g, '_')}`, 'WARN');
+            return { error: `Sending ${blocked} is blocked for security.` };
+        }
+        const filePath = r.real;
         if (!fs.existsSync(filePath)) return { error: `File not found: ${input.path}` };
 
         let stat;

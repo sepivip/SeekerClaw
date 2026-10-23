@@ -25,17 +25,19 @@
 // | tool                         | burner | routing | underCap | policy      |
 // | solana_send/swap/Jup-create  | false  | n/a     | n/a      | confirm     |
 // | solana_send/swap/Jup-create  | true   | burner  | true     | none        |
-// | solana_send/swap/Jup-create  | true   | burner  | false    | block (raise cap or use main) |
+// | solana_send/swap/Jup-create  | true   | burner  | false    | block (raise cap in Settings or use main) |
 // | solana_send/swap/Jup-create  | true   | main    | n/a      | confirm     |
 // | jupiter_*_cancel             | any    | per creator-role                | |
 // |   creatorRole=burner         |        |                                  | none |
 // |   creatorRole=main|unknown   |        |                                  | confirm |
-// | wallet_set_caps              | any    | n/a     | n/a      | confirm (with old→new diff) |
+// | wallet_set_caps              | any    | n/a     | n/a      | confirm (with old→new diff); block when a raise is visible (BAT-1409 P1-I) |
 // | agent_pay (with max_usdc)    | any    | n/a     | n/a      | none (real demand check happens inside the tool, Phase 6) |
 // | wallet_status                | any    | n/a     | n/a      | none        |
 // | (any other tool in v1.0 set) | n/a    | n/a     | n/a      | confirm     |
 
 'use strict';
+
+const { CAP_RAISE_HINT } = require('../wallet/cap-hint');
 
 // Mirror of the v1.0 static CONFIRM_REQUIRED set in config.js (line 681 at the
 // time of the Phase 1 snapshot). Phase 4 REMOVES the constant from config.js,
@@ -46,9 +48,12 @@
 // IF YOU ADD a tool that should always require confirmation regardless of
 // burner state, append it here AND wire the burner-specific override below
 // (or accept the v1.0 default of "always confirm").
+//
+// BAT-1409 P1-H: android_sms / android_call left this set. They only put a draft in the phone's
+// notifications; the user taps it and presses Send or Dial in their own app, so a chat YES on top
+// would be a third confirmation. Their rate limit stays (tool-rate-limit.js), and scheduled tasks and
+// heartbeat probes still can't use them (tools/android.js).
 const V1_STATIC_CONFIRM = new Set([
-    'android_sms',
-    'android_call',
     'android_camera_capture',
     'android_location',
     'solana_send',
@@ -57,6 +62,26 @@ const V1_STATIC_CONFIRM = new Set([
     'jupiter_trigger_create',
     'jupiter_dca_create',
 ]);
+
+// The retry that actually reaches the main wallet after an over-cap block:
+// - solana_send_token: source="main", which the gate honours (wallet/index.js getWalletState);
+// - solana_send: source="main" (its handler forces main) plus _allowMainFallback (this gate);
+// - jupiter_trigger_create on the V2 path (ws.triggerV2, set by ai.js): _allowMainFallback, which
+//   the V2 handler turns into a main route.
+// Swaps, DCA and V1 limit orders route by cap again in their handler, so a YES there would only be
+// refused afterwards (wallet/dispatch.js) — they are told to lower the amount instead.
+function _overCapRetryHint(toolName, ws) {
+    if (toolName === 'jupiter_trigger_create' && ws && ws.triggerV2 === true) {
+        return 'Or retry with _allowMainFallback: true to use the main wallet (popup required).';
+    }
+    if (toolName === 'solana_send_token') {
+        return 'Or retry with source: "main" to send from the main wallet (popup required).';
+    }
+    if (toolName === 'solana_send') {
+        return 'Or retry with source: "main" and _allowMainFallback: true to send from the main wallet (popup required).';
+    }
+    return 'Or lower the amount.';
+}
 
 // Tools that participate in burner routing for write actions.
 const SOLANA_WRITE_TOOLS = new Set([
@@ -207,6 +232,41 @@ function _agentPayPostConfirmMessage(args) {
     return `POST ${url}\nmax_usdc: ${max} USDC\n${bodyPreview}`;
 }
 
+// BAT-1409 P1-I: decimal string → atomic BigInt (null when malformed). Mirrors tools/wallet.js.
+function _decimalToAtomicBig(dec, decimals) {
+    const s = String(dec).trim();
+    const m = s.match(/^(\d+)(?:\.(\d+))?$/);
+    if (!m || (m[2] && m[2].length > decimals)) return null;
+    return BigInt(m[1] + (m[2] || '').padEnd(decimals, '0'));
+}
+
+const _CAP_ROWS = [
+    ['per_tx_sol',  'capPerTxSol',  9, 'per-tx SOL'],
+    ['daily_sol',   'capDailySol',  9, 'daily SOL'],
+    ['per_tx_usdc', 'capPerTxUsdc', 6, 'per-tx USDC'],
+    ['daily_usdc',  'capDailyUsdc', 6, 'daily USDC'],
+];
+
+/**
+ * BAT-1409 P1-I: the cap fields of [args] that would raise a cap, judged from the caps the gate
+ * knows (walletState.burnerCaps, atomic strings). A positive value over a 0/blank/malformed cap is a
+ * raise. Unknown current caps raise nothing here — the bridge still refuses the raise.
+ */
+function _capRaises(args, walletState) {
+    const current = (walletState && walletState.burnerCaps) || null;
+    if (!current) return [];
+    const raised = [];
+    for (const [argKey, capKey, decimals, label] of _CAP_ROWS) {
+        if (!args || args[argKey] == null || !(capKey in current)) continue;
+        const next = _decimalToAtomicBig(args[argKey], decimals);
+        if (next === null) continue;
+        let cur = null;
+        try { cur = current[capKey] == null || current[capKey] === '' ? null : BigInt(current[capKey]); } catch (_) { cur = null; }
+        if ((cur === null || cur <= 0n) ? next > 0n : next > cur) raised.push(label);
+    }
+    return raised;
+}
+
 function _capDiffMessage(args, walletState) {
     // wallet_set_caps args are decimal strings; current caps in walletState are atomic strings.
     const current = (walletState && walletState.burnerCaps) || {};
@@ -260,8 +320,18 @@ function getConfirmationPolicy(toolName, args, walletState) {
         return 'none';
     }
 
-    // wallet_set_caps always confirms (raise OR lower) and surfaces a diff.
+    // wallet_set_caps confirms with a diff. A raise the gate can see is blocked up front (BAT-1409
+    // P1-I: raising is Settings-only), so the user is never asked to confirm a change that the app
+    // would then refuse.
     if (toolName === 'wallet_set_caps') {
+        const raised = _capRaises(a, ws);
+        if (raised.length) {
+            return {
+                policy: 'block',
+                reason: 'cap_raise_settings_only',
+                message: `${CAP_RAISE_HINT} (would raise: ${raised.join(', ')})`,
+            };
+        }
         return {
             policy: 'confirm',
             message: _capDiffMessage(a, ws),
@@ -436,9 +506,7 @@ function getConfirmationPolicy(toolName, args, walletState) {
         return {
             policy: 'block',
             reason: 'burner_cap_exceeded',
-            message:
-                'Burner cap exceeded. Raise the cap with wallet_set_caps, ' +
-                'or retry with _allowMainFallback: true to use the main wallet (popup required).',
+            message: `Burner cap exceeded. ${CAP_RAISE_HINT} ${_overCapRetryHint(toolName, ws)}`,
         };
     }
 

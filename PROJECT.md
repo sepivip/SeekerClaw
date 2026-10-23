@@ -12,7 +12,7 @@ SeekerClaw turns a Solana Seeker phone into a 24/7 personal AI agent that can pa
 
 ## Elevator Pitch
 
-SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **22 bundled skills (incl. burner-wallet + paysh-catalog) + 13 workspace examples**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + xAI/Grok + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
+SeekerClaw embeds a full Node.js runtime inside an Android app, running an OpenClaw-compatible AI gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, settings). **v2 introduces a burner wallet + x402 payment client:** a user-imported, app-stored Solana keypair (encrypted under Android Keystore, AES-256-GCM) that lets the agent autonomously pay for paid HTTP APIs in USDC, within per-tx and daily caps the user sets. **SeekerClaw does not generate keys** — the user imports one once from Phantom / Solflare / hardware wallet / `solana-keygen`. The agent has **64 tools across 13 modules + MCP dynamic**, **22 bundled skills (incl. burner-wallet + paysh-catalog)**, ranked memory search, cron scheduling, Android device control, two-wallet Solana (main = popup, burner = capped + silent under cap), multi-provider AI (Claude + OpenAI + OpenRouter + xAI/Grok + Custom), extended thinking preserved across tool calls and `/resume`, graceful Stop — all running locally on the phone, 24/7. x402 v2 settlement is live end-to-end (Tripadvisor, CoinGecko, Textbelt SMS POST verified on-chain). 44 catalogued endpoints across 10 services via the OPT-IN paysh-catalog skill.
 
 ## What It Is
 
@@ -94,8 +94,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Device info** — Battery level/charging, storage stats
 - **Clipboard** — Read and write
 - **Contacts** — Search by name (requires READ_CONTACTS)
-- **SMS** — Send messages (SEND_SMS on dApp Store; intent handoff on Google Play — no SEND_SMS permission required, uses system SMS app)
-- **Phone calls** — Dial numbers (requires CALL_PHONE, user confirmation)
+- **SMS** — Message drafts: the agent puts a draft in the notifications on the phone running SeekerClaw; the user taps it to open their SMS app and presses Send (both editions; no SMS permission; live chat only)
+- **Phone calls** — Call drafts: the user taps the notification to open the dialer with the number filled in, then presses Dial (no phone permission; live chat only)
 - **GPS location** — Current coordinates (requires ACCESS_FINE_LOCATION)
 - **Text-to-speech** — Speak text with configurable speed/pitch
 - **Camera** — Capture photos (front/back) + vision analysis via the active AI provider
@@ -123,7 +123,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **Reserve / commit / release** state machine with stale-reservation sweep (60s TTL, 30s sweep). Mutex-guarded. Android is the SOLE writer of cap state.
 - **Wallet routing** in `caps/preflight.js` decides burner vs main on every spending tool. Under-cap burner → silent (`policy: "none"`); main wallet → MWA popup (`policy: "confirm"`); over-cap with no fallback → blocked. `solana_send`, `solana_send_token` (USDC is cap-gated; any other SPL token routes to the main wallet), `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create`, `jupiter_trigger_cancel`, `jupiter_dca_cancel` all participate.
 - **`wallet_status`** — read both wallets' state (configured, pubkey, caps, today's spend, remaining daily).
-- **`wallet_set_caps`** — update burner caps (per-tx and daily, SOL + USDC). Always confirms; surface shows old → new diff.
+- **`wallet_set_caps`** — lower or keep burner caps (per-tx and daily, SOL + USDC). Always confirms with an old → new diff; a raise is refused (`cap_raise_settings_only`) — caps are raised only in Settings → Burner Wallet (BAT-1409).
 - **`agent_pay`** — pay an x402-protected HTTP endpoint and fetch its response. Object-shaped args `{ url, max_usdc, method?, body? }`. `max_usdc` is a decimal string. `body` is a JSON object/array for POST (rejected on primitives via `body_not_json`).
   - **Security envelope (SeekerClaw V1 boundary, unrelated to the x402 protocol version):** HTTPS only, Solana mainnet only, USDC only, private-IP rejection, DNS rebinding defense, max 1 MB response, 30s timeout. pay.sh-compatible.
   - **GET and POST both supported.** GET runs silently when under burner cap. POST always requires user confirmation (side-effect-aware: SMS, content posts, etc.) — confirmation fires regardless of caps. POST bodies ≤ 8 KB.
@@ -177,9 +177,8 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 | `/resume` | Resume an interrupted task |
 | `/commands` | Alias for `/help` |
 
-### Skills (22 bundled + 13 workspace, version-aware seeding)
+### Skills (22 bundled, version-aware seeding)
 **Bundled skills (OpenClaw format, seeded by ConfigManager.kt with SHA-256 integrity + version tracking):** bookmark, briefing, burner-wallet, calclaw (AI calorie tracker), calculator, crypto-prices, define, github, joke, movie-tv, netwatch (network monitoring & security audit), news, notes, paysh-catalog, quote, reminders, research, summarize, timer, todo, translate, weather
-**Workspace skills (agent-usable examples):** crypto-prices, device-status, dictionary, exchange-rates, github, location, movie-tv, phone-call, recipe, sms, solana-dapp, solana-wallet, speak
 **Skill format:** YAML frontmatter (name, description, version, emoji, requires) — see `SKILL-FORMAT.md`
 **Skill install** — `skill_install` tool to install skills from URL or Telegram file attachment, with diagnostics via `/skills` command
 **Skill export/import** — Export individual skills as .md or bulk export user-added skills as ZIP; import from ZIP or .md file with path traversal protection, bundled skill overwrite prevention, size caps, and rollback on failure
@@ -189,11 +188,11 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 ### Security
 - **Prompt injection defense** — Content Trust Policy in system prompt, `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` boundary markers on all web_fetch/web_search results, 10-pattern suspicious content detection, Unicode homoglyph sanitization, zero-width space normalization
 - **Skill file protection** — Writes/edits to `skills/` blocked when suspicious injection patterns detected in content
-- **Tool confirmation gates** — `android_sms`, `android_call`, `android_camera_capture`, `android_location`, `solana_send`, `solana_send_token`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES in chat before execution (with a burner wallet configured, under-cap burner spends skip the prompt — see Burner Wallet). The runtime gate is the only prompt: the SMS and call tool descriptions tell the model not to ask separately, so the user confirms once, not twice (BAT-1306). 60s timeout auto-cancels; unavailable in scheduled-task and heartbeat turns. Rate limited (SMS/call 1 per 60s; camera, location, `solana_send`, `solana_swap` 1 per 15s; Jupiter order creation 1 per 30s)
+- **Tool confirmation gates** — `android_camera_capture`, `android_location`, `solana_send`, `solana_send_token`, `solana_swap`, `jupiter_trigger_create`, `jupiter_dca_create` require explicit user YES in chat before execution (with a burner wallet configured, under-cap burner spends skip the prompt — see Burner Wallet). The runtime gate is the only prompt. 60s timeout auto-cancels; unavailable in scheduled-task and heartbeat turns. Message and call drafts (`android_sms`, `android_call`) ask nothing in chat, because the user confirms on the phone by tapping the draft and pressing Send or Dial; they are also unavailable in scheduled-task and heartbeat turns (BAT-1409). Rate limited (SMS/call drafts 1 per 60s; camera, location, `solana_send`, `solana_swap` 1 per 15s; Jupiter order creation 1 per 30s)
 - **Jupiter API hardening** — 7 fixes from official skill audit (BAT-151-157): no retry for non-idempotent POSTs, amount validation, slippage bounds, error message sanitization
-- **Secrets blocklist** — `config.js`, `config.json`, `config.yaml`, `seekerclaw.db`, `xai_oauth.json` blocked from `read` tool (with symlink resolution) and `js_eval` fs access (proxied `fs`/`fs.promises` modules)
+- **Secrets blocklist** — `config.js`, `config.json`, `config.yaml`, `seekerclaw.db` at the workspace root, and `bridge_token`, `xai_oauth.json` anywhere, are refused by `read`/`memory_get` (by real path, links resolved), `shell_exec` content reads and `js_eval`'s fs façade, and by `send_file` except `seekerclaw.db` (sending it is unchanged); `agent_settings.json` is readable only through `read`, masked (BAT-1409)
 - **Swap transaction verification** — `verifySwapTransaction()` checks the fee payer and required signers; programs are labelled for logs, not allowlisted, and Address Lookup Tables are accepted (BAT-1013). Autonomous burner signing adds drainer-instruction blocking, a per-account loss invariant and simulate-vs-quote enforcement (`wallet/burner-policy.js`); main-wallet transactions still require approval in the wallet app
-- **js_eval sandbox** — blocked modules (child_process, vm, etc.), restricted fs (read/write/copy guards on sensitive files), shadowed `process`/`global`/`globalThis`
+- **js_eval sandbox** — Node built-ins only (an allowlist; no npm packages, `child_process`, `vm` or `worker_threads`), a workspace-confined `fs` façade (no descriptors, links or protected names), no Unix sockets and no access to the internal ports 8765/8766, shadowed `process`/`global`/`globalThis` (BAT-1409)
 - API key redaction in logs
 - Path traversal prevention (workspace sandboxing)
 - Shell command allowlist (no rm, kill, etc.)
@@ -268,7 +267,8 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 - **No browser/screen/canvas skills** — Can't be ported from OpenClaw (requires desktop environment)
 - **Ephemeral context** — Conversation history is held in memory and resets on Node.js restart (mitigated by session summaries, and by on-disk checkpoints of an interrupted task — its last 8 messages, kept up to 7 days — which resume automatically after a restart if under 5 minutes old, otherwise via `/resume`)
 - **Two channels** — Telegram and Discord supported; WhatsApp and others not yet implemented
-- **Google Play build: SMS is hand-off only** — the Google Play build has no `SEND_SMS` permission, so the agent opens the system SMS app with the message pre-filled and the user taps Send; the dApp Store build sends directly
+- **SMS and calls are drafts** — in both editions the agent puts a draft in the notifications; the user taps it and presses Send or Dial. Agent actions that open a screen (camera, app launch, main-wallet signing, adding a contact) need SeekerClaw in front, and otherwise ask the user to open it first (BAT-1409)
+- **js_eval is a guardrail, not an isolation boundary** — it runs in Node's `vm` module, which is not a security boundary. The workspace, module, socket and port guards hold for code that stays inside it; full isolation of `js_eval` is planned (BAT-1409 Phase 2)
 - **No light theme** — Dark only (DarkOps single theme)
 
 ## Stats
@@ -279,7 +279,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 | PRs merged | 364 (of 407 opened) |
 | AI Providers | 5 (Claude, OpenAI, OpenRouter, xAI/Grok, Custom) |
 | Tools | 64 built-in on Telegram, 60 on Discord (18 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram [Telegram channel only], 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
-| Skills | 22 bundled (incl. paysh-catalog + burner-wallet) + 13 workspace examples; user-installed skills live on the device and are not counted |
+| Skills | 22 bundled (incl. paysh-catalog + burner-wallet); user-installed skills live on the device and are not counted |
 | Paysh-catalog entries | 44 across 10 services (OPT-IN only; 63 unsupported with structured "why not" reasons) |
 | Android Bridge endpoints | 42 (33 core routes in `AndroidBridge.kt` incl. `/ping`, plus 9 burner-wallet and Jupiter order-ownership routes in `BurnerBridgeEndpoints.kt`) |
 | Telegram commands | 17 (`/start` + 16 `/`-menu commands; aliases `/commands` → `/help` and `/skills` → `/skill` not counted) |

@@ -754,6 +754,46 @@ open class VerifyBuildProvenanceTask : DefaultTask() {
     }
 }
 
+/**
+ * BAT-1409 P1-H: the agent's SMS and calls are notification drafts the user taps to send or
+ * dial, in both flavours. The MERGED manifest of every variant must therefore not request
+ * SEND_SMS or CALL_PHONE (a library or a manifest edit could otherwise bring them back), and
+ * must keep the <queries> entries that DraftNotifier's SMS-app / dialer check needs.
+ *
+ * Separate from VerifyBuildProvenanceTask on purpose: `-PskipProvenanceVerify` must never
+ * skip this check. Runs after assemble / bundle and before install, like that gate.
+ */
+open class VerifyDraftPermissionsTask : DefaultTask() {
+    @get:InputFile
+    val mergedManifestIn: RegularFileProperty = project.objects.fileProperty()
+
+    @TaskAction
+    fun verify() {
+        val manifest = mergedManifestIn.get().asFile
+        val xml = manifest.readText()
+        val q = '"'
+        val requested = listOf("android.permission.SEND_SMS", "android.permission.CALL_PHONE")
+            .filter { xml.contains("android:name=" + q + it + q) }
+        val needed = listOf(
+            "android:name=" + q + "android.intent.action.SENDTO" + q,
+            "android:scheme=" + q + "smsto" + q,
+            "android:name=" + q + "android.intent.action.DIAL" + q,
+            "android:scheme=" + q + "tel" + q,
+        ).filter { !xml.contains(it) }
+        if (requested.isNotEmpty() || needed.isNotEmpty()) {
+            throw GradleException(
+                "[VerifyDraftPermissions] " + manifest.path + "\n" +
+                "  requests (must not): " + requested + "\n" +
+                "  <queries> missing  : " + needed + "\n" +
+                "SMS and calls are notification drafts in every flavour (BAT-1409 P1-H): keep\n" +
+                "SEND_SMS / CALL_PHONE as tools:node=" + q + "remove" + q + " and the SENDTO/smsto + DIAL/tel\n" +
+                "<queries> in app/src/main/AndroidManifest.xml."
+            )
+        }
+        logger.lifecycle("[VerifyDraftPermissions] " + manifest.parentFile.name + " OK")
+    }
+}
+
 androidComponents {
     onVariants { variant ->
         val isRelease = variant.buildType == "release"
@@ -817,6 +857,17 @@ androidComponents {
             skipIn = gradle.startParameter.projectProperties["skipProvenanceVerify"] == "true"
         }
         tasks.matching { it.name == "bundle" + cap }.configureEach { finalizedBy(verifyBundle) }
+
+        // BAT-1409 P1-H: no variant may request SEND_SMS / CALL_PHONE (see the task's KDoc).
+        val verifyDrafts = tasks.register<VerifyDraftPermissionsTask>("verifyDraftPermissions" + cap) {
+            mergedManifestIn.set(
+                variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST)
+            )
+        }
+        tasks.matching { it.name == "install" + cap }.configureEach { dependsOn(verifyDrafts) }
+        tasks.matching { it.name == "assemble" + cap || it.name == "bundle" + cap }.configureEach {
+            finalizedBy(verifyDrafts)
+        }
     }
 }
 

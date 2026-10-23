@@ -15,6 +15,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
+import com.seekerclaw.app.util.SafeFs
 import java.io.File
 
 /**
@@ -156,11 +157,9 @@ class CameraCaptureActivity : ComponentActivity() {
     }
 
     private fun writeResultFile(result: JSONObject) {
-        val resultDir = File(filesDir, RESULTS_DIR).apply { mkdirs() }
-        val tmpFile = File(resultDir, "$requestId.tmp")
-        val jsonFile = File(resultDir, "$requestId.json")
-        tmpFile.writeText(result.toString())
-        tmpFile.renameTo(jsonFile)
+        // BAT-1409 P1-J: atomic (temp in filesDir/.kwrite, then rename), never through a link.
+        val jsonFile = File(File(filesDir, RESULTS_DIR), "$requestId.json")
+        SafeFs.writeAtomicText(filesDir.toPath(), jsonFile.toPath(), result.toString())
         Log.d(TAG, "Camera result written: ${jsonFile.absolutePath}")
     }
 }

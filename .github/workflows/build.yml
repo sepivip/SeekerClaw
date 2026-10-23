@@ -38,6 +38,10 @@ jobs:
           # Node major aligned with production catches that class of bug.
           node-version: '18'
 
+      - name: Install mksh (Android's shell, for the shell_exec tokenizer differential test)
+        # BAT-1409 P1-G: Ubuntu's /bin/sh is dash; Android's /system/bin/sh is mksh.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq mksh
+
       - name: Validate tool input_schemas
         # Required check — a bad schema breaks ALL agent turns, not just
         # calls to the bad tool. Cheap to run (<1s), high blast radius.
@@ -58,6 +62,9 @@ jobs:
       # they catch regressions that would otherwise only surface at
       # device-test time — too late.
       - name: Financial-flow + confirmation-gate tests
+        env:
+          # BAT-1409 P1-G: the mksh differential test must run here, never skip.
+          REQUIRE_MKSH: '1'
         run: |
           set -e
           for t in \
@@ -123,6 +130,18 @@ jobs:
             reasoning-checkpoint-durability \
             reasoning-recovery \
             reasoning-pipeline \
+            module-paths-preamble \
+            file-tools-confinement \
+            js-eval-confinement \
+            bridge-port-guard \
+            shell-grammar \
+            shell-recipes \
+            shell-args-mksh \
+            owner-claim-refused \
+            cap-raise-hints \
+            draft-outcomes \
+            boot-module-graph \
+            js-eval-snippets \
             ci-coverage-manifest
           do
             echo "── $t ──"

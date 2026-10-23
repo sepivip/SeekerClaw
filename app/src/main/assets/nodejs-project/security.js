@@ -14,7 +14,11 @@ const fs = require('fs');
 // messages too short to contain a UUID never hit the disk; longer
 // messages pay the fs.readFileSync (a 36-byte file from the OS
 // page cache, so cheap but not free).
-const { getBridgeToken, config, log, workDir } = require('./config');
+const {
+    getBridgeToken, config, log, workDir,
+    ROOT_SECRET_NAMES, SECRETS_ANYWHERE, WRITE_PROTECTED_ROOT,
+} = require('./config');
+const { resolveInWorkspace, linkOnPath, isProtectedRootName } = require('./workspace-path');
 
 // Minimum length of a bridge_token (UUID, 36 chars: 32 hex + 4
 // dashes). Messages shorter than this can't contain a token, so we
@@ -254,17 +258,63 @@ registerAgentSettingsSecrets();
 // PATH VALIDATION
 // ============================================================================
 
-// Validate that a resolved file path is within workspace (prevents path traversal)
+// BAT-1409 P1-E: the workspace path rule (workspace-path.js). The real path of the target — the
+// longest existing ancestor realpath'd, plus the new tail — must sit inside realpath(workDir), so a
+// link inside the workspace can never lead a tool outside it. Returns the resolved object or null.
+function resolveWorkspacePath(userPath) {
+    return resolveInWorkspace(workDir, userPath);
+}
+
+// Validate that a file path stays within the workspace; returns the absolute (lexical) path to
+// hand to fs, or null. Callers that need the real path or the relative name use
+// resolveWorkspacePath instead.
 function safePath(userPath) {
-    // Resolve to absolute, then check it starts with workDir
-    const resolved = path.resolve(workDir, userPath);
-    // Normalize both to handle trailing separators
-    const normalizedWork = path.resolve(workDir) + path.sep;
-    const normalizedResolved = path.resolve(resolved);
-    if (normalizedResolved !== path.resolve(workDir) && !normalizedResolved.startsWith(normalizedWork)) {
-        return null; // Path escapes workspace
-    }
-    return normalizedResolved;
+    const r = resolveInWorkspace(workDir, userPath);
+    return r ? r.abs : null;
+}
+
+function _basenames(r) {
+    return [path.basename(r.abs), path.basename(r.real)];
+}
+
+// Read-side refusals for the file tools (read, memory_get): a name in SECRETS_ANYWHERE at any
+// depth, or a ROOT_SECRET_NAMES name at the workspace root (lexical or real). Returns the refused
+// name, or null.
+function readBlockedName(r) {
+    const hit = _basenames(r).find((b) => SECRETS_ANYWHERE.has(b));
+    if (hit) return hit;
+    if (isProtectedRootName(workDir, r, ROOT_SECRET_NAMES)) return path.basename(r.abs);
+    return null;
+}
+
+// Send-side refusals (send_file, telegram_send_file send raw bytes): SECRETS_ANYWHERE at any depth,
+// the root config files, and agent_settings.json anywhere (only its masked form may leave through
+// read). Root seekerclaw.db is NOT refused here — contract ruling S3: sending it is not newly
+// restricted (the user may ask for their own data); it stays unreadable through read, shell and
+// js_eval.
+function sendBlockedName(r) {
+    const hit = _basenames(r).find((b) => SECRETS_ANYWHERE.has(b) || b === _AGENT_SETTINGS_FILE);
+    if (hit) return hit;
+    // Built per call, like the other checks read the sets per call (some test stubs of config.js
+    // leave them out, and nothing here may run at module load).
+    const sendBlockedRoot = new Set([...ROOT_SECRET_NAMES].filter((n) => n !== 'seekerclaw.db'));
+    if (isProtectedRootName(workDir, r, sendBlockedRoot)) return path.basename(r.abs);
+    return null;
+}
+
+// Write-side refusals (write, edit, delete): WRITE_PROTECTED_ROOT at the workspace root (lexical
+// or real), and SECRETS_ANYWHERE at any depth.
+function writeBlockedName(r) {
+    const hit = _basenames(r).find((b) => SECRETS_ANYWHERE.has(b));
+    if (hit) return hit;
+    if (isProtectedRootName(workDir, r, WRITE_PROTECTED_ROOT)) return path.basename(r.abs);
+    return null;
+}
+
+// Writers refuse a link anywhere from the workspace root down to the target (inclusive). Returns
+// the offending workspace-relative component, or null.
+function writeLinkOnPath(r) {
+    return linkOnPath(workDir, r.abs);
 }
 
 // ============================================================================
@@ -392,6 +442,11 @@ module.exports = {
     maskAgentSettings,
     registerAgentSettingsSecrets,
     safePath,
+    resolveWorkspacePath,
+    readBlockedName,
+    sendBlockedName,
+    writeBlockedName,
+    writeLinkOnPath,
     INJECTION_PATTERNS,
     normalizeWhitespace,
     detectSuspiciousPatterns,
