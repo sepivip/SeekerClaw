@@ -145,13 +145,13 @@ function checkCpMv(cmd, parsed, chk, ctx) {
     if (flags.some((f) => f.name === 'preserve' && /links|all/.test(String(f.value)))) {
         throw new GrammarError(`${cmd}: --preserve=links copies links as links; refused.`);
     }
-    // One destination selector. toybox keeps the LAST value of a string option, so with several
-    // -t / --target-directory the checked destination need not be the one written (Codex R1 on
-    // #459: `cp -t safe -t . staged/owner_ids`). -t with -T is contradictory: refused too.
-    const tFlags = flags.filter((f) => f.name === 't' || f.name === 'target-directory');
-    if (tFlags.length > 1) throw new GrammarError(`${cmd}: give one destination (-t or --target-directory once).`);
+    // One destination selector. toybox keeps the LAST value of a string option, so with several -t
+    // the checked destination need not be the one written (Codex R1 on #459:
+    // `cp -t safe -t . staged/owner_ids`). -t with -T is contradictory: refused too.
+    const tFlags = flags.filter((f) => f.name === 't');
+    if (tFlags.length > 1) throw new GrammarError(`${cmd}: give one destination (-t once).`);
     const tFlag = tFlags[0];
-    const noTargetDir = has(flags, 'T', 'no-target-directory');
+    const noTargetDir = has(flags, 'T');
     if (tFlag && noTargetDir) throw new GrammarError(`${cmd}: -t and -T cannot be combined.`);
     let dst;
     let sources;
@@ -366,11 +366,7 @@ function checkSed(args, chk) {
         if (a.startsWith('--')) {
             const [name, val] = a.slice(2).split(/=(.*)/s);
             if (name === 'quiet' || name === 'silent' || name === 'regexp-extended' || name === 'separate' || name === 'null-data' || name === 'posix' || name === 'debug') continue;
-            if (name === 'in-place') {
-                if (val !== undefined && !SED_SUFFIX.test(val)) throw new GrammarError('sed --in-place=SUFFIX: the suffix must look like .bak.');
-                inPlace = true;
-                continue;
-            }
+            if (name === 'in-place') throw new GrammarError("sed: --in-place is not in the device's toybox (use -i or -i.bak).");
             if (name === 'expression') {
                 const v = val !== undefined ? val : args[++i];
                 if (v === undefined) throw new GrammarError('sed: --expression needs a value.');
@@ -689,7 +685,7 @@ async function validateArgv(argv, ctx) {
     const parsed = parseOptions(cmd, args, g);
     for (const f of parsed.flags) {
         // cp/mv's -t DIR is the destination: checkCpMv checks it with the target table.
-        if ((cmd === 'cp' || cmd === 'mv') && (f.name === 't' || f.name === 'target-directory')) continue;
+        if ((cmd === 'cp' || cmd === 'mv') && f.name === 't') continue;
         if (f.role && f.role !== 'plain') chk.byRole(f.role, f.value, `${cmd} -${f.long ? '-' : ''}${f.name}`);
     }
     let extra = null;

@@ -242,7 +242,7 @@ async function refuses(line, rx) {
         await refuses('sed -in s/x/y/ notes.txt', /suffix/);
         await refuses('sed -if s.sed notes.txt', /suffix/);
         await accepts('sed -ni.bak s/x/y/p notes.txt');
-        await refuses('sed --in-place=x s/x/y/ notes.txt', /suffix/);
+        await refuses('sed --in-place=x s/x/y/ notes.txt', /use -i/);
     });
 
     // ---- curl
@@ -450,8 +450,6 @@ async function refuses(line, rx) {
         for (const line of [
             'cp -t dir -t . staged/owner_ids',
             'mv -t dir -t .. staged/owner_ids',
-            'cp -t dir --target-directory=. staged/owner_ids',
-            'cp --target-directory=dir --target-directory=.. staged/owner_ids',
             'cp -tdir -t. staged/owner_ids',
             'cp -rLt dir -t . staged',
             `mv -t dir -t '${outside}' staged/owner_ids`,
@@ -460,10 +458,13 @@ async function refuses(line, rx) {
         // One destination keeps working, and one protected destination is still refused by its target check.
         await accepts('cp -t dir notes.txt');
         await accepts('mv -t dir a.txt');
-        await accepts('cp --target-directory=dir notes.txt');
         await accepts('cp -rLt dir src');
         await refuses('cp -t . staged/owner_ids', /owner_ids is blocked/);
         await refuses('mv -t .. staged/owner_ids', /outside the workspace/);
+        await refuses('cp -t ../outside notes.txt', /outside the workspace/);
+        await refuses(`cp -t '${outside}' notes.txt`, /outside the workspace/);
+        await refuses('cp -T notes.txt ../outside/x', /outside the workspace/);
+        await refuses('cp -T notes.txt owner_ids', /owner_ids/);
         // A destination link as the last -t (where links can be made here; CI on Linux always can).
         let linked = false;
         try { fs.symlinkSync(path.join(ws, 'dir'), path.join(ws, 'r1-dirlink'), 'dir'); linked = true; } catch (_) {}
@@ -472,18 +473,34 @@ async function refuses(line, rx) {
             await refuses('cp -t r1-dirlink notes.txt', /link/);
         }
     });
+    await check("long write options the device's toybox lacks are refused, naming the short form (§6 device check: toybox 0.8.9-android answers \"Unknown option\")", async () => {
+        for (const [line, short] of [
+            ['cp --target-directory=dir notes.txt', /use -t DIR/],
+            ['cp --target-directory dir notes.txt', /use -t DIR/],
+            ['mv --target-directory=dir a.txt', /use -t DIR/],
+            ['cp --no-target-directory a.txt b.txt', /use -T/],
+            ['mv --no-target-directory a.txt b.txt', /use -T/],
+            ['sort --output=sorted.txt a.txt', /use -o FILE/],
+            ['sort --output sorted.txt a.txt', /use -o FILE/],
+            ['sed --in-place s/x/y/ notes.txt', /use -i/],
+            ['sed --in-place=.bak s/x/y/ notes.txt', /use -i/],
+        ]) {
+            await refuses(line, /not in the device's toybox/);
+            await refuses(line, short);
+        }
+    });
     await check('G1 write options refuse outside paths and protected names; a workspace file is accepted', async () => {
-        await refuses('sort --output=../outside/y a.txt', /outside the workspace/);
-        await refuses(`sort --output=${OUT_ABS_Y} a.txt`, /outside the workspace/);
-        await refuses('sort --output=owner_ids a.txt', /managed by the app/);
-        await refuses('sort --output owner_ids a.txt', /managed by the app/);
+        await refuses('sort -o ../outside/y a.txt', /outside the workspace/);
+        await refuses(`sort -o ${OUT_ABS_Y} a.txt`, /outside the workspace/);
+        await refuses('sort -o owner_ids a.txt', /managed by the app/);
+        await refuses('sort -oowner_ids a.txt', /managed by the app/);
         await refuses('sort -o dir/bridge_token a.txt', /writing bridge_token is blocked/);
-        await accepts('sort --output=sorted.txt a.txt');
-        await refuses('sed --in-place s/x/y/ owner_ids', /managed by the app/);
-        await refuses('sed --in-place=.bak s/x/y/ owner_ids', /managed by the app/);
-        await refuses('sed --in-place s/x/y/ ../outside/x', /outside the workspace/);
-        await accepts('sed --in-place s/x/y/ notes.txt');
-        await accepts('sed --in-place=.bak s/x/y/ notes.txt');
+        await accepts('sort -o sorted.txt a.txt');
+        await refuses('sed -i s/x/y/ owner_ids', /managed by the app/);
+        await refuses('sed -i.bak s/x/y/ owner_ids', /managed by the app/);
+        await refuses('sed -i s/x/y/ ../outside/x', /outside the workspace/);
+        await accepts('sed -i s/x/y/ notes.txt');
+        await accepts('sed -i.bak s/x/y/ notes.txt');
         for (const o of ['-o', '--output', '-c', '--cookie-jar', '-D', '--dump-header', '--trace', '--trace-ascii', '--stderr', '--libcurl', '--etag-save', '--hsts', '--alt-svc']) {
             await refuses(`curl ${o} ../outside/y ${U}`, /outside the workspace/);
             await refuses(`curl ${o} ${OUT_ABS_Y} ${U}`, /outside the workspace/);

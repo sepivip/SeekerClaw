@@ -46,20 +46,28 @@ const GRAMMAR = {
         operands: 'meta',
     },
     mkdir: { short: { p: F(), v: F(), m: V('plain') }, long: { parents: F(), verbose: F(), mode: V('plain') }, operands: 'write', minOperands: 1 },
+    // Write options the device's toybox does not have (0.8.9: --target-directory, --no-target-directory,
+    // sort --output, sed --in-place answer "Unknown option") are refused, naming the short form (§6).
     cp: {
         short: { r: F(), R: F(), L: F(), f: F(), i: F(), n: F(), p: F(), v: F(), u: F(), F: F(), T: F(), t: V('write') },
-        long: { recursive: F(), dereference: F(), force: F(), interactive: F(), 'no-clobber': F(), preserve: O('plain'), verbose: F(), update: F(), 'no-target-directory': F(), 'target-directory': V('write') },
+        long: { recursive: F(), dereference: F(), force: F(), interactive: F(), 'no-clobber': F(), preserve: O('plain'), verbose: F(), update: F() },
         refuse: {
             l: 'cp -l creates hard links', s: 'cp -s creates symbolic links', link: 'cp --link creates hard links',
             'symbolic-link': 'cp --symbolic-link creates links', d: 'cp -d copies links as links', P: 'cp -P copies links as links',
             H: 'cp -H copies links as links', a: 'cp -a copies links as links', 'no-dereference': 'cp --no-dereference copies links as links',
             archive: 'cp --archive copies links as links',
+            'target-directory': "cp --target-directory is not in the device's toybox (use -t DIR)",
+            'no-target-directory': "cp --no-target-directory is not in the device's toybox (use -T)",
         },
         operands: 'special', minOperands: 1,
     },
     mv: {
         short: { f: F(), i: F(), n: F(), v: F(), u: F(), F: F(), T: F(), t: V('write') },
-        long: { force: F(), interactive: F(), 'no-clobber': F(), verbose: F(), update: F(), 'no-target-directory': F(), 'target-directory': V('write') },
+        long: { force: F(), interactive: F(), 'no-clobber': F(), verbose: F(), update: F() },
+        refuse: {
+            'target-directory': "mv --target-directory is not in the device's toybox (use -t DIR)",
+            'no-target-directory': "mv --no-target-directory is not in the device's toybox (use -T)",
+        },
         operands: 'special', minOperands: 1,
     },
     // echo only prints its arguments: every word is plain text (toybox prints unknown -x as text).
@@ -71,8 +79,11 @@ const GRAMMAR = {
     wc: { short: { l: F(), w: F(), c: F(), m: F(), L: F() }, long: { lines: F(), words: F(), bytes: F(), chars: F(), 'max-line-length': F() }, operands: 'read' },
     sort: {
         short: { n: F(), r: F(), u: F(), f: F(), b: F(), d: F(), i: F(), M: F(), h: F(), g: F(), s: F(), c: F(), C: F(), z: F(), V: F(), R: F(), k: V('plain'), t: V('plain'), o: V('write') },
-        long: { 'numeric-sort': F(), reverse: F(), unique: F(), 'ignore-case': F(), 'ignore-leading-blanks': F(), 'dictionary-order': F(), 'human-numeric-sort': F(), 'general-numeric-sort': F(), stable: F(), check: F(), 'version-sort': F(), key: V('plain'), 'field-separator': V('plain'), output: V('write') },
-        refuse: { T: 'sort -T writes temporary files elsewhere', 'compress-program': 'sort --compress-program runs a program', 'files0-from': 'sort --files0-from reads a file list', S: 'sort -S is not needed' },
+        long: { 'numeric-sort': F(), reverse: F(), unique: F(), 'ignore-case': F(), 'ignore-leading-blanks': F(), 'dictionary-order': F(), 'human-numeric-sort': F(), 'general-numeric-sort': F(), stable: F(), check: F(), 'version-sort': F(), key: V('plain'), 'field-separator': V('plain') },
+        refuse: {
+            T: 'sort -T writes temporary files elsewhere', 'compress-program': 'sort --compress-program runs a program', 'files0-from': 'sort --files0-from reads a file list', S: 'sort -S is not needed',
+            output: "sort --output is not in the device's toybox (use -o FILE)",
+        },
         operands: 'read',
     },
     uniq: {
