@@ -52,6 +52,7 @@ const https = require('https');
 const http = require('http');
 
 const { log } = require('../config');
+const { CAP_RAISE_HINT } = require('../wallet/cap-hint');
 const { androidBridgeCall } = require('../bridge');
 const { getWallet } = require('../wallet');
 const { detectProtocol } = require('../payment');
@@ -812,14 +813,14 @@ async function _handle(input /* , chatId */) {
     if (!perTx.wouldAllow) {
         return {
             error: 'burner_cap_exceeded',
-            reason: `per-tx USDC cap insufficient (${perTx.reason}). Raise with wallet_set_caps or lower max_usdc.`,
+            reason: `per-tx USDC cap insufficient (${perTx.reason}): the endpoint's price is above the burner per-tx cap (lowering max_usdc does not help). ${CAP_RAISE_HINT}`,
         };
     }
     const daily = await wouldReserve('burner.daily.usdc', demandAtomic);
     if (!daily.wouldAllow) {
         return {
             error: 'burner_cap_exceeded',
-            reason: `daily USDC cap insufficient (${daily.reason}). Raise with wallet_set_caps or wait until 00:00 UTC.`,
+            reason: `daily USDC cap insufficient (${daily.reason}). Wait until 00:00 UTC. ${CAP_RAISE_HINT}`,
         };
     }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.data.caps.CapEnforcer
+import com.seekerclaw.app.data.caps.ReservationLedger
 import com.seekerclaw.app.data.wallet.EncryptedPrefsKeyVault
 import com.seekerclaw.app.data.wallet.KeyVault
 import com.seekerclaw.app.data.wallet.SigningException
@@ -36,7 +37,8 @@ import java.math.BigInteger
  *   - /burner/sign-and-send   → atomic reserve+sign+broadcast+commit (or release)
  *   - /burner/commit          → mark reserved slot as committed (idempotent)
  *   - /burner/release         → release reserved slot without spending (idempotent)
- *   - /config/burner-caps     → update cap settings (Settings UI + chat both call this)
+ *   - /config/burner-caps     → the agent's cap write: lower or keep only (BAT-1409 P1-I; raising
+ *                                caps is Settings-only, which calls CapEnforcer.setCaps directly)
  *
  * **Hard rules:**
  *   - Response schemas are allowlist-only — fields named `key`, `seed`,
@@ -119,6 +121,8 @@ class BurnerBridgeEndpoints internal constructor(
         // a missing-id bug. Caller should NOT retry with the same id.
         const val RESERVATION_NOT_PENDING = "reservation_not_pending"
         const val INVALID_INPUT = "invalid_input"
+        // BAT-1409 P1-I: a bridge cap write that would raise a cap (Settings-only).
+        const val CAP_RAISE_SETTINGS_ONLY = "cap_raise_settings_only"
         const val SIGN_FAILED = "sign_failed"
         const val BROADCAST_NOT_IMPLEMENTED = "broadcast_not_implemented"
         // BAT-582 R1: distinct error class for Keystore/IO failures inside
@@ -162,6 +166,8 @@ class BurnerBridgeEndpoints internal constructor(
         // by filterResponse() even if handleStatus() populates them.
         "heliusConfigured",
         "activeRpc",
+        // BAT-1409 P1-I: the cap fields a refused /config/burner-caps write would have raised.
+        "fields",
     )
 
     /**
@@ -323,7 +329,7 @@ class BurnerBridgeEndpoints internal constructor(
     private fun handleReserve(params: JSONObject): EndpointResult {
         val name = params.optString("name", "").trim()
         val atomicAmountStr = params.optString("atomicAmount", "").trim()
-        val ttlMs = params.optLong("ttlMs", 60_000L)
+        val requestedTtlMs = params.optLong("ttlMs", 60_000L)
         if (name.isEmpty() || atomicAmountStr.isEmpty()) {
             return invalidInput("name and atomicAmount required")
         }
@@ -340,9 +346,8 @@ class BurnerBridgeEndpoints internal constructor(
         if (atomicAmount < BigInteger.ZERO) {
             return invalidInput("atomicAmount must be >= 0")
         }
-        if (ttlMs <= 0 || ttlMs > 10 * 60_000L) {
-            return invalidInput("ttlMs out of range")
-        }
+        // BAT-1409 P1-K: clamped to MAX_RESERVATION_TTL_MS.
+        val ttlMs = reservationTtlMs(requestedTtlMs) ?: return invalidInput("ttlMs out of range")
 
         return runBlocking {
             when (val r = capEnforcer.reserve(name, atomicAmount, ttlMs)) {
@@ -592,19 +597,46 @@ class BurnerBridgeEndpoints internal constructor(
     private fun handleConfigBurnerCaps(params: JSONObject): EndpointResult {
         // Each cap is optional — null means "leave unchanged". The body
         // shape matches the contract: atomic-unit decimal strings. We
-        // validate format here, then delegate to CapEnforcer.setCaps.
+        // validate format here, then delegate to CapEnforcer.setCapsNoRaise
+        // (BAT-1409 P1-I: the agent can lower or keep caps; raising is
+        // Settings-only, and any raising field rejects the whole request).
         val capPerTxSol = params.optStringOrNull("capPerTxSol")
         val capPerTxUsdc = params.optStringOrNull("capPerTxUsdc")
         val capDailySol = params.optStringOrNull("capDailySol")
         val capDailyUsdc = params.optStringOrNull("capDailyUsdc")
+        return handleConfigBurnerCapsInternal(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc)
+    }
+
+    /**
+     * `/config/burner-caps` core, exposed for unit tests (the production caller is
+     * [handleConfigBurnerCaps], which reads the fields off a JSONObject — trimmed, blank as null;
+     * pure-JVM tests can't build that, so they call this directly). Null = leave unchanged.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun handleConfigBurnerCapsInternal(
+        capPerTxSol: String?,
+        capPerTxUsdc: String?,
+        capDailySol: String?,
+        capDailyUsdc: String?,
+    ): EndpointResult {
         val anyProvided = listOfNotNull(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc).isNotEmpty()
         if (!anyProvided) {
             return invalidInput("at least one cap field required")
         }
         return runBlocking {
-            val ok = capEnforcer.setCaps(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc)
-            if (ok) EndpointResult(200, mapOf("ok" to true))
-            else errorResp(400, ErrorCodes.INVALID_INPUT, "cap value invalid")
+            when (val r = capEnforcer.setCapsNoRaise(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc)) {
+                null -> errorResp(400, ErrorCodes.INVALID_INPUT, "cap value invalid")
+                ReservationLedger.NoRaiseResult.Applied -> EndpointResult(200, mapOf("ok" to true))
+                is ReservationLedger.NoRaiseResult.Raised -> EndpointResult(
+                    409,
+                    mapOf(
+                        "error" to ErrorCodes.CAP_RAISE_SETTINGS_ONLY,
+                        "reason" to "Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet.",
+                        "fields" to r.fields,
+                    ),
+                )
+                ReservationLedger.NoRaiseResult.Failed -> errorResp(500, "cap_write_failed", "Failed to persist caps")
+            }
         }
     }
 
@@ -682,5 +714,19 @@ class BurnerBridgeEndpoints internal constructor(
     companion object {
         private const val TAG = "BurnerBridge"
         const val BURNER_ID = "burner"
+
+        /** BAT-1409 P1-K: the longest a bridge reservation may live. The default stays 60 s. */
+        const val MAX_RESERVATION_TTL_MS = 120_000L
+
+        /**
+         * BAT-1409 P1-K: the reservation lifetime for a caller-supplied [ttlMs]. Null for an
+         * invalid value (≤ 0 or over 10 minutes, as before); otherwise clamped to
+         * [MAX_RESERVATION_TTL_MS]. This shortens how long one reservation lives; it does not bound
+         * signing (S6′).
+         */
+        fun reservationTtlMs(ttlMs: Long): Long? {
+            if (ttlMs <= 0 || ttlMs > 10 * 60_000L) return null
+            return minOf(ttlMs, MAX_RESERVATION_TTL_MS)
+        }
     }
 }

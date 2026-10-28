@@ -5,6 +5,7 @@ import android.util.Base64
 import android.util.Log
 import androidx.activity.ComponentActivity
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.util.SafeFs
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -103,12 +104,9 @@ class SolanaAuthActivity : ComponentActivity() {
     }
 
     private fun writeResultFile(requestId: String, result: JSONObject) {
-        val resultDir = File(filesDir, RESULTS_DIR).apply { mkdirs() }
-        // Atomic write: write to .tmp then rename to .json
-        val tmpFile = File(resultDir, "$requestId.tmp")
-        val jsonFile = File(resultDir, "$requestId.json")
-        tmpFile.writeText(result.toString())
-        tmpFile.renameTo(jsonFile)
+        // BAT-1409 P1-J: atomic (temp in filesDir/.kwrite, then rename), never through a link.
+        val jsonFile = File(File(filesDir, RESULTS_DIR), "$requestId.json")
+        SafeFs.writeAtomicText(filesDir.toPath(), jsonFile.toPath(), result.toString())
         Log.d(TAG, "Result written: ${jsonFile.absolutePath}")
     }
 }

@@ -829,13 +829,13 @@ After speaking, confirm: "🔊 *Speaking:* [summary]"
 
 - **Emoji:** 📞
 - **Category:** Device
-- **Description:** Make phone calls to contacts or phone numbers
+- **Description:** Draft phone calls to contacts or phone numbers
 
 ```markdown
 ---
 name: phone-call
 version: "1.0.0"
-description: "Make phone calls to contacts or phone numbers"
+description: "Draft phone calls to contacts or phone numbers"
 metadata:
   openclaw:
     emoji: "📞"
@@ -846,13 +846,13 @@ metadata:
 
 # Phone Call
 
-Make phone calls using the Android call tool.
+Draft phone calls with the Android call tool. The agent never dials: it puts a call draft in the
+notifications on the phone running SeekerClaw, and the user taps it to open the dialer with the
+number filled in, then presses Dial.
 
 ## When to Use
 
 User says: "Call Mom", "Phone John", "Dial 555-1234"
-
-## CRITICAL: Always confirm before calling!
 
 ## Usage
 
@@ -861,21 +861,22 @@ User says: "Call Mom", "Phone John", "Dial 555-1234"
 android_contacts_search({ query: "Mom" })
 ```
 
-### Step 2: Confirm with user
-"📞 Call **Mom** (+1 555-123-4567)? Say 'yes' to call."
-
-### Step 3: Make call
+### Step 2: Draft the call
 ```javascript
 android_call({ phone: "+15551234567" })
 ```
 
+### Step 3: Relay the result
+Relay the tool's `message`, for example "I've put the call in the notifications on the phone
+running SeekerClaw — tap it to dial." Never say "calling" or "called".
+
 ## Examples
 
 **User:** "Call Mom"
-**Action:** Search contacts, confirm, then dial
+**Action:** Search contacts, draft the call, relay the message
 
 **User:** "Call the nearest pizza place"
-**Action:** Web search for number, confirm, then dial
+**Action:** Web search for the number, draft the call, relay the message
 ```
 
 ---
@@ -884,13 +885,13 @@ android_call({ phone: "+15551234567" })
 
 - **Emoji:** 💬
 - **Category:** Device
-- **Description:** Send SMS text messages to contacts or phone numbers
+- **Description:** Draft SMS text messages to contacts or phone numbers
 
 ```markdown
 ---
 name: sms
 version: "1.0.0"
-description: "Send SMS text messages to contacts or phone numbers"
+description: "Draft SMS text messages to contacts or phone numbers"
 metadata:
   openclaw:
     emoji: "💬"
@@ -901,13 +902,13 @@ metadata:
 
 # SMS
 
-Send text messages using the Android SMS tool.
+Draft text messages with the Android SMS tool. The agent never sends: it puts a message draft in
+the notifications on the phone running SeekerClaw, and the user taps it to open their SMS app with
+the recipient and text filled in, then presses Send.
 
 ## When to Use
 
 User says: "Text John that I'll be late", "Send SMS to 555-1234", "Message Mom happy birthday"
-
-## CRITICAL: Always confirm message content before sending!
 
 ## Usage
 
@@ -916,23 +917,22 @@ User says: "Text John that I'll be late", "Send SMS to 555-1234", "Message Mom h
 android_contacts_search({ query: "John" })
 ```
 
-### Step 2: Confirm
-"📱 **To:** John Smith (+1 555-123-4567)
-💬 **Message:** Running 10 minutes late!
-Should I send it?"
-
-### Step 3: Send
+### Step 2: Draft the message
 ```javascript
 android_sms({ phone: "+15551234567", message: "Running 10 minutes late!" })
 ```
 
+### Step 3: Relay the result
+Relay the tool's `message`, for example "I've put the message in the notifications on the phone
+running SeekerClaw — tap it to open your SMS app and send." Never say the message was "sent".
+
 ## Examples
 
 **User:** "Text John that I'll be late"
-**Action:** Find John, compose message, confirm, send
+**Action:** Find John, compose the message, draft it, relay the message
 
 **User:** "Send Mom a happy birthday text"
-**Action:** Find Mom, compose birthday message, confirm, send
+**Action:** Find Mom, compose a birthday message, draft it, relay the message
 ```
 
 ---
@@ -1336,8 +1336,8 @@ This is the complete list of SeekerClaw tools. Use this for:
 | Tool | Description |
 |------|-------------|
 | `android_contacts_search` | Search contacts by name |
-| `android_sms` | Send an SMS message (requires confirmation) |
-| `android_call` | Make a phone call (requires confirmation) |
+| `android_sms` | Draft an SMS: a notification the user taps to open their SMS app and send |
+| `android_call` | Draft a call: a notification the user taps to open the dialer and dial |
 
 ### Device — Location & Sensors
 

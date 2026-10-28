@@ -6,7 +6,12 @@ const { flattenForLog } = require('../log-safe');
 
 const {
     workDir, log, config, SECRETS_BLOCKED, SHELL_ALLOWLIST,
+    ROOT_SECRET_NAMES, SECRETS_ANYWHERE, WRITE_PROTECTED_ROOT,
 } = require('../config');
+const { createJsEvalGuards } = require('../js-eval-guard');
+const { tokenize, ShellArgsError } = require('./shell-args');
+const { validateArgv } = require('./shell-validate');
+const { GrammarError } = require('./shell-grammar');
 
 const {
     redactSecrets, safePath,
@@ -31,11 +36,11 @@ function _setToolRegistry(fn) { _getTools = fn; }
 const tools = [
     {
         name: 'shell_exec',
-        description: 'Execute a shell command in a sandboxed environment. Working directory is restricted to your workspace. Only a predefined allowlist of safe commands is permitted (common Unix utilities like ls, cat, grep, find, curl). No shell chaining or redirection. Max 30s timeout. Note: node/npm/npx are NOT available (Node.js runs as a JNI library, not a standalone binary). Use for file operations, curl, and system info.',
+        description: 'Run one command from a predefined allowlist (common Unix utilities like ls, cat, grep, find, sed, curl). It runs directly, without a shell: no pipes, redirection, chaining, variables or wildcards (quote special characters that are part of an argument, e.g. grep -E "a|b"). Files must be inside your workspace; unusual flags are refused with the flag named. Max 30s timeout. Note: node/npm/npx are NOT available (Node.js runs as a JNI library, not a standalone binary). Use for file operations, curl, and system info.',
         input_schema: {
             type: 'object',
             properties: {
-                command: { type: 'string', description: 'Shell command to execute (e.g., "ls -la", "cat file.txt", "curl https://example.com", "grep pattern README.md")' },
+                command: { type: 'string', description: 'One command to run, without a shell (e.g., "ls -la", "cat file.txt", "curl https://example.com", "grep pattern README.md")' },
                 cwd: { type: 'string', description: 'Working directory relative to workspace (default: workspace root). Must be within workspace.' },
                 timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default: 30000, max: 30000)' }
             },
@@ -55,7 +60,7 @@ const tools = [
     },
     {
         name: 'js_eval',
-        description: 'Execute JavaScript code in a sandboxed VM context. Use for math, JSON manipulation, data processing, date calculations, and string operations. Has access to: Math, JSON, Date, RegExp, Buffer, URL, parseInt/parseFloat, encode/decodeURIComponent, setTimeout, and require() for safe Node.js built-ins (fs, path, http, crypto — but NOT child_process, vm, worker_threads, or config files). All output is redacted for secrets. 30s timeout. Use for computation and data processing, NOT for accessing app internals.',
+        description: 'Execute JavaScript code in a sandboxed VM context. Use for math, JSON manipulation, data processing, date calculations, and string operations. Has access to: Math, JSON, Date, RegExp, Buffer, URL, parseInt/parseFloat, encode/decodeURIComponent, setTimeout, and require() for Node.js built-ins (fs, path, http, https, net, dns, crypto, zlib, os, util and similar — not child_process, vm or worker_threads, and no npm packages). fs works inside your workspace only (relative paths resolve there); app files, links and file descriptors are refused. All output is redacted for secrets. 30s timeout. Use for computation and data processing, NOT for accessing app internals.',
         input_schema: {
             type: 'object',
             properties: {
@@ -121,7 +126,7 @@ const handlers = {
     },
 
     async shell_exec(input, chatId) {
-        const { exec } = require('child_process');
+        const { execFile } = require('child_process');
         const cmd = (input.command || '').trim();
         if (!cmd) return { error: 'command is required' };
 
@@ -138,29 +143,34 @@ const handlers = {
         // Allowlist of safe command base names (shared constant from config.js).
         const ALLOWED_CMDS = SHELL_ALLOWLIST;
 
-        // Extract the base command (first token before whitespace)
-        const firstToken = cmd.split(/\s/)[0].trim();
-        // Reject explicit paths (e.g., /usr/bin/rm, ./evil.sh)
-        if (firstToken.includes('/') || firstToken.includes('\\')) {
+        // BAT-1409 P1-G: the command line becomes argv exactly once (tokenize), argv[0] must be a bare
+        // allowlisted name, and every argument is checked against the command's grammar and the
+        // workspace path rule (validateArgv). The checked argv then runs with execFile, without a
+        // shell, so nothing in it is expanded or interpreted.
+        let argv;
+        try {
+            argv = tokenize(cmd).argv;
+        } catch (e) {
+            if (e instanceof ShellArgsError) return { error: e.message };
+            throw e;
+        }
+        const firstToken = argv[0] || '';
+        const firstRaw = cmd.split(/\s/)[0];
+        // Reject explicit paths (e.g., /usr/bin/rm, ./evil.sh) and quoted or escaped command names.
+        if (firstRaw !== firstToken || firstToken.includes('/') || firstToken.includes('\\')) {
             return { error: 'Command paths are not allowed. Use a bare command name from the allowlist.' };
         }
         if (!ALLOWED_CMDS.has(firstToken)) {
             return { error: `Command "${firstToken}" is not in the allowlist. Allowed: ${[...ALLOWED_CMDS].join(', ')}` };
         }
 
-        // Block shell operators, command substitution, and glob patterns (incl. brackets)
-        if (/[;&|`<>$~{}\[\]]|\*|\?/.test(cmd.slice(firstToken.length))) {
-            return { error: 'Shell operators (;, &, |, `, <, >, $, *, ?, ~, {}, []) are not allowed in arguments. Run one simple command at a time.' };
-        }
-
         // BAT-1087: block shell access to agent_settings.json. redactSecrets covers
         // registered values, but a corrupt/unparseable file registers nothing, so a
         // dump command (cat/head/grep/base64/...) could still leak raw stored keys.
-        // Strip shell quoting/backslash escapes before matching so evasions like
-        // `agent_settings\.json` or `agent_settings.jso''n` (which /bin/sh collapses to
-        // the real name) can't slip past; operators ($, backticks, *, ...) are already
-        // rejected above, leaving quotes and backslashes as the only evasion chars.
-        if (AGENT_SETTINGS_RX.test(cmd.replace(/['"\\]/g, ''))) {
+        // Strip quoting/backslash escapes before matching so evasions like
+        // `agent_settings\.json` or `agent_settings.jso''n` (which tokenize() collapses to
+        // the real name) can't slip past; every argv word is checked as well.
+        if (AGENT_SETTINGS_RX.test(cmd.replace(/['"\\]/g, '')) || argv.some((a) => AGENT_SETTINGS_RX.test(a))) {
             return { error: `Reading ${AGENT_SETTINGS_FILE} via shell_exec is blocked. Use the read tool — it returns the file with secret values masked.` };
         }
 
@@ -176,6 +186,22 @@ const handlers = {
             cwd = resolved;
         }
 
+        let runArgv;
+        try {
+            ({ argv: runArgv } = await validateArgv(argv, {
+                workDir,
+                cwd: path.resolve(cwd),
+                names: { ROOT_SECRET_NAMES, SECRETS_ANYWHERE, WRITE_PROTECTED_ROOT },
+                agentSettingsFile: AGENT_SETTINGS_FILE,
+            }));
+        } catch (e) {
+            if (e instanceof GrammarError) {
+                log(`[Security] shell_exec refused: ${flattenForLog(e.message, 160)}`, 'WARN');
+                return { error: e.message };
+            }
+            throw e;
+        }
+
         // Validate and clamp timeout to [1, 30000]ms
         let timeout = 30000;
         if (input.timeout_ms !== undefined) {
@@ -186,15 +212,14 @@ const handlers = {
             timeout = Math.min(Math.max(t, 1), 30000);
         }
 
-        // Detect shell: Android uses /system/bin/sh, standard Unix uses /bin/sh
-        const shellPath = fs.existsSync('/system/bin/sh') ? '/system/bin/sh' : '/bin/sh';
         // Build child env from process.env (needed for nodejs-mobile paths)
         // but strip any vars that could leak *system* secrets to child processes.
         // User-set env vars (BAT-495) are always preserved — the user explicitly
         // added them to use them from shell_exec / skills.
         const { USER_ENV_KEYS } = require('../config');
         const userEnvSet = new Set(USER_ENV_KEYS);
-        const childEnv = { ...process.env, HOME: workDir, TERM: 'dumb' };
+        // CURL_HOME is empty and curl runs with -q (P1-G): no .curlrc is read from anywhere.
+        const childEnv = { ...process.env, HOME: workDir, TERM: 'dumb', CURL_HOME: '' };
         for (const key of Object.keys(childEnv)) {
             if (userEnvSet.has(key)) continue; // preserve user-set env vars
             const k = key.toUpperCase();
@@ -204,14 +229,22 @@ const handlers = {
             }
         }
 
-        // Use async exec to avoid blocking the event loop
+        // Async, without a shell: the validated argv is exactly what runs.
+        const LIMIT = 50000;
+        // stdout is cut to its first 50,000 characters; say so, so a long grep over a big log is not
+        // mistaken for the whole answer (the newest lines are at the end — see DIAGNOSTICS.md).
+        const clip = (text) => {
+            const red = redactSecrets(text || '');
+            if (red.length <= LIMIT) return red;
+            return red.slice(0, LIMIT) + `
+[output truncated: showing the first ${LIMIT} of ${red.length} characters]`;
+        };
         return new Promise((resolve) => {
-            exec(cmd, {
+            const child = execFile(runArgv[0], runArgv.slice(1), {
                 cwd,
                 timeout,
                 encoding: 'utf8',
                 maxBuffer: 1024 * 1024, // 1MB
-                shell: shellPath,
                 env: childEnv
             }, (err, stdout, stderr) => {
                 // BAT-1087: redact secrets from shell output before it reaches the
@@ -220,23 +253,31 @@ const handlers = {
                 // the bridge token and any registered secret. Redact BEFORE slicing so
                 // a secret spanning the truncation boundary is still masked.
                 if (err) {
-                    if (err.killed && err.signal) {
-                        log(`shell_exec TIMEOUT: ${cmd.slice(0, 80)}`, 'WARN');
+                    let reason;
+                    if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+                        reason = 'Output exceeded 1 MB and was stopped. Narrow the command (e.g. a more specific grep pattern) or use js_eval.';
+                    } else if (err.code === 'ENOENT') {
+                        reason = `${runArgv[0]} is not available on this device.`;
+                    } else if (err.killed && err.signal) {
+                        reason = `Command timed out after ${timeout}ms`;
+                    }
+                    if (reason) {
+                        log(`shell_exec FAIL (${reason.split(/[.:]/)[0]}): ${cmd.slice(0, 80)}`, 'WARN');
                         resolve({
                             success: false,
                             command: cmd,
-                            stdout: redactSecrets(stdout || '').slice(0, 50000),
-                            stderr: `Command timed out after ${timeout}ms`,
-                            exit_code: err.code || 1
+                            stdout: clip(stdout),
+                            stderr: reason,
+                            exit_code: typeof err.code === 'number' ? err.code : 1
                         });
                     } else {
                         log(`shell_exec FAIL (exit ${err.code || '?'}): ${cmd.slice(0, 80)}`, 'WARN');
                         resolve({
                             success: false,
                             command: cmd,
-                            stdout: redactSecrets(stdout || '').slice(0, 50000),
+                            stdout: clip(stdout),
                             stderr: redactSecrets((stderr || '') || err.message || 'Unknown error').slice(0, 10000),
-                            exit_code: err.code || 1
+                            exit_code: typeof err.code === 'number' ? err.code : 1
                         });
                     }
                 } else {
@@ -244,12 +285,15 @@ const handlers = {
                     resolve({
                         success: true,
                         command: cmd,
-                        stdout: redactSecrets(stdout || '').slice(0, 50000),
+                        stdout: clip(stdout),
                         stderr: redactSecrets(stderr || '').slice(0, 10000),
                         exit_code: 0
                     });
                 }
             });
+            // Nothing is ever piped in: a command that reads stdin (cat -, a grep with no file)
+            // sees end-of-input at once instead of waiting for the timeout.
+            if (child.stdin) child.stdin.end();
         });
     },
 
@@ -290,49 +334,6 @@ const handlers = {
             group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
         };
 
-        // Sandboxed require: block dangerous modules and restrict fs access to sensitive files
-        const BLOCKED_MODULES = new Set(['child_process', 'cluster', 'worker_threads', 'vm', 'v8', 'perf_hooks', 'module']);
-        // Create a guarded fs proxy that blocks reads AND writes to sensitive files
-        // promisesGuard: optional set of guarded methods for the .promises sub-property
-        const createGuardedFsProxy = (realModule, guardedMethods, promisesGuard) => {
-            return new Proxy(realModule, {
-                get(target, prop) {
-                    // Intercept fs.promises to return a guarded proxy too
-                    if (prop === 'promises' && promisesGuard && target[prop]) {
-                        return createGuardedFsProxy(target[prop], promisesGuard);
-                    }
-                    const original = target[prop];
-                    if (typeof original !== 'function') return original;
-                    if (guardedMethods.has(prop)) {
-                        return function(...args) {
-                            const filePath = String(args[0]);
-                            // Resolve symlinks to prevent alias bypass (symlink -> config.json)
-                            let resolvedPath = filePath;
-                            try { resolvedPath = fs.realpathSync(filePath); } catch (_) {}
-                            const basename = path.basename(resolvedPath);
-                            if (SECRETS_BLOCKED.has(basename)) {
-                                throw new Error(`Access to ${basename} is blocked for security.`);
-                            }
-                            // BAT-1087: agent_settings.json isn't in SECRETS_BLOCKED (masked
-                            // read is allowed via the read tool), but js_eval must not read it
-                            // raw — that would bypass masking for <7-char / corrupt-file secrets.
-                            if (basename === AGENT_SETTINGS_FILE) {
-                                throw new Error('Access to agent_settings.json via js_eval is blocked; use the read tool (secret values are masked).');
-                            }
-                            return original.apply(target, args);
-                        };
-                    }
-                    return original.bind(target);
-                }
-            });
-        };
-        const FS_GUARDED = new Set([
-            'readFileSync', 'readFile', 'createReadStream', 'openSync', 'open',
-            'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
-            'copyFileSync', 'copyFile', 'cpSync', 'cp',
-            'symlinkSync', 'symlink', 'linkSync', 'link',
-        ]);
-        const FSP_GUARDED = new Set(['readFile', 'writeFile', 'appendFile', 'open', 'copyFile', 'cp']);
         // Safe process subset — env contains ONLY user-set BAT-495 env vars.
         // System secrets (bot tokens, provider API keys from config.json) stay hidden
         // because they live in the `config` object, not process.env (with the
@@ -347,59 +348,16 @@ const handlers = {
             }
         }
         const safeProcess = { env: userEnv, cwd: () => workDir, platform: process.platform, arch: process.arch, version: process.version };
-        const sandboxedRequire = (mod) => {
-            if (typeof mod !== 'string') {
-                throw new Error('Module identifier must be a string in js_eval.');
-            }
-            // Normalize Node core specifiers like "node:fs" -> "fs"
-            let normalizedMod = mod.startsWith('node:') ? mod.slice(5) : mod;
-
-            // Block relative requires (including ".", "..") — prevents access to config.js (secrets), security.js, etc.
-            if (
-                normalizedMod === '.' ||
-                normalizedMod === '..' ||
-                normalizedMod.startsWith('./') ||
-                normalizedMod.startsWith('../') ||
-                normalizedMod.startsWith('.\\') ||
-                normalizedMod.startsWith('..\\')
-            ) {
-                throw new Error('Relative module imports are blocked in js_eval for security.');
-            }
-
-            // Block absolute paths into workspace or source directory
-            // Resolve both sides via realpathSync to defeat symlink aliases
-            // (Android: /data/user/0/... is a symlink to /data/data/...)
-            if (path.isAbsolute(normalizedMod)) {
-                let resolvedMod = path.resolve(normalizedMod);
-                try { resolvedMod = fs.realpathSync(resolvedMod); } catch (_) {}
-                let resolvedWork = path.resolve(workDir);
-                try { resolvedWork = fs.realpathSync(resolvedWork); } catch (_) {}
-                let resolvedSrc = path.resolve(__dirname, '..');
-                try { resolvedSrc = fs.realpathSync(resolvedSrc); } catch (_) {}
-                const inWorkDir = resolvedMod === resolvedWork || resolvedMod.startsWith(resolvedWork + path.sep);
-                const inSourceDir = resolvedMod === resolvedSrc || resolvedMod.startsWith(resolvedSrc + path.sep);
-                if (inWorkDir || inSourceDir) {
-                    throw new Error('Direct module imports from app directories are blocked in js_eval for security.');
-                }
-            }
-
-            if (BLOCKED_MODULES.has(normalizedMod)) {
-                throw new Error(`Module "${normalizedMod}" is blocked in js_eval for security. Use shell_exec for command execution.`);
-            }
-
-            if (normalizedMod === 'fs') {
-                return createGuardedFsProxy(require('fs'), FS_GUARDED, FSP_GUARDED);
-            }
-            if (normalizedMod === 'fs/promises') {
-                return createGuardedFsProxy(require('fs/promises'), FSP_GUARDED);
-            }
-            // Return safe process stub instead of real process (blocks env, mainModule)
-            if (normalizedMod === 'process') {
-                return safeProcess;
-            }
-
-            return require(normalizedMod);
-        };
+        // BAT-1409 P1-F (amendment v3.3 M3): an explicit allowlist of Node built-ins; fs is a
+        // workspace-confined façade (P1-E path rule, no descriptors, no links, read-only flags on
+        // reads); net cannot wrap a descriptor. See js-eval-guard.js.
+        const guards = createJsEvalGuards({
+            workDir,
+            names: { ROOT_SECRET_NAMES, SECRETS_ANYWHERE, WRITE_PROTECTED_ROOT },
+            agentSettingsFile: AGENT_SETTINGS_FILE,
+            onRefuse: (msg) => log(`[Security] js_eval refused: ${flattenForLog(msg, 160)}`, 'WARN'),
+        });
+        const sandboxedRequire = (mod) => guards.requireModule(mod, safeProcess);
 
         let timerId;
         try {

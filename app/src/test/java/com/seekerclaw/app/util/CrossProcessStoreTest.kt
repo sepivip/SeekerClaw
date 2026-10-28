@@ -632,12 +632,17 @@ class CrossProcessStoreTest {
         // Files.move with REPLACE_EXISTING + ATOMIC_MOVE. The earlier
         // delete + renameTo fallback was rejected because it created a
         // DELETE-event window where observers briefly saw `initial`.
+        // BAT-1409 P1-J moved that write into SafeFs.writeAtomic (link-safe at every
+        // depth); the store must delegate to it, and SafeFs must keep the BAT-512 move.
+        assertTrue("store must persist through SafeFs.writeAtomicText",
+            text.contains("SafeFs.writeAtomicText("))
+        val safeFs = File(src.parentFile, "SafeFs.kt").readText().replace("\r\n", "\n")
         assertTrue("atomic write must use Files.move",
-            Regex("""Files\s*\.\s*move\s*\(""").containsMatchIn(text))
+            Regex("""Files\s*\.\s*move\s*\(""").containsMatchIn(safeFs))
         assertTrue("atomic write must request ATOMIC_MOVE",
-            text.contains("StandardCopyOption.ATOMIC_MOVE"))
+            safeFs.contains("StandardCopyOption.ATOMIC_MOVE"))
         assertTrue("atomic write must request REPLACE_EXISTING",
-            text.contains("StandardCopyOption.REPLACE_EXISTING"))
+            safeFs.contains("StandardCopyOption.REPLACE_EXISTING"))
         assertTrue("FileObserver mask must include the BAT-518 set",
             Regex("""FileObserver\.MODIFY[\s\S]*FileObserver\.CLOSE_WRITE[\s\S]*FileObserver\.MOVED_TO""").containsMatchIn(text))
         assertTrue("ACTION_STORE_CHANGED is the broadcast action",

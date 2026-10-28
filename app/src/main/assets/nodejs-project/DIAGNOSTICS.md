@@ -3,12 +3,31 @@
 > **Purpose:** Deep troubleshooting for failure modes not covered by the quick playbook in your system prompt.
 > Read this file on demand when you need detailed diagnosis steps.
 
+### Searching the logs
+`shell_exec` runs one command without a shell, so there are no pipes (`| tail`). The `grep` recipes below print every match **oldest first**, and output past 50,000 characters is cut (the result says so) — on a large `node_debug.log` the newest matches may be in the part that was cut. Quote patterns that contain `|`, `*` or brackets (`grep -iE "429|rate.limit" node_debug.log`). For the newest matches, use `js_eval`:
+```javascript
+const lines = require('fs').readFileSync('node_debug.log', 'utf8').split('\n');
+return lines.filter((l) => /429|rate.limit/i.test(l)).slice(-20).join('\n');
+```
+Each line is `LEVEL|epochMs|message`, so a bare number (`401`, `429`, `8765`) also matches timestamps. Prefer words (`Too Many Requests`, `status=429`), or test only the message part in `js_eval`: `l.split('|').slice(2).join('|')`.
+
 ---
 
 ## Channel Connection
 
 ### Which Channel Am I On?
 The agent runs on one of two channels, configured by the `CHANNEL` setting (`telegram` or `discord`). The `channel.js` abstraction routes all messaging calls to the active channel module. Check `CHANNEL` in config to determine which channel-specific diagnostics apply.
+
+### Someone's messages are ignored — owner claim refused (BAT-1409)
+**Symptoms:** a person gets no reply at all, or the bot answers once: "Channel changed in Settings — restart SeekerClaw to finish."
+**Check:** `grep -iE "Owner claim|not owner|save-owner" node_debug.log` (the app's side is on the **Logs screen** as `[Bridge] owner claim …`).
+**Diagnosis:** only the owner's messages reach you. While no owner is set, the first sender becomes the owner — but the app records an owner only when none is set, and only for the channel this run started with. `Owner claim by X refused by the app (code)`:
+- `owner_already_set` — a different owner is already recorded; this sender is not the owner.
+- `inactive_channel` — the channel was changed in Settings after this run started; a restart finishes the switch.
+- `bad_channel` / `owner_unreadable` — the owner record could not be read or used.
+- `Ignoring message from X (not owner)` — normal for anyone but the owner.
+- `Bridge save-owner failed` — the owner is set for this run only and may need setting again after a restart.
+**Fix:** you cannot change the owner. For `inactive_channel`, ask the owner to tap **Stop Agent**, then **Deploy Agent**. Otherwise the owner sets or corrects the **Owner ID** in SeekerClaw Settings (the Telegram or Discord settings), then restarts the agent.
 
 ---
 
@@ -18,7 +37,7 @@ The agent runs on one of two channels, configured by the `CHANNEL` setting (`tel
 **Symptoms:** No messages received, grammy throws 401 Unauthorized in logs.
 **Check:**
 ```
-grep -i "401\|Unauthorized\|FORBIDDEN" node_debug.log | tail -10
+grep -iE "401|Unauthorized|FORBIDDEN" node_debug.log
 ```
 **Diagnosis:** If you see `401 Unauthorized` from api.telegram.org (not api.anthropic.com), the Telegram bot token is invalid or revoked.
 **Fix:** Tell the user: "Your Telegram bot token appears invalid. Go to @BotFather on Telegram, regenerate the token, then update it in SeekerClaw Settings > Telegram Token." This requires an app restart.
@@ -27,7 +46,7 @@ grep -i "401\|Unauthorized\|FORBIDDEN" node_debug.log | tail -10
 **Symptoms:** Messages delayed or dropped, 429 responses from Telegram API in logs.
 **Check:**
 ```
-grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
+grep -iE "429|Too Many Requests|rate.limit" node_debug.log
 ```
 **Diagnosis:** Telegram rate limits: ~30 messages/second to different chats, ~20 messages/minute to same chat, ~1 message/second for same chat. Bulk sending or rapid tool status updates can trigger this.
 **Fix:** Reduce message frequency. Batch status updates into single messages. If persistent, wait 30-60 seconds before retrying. This is transient — no config change needed.
@@ -36,7 +55,7 @@ grep -i "429\|Too Many Requests\|rate.limit" node_debug.log | tail -10
 **Symptoms:** Replies render as plain/HTML instead of rich (no tables/headings/math), or logs show `sendRichMessage` warnings.
 **Check:**
 ```bash
-grep -i "sendRichMessage\|systemPlain\|Plain-text fallback\|transient send" node_debug.log | tail -20
+grep -iE "sendRichMessage|systemPlain|Plain-text fallback|transient send" node_debug.log
 ```
 **Diagnosis:** Rich Messages (Bot API 10.1) are **default ON**, controlled by the Telegram-settings **Rich Messages** toggle (`config.richMessages`) with a `SEEKERCLAW_RICH` env-var override (precedence: toggle > env > default ON). With it OFF, every reply uses the classic `parse_mode:HTML` pipeline — this is normal. With it ON (the default), a reply falls back to classic when `sendRichMessage` does not land:
 - `sendRichMessage unsupported by this Bot API ...` — the API does not expose Rich Messages; Rich is disabled for the rest of the run and all replies use the classic pipeline. Nothing is lost.
@@ -53,12 +72,12 @@ grep -i "sendRichMessage\|systemPlain\|Plain-text fallback\|transient send" node
 **Symptoms:** No messages arrive for extended periods. Logs show many consecutive poll or WebSocket failures.
 **Check:**
 ```
-grep -i "Prolonged outage\|consecutive.*poll\|consecutive.*fail" node_debug.log | tail -10
+grep -iE "Prolonged outage|consecutive.*poll|consecutive.*fail" node_debug.log
 ```
 **Diagnosis:** After 20+ consecutive poll failures (Telegram) or sustained WebSocket disconnects (Discord), the system logs a "Prolonged outage" warning. This indicates persistent network loss — not a bot or API issue.
 **Fix:**
 1. Check device network: WiFi connected? Mobile data active?
-2. Check DNS: `grep -i ENOTFOUND node_debug.log | tail -5`
+2. Check DNS: `grep -iE "ENOTFOUND|DNS resolution failing" node_debug.log`
 3. The polling/WebSocket system auto-recovers when network returns — no manual intervention needed
 4. If the user reports this: "Your phone lost network connectivity for a while. Messages during the outage may have been missed. Check your WiFi/mobile data connection."
 
@@ -70,7 +89,7 @@ grep -i "Prolonged outage\|consecutive.*poll\|consecutive.*fail" node_debug.log 
 **Symptoms:** Bot never connects, logs show 4004 (Authentication failed) or 4014 (Disallowed intents).
 **Check:**
 ```
-grep -i "4004\|4014\|Authentication\|Disallowed intent\|DISCORD" node_debug.log | tail -10
+grep -iE "4004|4014|Authentication|Disallowed intent|DISCORD" node_debug.log
 ```
 **Diagnosis:**
 - **4004 Authentication failed:** The Discord bot token is invalid, revoked, or malformed.
@@ -83,7 +102,7 @@ grep -i "4004\|4014\|Authentication\|Disallowed intent\|DISCORD" node_debug.log 
 **Symptoms:** Messages stop arriving, then resume after a delay. Logs show "Gateway disconnected" or "Reconnecting".
 **Check:**
 ```
-grep -i "gateway.*disconnect\|reconnect\|resume\|heartbeat.*ack" node_debug.log | tail -10
+grep -iE "gateway.*disconnect|reconnect|resume|heartbeat.*ack" node_debug.log
 ```
 **Diagnosis:** Discord Gateway uses WebSocket with heartbeat/ACK keepalive. If the server doesn't ACK a heartbeat, the client reconnects automatically. This is normal and self-healing. Frequent disconnects indicate network instability.
 **Fix:** Transient — no action needed. If persistent:
@@ -95,7 +114,7 @@ grep -i "gateway.*disconnect\|reconnect\|resume\|heartbeat.*ack" node_debug.log 
 **Symptoms:** Messages delayed, 429 responses in logs.
 **Check:**
 ```
-grep -i "429\|rate.limit\|Retry-After" node_debug.log | tail -10
+grep -iE "429|rate.limit|Retry-After" node_debug.log
 ```
 **Diagnosis:** Discord rate limits: 5 messages/5s per channel, 50 requests/second global. Bulk sending or rapid tool status updates can trigger this.
 **Fix:** Reduce message frequency. The Discord client automatically waits for Retry-After headers. If persistent, batch status updates into single messages.
@@ -108,20 +127,20 @@ grep -i "429\|rate.limit\|Retry-After" node_debug.log | tail -10
 **Symptoms:** Responses cut off mid-stream, `[Trace]` entries in logs showing high latency, user sees partial or no response.
 **Check:**
 ```
-grep "\[Trace\]" node_debug.log | tail -10
+grep "\[Trace\]" node_debug.log
 ```
-**Diagnosis:** Look at the `elapsed` field in trace entries. Values over 60s indicate transport timeouts. Common on unstable mobile networks. Since BAT-259, responses use streaming which reduces but doesn't eliminate this.
+**Diagnosis:** Look at the `elapsedMs` field in trace entries. Values over 60s indicate transport timeouts. Common on unstable mobile networks. Since BAT-259, responses use streaming which reduces but doesn't eliminate this.
 **Fix:**
-1. Check network stability: `grep -i "ETIMEDOUT\|ECONNRESET\|socket hang up" node_debug.log`
+1. Check network stability: `grep -iE "ETIMEDOUT|ECONNRESET|socket hang up" node_debug.log`
 2. If frequent: suggest the user switch to WiFi or a more stable connection
 3. The system automatically retries with backoff — no manual intervention usually needed
-4. API timeout is configurable in agent_settings.json (`apiTimeoutMs`, default 120000)
+4. The per-request API timeout is 60 s by default (`apiTimeoutMs` / `API_TIMEOUT_MS`); it is not a Settings or `agent_settings.json` option
 
 ### Invalid Tool Schema (400 Error) — Agent Won't Respond
 **Symptoms:** Every agent turn fails with `API error (400): Invalid schema for function 'TOOLNAME'`. NO tool is dispatched; the model rejects the entire toolset before producing any output. Agent appears completely dead.
 **Check:**
 ```
-grep -i "Invalid schema for function" node_debug.log | tail -3
+grep -i "Invalid schema for function" node_debug.log
 ```
 **Diagnosis:** The Anthropic API validates every tool's `input_schema` before allowing the model to call any of them. A single malformed schema rejects the WHOLE toolset, not just calls to the bad tool. Common bug shapes that bite:
 - `type: ['object', 'array', 'string']` without `items: {}` — when a union includes `array`, `items` is required even for the polymorphic case. Caught: BAT-664 (`tools/agent_pay.js` `body` parameter).
@@ -135,7 +154,7 @@ grep -i "Invalid schema for function" node_debug.log | tail -3
 **Symptoms:** API returns 400 error, message mentions "maximum context length" or "too many tokens".
 **Check:**
 ```
-grep -i "400\|context.*length\|too many tokens" node_debug.log | tail -5
+grep -iE "400|context.*length|too many tokens" node_debug.log
 ```
 **Diagnosis:** The conversation + system prompt exceeded the model's context window. This can happen with very long tool results or accumulated conversation history.
 **Fix:**
@@ -147,7 +166,7 @@ grep -i "400\|context.*length\|too many tokens" node_debug.log | tail -5
 **Symptoms:** During a long single turn (many tool rounds), the agent suddenly acts as if it never got the request — says things like "I didn't receive any text", treats the triggering input as an "unexplained leftover file", or abandons a multi-step task partway and invents a reason. The message *was* received (it shows in the reply), and there's no crash, timeout, or 4xx.
 **Check:**
 ```
-grep -E "\[History\]|\[AnchorGuard\]" node_debug.log | tail -20
+grep -E "\[History\]|\[AnchorGuard\]" node_debug.log
 ```
 **Diagnosis:** The conversation is trimmed to `MAX_HISTORY` (35) each tool round. The current turn's user instruction (the "anchor") is now **exempt** from that trim (additive-exempt — `nonAnchorLen <= 35`, so preserving it never costs a findings slot). The two log lines report on this:
 - `[History] {... anchorSkipped:1, anchorExempt:1, nonAnchorLen, len ...}` — the anchor-preserving trim engaged and skipped over the instruction instead of deleting it. On a long turn this is **normal and expected** — it's the fix working. First skip per turn+site logs `WARN`, later same-turn skips `DEBUG`.
@@ -161,7 +180,7 @@ grep -E "\[History\]|\[AnchorGuard\]" node_debug.log | tail -20
 **Symptoms:** On a Pro/Max sign-in (setup_token), API calls return `400` with "You're out of extra usage. Add more at claude.ai/settings/usage" — sometimes on every turn, even when the subscription still has usage left.
 **Check:**
 ```
-grep -iE "out of extra usage|SelfHeal|invalid_request_error" node_debug.log | tail -10
+grep -iE "out of extra usage|SelfHeal|invalid_request_error" node_debug.log
 ```
 **Diagnosis:** Anthropic's setup_token path can MISLABEL a content-filter rejection as this billing message. A specific phrase inside the request (historically an auto-generated session summary) trips a filter, and the rejection is dressed up as "out of extra usage" — the account is often NOT actually out of usage (a tiny request on the same sign-in still succeeds).
 **What the system does automatically:** On this 400, SeekerClaw retries the turn ONCE with volatile memory dropped (Recent Sessions + today's daily memory + MEMORY.md), logged as `[SelfHeal]`. If the lean retry succeeds, it was a content false-positive and the turn completes normally.
@@ -173,7 +192,7 @@ grep -iE "out of extra usage|SelfHeal|invalid_request_error" node_debug.log | ta
 **Symptoms:** All API calls fail immediately. Logs show connection refused, SSL errors, or unexpected response format (e.g., "Unexpected token" JSON parse errors).
 **Check:**
 ```
-grep -i "custom provider\|ECONNREFUSED\|UNABLE_TO_VERIFY\|Unexpected token" node_debug.log | tail -10
+grep -iE "custom provider|ECONNREFUSED|UNABLE_TO_VERIFY|Unexpected token" node_debug.log
 ```
 **Diagnosis:** The user configured a custom OpenAI-compatible endpoint in Settings > AI Provider > Custom. Common issues:
 - **Wrong base URL:** URL must include the path up to (but not including) `/v1/chat/completions` — e.g., `https://my-gateway.example.com` not `https://my-gateway.example.com/v1/chat/completions`
@@ -191,7 +210,7 @@ grep -i "custom provider\|ECONNREFUSED\|UNABLE_TO_VERIFY\|Unexpected token" node
 **Symptoms:** Agent stops responding on OpenAI OAuth. Log shows `[OpenAI] OAuth refresh failed` or `OAuth token refresh failed`. Subsequent API calls return 401.
 **Check:**
 ```
-grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
+grep -iE "OAuth refresh|oauth_refresh|invalid_grant" node_debug.log
 ```
 **Diagnosis:** The OAuth refresh token is rejected by `auth.openai.com/oauth/token`. Causes:
 - **User changed ChatGPT password** — invalidates all refresh tokens
@@ -199,14 +218,14 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 - **Refresh token revoked** — manual revocation in OpenAI account settings
 - **OpenAI rotated client secret** — rare, would affect all users
 **Fix:**
-1. Check the exact refresh error: `grep "OAuth refresh failed" node_debug.log | tail -5` — look for `error_description`
+1. Check the exact refresh error: `grep "OAuth refresh failed" node_debug.log` — look for `error_description`
 2. Tell the user to re-sign-in: Settings > AI Provider > OpenAI > Sign in with ChatGPT
 3. Sign-out is NOT required first — re-signing-in overwrites the stored tokens
 4. If the user can't re-sign-in (e.g., lost access to ChatGPT account), suggest switching auth type to "API Key" in the picker and providing a platform API key as a fallback
 
 ### OpenAI Codex OAuth — Sign-In Flow Failures
 **Symptoms:** User taps "Sign in with ChatGPT", browser opens, but sign-in never completes. UI shows "Sign-in canceled" or hangs.
-**Check:** `grep -i "OpenAIOAuth" node_debug.log | tail -30` (note: this is Logcat, not node_debug.log — Logcat lives in Android logs, not the Node-side log)
+**Check:** the sign-in flow is Kotlin-side, so `node_debug.log` has no `OpenAIOAuth` lines. Ask the user what the app showed; a developer can read Logcat on a computer (`adb logcat`, filtered for `OpenAIOAuth`) <!-- not-shell-recipe -->
 **Diagnosis:** The PKCE flow has several failure modes:
 - **State mismatch:** A stray request hit `127.0.0.1:1455/auth/callback` with the wrong state (CSRF defense). The legitimate redirect should still work — tell the user to retry.
 - **Browser closed before completion:** Custom Tab dismissed before consent. Tokens not exchanged. Retry from Settings.
@@ -217,12 +236,12 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 **Fix:**
 1. The OAuth section in Settings stays visible after a failed sign-in — the user just taps "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.
 2. If the auth picker shows "Sign in first" disabled state, that means authType=oauth is selected but no token. Tap "Sign in with ChatGPT" in the OAuth section directly.
-3. For persistent failures: check Logcat (`adb logcat | grep OpenAIOAuth`) for the exact error code. State mismatches and double-submission errors are usually benign.
+3. For persistent failures: a developer checks Logcat on a computer (`adb logcat`, filtered for `OpenAIOAuth`) for the exact error code. <!-- not-shell-recipe --> State mismatches and double-submission errors are usually benign.
 4. As a last resort, the user can sign out (clears tokens, keeps OAuth as the chosen auth type) and sign back in.
 
 ### xAI Grok OAuth — Sign-In Flow (BAT-1124)
 **Symptoms:** User taps "Sign in with Grok", browser opens auth.x.ai, but sign-in never completes. UI shows "Sign-in canceled", "Port 56121 is in use", or hangs.
-**Check:** `adb logcat | grep XaiOAuth` (this is Logcat, not node_debug.log — the sign-in flow is Kotlin-side).
+**Check:** the sign-in flow is Kotlin-side, so it is in Logcat, not `node_debug.log`: a developer reads it on a computer (`adb logcat`, filtered for `XaiOAuth`). <!-- not-shell-recipe -->
 **Diagnosis / flow:** loopback + PKCE S256, mirror of the OpenAI flow. Chrome Custom Tab → user signs in on `auth.x.ai` → 302 to the FIXED redirect `http://127.0.0.1:56121/callback` → the on-device server captures the code → token exchange at `auth.x.ai/oauth2/token`. Failure modes:
 - **Port 56121 in use:** the redirect port is FIXED (xAI registered exactly `127.0.0.1:56121` — there is no random-port fallback). If another app holds it, sign-in fails loud with "Port 56121 is in use". Close the offending app and retry; an app restart usually frees it.
 - **State mismatch:** a stray request hit the callback with the wrong `state` (CSRF defense) — the legitimate redirect still works, tell the user to retry.
@@ -232,7 +251,7 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 
 ### xAI Grok — 403 "Grok denied the request" (read the REAL reason — not automatically a tier-gate)
 **Symptoms:** Grok messages fail with a 403 / "Grok denied the request" / "permission-denied". The user is signed in via OAuth.
-**Check:** `grep -i "xai\|grok" node_debug.log | tail -20` — look for the `[xAI] 403 forbidden: code=<...> reason=<...>` line the provider logs on every terminal 403 (it records xAI's REAL error code + message).
+**Check:** `grep -iE "xai|grok" node_debug.log` — look for the `[xAI] 403 forbidden: code=<...> reason=<...>` line the provider logs on every terminal 403 (it records xAI's REAL error code + message).
 **Diagnosis:** A 403 is **NOT** automatically a subscription-tier gate — that copy used to be fabricated from the HTTP status alone (fixed in BAT-1172). xAI returns a flat `{code, error}` body; the provider now reads it and classifies on the real code/message:
 - On the **first** touch, API access can provision *lazily* — the provider retries a 403 ONCE after a short delay, so a single transient 403 is expected and self-heals.
 - A **persistent** 403 is surfaced with xAI's actual reason. If the code/message is auth-ish (`unauthenticated:*`, "bad credentials", expired) it is treated as a sign-in problem → reconnect. Otherwise it is a genuine permission/entitlement limit and xAI's real message is shown. A genuine non-auth gate does NOT trigger a token refresh (no rotation is burned).
@@ -244,12 +263,12 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 
 ### xAI Grok OAuth — Token Refresh / Persist Failure
 **Symptoms:** Agent stops responding on xAI OAuth after ~6h. Log shows `[xAI] OAuth refresh failed` or `[xAI] OAuth token rotated but could NOT be persisted`.
-**Check:** `grep -i "xai.*oauth\|invalid_grant\|persist" node_debug.log | tail -20`
+**Check:** `grep -iE "xai.*oauth|invalid_grant|persist" node_debug.log`
 **Diagnosis:** xAI refresh tokens are **single-use and rotate** — each refresh returns a NEW refresh token that MUST be persisted (via the bridge `POST /xai/oauth/save-tokens`) or the account is locked out on the next restart. Causes:
 - **`invalid_grant` on refresh** — the refresh token is dead (revoked, or a prior rotation wasn't persisted). Re-login required.
 - **Bridge persist failed** — the rotated token couldn't be written to Keystore (`XAI_OAUTH_SAVE_FAILED`). The in-memory token keeps THIS session working, but a re-login may be needed after a restart.
 **Fix:**
-1. Check the exact error: `grep "xAI.*refresh\|persist" node_debug.log | tail -5`.
+1. Check the exact error: `grep -E "xAI.*refresh|persist" node_debug.log`.
 2. Tell the user to re-sign-in: Settings > AI Provider > xAI > Sign in with Grok (overwrites the stored tokens; sign-out first is not required).
 3. If re-login isn't possible, switch Auth Type to "API Key" and provide a `console.x.ai` key.
 
@@ -265,8 +284,8 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 ## Tools
 
 ### Tool Result Truncation (>50K chars)
-**Symptoms:** Tool results seem incomplete or cut off. No error message — truncation is silent.
-**How it works:** Any tool result exceeding ~50K characters (HARD_MAX_TOOL_RESULT_CHARS in config.js) is silently truncated with a `...(truncated)` suffix. The agent receives the truncated version without explicit notification.
+**Symptoms:** Tool results seem incomplete or cut off.
+**How it works:** A tool result over ~50K characters (HARD_MAX_TOOL_RESULT_CHARS in config.js, lower for small-context models) is cut and ends with `⚠️ [Content truncated — N characters removed…]`. `shell_exec` also keeps only the first 50,000 characters of output (noting `[output truncated: …]`) and stops a command whose output passes 1 MB.
 **Check:** If a tool result seems incomplete:
 1. Check if the original output would have been large (e.g., `web_fetch` on a huge page, `shell_exec` with lots of output)
 2. Re-run with more targeted parameters (e.g., `grep` instead of `cat`, smaller page ranges)
@@ -277,13 +296,38 @@ grep -i "OAuth refresh\|oauth_refresh\|invalid_grant" node_debug.log | tail -20
 **How it works:** Text emitted in the same model turn as a `tool_use` block is delivered live — before the tool runs — as its own message (BAT-1109). Each such interim send is independent of tool execution and of the final reply.
 **Check:**
 ```
-grep "\[Interim\]" node_debug.log | tail -5
+grep "\[Interim\]" node_debug.log
 ```
 **Diagnosis:**
 - `[Interim] send failed` / `[Interim] sendInterim threw` (WARN): a transient channel error (e.g. Telegram 429 / network) on the interim bubble only. The tool turn and the final reply are unaffected, and the text is still in conversation history, so the agent's transcript stays consistent.
 - `[Interim] Duplicate interim text suppressed` (DEBUG): the exact same narration was emitted twice in one turn (e.g. a reasoning-content-400 recovery replay) and the duplicate bubble was intentionally suppressed — not an error.
 - No `[Interim]` lines but narration still missing: the model didn't emit any text alongside the tool call (nothing to deliver), or the text was a protocol token (`[[SILENT_REPLY]]` / `HEARTBEAT_OK`) and was intentionally suppressed.
 **Fix:** Interim-send failures are transient and self-recovering — the final reply still arrives. If they recur, check the Telegram/Discord channel sections (rate limits or token issues). Only the interactive channel receives interim narration; cron/heartbeat turns deliver a single message by design.
+
+### Sandbox refusals — file tools, shell_exec, js_eval (BAT-1409)
+**Symptoms:** a tool call is refused with a message naming a path, flag, module or port. This is the workspace sandbox working as designed, not a bug.
+**Check:** `grep -iE "BLOCKED|shell_exec refused|js_eval refused|socket refused" node_debug.log` (each refusal is logged with its reason).
+**What each refusal means and what to do instead:**
+
+| Refusal says | Why | Do instead |
+|---|---|---|
+| `Access denied: path outside workspace` / `… is outside the workspace` | File tools, `shell_exec` and `js_eval` only reach your workspace; links are followed to where they really point | Ask the user to send the file in chat (it lands in `media/inbound/`) |
+| `… is a link; the file tools do not write through links` | Writes never follow a link | Write to a real path in the workspace |
+| `Writing X is blocked: it is managed by the app` | `owner_ids`, `config.json`, `config.yaml`, `seekerclaw.db`, `solana_wallet.json`, `skills-manifest.json` at the workspace root belong to the app | Change these in SeekerClaw Settings |
+| `Reading X is blocked for security` / `Sending X is blocked for security` | Reading: `config.*` and `seekerclaw.db` at the root; `bridge_token`, `xai_oauth.json` anywhere. Sending: the same, except `seekerclaw.db` (it can be sent), plus `agent_settings.json` | `read` shows `agent_settings.json` with secrets masked; use memory_search / session_status for the database |
+| `Pipes, redirection and command chaining are not supported…` | `shell_exec` runs one command with no shell | One command per call; quote a `|` that is part of a pattern (`grep -iE "a|b" node_debug.log`); for the newest matches use the `js_eval` recipe in "Searching the logs" |
+| `Variables and command substitution are not expanded…` | `$VAR` and backticks are never expanded | Read env vars in `js_eval` with `process.env.NAME` |
+| `Wildcards and expansions are not supported…` | No globbing | Name the file, or use `find` with a quoted `-name` pattern |
+| `<cmd>: the flag -x is not allowed` / `the option --x`, or `<reason>; refused.` | That flag isn't in the command's allowed set, or it follows links / writes or runs something | Drop it. Common swaps: `grep -R` → `-r`; `cp -r` → `cp -rL`; `find -delete`/`-exec` → the `delete` tool or `js_eval`; curl's remote-name flag (capital O) → `-o` with a file name <!-- not-shell-recipe --> |
+| `Command "x" is not in the allowlist` | Not an allowed command | Use `js_eval` or a dedicated tool |
+| `Output exceeded 1 MB` / `Command timed out` | Too much output, or over 30 s | Narrow the pattern, or use `tail -n 50 node_debug.log` / the `js_eval` recipe |
+| `Module "x" is not available in js_eval…` | `js_eval` loads Node built-ins only (no npm packages) | Use built-ins (`https`, `crypto`, `zlib`, …) |
+| `js_eval: <api> is not available (descriptor, open, copy-tree, link …)` | `js_eval` file access is by path, with plain read/write APIs | Use `readFileSync` / `writeFileSync` with workspace paths |
+| `Connecting to port 8765 on this device (an internal app port)` | Your code can't reach the app's internal ports 8765/8766 | Use the `android_*` tools; `android_battery` doubles as a bridge health check |
+
+**Camera:** if `android_camera_capture` returns a `path` outside `media/inbound/` (the log shows `Camera move to workspace failed`), the photo could not be moved into the workspace — usually storage — so `read` and `send_file` refuse it. Free space and capture again.
+
+**Skills:** a skill written for the old shell rules (pipes, `$TOKEN` in `curl`, npm `require`) fails at that step — see Skills → "A skill runs but a step is refused".
 
 ---
 
@@ -302,7 +346,7 @@ grep "\[Interim\]" node_debug.log | tail -5
 **Symptoms:** web_search returns error with HTTP status code (e.g., "Tavily search error (401)").
 **Check:**
 ```
-grep -i "WebSearch.*failed\|search error" node_debug.log | tail -5
+grep -iE "WebSearch.*failed|search error" node_debug.log
 ```
 **Diagnosis:**
 - 401/403: API key invalid, expired, or revoked
@@ -325,7 +369,7 @@ grep -i "WebSearch.*failed\|search error" node_debug.log | tail -5
 **Symptoms:** Memory save silently fails or throws uncaught error. Agent believes it saved but data is lost.
 **Check:**
 ```
-grep -i "memory_save\|ENOSPC\|disk.*full\|write.*fail" node_debug.log | tail -10
+grep -iE "memory_save|ENOSPC|disk.*full|write.*fail" node_debug.log
 df -h
 ```
 **Diagnosis:** If `df` shows low disk space (>95% used), the filesystem is full.
@@ -356,54 +400,71 @@ df -h
 **Symptoms:** Scheduled reminder doesn't fire. No notification to user or agent.
 **Check:**
 ```
-grep -i "cron\|job.*fail\|job.*error" node_debug.log | tail -20
-ls cron/
+grep -iE "cron|job.*fail|job.*error" node_debug.log
 ```
-**Diagnosis:** Check the job file in `cron/` directory. Each job has a `state.lastError` field if it failed. Common causes:
+Then `cron_list` / `cron_status` show every job and its state.
+**Diagnosis:** All jobs live in one file, `cron/jobs.json` (with a `cron/jobs.json.bak` backup). A job that failed has a `state.lastError`. Common causes:
 - Telegram send failed (network issue at fire time)
 - Job handler threw an exception
 - Zombie detection triggered (job missed 2+ hour window)
 **Fix:**
-1. Read the specific job file to see `state.lastError`
-2. If the job exists but didn't fire: check if cron service is running (`grep "cron" node_debug.log | tail -5`)
-3. Re-create the job if it's in a bad state: delete the old job file, create a new one
+1. `cron_status` (or read `cron/jobs.json`) to see the job's `state.lastError`
+2. If the job exists but didn't fire: check that the cron service started (`grep -F "[Cron]" node_debug.log`)
+3. Re-create a job in a bad state with `cron_cancel`, then `cron_create`. Never delete or rewrite `cron/jobs.json` — it holds every job
 
 ### Jobs Persist Across Restarts
-**How it works:** Cron jobs are persisted as JSON files in the `cron/` directory. On restart, all jobs are reloaded and timers recreated from their saved state. One-shot jobs that already fired are skipped. Recurring jobs resume on their next scheduled time.
+**How it works:** Cron jobs are persisted in `cron/jobs.json`. On restart, all jobs are reloaded and timers recreated from their saved state. One-shot jobs that already fired are skipped. Recurring jobs resume on their next scheduled time; missed jobs run (some staggered) at startup.
 **If jobs seem lost after restart:**
-1. Check `ls cron/` — the job files should still exist
-2. Check `grep "cron.*load\|cron.*restore" node_debug.log | tail -10` for reload logs
-3. If files exist but jobs don't fire: the cron service may have failed to start (check startup logs)
+1. `cron_list` — the jobs should still be listed
+2. `grep -iE "\[Cron\]|cron store" node_debug.log` — look for `[Cron] Startup: N missed jobs`, `Error loading cron store` or `jobs.json has invalid shape, resetting to empty store`
+3. After a reset, `cron/jobs.json` and `cron/jobs.json.bak` still hold the previous jobs until the next save — read them **before** creating or running any job (the next save overwrites the backup), then re-create the jobs with `cron_create`
 
 ---
 
 ## Android Bridge
 
 ### Service Down (ECONNREFUSED)
-**Symptoms:** All `android_*` tools fail with "Android Bridge unavailable" or ECONNREFUSED on localhost:8765.
+**Symptoms:** every `android_*` tool returns `Android Bridge unavailable: … ECONNREFUSED 127.0.0.1:8765`, `Android Bridge timeout`, or keeps returning `Unauthorized`.
+**Not this one:** `needs_foreground` means the bridge is up and refused to open a screen — see "`needs_foreground`" below.
 **Check:**
 ```
-grep -i "bridge\|ECONNREFUSED\|8765" node_debug.log | tail -10
+grep -iE "Android Bridge|ECONNREFUSED" node_debug.log
 ```
-**Diagnosis:** The Android main process bridge server is not running. This can happen if:
-- The app's main Activity was killed by the OS (but the :node process survived)
-- The bridge server crashed or failed to start
-- Port 8765 is blocked or in use
+or call `android_battery`: an `Android Bridge …` error confirms the bridge is down. Don't probe port 8765 with `curl` or `js_eval` — both are refused by design. The app's own line is `[Service] Failed to start AndroidBridge` on the **Logs screen**.
+**Diagnosis:** the bridge is an HTTP server run by SeekerClaw's background service inside this same `:node` process, started once when the agent starts. If you can answer but the bridge refuses, it failed to start or stopped. Opening the app does not restart it.
 **Fix:**
-1. Tell the user: "The Android bridge is down — I can't access device features right now. Try opening the SeekerClaw app to restart the bridge."
-2. Non-bridge tools (Telegram, Claude API, memory, web, cron) still work normally
-3. The bridge auto-recovers when the app's Activity is reopened
+1. Ask the user to tap **Stop Agent**, then **Deploy Agent** on the dashboard. Conversation history resets; memory files persist.
+2. Until then, non-bridge tools (chat, AI, memory, web, cron) keep working.
 
 ### Permission-Specific Errors
 **Symptoms:** An `android_*` tool returns a generic error without specifying which permission is missing.
 **Common permission mappings:**
-- `android_sms` → SEND_SMS permission
-- `android_call` → CALL_PHONE permission
 - `android_location` → ACCESS_FINE_LOCATION permission
 - `android_camera_check` → CAMERA permission
 - `android_contacts` → READ_CONTACTS permission
+- `android_sms` / `android_call` → no SMS or phone permission at all: they need SeekerClaw's notifications (see "Message & call drafts" below)
 **Check:** Read PLATFORM.md — it lists all granted permissions under the "Permissions" section.
-**Fix:** Tell the user which specific permission is needed: "To use [feature], grant [permission] in SeekerClaw Settings > Permissions."
+**Fix:** Tell the user which specific permission is needed: "To use [feature], grant [permission] in SeekerClaw Settings → Preferences & Permissions."
+
+### Message & call drafts (`android_sms` / `android_call`, BAT-1409)
+These tools never send a text or dial a number, in either app flavour. They put a draft in the notifications on the phone running SeekerClaw. The user taps it, which opens their SMS app or dialer with everything filled in, and presses Send or Dial there. There is no chat confirmation: the user confirms on the phone. The notification shows only "Message draft · <time> — tap to review" (or "Call draft"), never the number or the text, and it expires after 15 minutes.
+Each result has a `message` to relay, and one `outcome` whenever a draft was attempted (a bridge transport failure has only `error` and `message`). Only `unattended` and `rate_limited` are logged (`grep -iE "Drafts|RateLimit" node_debug.log`); for the others, ask whether a "Message draft" or "Call draft" notification appeared on the phone running SeekerClaw.
+
+| `outcome` | What happened | What to tell the user |
+|---|---|---|
+| `posted` | The draft is in the notifications (Do Not Disturb can still hide it). | "I've put the message in the notifications on the phone running SeekerClaw — tap it to open your SMS app and send." / "I've put the call in the notifications on the phone running SeekerClaw — tap it to dial." Never "sent", "opened", "calling" or "called". |
+| `notifications_disabled` | SeekerClaw's notifications are off. No draft exists. | Turn them on in SeekerClaw → Settings → Notifications. |
+| `notifications_paused` | SeekerClaw is paused (Digital Wellbeing or a focus mode). No draft exists. | Unpause the app, then ask again. |
+| `channel_blocked` | The "Message & call drafts" notification category is off. No draft exists. | SeekerClaw → Settings → Notifications opens that category. |
+| `no_handler` | No SMS app or dialer is installed or enabled. No draft exists. | Install or enable one. |
+| `invalid_recipient` | The number failed the check: one number, 3–15 digits with an optional leading `+`, after spaces, dashes, dots, brackets and `/` are removed. Letters, `*`, `#`, pause characters, `,` and `;` are refused. No draft exists. | Ask for a plain phone number. |
+| `unattended` | The request came from a scheduled task or a heartbeat check. Drafts are made only when the user asks in chat. No draft exists. | Explain that it can't be scheduled; the user can ask in chat when they want it. |
+| `rate_limited` | Too many drafts: the agent may post one per 60 s per tool (a refused draft doesn't count), and the app allows 5 message and 3 call drafts per 60 s. No draft exists. | Wait a minute, then ask again. |
+
+### `needs_foreground` (BAT-1409)
+**Symptoms:** a tool that opens a screen on the phone returns `needs_foreground` as its `error` or `reason`: `android_camera_capture` / `android_camera_check`, `android_apps_launch`, or a main-wallet (MWA) approval or signature (`Wallet authorization failed: needs_foreground`).
+**Diagnosis:** Android lets SeekerClaw open a screen only while SeekerClaw itself is on the phone's screen. While it is in the background (the usual case when the user chats from Telegram or Discord) the screen would be blocked silently, so the app refuses at once instead of waiting for a screen that never appears.
+**Fix:** ask the user to open SeekerClaw on the phone, then try again. Message and call drafts don't need this: they go through notifications.
 
 ---
 
@@ -413,7 +474,7 @@ grep -i "bridge\|ECONNREFUSED\|8765" node_debug.log | tail -10
 **Symptoms:** MCP tools from a specific server are unavailable. Logs show "Failed to connect to [server]".
 **Check:**
 ```
-grep -i "mcp\|Failed to connect" node_debug.log | tail -10
+grep -iE "mcp|Failed to connect" node_debug.log
 ```
 **Diagnosis:** The MCP server URL is unreachable. Could be: server is down, URL changed, network issue, or auth token expired.
 **Fix:**
@@ -425,7 +486,7 @@ grep -i "mcp\|Failed to connect" node_debug.log | tail -10
 **Symptoms:** An MCP tool that previously worked now silently fails or is blocked. WARN log entry about tool hash mismatch.
 **Check:**
 ```
-grep -i "rug.pull\|hash.*mismatch\|tool.*blocked\|sha.256" node_debug.log | tail -10
+grep -iE "rug.pull|hash.*mismatch|tool.*blocked|sha.256" node_debug.log
 ```
 **Diagnosis:** SeekerClaw computes SHA-256 hashes of MCP tool definitions on first connect. If a server changes a tool's definition (parameters, description) without the agent's knowledge, the tool is blocked as a security measure. This prevents a compromised MCP server from changing what a tool does.
 **Fix:**
@@ -436,7 +497,7 @@ grep -i "rug.pull\|hash.*mismatch\|tool.*blocked\|sha.256" node_debug.log | tail
 **Symptoms:** MCP tool calls return "Rate limit exceeded for [server]".
 **Check:**
 ```
-grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
+grep -iE "rate limit.*mcp|rate limit.*exceeded" node_debug.log
 ```
 **Diagnosis:** Per-server and global MCP rate limits are enforced to prevent abuse. Default: 10 calls/minute per server (configurable), 50 calls/minute global.
 **Fix:**
@@ -460,7 +521,13 @@ grep -i "rate limit.*mcp\|rate limit.*exceeded" node_debug.log | tail -10
 1. **Missing env vars (`requires.env`):** Call `env_list` to confirm which vars are set. For each missing var, tell the user to add it in **Settings → Env Vars** (single add, or use the **Raw editor** button for bulk). Once added, the service must restart to apply the new vars — the skill will then become available.
 2. **Missing binaries (`requires.bins`):** Explain the requirement and suggest alternatives (e.g., use `js_eval` instead of a shell binary).
 3. **Config keys (`requires.config`):** The skill needs a built-in config value (e.g., Jupiter API key, Helius API key). Guide the user to the relevant Settings page.
-4. Use the `shell_exec` tool to run `grep 'Skipping' node_debug.log | tail -10` — shows which skills were gated and why at last startup.
+4. Use the `shell_exec` tool to run `grep 'Skipping' node_debug.log` — shows which skills were gated and why at last startup.
+
+### A skill runs but a step is refused (BAT-1409)
+**Symptoms:** the skill loads and triggers (no `Skipping` line), then one of its steps fails with a refusal.
+**Check:** `grep -iE "shell_exec refused|js_eval refused|socket refused" node_debug.log`, then `read skills/<name>/SKILL.md` to find the step.
+**Diagnosis:** the skill was written for the old shell rules: a pipe (`| tail`), a variable in a command (`curl -H "Authorization: Bearer $TOKEN"`), a redirect (`> out.txt`), an npm `require`, or a path outside the workspace. <!-- not-shell-recipe -->
+**Fix:** run the step the new way (see Tools → "Sandbox refusals"): one command per call, env vars through `js_eval` with `process.env`, files inside the workspace. Tell the user the skill needs updating; with their OK, edit their own skill file. The bundled skills already follow the new rules.
 
 ## Activity Heatmap
 
@@ -496,7 +563,7 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 **Symptoms:** User on Custom provider with a DeepSeek V4 model gets `400` errors after tool calls, often in a loop after `/resume`.
 **Diagnosis:** Pre-BAT-549 the Custom adapter stripped V4's `reasoning_content` field from the next request, but V4 REQUIRES it echoed back after a tool call. Commit 1 added model-gating: V4 now echoes, R1 strips, unknown captures-only. The 400-loop should be impossible on the current build for V4 ids matching `deepseek-v4*` (case-insensitive, with or without `deepseek/` OR-prefix).
 **Fix:**
-- Confirm the model id matches the V4 regex (the agent can grep `reasoning-gating.js` for the exact pattern).
+- Confirm the model id matches the V4 pattern above (`deepseek-v4*`, case-insensitive, with or without the `deepseek/` prefix).
 - If the user is on a V4 fork with a non-matching id (e.g., `my-deepseek-v4-fork`): toggle `/think echo on` (Custom-only, force echo on tool-loop) OR enable in Settings > AI Provider > Custom > Advanced (Reasoning) > "Echo reasoning to gateway".
 - If still failing: the 400 message likely contains "reasoning_content must be passed back" — the adaptive 3-step quarantine recovery (last-user → earliest-tool-call → full reset) auto-runs and saves a forensic dump under `<workDir>/recovery/` (file pattern: `<chatId>-<timestamp>-step<N>[-task<id>].json`).
 
@@ -515,7 +582,7 @@ failing the same way each time it is retried.
 
 **Check:**
 ```
-grep "\[ReasoningRecovery\]" node_debug.log | tail -20
+grep "\[ReasoningRecovery\]" node_debug.log
 ```
 
 **Diagnosis:** When a turn 400s on reasoning content, the poisoned segment is
@@ -534,11 +601,7 @@ reason string is the useful part:
 | `forensic copy failed` (WARN) | The diagnostic copy could not be written. Repair itself still ran. | Usually disk space. Check free space. |
 | `quarantine FAILED` (**ERROR**) | The poisoned checkpoint could **not** be moved aside. It may be reloaded and re-trigger the same 400. | Report it. As a stopgap, `/new` starts a clean conversation. |
 
-**Where the files live:**
-```
-adb shell run-as com.seekerclaw.app ls -la files/workspace/tasks
-adb shell run-as com.seekerclaw.app ls -la files/workspace/recovery
-```
+**Where the files live:** in your workspace — `ls -la tasks` and `ls -la recovery`. (From a computer, a developer uses `adb shell run-as com.seekerclaw.app ls -la files/workspace/tasks`.) <!-- not-shell-recipe -->
 `tasks/` holds live checkpoints; `recovery/` is created on the first quarantine
 and holds the forensic copies. An absent `recovery/` simply means no quarantine
 has ever been needed.
@@ -606,6 +669,21 @@ has ever been needed.
 **Diagnosis:** the forwarder uses Node's **event time** for new-format lines and falls back to **receipt time** for legacy/raw lines (a pre-BAT-1161 log, or a line whose 2nd token isn't a valid epoch). The WARN fires only when a token *looks* like an epoch but is out of range — genuine corruption or a Node/Kotlin version skew, not an ordinary legacy line.
 **Fix:** none needed for legacy lines. If it repeats on a current build the wire format is drifting — check that Node's `log()` and the Kotlin parser agree (`logfmt=` in the SESSION banner).
 
+### Red `[Bundle]` / `[LinkHygiene]` lines at start, agent running (BAT-1409)
+**Symptoms:** the user asks about red ERROR lines on the **Logs screen** from around a start, though the agent works.
+**Check:** these are app (Kotlin) lines, on the Logs screen only — not in `node_debug.log`. Ask the user to read them to you.
+**Diagnosis:** they are ERROR because they are security events, not because the start failed:
+- `[Bundle] app update: re-extracting` — normal after an update.
+- `[Bundle] bundle differs from the app's copy, repairing: …` — the agent's code was restored from the app before starting; changes to `nodejs-project/` never survive a restart.
+- `[Bundle] quarantined|deleted a planted …node_modules` — a module folder that would load ahead of the app's was moved aside or deleted.
+- `[Bundle] … leftover …` / `out of space for a side copy` — cleanup after an interrupted repair, or low storage.
+- `[LinkHygiene] unlinked|quarantined link P -> T` — a link in the app's storage was removed (its target was not touched); quarantined ones are listed in `files/quarantine/<time>/manifest.tsv`, outside your workspace.
+- `[LinkHygiene] linked root workspace replaced by a fresh directory` — memory, skills and SOUL look reset; the old files are still wherever the link pointed.
+- `[LinkHygiene] removed hard-linked workspace name …` — that workspace file was removed.
+- `[LinkHygiene] … budget exhausted` / `deeper than 24 levels` / `cannot list|check … not certified` — the check did not reach those folders this start; the file tools still never follow links.
+- `ancestor is a link or not a directory` in an app line (`[Config] workspace directory refused`, `Failed to write agent_settings.json: …`, `Could not remove workspace/…`) — the app never writes through a link, and one appeared after the start check. Stop Agent, then Deploy Agent: the start check removes it.
+**Fix:** nothing for a one-off — the first start after an update may show several. If the same line returns at every start, something keeps re-creating it. For "not certified", archive old workspace files.
+
 ---
 
 ## Service Lifecycle
@@ -614,9 +692,9 @@ has ever been needed.
 **Symptoms:** User taps Stop Agent on the dashboard. Logs show `[Shutdown] Node flush timed out or failed; continuing process kill` instead of the success path `[Shutdown] Node flush acknowledged`. Some `api_request_log` rows or session summaries from the last ~60s before Stop are missing after restart.
 **Check:**
 ```
-grep -i "Shutdown.*flush\|/shutdown/flush" node_debug.log | tail -20
-adb logcat -d 2>/dev/null | grep -i "NodeControlClient\|Cleartext"
+grep -iE "Shutdown.*flush|/shutdown/flush" node_debug.log
 ```
+On a computer, a developer can also read Logcat (`adb logcat -d`, filtered for `NodeControlClient` or `Cleartext`). <!-- not-shell-recipe -->
 **Diagnosis:** The graceful-shutdown handshake (POST /shutdown/flush over 127.0.0.1:8766) failed before the killProcess() fallback. Possible causes:
 - **Cleartext blocked (pre-`ee29727` builds):** `IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted` — fixed by `network_security_config.xml` scoped to loopback. If still seen, the manifest is missing `android:networkSecurityConfig`.
 - **Bridge token rotated mid-shutdown:** 401 from the endpoint. Rare — would require the token to have been cleared between flush call and process kill.
@@ -632,8 +710,8 @@ adb logcat -d 2>/dev/null | grep -i "NodeControlClient\|Cleartext"
 **Symptoms:** User runs `/model <name>` or `/provider <name>` in Telegram, the bot acknowledges, but the next response uses the OLD model/provider. UI may show the new one while the agent runs on the old one.
 **Check:**
 ```
-grep -i "/model\|/provider\|runtime_state" node_debug.log | tail -20
-read runtime_state.json
+grep -iE "/model|/provider|runtime_state" node_debug.log
+session_status
 ```
 **Diagnosis:** `/model` and `/provider` write to `runtime_state.json` (live overlay) and require either an in-place update (model) or a service restart (provider). Common failure log lines:
 - `[/model] runtime_state.json write threw: <err>` (ERROR) — disk write failed
@@ -657,7 +735,7 @@ read runtime_state.json
 **Symptoms:** Every AI turn fails after setting a custom model ID; logs show HTTP 404 / `model_not_found` from the provider API.
 **Check:**
 ```
-grep -i "404\|model_not_found\|not found" node_debug.log | tail -10
+grep -iE "404|model_not_found|not found" node_debug.log
 ```
 **Diagnosis:** The custom ID has a typo or isn't served to this account (tier-gated, deprecated, or wrong provider). Settings accepts any string by design (BAT-1032) — validity is only known when the API answers.
 **Fix:** `/model <registry-listed-id>` recovers immediately (slash commands work even when AI turns fail), or correct the ID in Settings > AI Provider > Model > Custom model.
@@ -666,7 +744,7 @@ grep -i "404\|model_not_found\|not found" node_debug.log | tail -10
 **Symptoms:** User sends a photo/file in chat; the agent never references it, or replies as if no attachment existed.
 **Check:**
 ```
-grep -i "Media download" node_debug.log | tail -10
+grep -i "Media download" node_debug.log
 ```
 **Diagnosis:** `Media download failed: <err>` (ERROR) — network blip while fetching the attachment from the channel CDN. Files over the size cap are rejected loudly with an inline note (not this failure mode).
 **Fix:** Re-send the attachment when connectivity is stable; for large files, compress below the cap.
@@ -675,7 +753,7 @@ grep -i "Media download" node_debug.log | tail -10
 **Symptoms:** `/resume` reports no task to resume, or fails to restore an interrupted task.
 **Check:**
 ```
-grep -i "\[Resume\]\|TaskStore" node_debug.log | tail -10
+grep -iE "\[Resume\]|TaskStore" node_debug.log
 ```
 **Diagnosis:** `[Resume] FAIL: loadCheckpoint returned null` — the checkpoint expired, was cleaned up, or the save failed at interrupt time (`[TaskStore] saveCheckpoint failed` = storage issue).
 **Fix:** Restate the task in a fresh message; if saveCheckpoint failures appear, free device storage.
@@ -684,7 +762,7 @@ grep -i "\[Resume\]\|TaskStore" node_debug.log | tail -10
 **Symptoms:** User edits an MCP server in Settings (toggle enable, edit token, add/remove). UI updates but the agent still has the OLD active tool set — or no MCP tools at all when there should be some.
 **Check:**
 ```
-grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
+grep -iE "MCP.*reconcile|MCP.*Failed to" node_debug.log
 ```
 **Diagnosis:** Settings → MCP servers writes `mcp_servers.json` and POSTs `/mcp/reconcile` to the loopback control server. If the POST fails, the file write still landed but the running :node process didn't pick up the change until next service restart. Common failure log lines:
 - `[MCP] reconcile drain error` (ERROR) — request body couldn't drain
@@ -695,6 +773,30 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 1. The cleartext loopback fix (`ee29727`) repaired this path — pre-fix, `[NodeControlClient] reconcile failed: Cleartext HTTP not permitted` was silent and fell through to "next service start picks up the change."
 2. If reconcile is still failing post-`ee29727`: stop and restart the agent — the next service start reads `mcp_servers.json` fresh and connects all enabled servers via the normal startup path.
 3. If a specific server keeps failing in `[MCP] Failed to (re)connect`: verify the URL and auth in Settings → MCP Servers. Test reachability with `curl -I <server-url>` if it has a public health endpoint.
+
+### Agent won't start — `[Service] Start failed before Node: <reason>` (BAT-1409)
+**Symptoms:** Deploy Agent ends in Error and the dashboard shows that line; or Deploy Agent does nothing and the dashboard stays Offline. No replies.
+**Check:** you are not running while this happens, and these are app (Kotlin) lines on the **Logs screen**, not in `node_debug.log` — ask the user for the `Start failed before Node:` line and the `[Bundle]` / `[LinkHygiene]` lines just above it.
+**Fix, by reason:**
+
+| Reason | Fix |
+|---|---|
+| `LINK_HYGIENE` | A link at a critical path in the app's storage could not be removed. Deploy again; if it repeats, Android Settings → Apps → SeekerClaw → Storage → Clear storage, or reinstall |
+| No line at all (Deploy does nothing) | The same check failed before the app could log. Force-stop SeekerClaw, reopen it (its own check names any path it cannot fix on the Logs screen), then Deploy. If it repeats: clear storage or reinstall |
+| `BUNDLE_NO_SPACE_AT_…` | Free storage, then Deploy |
+| `BUNDLE_VERIFY_BUDGET_AT_budget` | The bundle check ran out of time; Deploy again, or reboot the phone if it repeats |
+| `BUNDLE_VERIFY_IO_…` / `BUNDLE_REPAIR_IO_…` | Deploy again (the next start verifies and repairs again); if it repeats, free storage, then reinstall |
+| `BUNDLE_ANCESTOR_MODULES_AT_…` | A module folder that cannot be removed sits above the agent's code. Clear storage or reinstall |
+| `CONFIG_WRITE (…)` / `WORKSPACE_SEED (…)` | The app could not write `config.json` or seed the workspace (storage full, or a link appeared). Deploy again; free storage if it repeats |
+| `STOP_TOKEN_UNREADABLE` | Already repaired by this attempt; Deploy again |
+| `WORKER_…` | Deploy again; report it if it repeats |
+
+Also on the Logs screen, and expected:
+- `[Service] Start superseded by a stop request; not starting` — a Stop arrived during the start; nothing is wrong.
+- `[Shutdown] stop token could not be written; stopping anyway` — the stop still happened; free storage if it repeats.
+- `[Service] Crash loop detected (… restarts in 30s) — stopping` — the agent crashed repeatedly; wait 30 s and Deploy again, then check `node_debug.log` around the last SESSION banner for the cause.
+- `[Service] Config not available (config.json not written)`, `[Service] Node runtime failed to initialize`, `[NodeBridge] … native libraries …` / `Entry point not found` — the app could not set up or load the agent. Deploy again; if it repeats, free storage, then reinstall.
+- `[Watchdog] Node.js not running` / `Node.js unresponsive, triggering restart` — the Watchdog found the agent dead or unresponsive and restarted it. If it repeats, look for out-of-memory errors or a long-blocking task in `node_debug.log` before the restart.
 
 ---
 
@@ -723,14 +825,14 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 1. Tell the user: "The burner key looked valid but couldn't be saved to encrypted storage." Do NOT tell them to re-paste — the key wasn't the problem.
 2. Check device storage: `android_storage` tool or Settings → Storage. Free space if under ~100 MB.
 3. Restart the app — Keystore alias may re-initialize cleanly on next start.
-4. If persistent across restarts: collect logcat (`adb logcat | grep KeystoreHelper\|EncryptedPrefsKeyVault`) and file a bug.
+4. If persistent across restarts: a developer collects Logcat on a computer (`adb logcat`, filtered for `KeystoreHelper` and `EncryptedPrefsKeyVault`) and files a bug. <!-- not-shell-recipe -->
 
 ### `burner: cap exceeded (per-tx)`
 **Symptoms:** Tool result includes `error: "burner_cap_exceeded"` or `over_per_tx_cap`. Agent tells the user "this is over your burner per-tx cap."
 **Diagnosis:** The principal (lamports for SOL, microunits for USDC) of the tx exceeds the configured `capPerTxSol` / `capPerTxUsdc`.
 **Fix:**
-1. Use `wallet_set_caps` to raise the per-tx cap (confirmation popup shows old → new diff).
-2. Or pass `_allowMainFallback: true` in the tool args to retry through the main MWA wallet (popup required).
+1. Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet. `wallet_set_caps` can only lower or keep caps; a raise is refused with `cap_raise_settings_only`.
+2. Or use the main wallet (popup), where the tool allows it: `solana_send_token` with `source="main"`; `solana_send` with `source="main"` and `_allowMainFallback: true`; a V2 limit order with `_allowMainFallback: true`. Swaps, DCA and V1 limit orders have no main-wallet retry while a burner is configured — lower the amount. The block message names the retry that works for that tool.
 3. Or split the spend into smaller chunks if appropriate.
 
 ### `burner: cap exceeded (daily, X remaining, resets at HH:MM UTC)`
@@ -738,8 +840,8 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 **Diagnosis:** `spentTodaySol + atomicAmount > capDailySol` (or USDC equivalent). The 24-hour window resets at 00:00 UTC.
 **Fix:**
 1. Wait for the daily reset (00:00 UTC).
-2. Raise the daily cap via `wallet_set_caps`.
-3. Use the main wallet (popup) for the over-cap portion.
+2. Raise the daily cap in the SeekerClaw app: Settings → Burner Wallet (`wallet_set_caps` cannot raise caps).
+3. Use the main wallet (popup) where the tool allows it — see "cap exceeded (per-tx)" above.
 
 ### `burner: no burner configured`
 **Symptoms:** `wallet_status` returns `burner: null`. Tools route to main MWA path with confirmation popup. Bridge calls return `burner_not_configured`.
@@ -788,9 +890,9 @@ grep -i "MCP.*reconcile\|MCP.*Failed to" node_debug.log | tail -20
 **Symptoms:** Tool result `error: "bridge_unreachable"` or `Android Bridge unavailable`. /burner/* calls fail at the HTTP transport.
 **Diagnosis:** AndroidBridge HTTP server (localhost:8765) isn't responding. Either the foreground service isn't running, the bridge port is blocked, or the auth token is wrong.
 **Fix:**
-1. Check `grep -i "Android Bridge" node_debug.log | tail -20`.
-2. Open the Dashboard in SeekerClaw — is the agent showing GREEN? If RED/yellow, restart the agent from Settings → Service Control.
-3. If persistent: stop and start the SeekerClawService. The bridge initializes on service start.
+1. Check `grep -i "Android Bridge" node_debug.log`.
+2. Open the Dashboard in SeekerClaw — is the agent showing GREEN? If RED/yellow, tap **Stop Agent**, then **Deploy Agent**.
+3. If persistent: the same Stop Agent / Deploy Agent — the bridge starts only with the agent (see Android Bridge → "Service Down").
 
 ### Jupiter ownership map missed a write
 **Symptoms:** Cancel-tool returns `creatorRole: "unknown"` for an order created via SeekerClaw on this device.
@@ -849,7 +951,7 @@ All errors below:
 **Diagnosis:** V1 caps response body at 1 MB and total request time at 30 s. Either the endpoint streams more than 1 MB or it's slow.
 **Fix:**
 1. For large responses: the endpoint isn't a fit for agent_pay V1. Suggest the user fetch directly via web browser, or escalate to a follow-up ticket if the use case is common.
-2. For timeouts: retry once. If persistent, the endpoint is degraded — wait, OR check connectivity (`grep -i ENOTFOUND node_debug.log | tail -5`).
+2. For timeouts: retry once. If persistent, the endpoint is degraded — wait, OR check connectivity (`grep -i ENOTFOUND node_debug.log`).
 
 ### `agent_pay: burner not configured`
 **Symptoms:** Tool result `error: "burner_not_configured"`. NO HTTP request to the URL was made.
@@ -884,7 +986,7 @@ Both were red herrings — root cause was always "not enough USDC at the source.
 **Diagnosis:** Two different ceilings: `max_usdc` is the agent-side cap (per-call), `burner.pertx.usdc` and `burner.daily.usdc` are user-controlled caps (per-burner). Both must allow the demand.
 **Fix:**
 1. Run `wallet_status` to show the current caps + remaining daily.
-2. Suggest `wallet_set_caps({per_tx_usdc: "..."})` (always with user confirmation) OR wait for daily reset at 00:00 UTC.
+2. Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet. Otherwise wait for the daily reset at 00:00 UTC (daily cap). Lowering `max_usdc` does not help — the cap is checked against the endpoint's price.
 
 ## paysh-catalog (BAT-704/761/768/766/769)
 
@@ -1003,10 +1105,12 @@ The confirmation gate (`confirmation/policy.js getConfirmationPolicy`, called in
 | Action | Gate outcome |
 |---|---|
 | Burner SPENDS USDC or native SOL, routes to burner, **under cap** | **Silent** (no prompt) — the cap pre-authorizes it |
-| Burner spend of USDC/SOL **over cap** | Default/auto flow falls back to the **main wallet (MWA) confirmation**. A *forced* burner (`source="burner"`, or a swap that doesn't opt into main fallback) returns `burner_cap_exceeded` instead → raise caps, lower amount, or use main. |
+| Burner spend of USDC/SOL **over cap** | **Refused** with `burner_cap_exceeded` before any prompt → lower the amount, or the user raises caps in Settings → Burner Wallet. The main wallet instead: `solana_send_token` with `source="main"`; `solana_send` with `source="main"` and `_allowMainFallback: true`; a V2 limit order with `_allowMainFallback: true`. Swaps, DCA and V1 limit orders have no main-wallet retry while a burner is configured. |
 | Spend any **non-USDC/SOL token** (e.g. PYUSD, BONK) — including **converting a held token back** to USDC/SOL (BAT-1057) | **Confirm** — disposing of a non-cap asset is not pre-authorized by the USDC/SOL caps |
 | **Main-routed** (MWA) action | **Confirm** (the wallet app's own approval) |
-| `wallet_set_caps`, `agent_pay` POST, android_sms/call/camera/location | **Confirm** (always) |
+| `wallet_set_caps` lowering or keeping caps, `agent_pay` POST, `android_camera_capture` / `android_location` | **Confirm** (always) |
+| `wallet_set_caps` raising a cap | **Blocked** with `cap_raise_settings_only`: caps are raised only in the SeekerClaw app, Settings → Burner Wallet |
+| `android_sms` / `android_call` | **No prompt**: they only put a draft in the phone's notifications, and the user presses Send or Dial themselves (see "Message & call drafts") |
 | `agent_pay` GET (with max_usdc), `wallet_status` | **Silent** (read / GET-side, not cap-related) |
 
 This is intended product behavior, not a bug or a "PYUSD/Token-2022 limitation." So "buy PYUSD with USDC under cap" signs silently, but "sell that PYUSD back to USDC" asks for one confirmation — because the second spends a non-cap asset. Never promise silent held-token conversions, and never tell the user a confirmed conversion is a defect.
@@ -1136,7 +1240,7 @@ These errors fire at the **tool-handler layer** BEFORE any burner-policy validat
 |---|---|---|---|
 | `main_wallet_not_connected` | `solana_send`, `solana_swap` | User said `source="main"` (explicit) OR main is not connected AND no burner is configured | "Your main wallet isn't connected. Tap the Wallet button in Settings → Solana Wallet to authorize MWA, or configure a Burner wallet for autonomous signing." Do NOT retry until user connects. |
 | `self_send_rejected` | `solana_send` | Resolved source address equals the `to` address (would produce on-chain `AccountLoadedTwice`) | "Cannot send to the same address that pays the transaction (`<addr>`). Pick a different recipient. If you wanted to fund the burner FROM main, retry with `source=\"main\"` — the burner address you targeted will be the recipient." Do NOT retry as-is. |
-| `over_burner_cap` | `solana_send` (when `source="burner"` explicitly) | Amount exceeds burner per-tx or daily cap and `source="burner"` was forced | "Amount exceeds your burner per-tx or daily cap. Lower the amount, raise caps in Settings → Burner Wallet → Caps, or omit `source` to use main wallet for over-cap." |
+| `over_burner_cap` | `solana_send` (when `source="burner"` explicitly) | Amount exceeds burner per-tx or daily cap and `source="burner"` was forced | "Amount exceeds your burner per-tx or daily cap. Lower the amount, raise caps in Settings → Burner Wallet → Caps, or retry with `source="main"` and `_allowMainFallback: true` to send from the main wallet." |
 | `fee_payer_mismatch` | `solana_swap` | The Jupiter Ultra order's decoded fee payer is not the burner taker, OR fee-payer introspection failed, on a burner-routed swap (BAT-1038, Amendment 1) | **Retryable, NOT a security reject** — do not confuse with the burner-policy security code `payer_mismatch`. Relay the tool's `reason` (which is **route-aware** — see below). Sponsored signer-mode is not wired in the swap path, so the burner-built order is never re-signed on main; a real main fallback needs a fresh order with the main wallet as taker. |
 | `expected_delta_unbuildable` | `solana_swap` | On a **burner-routed** swap, the burner-policy safety check (`expectedDelta`) couldn't be built — usually a transient RPC failure or an unrecognized/unverifiable mint owner during ATA derivation (BAT-1066, CodeRabbit #413). | **Retryable, NOT a security reject.** Same risk class as `fee_payer_mismatch`: the order was built with the burner as taker, so the agent must NOT fall back to the main wallet with that order (MWA can't validly sign a burner-taker tx). Relay the tool's **route-aware** `reason` (see below). Fails closed BEFORE reserve/sign/broadcast. Main-routed swaps are unaffected (the order is built for the main taker; the unused expectedDelta is dropped and signing proceeds via MWA). |
 
@@ -1144,7 +1248,7 @@ These errors fire at the **tool-handler layer** BEFORE any burner-policy validat
 
 ### Live test (Codex amendment #7 v8.1)
 
-The dual-source contract (accounts-config + getMultipleAccounts) has a load-bearing live test at `tests/jupiter-ultra/live-burner-policy-helius.js`. It exercises the real Solana RPC against a real Jupiter Ultra order and asserts the policy accepts. Run via `cd tests/jupiter-ultra && node live-burner-policy-helius.js` — requires `BURNER_SECRET_KEY` + `JUPITER_API_KEY` + `SOLANA_RPC` in `.env.test`. See file header for safety notes (no signing, no broadcast).
+The dual-source contract (accounts-config + getMultipleAccounts) has a load-bearing live test at `tests/jupiter-ultra/live-burner-policy-helius.js`. It exercises the real Solana RPC against a real Jupiter Ultra order and asserts the policy accepts. A developer runs it on a computer, from `tests/jupiter-ultra`, with `node live-burner-policy-helius.js` <!-- not-shell-recipe --> — requires `BURNER_SECRET_KEY` + `JUPITER_API_KEY` + `SOLANA_RPC` in `.env.test`. See file header for safety notes (no signing, no broadcast).
 
 **BAT-1038 T2 (Token-2022 output):** `tests/jupiter-ultra/live-t2-pyusd.js` is the companion no-broadcast probe for a real USDC→PYUSD (Token-2022) Ultra order. It runs `validateBurnerTx` two ways on the same order — the corrected Token-2022 credit ATA (must ACCEPT) and the old classic 2-arg ATA (must REJECT with `simulation_delta_mismatch`) — proving the token-program-aware derivation is what unblocks Token-2022 swaps. Same safety posture (no signing, no broadcast, read-only RPC).
 
@@ -1188,10 +1292,10 @@ After BAT-1031 (PR #402), the burner policy TRUSTS `api.jup.ag` for the deposit/
 ### `jupiter_wallet_holdings` returns `error: "unexpected_jupiter_holdings_shape"`
 **Symptoms:** Tool result `{ error: "unexpected_jupiter_holdings_shape", details: "...Top-level keys: ..." }`.
 **Diagnosis:** This is a **fail-loud API-drift guard, NOT an empty wallet.** Jupiter's holdings response had neither a `tokens` object nor a native-SOL line — meaning the API contract changed, or the request was rejected (e.g. invalid/expired Jupiter API key returning an error body in an unexpected shape). The tool deliberately refuses to render this as a `$0.00` empty wallet (the exact silent-failure BAT-1056 exists to kill).
-**Check:** `grep -i 'unexpected_jupiter_holdings_shape' node_debug.log | tail -5` — the `details` lists the actual top-level keys Jupiter returned.
+**Check:** `grep -i 'unexpected_jupiter_holdings_shape' node_debug.log` — the `details` lists the actual top-level keys Jupiter returned.
 **Fix:**
 1. Do **not** tell the user their wallet is empty. Say holdings are temporarily unavailable (a Jupiter API issue).
-2. Verify the Jupiter API key: Settings → Configuration → Jupiter API Key (test at portal.jup.ag).
+2. Verify the Jupiter API key: Settings → Solana Wallet → Jupiter API Key (test at portal.jup.ag).
 3. Fall back to `solana_balance` for the authoritative on-chain balance — it does not depend on Jupiter.
 4. If the key is valid and `solana_balance` works, Jupiter likely changed the `/ultra/v1/holdings` contract → flag for a code update (the parser pins the documented shape).
 
@@ -1213,7 +1317,7 @@ After BAT-1031 (PR #402), the burner policy TRUSTS `api.jup.ag` for the deposit/
 **Diagnosis:** **Transient, NOT a burner / PYUSD / Token-2022 limitation.** The route's price moved between the quote and the on-chain landing (normal for thin or volatile routes — e.g. some PYUSD routes). The transaction failed **atomically** — no funds moved (a failed execute changes nothing but a few lamports of fees).
 **What the tool already does (BAT-1061):** `solana_swap` **auto-re-quotes a fresh order and retries** on a definite slippage failure, bounded (3 attempts total), each retry fully re-gated by burner-policy + a fresh reservation. It does **not** retry on an *ambiguous* transport/timeout failure (can't prove the prior tx didn't land → would risk a double-execute).
 **Fix / what to tell the user:**
-- If `solana_swap` returns `retryable: true` after the internal retries, tell the user the market moved and ask if they want to **try again**. If they do, follow the normal swap workflow: fetch a **fresh `solana_quote`, show it** (the price may have moved materially over the failed attempts), confirm, and only **then** call `solana_swap` — do NOT blindly re-call `solana_swap` without a fresh quote in chat. Do **NOT** say "use your main wallet" or call it a "known issue with the burner."
+- If `solana_swap` returns `retryable: true` after the internal retries, tell the user the market moved and ask if they want to **try again**. If they do, follow the normal swap workflow: fetch a **fresh `solana_quote`, show it** (the price may have moved materially over the failed attempts), and only **then** call `solana_swap` (the system gate asks for YES when policy requires it — don't run your own yes/no) — do NOT blindly re-call `solana_swap` without a fresh quote in chat. Do **NOT** say "use your main wallet" or call it a "known issue with the burner."
 - This is distinct from a **pre-sign refusal** (fee-bearing/unverifiable Token-2022, or >1% price impact in a BAT-1057 conversion) — those genuinely route to the main wallet and are surfaced verbatim.
 - Persistent slippage usually means a thin route; retrying picks a different one (Jupiter routing is dynamic). If it never settles after several manual retries, the route is genuinely illiquid right now — suggest a smaller amount or trying later.
 

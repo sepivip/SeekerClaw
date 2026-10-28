@@ -3,6 +3,7 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.util.Log
 import com.seekerclaw.app.config.KeystoreHelper
+import com.seekerclaw.app.util.SafeFs
 import java.io.File
 
 /**
@@ -69,15 +70,23 @@ object McpTokenStore {
      */
     private val ID_REGEX = Regex("^[A-Za-z0-9_-]+$")
 
+    private fun root(context: Context) = context.applicationContext.filesDir.toPath()
+
+    // BAT-1409 P1-J: the directory is created and validated without following links.
     private fun dir(context: Context): File {
         val d = File(context.applicationContext.filesDir, DIR_NAME)
-        if (!d.exists()) d.mkdirs()
+        SafeFs.ensureRealDir(root(context), d.toPath())
         return d
     }
 
     private fun fileFor(context: Context, id: String): File? {
         if (!ID_REGEX.matches(id)) return null
-        return File(dir(context), id)
+        return try {
+            File(dir(context), id)
+        } catch (e: Exception) {
+            Log.w(TAG, "mcp_tokens directory unavailable: ${e.message}")
+            null
+        }
     }
 
     /**
@@ -92,9 +101,9 @@ object McpTokenStore {
      */
     fun read(context: Context, id: String): String {
         val file = fileFor(context, id) ?: return ""
-        if (!file.exists()) return ""
+        if (!SafeFs.existsNoFollow(file.toPath())) return ""
         return try {
-            KeystoreHelper.decrypt(file.readBytes())
+            KeystoreHelper.decrypt(SafeFs.readBytesNoFollow(root(context), file.toPath()))
         } catch (e: Exception) {
             // Corrupt or partially-written entry — treat as missing
             // rather than crash the bridge endpoint. The user can
@@ -126,33 +135,14 @@ object McpTokenStore {
     fun write(context: Context, id: String, token: String): Boolean {
         if (token.isBlank()) return false
         val file = fileFor(context, id) ?: return false
-        val tmp = File(file.parentFile, "$id.tmp")
         return try {
             val enc = KeystoreHelper.encrypt(token)
-            tmp.writeBytes(enc)
-            try {
-                java.nio.file.Files.move(
-                    tmp.toPath(),
-                    file.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                // Same-directory move that the kernel decided isn't
-                // atomically replaceable (rare on ext4/F2FS). Fall
-                // back to REPLACE_EXISTING — still single-syscall.
-                java.nio.file.Files.move(
-                    tmp.toPath(),
-                    file.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                )
-            }
+            // BAT-1409 P1-J: staged in filesDir/.kwrite and renamed into place with
+            // Files.move(REPLACE_EXISTING, ATOMIC_MOVE) — never written through a link.
+            SafeFs.writeAtomic(root(context), file.toPath(), enc)
             true
         } catch (e: Exception) {
             Log.w(TAG, "Failed to write mcp_tokens/$id: ${e.message}")
-            // Clean up the tmp file we may have created so a future
-            // call doesn't trip over a stale partial write.
-            try { if (tmp.exists()) tmp.delete() } catch (_: Exception) {}
             false
         }
     }
@@ -171,7 +161,8 @@ object McpTokenStore {
     fun clear(context: Context, id: String): Boolean {
         val file = fileFor(context, id) ?: return false
         return try {
-            if (!file.exists()) return true
+            // lstat-based; File.delete unlinks a link without touching its target.
+            if (!SafeFs.existsNoFollow(file.toPath())) return true
             file.delete()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to clear mcp_tokens/$id: ${e.message}")
@@ -190,7 +181,7 @@ object McpTokenStore {
      */
     fun hasToken(context: Context, id: String): Boolean {
         val file = fileFor(context, id) ?: return false
-        return file.exists()
+        return java.nio.file.Files.isRegularFile(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
     }
 
     /**
@@ -201,7 +192,12 @@ object McpTokenStore {
      * stale `<id>.tmp` files left by a crashed write.
      */
     fun listAllIds(context: Context): List<String> {
-        return dir(context).listFiles()
+        // BAT-1409 P1-J: dir() refuses an unsafe directory; treat that as "no tokens".
+        val d = try { dir(context) } catch (e: Exception) {
+            Log.w(TAG, "mcp_tokens directory unavailable: ${e.message}")
+            return emptyList()
+        }
+        return d.listFiles()
             ?.asSequence()
             ?.filter { it.isFile && ID_REGEX.matches(it.name) }
             ?.map { it.name }

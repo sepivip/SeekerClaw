@@ -460,6 +460,154 @@ class BurnerBridgeEndpointsTest {
 
         assertEquals("KeyVault never invoked when args are malformed", 0, recorder.signCount)
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // BAT-1409 P1-I: /config/burner-caps is the agent's cap write. It may lower or keep caps;
+    // any raising field refuses the whole request with 409 cap_raise_settings_only and the
+    // raising fields named. Raising is Settings-only (CapEnforcer.setCaps). Driven through
+    // handleConfigBurnerCapsInternal (the JSON half only reads the four fields) with the real
+    // CapEnforcer + ledger + store.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private val capFields = listOf("capPerTxSol", "capPerTxUsdc", "capDailySol", "capDailyUsdc")
+
+    private val settingsOnlyReason = "Raising caps is only possible in the SeekerClaw app: Settings → Burner Wallet."
+
+    private fun capsRequest(ep: BurnerBridgeEndpoints, values: Map<String, String>): BurnerBridgeEndpoints.EndpointResult =
+        ep.handleConfigBurnerCapsInternal(values["capPerTxSol"], values["capPerTxUsdc"], values["capDailySol"], values["capDailyUsdc"])
+
+    private fun capsOf(enforcer: CapEnforcer): Map<String, String> {
+        val s = runBlocking { enforcer.status() }
+        return mapOf("capPerTxSol" to s.capPerTxSol, "capPerTxUsdc" to s.capPerTxUsdc, "capDailySol" to s.capDailySol, "capDailyUsdc" to s.capDailyUsdc)
+    }
+
+    private fun allCaps(value: String) = capFields.associateWith { value }
+
+    private fun assertRaiseRefused(res: BurnerBridgeEndpoints.EndpointResult, fields: List<String>, case: String = "") {
+        assertEquals("$case: status", 409, res.httpStatus)
+        assertEquals(
+            "$case: body",
+            mapOf("error" to BurnerBridgeEndpoints.ErrorCodes.CAP_RAISE_SETTINGS_ONLY, "reason" to settingsOnlyReason, "fields" to fields),
+            res.body,
+        )
+        assertEquals("cap_raise_settings_only", res.body["error"])
+    }
+
+    /** A fresh endpoint whose caps were set by Settings to [settingsValue], or left at [initial]. */
+    private fun capsEndpoint(
+        settingsValue: String?,
+        initial: com.seekerclaw.app.data.caps.BurnerCapsState = com.seekerclaw.app.data.caps.BurnerCapsState(),
+    ): Pair<BurnerBridgeEndpoints, CapEnforcer> {
+        val (ep, enforcer, _) = TestEndpointBuilder.buildWithRealCapEnforcer(initialCaps = initial)
+        if (settingsValue != null) {
+            assertTrue(runBlocking { enforcer.setCaps(settingsValue, settingsValue, settingsValue, settingsValue) })
+        }
+        return ep to enforcer
+    }
+
+    @Test
+    fun `burner-caps refuses a raise of each cap over a set, zero, unset, blank or malformed cap, naming the field`() {
+        val blank = com.seekerclaw.app.data.caps.BurnerCapsState(capPerTxSol = "", capPerTxUsdc = "", capDailySol = "", capDailyUsdc = "")
+        val malformed = com.seekerclaw.app.data.caps.BurnerCapsState(capPerTxSol = "abc", capPerTxUsdc = "1e9", capDailySol = "-", capDailyUsdc = "0x10")
+        // (case, Settings value or null, initial store state, the raising request value)
+        val cases = listOf(
+            Triple("over a set value", "1000" to com.seekerclaw.app.data.caps.BurnerCapsState(), "1001"),
+            Triple("over a Settings zero", "0" to com.seekerclaw.app.data.caps.BurnerCapsState(), "1"),
+            Triple("over an unset (fresh) cap", null to com.seekerclaw.app.data.caps.BurnerCapsState(), "1"),
+            Triple("over a blank cap", null to blank, "1"),
+            Triple("over a malformed cap", null to malformed, "1"),
+        )
+        for ((name, setup, raise) in cases) {
+            for (field in capFields) {
+                val (ep, enforcer) = capsEndpoint(setup.first, setup.second)
+                val before = capsOf(enforcer)
+                assertRaiseRefused(capsRequest(ep, mapOf(field to raise)), listOf(field), "$name / $field")
+                assertEquals("$name / $field: nothing changed", before, capsOf(enforcer))
+            }
+        }
+    }
+
+    @Test
+    fun `burner-caps applies nothing when one field lowers and another raises`() {
+        val (ep, enforcer) = capsEndpoint("1000")
+        for (lower in capFields) {
+            for (raise in capFields - lower) {
+                val res = capsRequest(ep, mapOf(lower to "500", raise to "1001"))
+                assertRaiseRefused(res, listOf(raise), "lower $lower + raise $raise")
+                assertEquals("lower $lower + raise $raise: not even the lowered field applied", allCaps("1000"), capsOf(enforcer))
+            }
+        }
+        assertRaiseRefused(capsRequest(ep, allCaps("1001")), capFields) // every raising field named, in order
+        assertEquals(allCaps("1000"), capsOf(enforcer))
+    }
+
+    @Test
+    fun `burner-caps applies lower and equal values`() {
+        for (field in capFields) {
+            val (ep, enforcer) = capsEndpoint("1000")
+            val lowered = capsRequest(ep, mapOf(field to "999"))
+            assertEquals(200, lowered.httpStatus)
+            assertEquals(mapOf("ok" to true), lowered.body)
+            assertEquals(allCaps("1000") + (field to "999"), capsOf(enforcer))
+
+            val equal = capsRequest(ep, mapOf(field to "999"))
+            assertEquals(200, equal.httpStatus)
+            assertEquals(mapOf("ok" to true), equal.body)
+            assertEquals(allCaps("1000") + (field to "999"), capsOf(enforcer))
+
+            assertEquals(200, capsRequest(ep, mapOf(field to "0")).httpStatus) // 0 = disabled is always a lower
+            assertEquals(allCaps("1000") + (field to "0"), capsOf(enforcer))
+        }
+        val (ep, enforcer) = capsEndpoint("1000")
+        assertEquals(200, capsRequest(ep, allCaps("1000")).httpStatus) // keep every cap
+        assertEquals(allCaps("1000"), capsOf(enforcer))
+        val all = mapOf("capPerTxSol" to "1", "capPerTxUsdc" to "2", "capDailySol" to "3", "capDailyUsdc" to "999")
+        assertEquals(200, capsRequest(ep, all).httpStatus)
+        assertEquals(all, capsOf(enforcer))
+        // Settings can still raise after the agent lowered.
+        assertTrue(runBlocking { enforcer.setCaps("5000", "5000", "5000", "5000") })
+        assertEquals(allCaps("5000"), capsOf(enforcer))
+    }
+
+    @Test
+    fun `burner-caps refuses missing and invalid values before any write`() {
+        val (ep, enforcer) = capsEndpoint("1000")
+        assertEquals(
+            BurnerBridgeEndpoints.EndpointResult(400, mapOf("error" to "invalid_input", "reason" to "at least one cap field required")),
+            capsRequest(ep, emptyMap()),
+        )
+        for (bad in listOf("-1", "1.5", "abc", "1e3")) {
+            for (field in capFields) {
+                assertEquals(
+                    BurnerBridgeEndpoints.EndpointResult(400, mapOf("error" to "invalid_input", "reason" to "cap value invalid")),
+                    capsRequest(ep, mapOf(field to bad)),
+                )
+            }
+        }
+        assertEquals(allCaps("1000"), capsOf(enforcer))
+    }
+
+    @Test
+    fun `the burner-caps refusal and success survive the response scrub intact`() {
+        val (ep, _) = capsEndpoint("1000")
+        val refused = capsRequest(ep, mapOf("capDailySol" to "2000", "capPerTxSol" to "10"))
+        assertRaiseRefused(refused, listOf("capDailySol"))
+        assertEquals("error, reason and fields are all allowlisted", refused.body, ep.scrubResponse(refused.body))
+        // The scrub is live on this body: an unlisted key is dropped, the listed ones stay.
+        assertEquals(refused.body, ep.scrubResponse(refused.body + ("unlisted" to 1)))
+
+        val ok = capsRequest(ep, mapOf("capPerTxSol" to "10"))
+        assertEquals(mapOf("ok" to true), ep.scrubResponse(ok.body))
+    }
+
+    @Test
+    fun `the burner-caps route reads each field by its own name and delegates in order`() {
+        val src = java.io.File("src/main/java/com/seekerclaw/app/bridge/burner/BurnerBridgeEndpoints.kt").readText()
+        assertTrue(src.contains("\"/config/burner-caps\" -> handleConfigBurnerCaps(params)"))
+        for (f in capFields) assertTrue(f, src.contains("val $f = params.optStringOrNull(\"$f\")"))
+        assertTrue(src.contains("return handleConfigBurnerCapsInternal(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc)"))
+        assertTrue(src.contains("capEnforcer.setCapsNoRaise(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc)"))
+    }
 }
 
 /**
@@ -511,6 +659,8 @@ private object TestEndpointBuilder {
      */
     fun buildWithRealCapEnforcer(
         clockTickMs: Long = 1_700_000_000_000L,
+        // BAT-1409 P1-I: the caps the store holds before any write (a fresh store's are "0").
+        initialCaps: com.seekerclaw.app.data.caps.BurnerCapsState = com.seekerclaw.app.data.caps.BurnerCapsState(),
     ): Triple<BurnerBridgeEndpoints, com.seekerclaw.app.data.caps.CapEnforcer, RecordingKeyVault> {
         testClockMs = clockTickMs
         val tmpCaps = newTempDir("signtx-caps")
@@ -518,7 +668,7 @@ private object TestEndpointBuilder {
             filesDir = tmpCaps,
             fileName = com.seekerclaw.app.data.caps.BurnerCapsState.FILE_NAME,
             serializer = com.seekerclaw.app.data.caps.BurnerCapsState.serializer(),
-            initial = com.seekerclaw.app.data.caps.BurnerCapsState(),
+            initial = initialCaps,
         )
         val ledger = com.seekerclaw.app.data.caps.ReservationLedger(capStore)
         val enforcer = com.seekerclaw.app.data.caps.CapEnforcer(

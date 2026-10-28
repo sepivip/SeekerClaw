@@ -898,10 +898,22 @@ function truncateToolResult(text) {
 // SENSITIVE FILE BLOCKLIST (shared by read tool, js_eval, delete tool)
 // ============================================================================
 
+// BAT-1409 P1-E: the file tools anchor the config names at the workspace ROOT (lexical or real
+// path), so a skill's own `nutrition/config.json` stays readable; only names that must never be
+// read anywhere keep the basename rule.
+const ROOT_SECRET_NAMES = new Set(['config.js', 'config.json', 'config.yaml', 'seekerclaw.db']);
 // BAT-1155: xai_oauth.json is the dedicated OAuth token store (filesDir sibling of
-// runtime_state.json, outside workDir). Belt-and-suspenders: block it from the agent's
-// read/write/delete tools too, so a relocated workDir can never expose or delete it.
-const SECRETS_BLOCKED = new Set(['config.js', 'config.json', 'config.yaml', 'seekerclaw.db', 'xai_oauth.json']);
+// runtime_state.json, outside workDir); BAT-1409 adds bridge_token (filesDir), the bridge's
+// credential. Blocked by basename anywhere, so a relocated workDir or a copy can never expose them.
+const SECRETS_ANYWHERE = new Set(['xai_oauth.json', 'bridge_token']);
+// The union keeps the basename rule for shell_exec and js_eval until P1-F/P1-G anchor them too.
+const SECRETS_BLOCKED = new Set([...ROOT_SECRET_NAMES, ...SECRETS_ANYWHERE]);
+// BAT-1409 P1-E: workspace-root files the agent's file tools may never write, edit or delete.
+// agent_settings.json is deliberately not here: the agent edits it (BAT-236 key sync).
+const WRITE_PROTECTED_ROOT = new Set([
+    'owner_ids', 'owner_ids.tmp', 'config.json', 'config.yaml',
+    'seekerclaw.db', 'seekerclaw.db.tmp', 'solana_wallet.json', 'skills-manifest.json',
+]);
 
 // ============================================================================
 // SHELL EXEC ALLOWLIST (shared by tools.js and skills.js requirements gating)
@@ -1133,6 +1145,9 @@ module.exports = {
     // Security/tool constants
     SHELL_ALLOWLIST,
     SECRETS_BLOCKED,
+    ROOT_SECRET_NAMES,
+    SECRETS_ANYWHERE,
+    WRITE_PROTECTED_ROOT,
     // CONFIRM_REQUIRED removed in BAT-582 Phase 4 — see confirmation/policy.js
     TOOL_RATE_LIMITS,
     TOOL_STATUS_MAP,

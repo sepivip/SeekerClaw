@@ -65,6 +65,20 @@ const LOAD_TARGETS = [
     'log-safe.js',
     'loop-detector.js',
     'model-catalog.js',
+    // BAT-1409 P1-E: pure path rule (fs + path only, no config.js, no IO at load).
+    'workspace-path.js',
+    // BAT-1409 P1-F: js_eval guards (no config.js; nothing runs at load) and the process-wide
+    // socket guards (patches only when install() is called).
+    'js-eval-guard.js',
+    'net-guard.js',
+    // BAT-1409 P1-H: tool-loop rate limits (no deps, no IO at load).
+    'tool-rate-limit.js',
+    // BAT-1409 P1-G: shell_exec tokenizer, grammar and validator (no config.js, no IO at load).
+    'tools/shell-args.js',
+    'tools/shell-grammar.js',
+    'tools/shell-validate.js',
+    // BAT-1409 P1-I: the shared Settings pointer for cap raises (a constant).
+    'wallet/cap-hint.js',
     'telegram-commands.js',
     // BAT-514: both modules are pure (functions only, no top-level
     // side effects). internal-control-server.js's HTTP listener is

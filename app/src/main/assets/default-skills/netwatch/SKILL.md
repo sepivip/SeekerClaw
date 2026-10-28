@@ -1,7 +1,7 @@
 ---
 name: netwatch
 description: "Network monitoring and security audit. Use when: user asks to scan network, check open ports, network audit, who's on wifi, check connection, port scan, firewall check, network status, or network security. Don't use when: user asks about crypto transactions (use solana tools) or web search (use research skill)."
-version: "2.3.1"
+version: "2.3.2"
 emoji: "🛡️"
 triggers:
   - "scan my network"
@@ -139,6 +139,7 @@ You have four modes. Default to **Network Audit** unless the user asks for somet
 
 **Allowed tools — ONLY these:**
 - `android_bridge` calls: `/network`, `/battery`, `/storage`, `/ping`
+- `android_battery` (its result, or its failure, is the bridge health)
 - `js_eval` for ALL network probes and data processing
 - **NO `shell_exec`** — do not use it at all in this skill
 
@@ -165,7 +166,7 @@ try {
       res.on('end', () => resolve({ url, status: res.statusCode, latencyMs: Date.now() - start, ok: true }));
     });
     req.on('timeout', () => { req.destroy(); resolve({ url, ok: false, error: 'timeout' }); });
-    req.on('error', (e) => resolve({ url, ok: false, error: e.message }); });
+    req.on('error', (e) => resolve({ url, ok: false, error: e.message }));
   });
   return JSON.stringify(result);
 } catch (e) {
@@ -186,10 +187,13 @@ try {
 ```
 
 **Local port probe (TCP connect):**
+
+The app's own internal bridge ports are never probed: `js_eval` refuses them. Bridge health comes from an `android_battery` call (it fails when the bridge is down).
+
 ```javascript
 try {
   const net = require('net');
-  const port = 8765;
+  const port = 8080;
   const start = Date.now();
   const result = await new Promise((resolve) => {
     const sock = net.createConnection({ host: '127.0.0.1', port, timeout: 3000 }, () => {
@@ -198,11 +202,11 @@ try {
       resolve({ port, open: true, latencyMs: ms });
     });
     sock.on('timeout', () => { sock.destroy(); resolve({ port, open: false, error: 'timeout' }); });
-    sock.on('error', (e) => resolve({ port, open: false, error: e.message }); });
+    sock.on('error', (e) => resolve({ port, open: false, error: e.message }));
   });
   return JSON.stringify(result);
 } catch (e) {
-  return JSON.stringify({ port: 8765, open: false, error: e.message });
+  return JSON.stringify({ port: 8080, open: false, error: e.message });
 }
 ```
 
@@ -232,12 +236,11 @@ Run the DNS resolve probe pattern for each hostname:
 
 **Step 4 — Local service port checks (js_eval, each separate):**
 Run the TCP port probe pattern for each port:
-- `8765` (Android bridge)
 - `3000` (dev server)
 - `8080` (HTTP)
 
 **Step 5 — Compile report:**
-Process all gathered data, calculate risk score, and format the report.
+Process all gathered data, calculate risk score, and format the report. Bridge status is ✅ when the Step 1 `android_battery` call returned data and ❌ when it failed.
 
 **Compact output (DEFAULT):**
 
@@ -253,7 +256,7 @@ Process all gathered data, calculate risk score, and format the report.
 
 📋 **Services**
 • `WiFi` `HomeNetwork` • `192.168.1.42`
-• Bridge `:8765` ✅ • Telegram ✅ • DNS ✅
+• Bridge ✅ • Telegram ✅ • DNS ✅
 • 🔋 85% charging
 
 👉 Reply:
@@ -290,7 +293,7 @@ Process all gathered data, calculate risk score, and format the report.
 • Anthropic API: ✅ reachable (<X>ms) / ❌ down
 
 🔌 **Local Services**
-• `localhost:8765` (bridge): ✅ / ❌
+• Android bridge: ✅ responding / ❌ not responding
 • `localhost:3000`: ✅ / ❌ / not running
 • `localhost:8080`: ✅ / ❌ / not running
 
@@ -316,7 +319,6 @@ Process all gathered data, calculate risk score, and format the report.
 - Telegram API unreachable: +20
 - Anthropic API unreachable: +15
 - High latency (>200ms avg): +10
-- Android bridge not responding: +20
 - Unknown local port open: +5 each
 - Expected services not running: +5
 
@@ -326,7 +328,6 @@ Check local service ports using js_eval TCP connect probes:
 
 **Standard ports to check (js_eval, each separate):**
 Run the TCP port probe pattern for each port:
-- `8765` (Android bridge)
 - `3000` (dev server)
 - `8080` (HTTP)
 - `5555` (ADB)
@@ -339,13 +340,13 @@ Run the TCP port probe pattern for each port:
 **Compact output (DEFAULT):**
 
 ```
-🔍 **Ports** • 9 scanned
+🔍 **Ports** • 8 scanned
 
-✅ `8765` bridge • `8080` HTTP
+✅ `8080` HTTP
 ⚠️ `3000` unknown service
 ❌ `5555` ADB open! • `4444` reverse shell!
 
-2 flagged — 2 open, 7 closed
+2 flagged — 4 open, 4 closed
 
 👉 Reply:
 • `deep scan .1`
@@ -359,7 +360,6 @@ Run the TCP port probe pattern for each port:
 🔍 **Port Watch Report**
 
 🟢 **Expected Services**
-• `8765` — Android bridge ✅ responding
 • `8080` — HTTP service ✅ responding
 
 ⚠️ **Unusual Ports**
@@ -370,7 +370,7 @@ Run the TCP port probe pattern for each port:
 • `4444` — reverse shell port ❌ open!
 
 📊 **Summary**
-• Scanned: 9 ports
+• Scanned: 8 ports
 • Open: X • Closed: Y
 • Flagged: Z
 
@@ -378,7 +378,7 @@ Run the TCP port probe pattern for each port:
 ```
 
 **Port classification:**
-- ✅ Expected: `8765` (Android bridge), `80`, `443`, `8080`, `53`
+- ✅ Expected: `80`, `443`, `8080`, `53`
 - ⚠️ Unusual: `3000`, any other responding port
 - ❌ Dangerous: `5555` (ADB), `4444` (reverse shell), `22` (SSH exposed), `23` (Telnet)
 
@@ -476,7 +476,7 @@ try {
       resolve({ host, port, open: true, latencyMs: ms });
     });
     sock.on('timeout', () => { sock.destroy(); resolve({ host, port, open: false, error: 'timeout' }); });
-    sock.on('error', (e) => resolve({ host, port, open: false, error: e.message }); });
+    sock.on('error', (e) => resolve({ host, port, open: false, error: e.message }));
   });
   return JSON.stringify(result);
 } catch (e) {

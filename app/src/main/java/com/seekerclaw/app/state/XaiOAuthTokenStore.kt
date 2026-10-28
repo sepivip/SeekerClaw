@@ -3,13 +3,14 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.util.Log
 import com.seekerclaw.app.util.CrossProcessStore
+import com.seekerclaw.app.util.SafeFs
+import com.seekerclaw.app.util.StopToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.nio.channels.FileLock
 import java.util.concurrent.TimeUnit
@@ -191,13 +192,13 @@ object XaiOAuthTokenStore {
             false
         }
         if (!gotJvm) return Result.Failed("jvm lock timeout")
-        var raf: RandomAccessFile? = null
         var chan: FileChannel? = null
         var lock: FileLock? = null
         try {
             val lockFile = File(dir, LOCK_NAME)
-            raf = RandomAccessFile(lockFile, "rw")
-            chan = raf.channel
+            // BAT-1409 P1-J: opened with NOFOLLOW_LINKS after the ancestor rule — a link at the
+            // lock path is refused, never followed (RandomAccessFile "rw" followed it).
+            chan = SafeFs.openLockChannelNoFollow(dir.toPath(), lockFile.toPath())
             // Bounded cross-process acquisition: tryLock + brief retries instead of a
             // blocking lock() that could hang forever on a stuck other-process holder.
             while (lock == null) {
@@ -225,7 +226,6 @@ object XaiOAuthTokenStore {
         } finally {
             try { lock?.release() } catch (_: Exception) {}
             try { chan?.close() } catch (_: Exception) {}
-            try { raf?.close() } catch (_: Exception) {}
             jvmLock.unlock()
         }
     }
@@ -415,13 +415,37 @@ object XaiOAuthTokenStore {
     }
 
     /**
-     * Clear the stop fence (epoch-STABLE, unconditional on the current record). Called at `:node`
-     * boot (drop a stale fence from the prior generation) and on an ABANDONED stop — where the
-     * caller MUST confirm this returns [Result.Ok] BEFORE unquiescing/resuming; if it fails, stay
-     * stopped and retry (Codex amendment 2 / decision 3 — no TTL). Never throws.
+     * Clear the stop fence (epoch-STABLE, unconditional on the current record). Called on an
+     * ABANDONED stop — where the caller MUST confirm this returns [Result.Ok] BEFORE
+     * unquiescing/resuming; if it fails, stay stopped and retry (Codex amendment 2 / decision 3 —
+     * no TTL). `:node` boot drops a stale fence with [clearStopFenceIfUnchanged] instead
+     * (BAT-1409 P1-A). Never throws.
      */
     fun clearStopFence(): Result =
         mutate(null, advanceEpoch = false) { it.copy(stopFenceEpoch = -1L) }
+
+    /**
+     * BAT-1409 P1-A (amendment v3.3 M2, correction v3.4) — the boot reconcile's fence clear.
+     * Inside the store lock (the one [armStopFenceAndProbeRotation] takes), the stop token is read
+     * again, and the fence is cleared only when the token still matches [baseline], the state this
+     * start recorded. `Unreadable` never matches.
+     *
+     * Why it holds: a stop writes its token before its gate arms the fence. If that write came
+     * first, this read sees it and does not clear; if it came later, the arm waits for this lock and
+     * lands after the clear. So a stop that began after this start can never lose its fence here.
+     * Returns [Result.Conflict] with no write on a mismatch. Never throws.
+     */
+    fun clearStopFenceIfUnchanged(baseline: StopToken.State): Result {
+        val dir = lockDir ?: return Result.Failed("not initialized")
+        return withStoreLock { cps, current ->
+            if (!StopToken.matches(baseline, StopToken.read(dir.toPath()))) {
+                return@withStoreLock Result.Conflict(current.epoch)
+            }
+            if (current.stopFenceEpoch == -1L) return@withStoreLock Result.Ok(current)
+            val next = current.copy(stopFenceEpoch = -1L)
+            if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
+        }
+    }
 
     /**
      * CONDITIONAL fail-close (Codex major): durably mark the family reauth-required ONLY IF the

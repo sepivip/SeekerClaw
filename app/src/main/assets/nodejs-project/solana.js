@@ -581,7 +581,7 @@ async function resolveToken(input) {
 // Jupiter Swap API v6 - Quote endpoint (Metis routing)
 async function jupiterQuote(inputMint, outputMint, amountRaw, slippageBps = 100) {
     if (!config.jupiterApiKey) {
-        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Solana Wallet > Jupiter API Key');
     }
 
     const params = new URLSearchParams({
@@ -1120,7 +1120,7 @@ function readCompactU16(buf, offset) {
 // Jupiter Ultra API — get order (quote + unsigned tx in one call, gasless)
 async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
     if (!config.jupiterApiKey) {
-        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Solana Wallet > Jupiter API Key');
     }
 
     const params = new URLSearchParams({
@@ -1151,7 +1151,7 @@ async function jupiterUltraOrder(inputMint, outputMint, amount, taker) {
 // Jupiter Ultra API — execute signed transaction (Jupiter broadcasts)
 async function jupiterUltraExecute(signedTransaction, requestId) {
     if (!config.jupiterApiKey) {
-        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Solana Wallet > Jupiter API Key');
     }
 
     const headers = {
@@ -1180,7 +1180,7 @@ async function jupiterUltraExecute(signedTransaction, requestId) {
 // Jupiter Trigger API — execute signed transaction
 async function jupiterTriggerExecute(signedTransaction, requestId) {
     if (!config.jupiterApiKey) {
-        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Solana Wallet > Jupiter API Key');
     }
 
     const res = await httpRequest({
@@ -1203,7 +1203,7 @@ async function jupiterTriggerExecute(signedTransaction, requestId) {
 // Jupiter Recurring API — execute signed transaction
 async function jupiterRecurringExecute(signedTransaction, requestId) {
     if (!config.jupiterApiKey) {
-        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Solana Wallet > Jupiter API Key');
     }
 
     const res = await httpRequest({
@@ -1226,7 +1226,7 @@ async function jupiterRecurringExecute(signedTransaction, requestId) {
 // Jupiter Price API v3
 async function jupiterPrice(mintAddresses) {
     if (!config.jupiterApiKey) {
-        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Configuration > Jupiter API Key');
+        throw new Error('Jupiter API key required. Get a free key at portal.jup.ag and add it in Settings > Solana Wallet > Jupiter API Key');
     }
 
     const ids = mintAddresses.join(',');

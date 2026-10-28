@@ -13,14 +13,47 @@ import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.state.McpServersStore
 import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.state.XaiOAuthTokenStore
+import android.util.Log
 import com.seekerclaw.app.util.Analytics
+import com.seekerclaw.app.util.BootHygiene
 import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.SafeFs
 import com.seekerclaw.app.util.ServiceState
 
 class SeekerClawApplication : Application() {
 
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        // BAT-1409 P1-C (amendment v3.3 M1): the main process runs the same exact-list check
+        // before its content providers run. Links are unlinked and logged; a path it cannot fix is
+        // logged as ERROR and the UI starts anyway, so an upgrade can never lock users out.
+        if (getProcessName() == base.packageName) BootHygiene.runStep1(base.dataDir)
+    }
+
     override fun onCreate() {
         super.onCreate()
+        // BAT-1409 P1-C step 1 (amendment v3.3 M1): in `:node`, before any store is constructed or
+        // read, no planted link may remain at a critical path. A path that cannot be verified ends
+        // this process's start as Failed(LINK_HYGIENE) below.
+        val isNodeProcess = getProcessName().endsWith(":node")
+        if (isNodeProcess) BootHygiene.runStep1(dataDir)
+        // BAT-1409 P1-J: the link-safe filesystem helper needs this process's filesDir (the
+        // ancestor-rule root) and an Android directory fsync for durable writes. Set first, in
+        // EVERY process, before any store is constructed or any file is written.
+        SafeFs.filesRoot = filesDir.toPath()
+        SafeFs.dirSync = { dir ->
+            try {
+                // O_RDONLY on a directory is valid on Linux; OsConstants has no O_DIRECTORY.
+                val fd = android.system.Os.open(dir.toString(), android.system.OsConstants.O_RDONLY, 0)
+                try {
+                    android.system.Os.fsync(fd)
+                } finally {
+                    android.system.Os.close(fd)
+                }
+            } catch (_: Exception) {
+                // The rename already happened atomically; durability is best effort.
+            }
+        }
         createNotificationChannel()
 
         // BAT-517: load the shared provider+model registry FIRST,
@@ -34,6 +67,14 @@ class SeekerClawApplication : Application() {
         // can re-attempt the load.
         com.seekerclaw.app.config.ModelRegistry.init(this)
 
+        // BAT-1409 P1-C (v3.3 M1): a critical path step 1 could not verify is never dereferenced.
+        // No store is constructed or read in this process (the stores' init, loadConfig,
+        // getWalletAddress, Analytics); the service ends the start as Failed(LINK_HYGIENE).
+        if (isNodeProcess && BootHygiene.unsafe.isNotEmpty()) {
+            Log.e("LinkHygiene", "Failed(LINK_HYGIENE): skipping store initialisation in :node")
+            return
+        }
+
         // BAT-1155: initialize the dedicated cross-process xAI OAuth token
         // store in EVERY process (NOT gated on isMainProcess). Unlike
         // RuntimeStateStore — which the `:node` process reads via JS
@@ -45,13 +86,9 @@ class SeekerClawApplication : Application() {
         // init() is idempotent, so a second call is a no-op.
         XaiOAuthTokenStore.init(this)
 
-        // Firebase Analytics
-        Analytics.init(this)
-        ConfigManager.loadConfig(this)?.let { config ->
-            Analytics.setUserProperty("model", config.model)
-            Analytics.setUserProperty("auth_type", config.authType)
-        }
-        Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(this).isNullOrBlank()).toString())
+        // Firebase Analytics. In `:node` it initialises in the service's start continuation instead,
+        // after link hygiene step 2 has checked shared_prefs/ and databases/ (BAT-1409 P1-C, v3.3 M1).
+        if (!isNodeProcess) initAnalytics(this)
 
         // Start cross-process file watching so UI picks up state/logs from :node.
         // Guard: only the main UI process should attach observers. The :node
@@ -79,6 +116,7 @@ class SeekerClawApplication : Application() {
         val isMainProcess = getProcessName() == packageName
         if (isMainProcess) {
             LogCollector.startWatching(this)
+            BootHygiene.flushLog() // BAT-1409 P1-C: step 1's lines from attachBaseContext
             ServiceState.startWatching(this)
             // BAT-513: take ownership of the runtime config (provider /
             // authType / model) BEFORE the first UI screen reads it, so
@@ -178,10 +216,34 @@ class SeekerClawApplication : Application() {
             setShowBadge(true)
         }
         manager.createNotificationChannel(errorChannel)
+
+        // BAT-1409 P1-H: the agent's SMS and calls are drafts the user taps to send or dial.
+        // High importance so they are seen; no group, so a blocked group can never hide them.
+        // Created in every process (`:node` posts them).
+        val draftsChannel = NotificationChannel(
+            DRAFTS_CHANNEL_ID,
+            "Message & call drafts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Messages and calls your agent prepared: tap one to review, then send or dial it yourself"
+            setShowBadge(true)
+        }
+        manager.createNotificationChannel(draftsChannel)
     }
 
     companion object {
         const val CHANNEL_ID = "seekerclaw_service"
         const val ERROR_CHANNEL_ID = "seekerclaw_errors"
+        const val DRAFTS_CHANNEL_ID = "seekerclaw_drafts"
+
+        /** Firebase Analytics and its user properties (model, auth type, wallet presence). */
+        fun initAnalytics(context: Context) {
+            Analytics.init(context)
+            ConfigManager.loadConfig(context)?.let { config ->
+                Analytics.setUserProperty("model", config.model)
+                Analytics.setUserProperty("auth_type", config.authType)
+            }
+            Analytics.setUserProperty("has_wallet", (!ConfigManager.getWalletAddress(context).isNullOrBlank()).toString())
+        }
     }
 }

@@ -319,6 +319,32 @@ class CapEnforcer internal constructor(
         )
     }
 
+    /**
+     * BAT-1409 P1-I — the bridge-only cap write: lowering or keeping caps applies; any raising field
+     * rejects the whole request ([ReservationLedger.NoRaiseResult.Raised]). Settings keeps [setCaps].
+     * Returns null when a value does not parse as a non-negative integer.
+     */
+    suspend fun setCapsNoRaise(
+        capPerTxSol: String? = null,
+        capPerTxUsdc: String? = null,
+        capDailySol: String? = null,
+        capDailyUsdc: String? = null,
+    ): ReservationLedger.NoRaiseResult? {
+        listOfNotNull(capPerTxSol, capPerTxUsdc, capDailySol, capDailyUsdc).forEach {
+            try {
+                if (BigInteger(it) < BigInteger.ZERO) return null
+            } catch (_: Exception) {
+                return null
+            }
+        }
+        return ledger.updateCapsNoRaise(
+            capPerTxSol = capPerTxSol,
+            capPerTxUsdc = capPerTxUsdc,
+            capDailySol = capDailySol,
+            capDailyUsdc = capDailyUsdc,
+        )
+    }
+
     data class CapStatus(
         val capPerTxSol: String,
         val capPerTxUsdc: String,

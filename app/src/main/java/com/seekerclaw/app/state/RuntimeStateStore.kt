@@ -3,6 +3,7 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -103,7 +104,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object RuntimeStateStore {
     private const val TAG = "RuntimeStateStore"
-    private const val PREFS_NAME = "seekerclaw_prefs"
     private const val FILE_NAME = "runtime_state.json"
     private const val KEY_PROVIDER = "provider"
     private const val KEY_AUTH_TYPE = "auth_type"
@@ -152,7 +152,7 @@ object RuntimeStateStore {
         if (!initialized.compareAndSet(false, true)) return
         val app = context.applicationContext
         appContext = app
-        val sp = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val sp = app.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
         val seeded = seedFromPrefs(sp)
         _state.value = seeded
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

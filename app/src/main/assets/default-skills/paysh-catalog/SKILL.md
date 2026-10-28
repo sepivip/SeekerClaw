@@ -1,7 +1,7 @@
 ---
 name: paysh-catalog
 description: "Catalog of pay.sh services payable via agent_pay (x402). OPT-IN ONLY — activate when the user explicitly invokes pay.sh / paysh / x402 / 'pay for' / 'pay with burner', or asks what they can pay for. Stay dormant otherwise; defer to free tools. Activation triggers are the frontmatter `triggers:` list (authoritative); policy + examples in the SKILL.md body."
-version: "1.9.0"
+version: "1.10.0"
 priority: 10
 triggers:
   - "pay.sh"
@@ -175,7 +175,7 @@ Some `endpoint_not_402_at_probe` and `invalid_demand` entries also carry BAT-706
 
 - All charges go through the **burner wallet**, never the main wallet. `agent_pay` is **burner-only** — there is no main-wallet fallback. If the user doesn't have a burner configured, `agent_pay` refuses with `burner_not_configured` — tell them to set one up in Settings → Solana Wallet → Burner Wallet.
 - `max_usdc` is a **ceiling**, not a target. The actual charge is whatever the service demands, capped at `max_usdc`. Default to `max_usdc = 2× the listed cost` for safety.
-- Burner caps (per-tx / daily USDC) apply on top of `max_usdc`. If a single call exceeds the per-tx cap or the daily cap is exhausted, `agent_pay` returns `burner_cap_exceeded` and **does not fall back to the main wallet**. Tell the user to either raise the cap with `wallet_set_caps`, lower their request, or wait for the 00:00 UTC daily reset.
+- Burner caps (per-tx / daily USDC) apply on top of `max_usdc`. If a single call exceeds the per-tx cap or the daily cap is exhausted, `agent_pay` returns `burner_cap_exceeded` and **does not fall back to the main wallet**. Tell the user to either raise the cap in the SeekerClaw app (Settings → Burner Wallet), lower their request, or wait for the 00:00 UTC daily reset.
 
 ## Failure modes
 
@@ -183,7 +183,7 @@ Some `endpoint_not_402_at_probe` and `invalid_demand` entries also carry BAT-706
 |-------|---------------|------------|
 | `burner_not_configured` | No burner wallet set up | Tell user to set up in Settings |
 | `demand_exceeds_max_usdc` | Service costs more than you offered | Retry with higher max_usdc, within burner cap |
-| `burner_cap_exceeded` | Burner per-tx or daily USDC cap insufficient for this charge | Tell user to raise cap with `wallet_set_caps`, lower the request, or wait for 00:00 UTC daily reset. **No main-wallet fallback.** |
+| `burner_cap_exceeded` | Burner per-tx or daily USDC cap insufficient for this charge | Tell user to raise the cap in the SeekerClaw app (Settings → Burner Wallet), lower the request, or wait for 00:00 UTC daily reset. **No main-wallet fallback.** |
 | `insufficient_burner_balance` | Burner USDC balance < demanded amount | Reason text states exact shortfall — tell user how much more USDC to send to the burner pubkey, offer to retry once funded |
 | `non_usdc_asset` | Service demanded non-USDC payment | Service incompatible — not actionable |
 | `no_solana_offer` | Service is EVM-only on this call | Service incompatible — not actionable |

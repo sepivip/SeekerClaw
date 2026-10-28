@@ -11,7 +11,8 @@
 //     REGARDLESS of directory load order — the original bug class), and
 //     deterministic tie order (equal priority → load order ASC).
 //   - paysh-catalog drift guard: exact 8 narrow triggers + priority 10 +
-//     version 1.9.0, and no service-name / dropped-phrase triggers.
+//     version 1.10.0 (BAT-1409 P1-I bumped it from 1.9.0 for the Settings-only cap-raise
+//     wording; triggers and priority unchanged), and no service-name / dropped-phrase triggers.
 
 'use strict';
 
@@ -122,12 +123,12 @@ check('equal-priority skills keep load order (deterministic tie)', () => {
     assert.deepStrictEqual(r.map(s => s.name), ['first', 'second']);
 });
 
-check('paysh-catalog SKILL.md drift: exact 8 triggers + priority 10 + version 1.9.0, no service-name/dropped triggers', () => {
+check('paysh-catalog SKILL.md drift: exact 8 triggers + priority 10 + version 1.10.0, no service-name/dropped triggers', () => {
     const p = path.join(BUNDLE, '..', 'default-skills', 'paysh-catalog', 'SKILL.md');
     const content = fs.readFileSync(p, 'utf8');
     const s = parseSkillFile(content, path.dirname(p));
     assert.strictEqual(s.priority, 10, 'paysh-catalog priority must be 10');
-    assert.strictEqual(s.version, '1.9.0', 'paysh-catalog version must be 1.9.0');
+    assert.strictEqual(s.version, '1.10.0', 'paysh-catalog version must be 1.10.0');
     const expected = ['pay.sh', 'paysh', 'x402', 'pay with burner', 'pay for', 'what can you pay for', 'show me pay.sh services', 'list paid services'];
     assert.deepStrictEqual(s.triggers, expected, `triggers must be exactly the 8 narrow set; got ${JSON.stringify(s.triggers)}`);
     for (const bad of ['purch', 'tripadvisor', 'perplexity', 'reducto', 'rentcast', '2captcha', 'pay with main', 'pay to']) {
