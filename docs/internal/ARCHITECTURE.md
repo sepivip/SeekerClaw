@@ -112,7 +112,7 @@ READ_CONTACTS, WRITE_CONTACTS
 
 - **`SEND_SMS` / `CALL_PHONE`** are stripped with `tools:node="remove"` (BAT-1409). The agent can only post a draft notification; the user taps it to open their SMS app or dialer.
 - **`POST_NOTIFICATIONS`:** Required on API 33+. Requested at runtime during Setup, before the service starts.
-- **`specialUse` service type:** dApp Store friendly — no justification needed. Google Play requires written justification for `specialUse`. Consider `dataSync` as alternative for Play Store (but note 6-hour time limit on Android 14+). Can be flavor-gated if needed.
+- **`specialUse` service type:** dApp Store friendly — no justification needed. Google Play requires written justification for `specialUse`. Android also asks the service to declare a `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` `<property>` explaining the use case, which Play reviews; the manifest doesn't declare one today. Consider `dataSync` as alternative for Play Store (but note its 6-hour time limit on Android 15+). This can be flavor-gated if needed.
 
 ## Android Bridge
 
@@ -191,12 +191,12 @@ Sensitive fields are encrypted via Android Keystore (AES-256-GCM). Non-sensitive
 
 ### Config Generation
 
-On every service start, Kotlin (`ConfigManager.writeConfigJson`, called from `SeekerClawService`) regenerates `workspace/config.json` from the encrypted store, and Node reads it in `config.js`. It is safe to regenerate; nothing user-owned lives in it. Settings the user changes at runtime (for example the heartbeat interval) are also written to `workspace/agent_settings.json`, which Node re-reads without a restart.
+On every service start, Kotlin (`ConfigManager.writeConfigJson`, called from `SeekerClawService`) writes `workspace/config.json` from the stored configuration — SharedPreferences, `workspace/owner_ids`, and the Keystore-encrypted secrets, which are decrypted into it — and Node reads it once in `config.js`. `SeekerClawService` deletes the file about 5s later. It is a short-lived handoff, safe to regenerate, but while it exists it holds API keys, bot and OAuth tokens and the bridge token, so treat it as sensitive: it is on the agent's file-tool blocklist (`config.js`). Settings the user changes at runtime (for example the heartbeat interval) are also written to `workspace/agent_settings.json`, which Node re-reads without a restart.
 
 ### Workspace Seeding
 
 `ConfigManager.seedWorkspace` creates each of these only if it is missing, and never overwrites one (see *Memory Preservation* in `CLAUDE.md`):
-- **`SOUL.md`** — default personality template (same template as OpenClaw)
+- **`SOUL.md`** — default personality template, based on OpenClaw's
 - **`MEMORY.md`** — empty long-term memory
 - **`memory/`** — directory for daily memory files
 - **`BOOTSTRAP.md`** — the first-run ritual; the agent deletes it when done
@@ -211,7 +211,7 @@ These are standard OpenClaw workspace files — the agent manages them after fir
 ├── files/
 │   ├── nodejs-project/        # Agent JS bundle, copied from APK assets and verified byte-for-byte on start (BundleIntegrity, BAT-1409)
 │   ├── workspace/             # Agent working directory (preserved across updates)
-│   │   ├── config.json        # Regenerated from encrypted storage on each service start
+│   │   ├── config.json        # Ephemeral: written on each service start, deleted ~5s later (holds secrets)
 │   │   ├── agent_settings.json
 │   │   ├── SOUL.md · IDENTITY.md · USER.md · MEMORY.md · HEARTBEAT.md
 │   │   ├── BOOTSTRAP.md       # First-run ritual; the agent deletes it when done
@@ -258,9 +258,9 @@ Full Jupiter DEX integration via MWA (Mobile Wallet Adapter). Tested on Solana S
 
 ## CI/CD (GitHub Actions)
 
-**`.github/workflows/build.yml`** — runs on push/PR to main: Node tests (tool schemas, bundle smoke, financial-flow and confirmation-gate tests), JVM unit tests, and both flavor debug APKs.
+**`.github/workflows/build.yml`** — runs on pushes to `main` and on pull requests to any branch: Node tests (tool schemas, bundle smoke, financial-flow and confirmation-gate tests), JVM unit tests, and both flavor debug APKs.
 
-**`.github/workflows/release.yml`** — triggered by `v*` tags, 3 parallel jobs:
+**`.github/workflows/release.yml`** — triggered by `v*` tags; two build jobs run in parallel, then `release` waits for both:
 1. `build-dappstore` — signed APK (`assembleDappStoreRelease`), renamed to `SeekerClaw-{tag}.apk`
 2. `build-googleplay` — signed AAB (`bundleGooglePlayRelease`), renamed to `SeekerClaw-{tag}.aab`
 3. `release` — downloads both artifacts, extracts changelog, creates GitHub Release

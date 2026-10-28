@@ -105,7 +105,7 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 | `MEMORY.md` | Long-term memory | YES |
 | `memory/*.md` | Daily memory files | YES |
 | `HEARTBEAT.md` | Last heartbeat | YES |
-| `config.json` | Config (regenerated) | Regenerated from encrypted store |
+| `config.json` | Config handoff to Node (holds secrets) | Rewritten from stored config on each service start, deleted ~5s later |
 | `skills/*.md` | Custom user skills | YES |
 
 ### Rules for Developers
@@ -114,7 +114,7 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 2. **Never overwrite** existing SOUL.md, MEMORY.md, IDENTITY.md, USER.md
 3. **Seed files only if they don't exist** (`if (!file.exists())`)
 4. **BOOTSTRAP.md** is the only file the agent itself deletes (after first-run ritual)
-5. **config.json** is regenerated from encrypted storage on each service start — this is fine
+5. **config.json** is a short-lived handoff: rewritten from stored config (secrets decrypted) on each service start and deleted ~5s later — this is fine
 6. **Use `adb install -r`** (replace) to preserve app data during development
 7. **Export/Import** feature exists in Settings for backup/restore
 
@@ -431,7 +431,7 @@ if (bootstrap) { runRitual(/* resume: !!identity */); }
 
 Full write-ups, with the misleading error text and the probe evidence, are in `docs/internal/PITFALLS.md`. The rules:
 
-- **Handle every SSE `*_delta` type.** `applyClaudeStreamEvent` in `http.js` must accumulate `text_delta`, `input_json_delta`, `thinking_delta` **and** `signature_delta`. A dropped `signature_delta` leaves the thinking block with an empty signature, and replaying it on the next tool-use turn fails with `400 … each thinking block must contain thinking` — the trigger is the empty **signature**, not empty text. The replay guard in `providers/claude.js:_collectClaudeWireBlocks` skips blocks whose signature is empty; key on the signature, never the text.
+- **Handle every SSE `*_delta` type the enabled content blocks use.** Today `applyClaudeStreamEvent` in `http.js` accumulates `text_delta`, `input_json_delta`, `thinking_delta` **and** `signature_delta`; enabling another block type (e.g. citations) means handling its delta too. A dropped `signature_delta` leaves the thinking block with an empty signature, and replaying it on the next tool-use turn fails with `400 … each thinking block must contain thinking` — the trigger is the empty **signature**, not empty text. The replay guard in `providers/claude.js:_collectClaudeWireBlocks` skips blocks whose signature is empty; key on the signature, never the text.
 - **Thinking is `{type:'adaptive'}`.** Current Anthropic models reject `thinking:{type:'enabled', budget_tokens}`. Verify any provider-shape claim on **both** auth paths (raw API key and setup_token) — the setup_token path tolerated the old shape and hid the bug.
 - **Wire-contract bugs need live probes, not just mocks.** Offline, feed the exact streamed bytes to the exported reducer (`tests/nodejs-project/claude-thinking-signature.test.js`) and confirm the test fails if the fix is reverted. Before any release that touches provider request/response shaping, run the opt-in live probes in `tests/live/anthropic/`.
 - **Check the current API contract via the context7 MCP, not training memory**, before changing provider request/response shaping or any hardcoded external identifier (API params, model ids, header/beta tags, endpoint paths). Pair it with a live probe.

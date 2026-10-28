@@ -640,14 +640,14 @@ Instructions...
 
 **Key fields:**
 - `image:` — Absolute HTTPS URL to skill logo. Displayed in Skills screen via Coil. Falls back to emoji → ⚡. **Partner skills** host images at `https://seekerclaw.xyz/assets/partner-skills/{skill-id}.{ext}`, with image files in the `SeekerClaw_Web` repo under `assets/partner-skills/`.
-- `allowed-tools:` — Restricts which tools the skill can use (important for partner skills).
-- OpenClaw's nested `metadata.openclaw` format is also supported; top-level fields take precedence.
+- `allowed-tools:` — **not enforced.** OpenClaw's field is accepted in frontmatter but ignored: `skills.js` stopped parsing it in BAT-305 because it never restricted anything. A skill can call any tool. Per-skill restriction would have to be built into `executeTool()`.
+- OpenClaw's nested `metadata.openclaw` format is also supported. For `emoji` and `requires`, the nested `metadata.openclaw` value wins when both are set (`skills.js`).
 
 **Legacy format** (`Trigger: keyword1, keyword2`) is deprecated — still parsed but logs warnings.
 
 ### SOUL.md Template
 
-SeekerClaw uses the **exact same SOUL.md template** as OpenClaw:
+SeekerClaw's default SOUL.md follows OpenClaw's template. Shortened excerpt below; the full seeded text is in `ConfigManager.seedWorkspace` (Kotlin) and `DEFAULT_SOUL` in `memory.js`:
 
 ```markdown
 # SOUL.md - Who You Are

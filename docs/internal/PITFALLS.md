@@ -6,7 +6,7 @@
 
 ### SSE Streaming — Handle EVERY Delta Type (thinking signatures)
 
-**When assembling a streamed API response, handle every `*_delta` type the wire can send — a dropped delta silently corrupts the block.** The Claude SSE reducer in `http.js` (`applyClaudeStreamEvent`) accumulates `text_delta`, `input_json_delta`, `thinking_delta`, and `signature_delta`. Anthropic streams a thinking block as an empty shell followed by deltas:
+**When assembling a streamed API response, handle every `*_delta` type used by the content blocks we enable — a dropped delta silently corrupts the block.** The Claude SSE reducer in `http.js` (`applyClaudeStreamEvent`) currently accumulates `text_delta`, `input_json_delta`, `thinking_delta`, and `signature_delta`. That is today's coverage, not the whole wire contract: enabling another block type (for example citations, which stream `citations_delta`) means adding its delta here. Anthropic streams a thinking block as an empty shell followed by deltas:
 
 ```text
 content_block_start  { type:'thinking', thinking:'', signature:'' }
