@@ -547,6 +547,137 @@ TODO: Create a script that:
 # Future: ./scripts/check-openclaw-updates.sh
 ```
 
+## SeekerClaw Compatibility Notes (moved from CLAUDE.md)
+
+> Moved from `CLAUDE.md` on 2026-10-28. The original goal was for SeekerClaw to behave as close to OpenClaw as possible; since the 2026-07-06 review (top of this file) OpenClaw is a loose reference.
+
+### Reference Repository
+
+OpenClaw source is cloned at `openclaw-reference/` for direct comparison.
+
+```bash
+# Update OpenClaw reference
+cd openclaw-reference && git pull
+```
+
+### Key OpenClaw Files to Monitor
+
+| OpenClaw File | Purpose | SeekerClaw Equivalent |
+|---------------|---------|----------------------|
+| `src/agents/system-prompt.ts` | System prompt builder | `ai.js:buildSystemBlocks()` |
+| `src/skills/loading/` + `src/skills/discovery/` | Skills loading | `skills.js:loadSkills()` |
+| `src/memory/` | Memory management | `memory.js` (simplified) |
+| `src/cron/service/` + `src/cron/types.ts` | Cron/scheduling | `cron.js:cronService` (ported) |
+| `skills/` | 76 bundled skills | `assets/default-skills/` (22 bundled) + `workspace/skills/` (user-installed) |
+
+### OpenClaw Compatibility Checklist
+
+**System Prompt Sections:**
+- [x] Identity line
+- [x] Tooling section
+- [x] Tool Call Style
+- [x] Safety section (exact copy)
+- [x] Skills section
+- [x] Memory Recall
+- [x] Workspace
+- [x] Project Context (SOUL.md, MEMORY.md)
+- [x] Heartbeats
+- [x] Runtime info
+- [x] Silent Replies (SILENT_REPLY token)
+- [x] Reply Tags ([[reply_to_current]])
+- [x] User Identity
+
+**Memory System:**
+- [x] MEMORY.md
+- [x] Daily memory files (memory/*.md)
+- [x] HEARTBEAT.md
+- [ ] Vector search (requires Node 22+)
+- [ ] FTS search
+- [ ] Line citations
+
+**Skills System:**
+- [x] SKILL.md loading
+- [x] Trigger keywords
+- [x] YAML frontmatter format
+- [x] Semantic triggering (AI picks skills)
+- [ ] Requirements gating (bins, env, config)
+
+**Cron/Scheduling (ported from OpenClaw):**
+- [x] cron_create tool (one-shot + recurring)
+- [x] cron_list, cron_cancel, cron_status tools
+- [x] Natural language time parsing ("in X min", "every X hours", "tomorrow at 9am")
+- [x] JSON file persistence with atomic writes + .bak backup
+- [x] JSONL execution history per job
+- [x] Timer-based delivery (no polling)
+- [x] Zombie detection (2hr threshold)
+- [x] Recurring intervals ("every" schedule)
+- [x] HEARTBEAT_OK protocol
+
+### SKILL.md Format
+
+> **Full spec:** See `SKILL-FORMAT.md` — Claude uses this as the reference when creating skills.
+
+**SeekerClaw Format (current):**
+```yaml
+---
+name: skill-name
+description: "What the skill does — AI reads this to decide when to use"
+version: "1.0.0"
+emoji: "🔧"
+image: "https://seekerclaw.xyz/assets/partner-skills/skill-name.jpg"
+requires:
+  bins: []
+  env: []
+allowed-tools:
+  - tool1
+  - tool2
+---
+
+# Skill Name
+
+Instructions...
+```
+
+**Key fields:**
+- `image:` — Absolute HTTPS URL to skill logo. Displayed in Skills screen via Coil. Falls back to emoji → ⚡. **Partner skills** host images at `https://seekerclaw.xyz/assets/partner-skills/{skill-id}.{ext}`, with image files in the `SeekerClaw_Web` repo under `assets/partner-skills/`.
+- `allowed-tools:` — **not enforced.** OpenClaw's field is accepted in frontmatter but ignored: `skills.js` stopped parsing it in BAT-305 because it never restricted anything. A skill can call any tool. Per-skill restriction would have to be built into `executeTool()`.
+- OpenClaw's nested `metadata.openclaw` format is also supported. For `emoji` and `requires`, the nested `metadata.openclaw` value wins when both are set (`skills.js`).
+
+**Legacy format** (`Trigger: keyword1, keyword2`) is deprecated — still parsed but logs warnings.
+
+### SOUL.md Template
+
+SeekerClaw's default SOUL.md follows OpenClaw's template. Shortened excerpt below; the full seeded text is in `ConfigManager.seedWorkspace` (Kotlin) and `DEFAULT_SOUL` in `memory.js`:
+
+```markdown
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+- Be genuinely helpful, not performatively helpful
+- Have opinions
+- Be resourceful before asking
+- Earn trust through competence
+- Remember you're a guest
+...
+```
+
+### Node.js Limitations
+
+OpenClaw requires **Node 22+** for `node:sqlite`. SeekerClaw runs on **Node 18** (nodejs-mobile limitation).
+
+**Solved:**
+- SQLite — uses **SQL.js** (WASM-compiled SQLite, v1.12.0) instead of `node:sqlite`. Bundled as `sql-wasm.js` + `sql-wasm.wasm` in assets. Currently used for API request logging (`api_request_log` table); future: conversation storage, FTS5 memory search.
+
+**Cannot implement (yet):**
+- Vector embeddings for semantic search (needs native bindings)
+
+**Current workarounds:**
+- File-based memory (MEMORY.md, daily files) — future: migrate to SQL.js
+- Keyword matching for skills
+- Full file reads for memory recall — future: FTS5 via SQL.js
+
 ---
 
 ## Contact & Resources

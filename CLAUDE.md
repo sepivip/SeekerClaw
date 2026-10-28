@@ -1,6 +1,6 @@
 # CLAUDE.md — SeekerClaw Project Guide
 
-> **Background research:** See `docs/internal/RESEARCH.md` | **Source of truth:** See `PROJECT.md`
+> **Background research:** See `docs/internal/RESEARCH.md` | **Source of truth:** See `PROJECT.md` | **Architecture:** See `docs/internal/ARCHITECTURE.md` | **All reference docs:** *Reference Docs* below
 
 ## PROJECT.md — Source of Truth
 
@@ -17,18 +17,13 @@
 
 ## What Is This Project
 
-**SeekerClaw** (package: `com.seekerclaw.app`) is an Android app that turns a Solana Seeker phone into a 24/7 personal AI agent. It embeds a Node.js runtime via `nodejs-mobile` and runs the OpenClaw gateway as a foreground service. Users interact with their agent through Telegram — the app itself is minimal (setup, status, logs, settings).
+**SeekerClaw** (package: `com.seekerclaw.app`) is an Android app that turns a Solana Seeker phone into a 24/7 personal AI agent. It embeds a Node.js runtime via `nodejs-mobile` and runs an agent ported from the OpenClaw gateway as a foreground service. Users interact with their agent through Telegram or Discord — the app itself is minimal (setup, status, logs, skills, settings).
 
 ### Supported Devices
 
 - **Primary:** Solana Seeker (Android 14, Snapdragon 6 Gen 1, 8GB RAM)
 - **Secondary:** Any Android 14+ with 4GB+ RAM
 - **Note:** OEM-modified ROMs (Xiaomi MIUI, Samsung OneUI) may aggressively kill background services — Seeker's stock Android avoids this.
-
-### Development Phases
-
-- **Phase 1 (PoC):** Mock OpenClaw with a simple Node.js Telegram bot (`grammy`/`telegraf`) that responds to a hardcoded message. Proves Node.js runs on device, Telegram round-trip works.
-- **Phase 2 (App Shell):** Replace mock with real OpenClaw gateway bundle. Full setup flow, all screens, watchdog, boot receiver.
 
 ## Version Tracking (KEEP UPDATED)
 
@@ -75,234 +70,26 @@
 - **Build:** Gradle (Kotlin DSL)
 - **Distribution:** Solana dApp Store APK (primary), Google Play AAB (secondary), direct APK sideload (fallback)
 
-## Project Structure
+## Reference Docs
 
-```
-seekerclaw/
-├── app/
-│   ├── src/main/
-│   │   ├── java/com/seekerclaw/app/
-│   │   │   ├── MainActivity.kt              # Single activity, Compose navigation
-│   │   │   ├── SeekerClawApplication.kt     # App class
-│   │   │   ├── ui/
-│   │   │   │   ├── theme/Theme.kt            # Dark theme (Theme.SeekerClaw), Material 3
-│   │   │   │   ├── navigation/NavGraph.kt    # Setup → Main (Dashboard/Logs/Settings)
-│   │   │   │   ├── setup/SetupScreen.kt      # QR scan + manual entry + notification permission
-│   │   │   │   ├── dashboard/DashboardScreen.kt
-│   │   │   │   ├── logs/LogsScreen.kt        # Monospace scrollable log viewer
-│   │   │   │   └── settings/SettingsScreen.kt
-│   │   │   ├── service/
-│   │   │   │   ├── SeekerClawService.kt      # Foreground Service — starts/manages Node.js
-│   │   │   │   ├── NodeBridge.kt             # IPC wrapper for nodejs-mobile
-│   │   │   │   └── Watchdog.kt               # Monitors Node.js health, auto-restarts
-│   │   │   ├── receiver/
-│   │   │   │   └── BootReceiver.kt           # BOOT_COMPLETED → start service
-│   │   │   ├── config/
-│   │   │   │   ├── ConfigManager.kt          # Read/write config (encrypted + prefs)
-│   │   │   │   ├── KeystoreHelper.kt         # Android Keystore encrypt/decrypt
-│   │   │   │   └── QrParser.kt               # Parse QR JSON payload
-│   │   │   └── util/
-│   │   │       ├── LogCollector.kt           # Captures Node.js stdout/stderr
-│   │   │       └── ServiceState.kt           # Shared state (StateFlow) for UI
-│   │   ├── assets/openclaw/                  # Bundled OpenClaw JS (extracted on first launch)
-│   │   ├── res/
-│   │   └── AndroidManifest.xml
-│   └── build.gradle.kts
-├── build.gradle.kts                          # Root build file
-├── settings.gradle.kts
-├── CLAUDE.md
-└── docs/internal/          # Internal docs (audits, tracking, plans)
-```
+This file holds the rules. The detail lives in these docs; read the one that matches your change.
 
-## Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│          Android App (SeekerClaw)             │
-│  ┌─────────────┐    ┌──────────────────────┐ │
-│  │  UI Activity │    │  Foreground Service   │ │
-│  │  (Compose)   │◄──►│                      │ │
-│  │              │ IPC│  ┌──────────────────┐ │ │
-│  │ • Dashboard  │    │  │ Node.js Runtime  │ │ │
-│  │ • Setup      │    │  │ (nodejs-mobile)  │ │ │
-│  │ • Logs       │    │  │ ┌──────────────┐ │ │ │
-│  │ • Settings   │    │  │ │  OpenClaw     │ │ │ │
-│  └─────────────┘    │  │ │  Gateway      │ │ │ │
-│                      │  │ └──────────────┘ │ │ │
-│  ┌─────────────┐    │  └──────────────────┘ │ │
-│  │ Boot Receiver│────►                       │ │
-│  ├─────────────┤    │                        │ │
-│  │ Watchdog     │────►  (30s health check)   │ │
-│  └─────────────┘    └──────────────────────┘ │
-└──────────────────────────────────────────────┘
-         │ HTTPS              │ HTTPS
-         ▼                    ▼
-   api.anthropic.com    api.telegram.org
-```
-
-- **Foreground Service** keeps Node.js alive 24/7 with `START_STICKY` and partial wake lock
-- **Watchdog** checks heartbeat every 30s, expects pong within 10s, restarts Node.js if unresponsive >60s (2 missed checks)
-- **Boot Receiver** auto-starts the service after device reboot (`directBootAware=false` for v1 — starts after first unlock)
-- **IPC** uses nodejs-mobile JNI bridge for lifecycle + localhost HTTP for rich API
-
-## Screens (4 total)
-
-1. **Setup** (first launch only) — notification permission request (API 33+), QR scan or manual entry of API key, Telegram bot token, owner ID, model, agent name
-2. **Dashboard** (main) — status indicator (green/red/yellow), uptime, start/stop toggle, message stats
-3. **Logs** — monospace auto-scrolling view, color-coded (white=info, yellow=warn, red=error)
-4. **Settings** — edit config (masked fields), model dropdown, auto-start toggle, battery optimization, danger zone (reset/clear memory), about
-
-**Navigation:** Bottom bar with 3 tabs (Dashboard | Logs | Settings). Setup screen has no bottom bar.
-
-## Design Theme (Dark Only)
-
-Theme name: `Theme.SeekerClaw`
-
-| Token | Value |
-|-------|-------|
-| Background | `#0D0D0D` |
-| Surface / Card | `#1A1A1A` |
-| Card border | `#FFFFFF0F` |
-| Primary (green) | `#00C805` |
-| Error | `#FF4444` |
-| Warning | `#FBBF24` |
-| Accent (purple) | `#A78BFA` |
-| Text primary | `#FFFFFF` at 87% opacity |
-| Text secondary | `#FFFFFF` at 50% opacity |
-
-## Key Permissions (AndroidManifest)
-
-```xml
-FOREGROUND_SERVICE, FOREGROUND_SERVICE_SPECIAL_USE,
-RECEIVE_BOOT_COMPLETED, INTERNET, WAKE_LOCK, CAMERA,
-REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, POST_NOTIFICATIONS
-```
-
-- **`POST_NOTIFICATIONS`:** Required on API 33+. Request at runtime during Setup flow before starting the service.
-- **`specialUse` service type:** dApp Store friendly — no justification needed. Google Play requires written justification for `specialUse`. Consider `dataSync` as alternative for Play Store (but note 6-hour time limit on Android 14+). Can be flavor-gated if needed.
+| Doc | What's in it |
+|-----|--------------|
+| `PROJECT.md` | Source of truth: shipped, in progress, limitations, changelog, stats |
+| `docs/internal/ARCHITECTURE.md` | Project tree, runtime diagram, screens, theme tokens, permissions, Android Bridge endpoints, MCP servers, QR payload, config generation, workspace seeding, on-device file layout, watchdog, mobile config, Jupiter safety layers, CI/CD |
+| `app/src/main/assets/nodejs-project/ARCHITECTURE.md` | Node.js agent module map and dependency wiring |
+| `docs/internal/PITFALLS.md` | Full incident write-ups behind *Coding Patterns & Pitfalls* (BAT-1033 thinking signatures, adaptive thinking, live probes, context7) |
+| `docs/internal/OPENCLAW_TRACKING.md` | **Critical:** OpenClaw version tracking, update process, parity checklist, SOUL.md template, Node 18 limits |
+| `SKILL-FORMAT.md` | SKILL.md spec — use it as the reference when creating skills |
+| `CONTRIBUTING.md` | Contributor setup, PR process, shipping a new AI model |
+| `docs/internal/RESEARCH.md` | Feasibility research: Node.js on Android, background services, Solana Mobile, competitive landscape |
 
 ## Model List
 
-Available models for the dropdown (using API aliases — auto-resolve to latest snapshot):
-- `claude-fable-5` — most powerful, newest tier (Fable 5)
-- `claude-opus-4-8` — smartest Opus — **default for the Anthropic provider**
-- `claude-opus-4-7` — previous flagship (Opus 4.7)
-- `claude-opus-4-6` — older flagship (Opus 4.6) — retained: dropping a registry row silently disables Extended Thinking for users still on it (registry drives `reasoningSupport`); drop only once a retired-models concept exists
-- `claude-sonnet-4-6` — balanced, recommended (Sonnet 4.6)
-- `claude-haiku-4-5` — fast, cheapest (Haiku 4.5)
+The model picker is driven by `app/src/main/assets/nodejs-project/model-registry.json` — the single source of truth read by both Kotlin (`ModelRegistry` in `Providers.kt`) and Node (`model-catalog.js`). Each provider's default model is that file's `defaultModel` field. Model ids quoted elsewhere in the docs are examples; the registry is the authority.
 
-Defined in `app/src/main/assets/nodejs-project/model-registry.json` — single source of truth read by both Kotlin (`ModelRegistry` in `Providers.kt`) and Node (`model-catalog.js`). A custom model ID typed in the picker is also supported on Anthropic/OpenAI and survives reconcile (BAT-1032).
-
-Model list can be updated via app update or future remote config.
-
-## MCP Servers (Remote Tools)
-
-Users can add remote MCP (Model Context Protocol) servers in Settings > MCP Servers.
-Each server provides additional tools via Streamable HTTP transport (JSON-RPC 2.0).
-
-- Config: `McpServerConfig` in `ConfigManager.kt` (id, name, url, authToken, enabled, rateLimit)
-- Client: `app/src/main/assets/nodejs-project/mcp-client.js` (MCPClient + MCPManager)
-- Integration: `main.js` merges MCP tools into TOOLS array, routes `mcp__<server>__<tool>` calls
-- Security: descriptions sanitized, SHA-256 rug-pull detection, results wrapped as untrusted content
-- Rate limiting: 10/min per server (configurable), 50/min global ceiling
-
-## QR Config Payload
-
-Base64-encoded JSON:
-```json
-{
-  "v": 1,
-  "anthropic_api_key": "sk-ant-api03-...",
-  "telegram_bot_token": "123456789:ABCdefGHI...",
-  "telegram_owner_id": "987654321",
-  "model": "claude-opus-4-8",
-  "agent_name": "MyAgent"
-}
-```
-
-Sensitive fields encrypted via Android Keystore (AES-256-GCM). Non-sensitive fields (model, agent_name) in SharedPreferences. QR generation web tool at `seekerclaw.xyz/setup` (client-side only, keys never leave the browser).
-
-## OpenClaw Config Generation
-
-On setup completion, generate `config.yaml` in the workspace directory:
-
-```yaml
-version: 1
-providers:
-  anthropic:
-    apiKey: "{anthropic_api_key}"
-agents:
-  main:
-    model: "{model}"
-    channel: telegram
-channels:
-  telegram:
-    botToken: "{telegram_bot_token}"
-    ownerIds:
-      - "{telegram_owner_id}"
-    polling: true
-```
-
-## Workspace Seeding
-
-On first launch, seed the workspace directory with:
-- **`SOUL.md`** — a default personality template (basic, friendly agent personality)
-- **`MEMORY.md`** — empty file
-
-These are standard OpenClaw workspace files — the agent creates and manages them automatically after first launch.
-
-## Watchdog Timing
-
-- **Check interval:** Every 30 seconds, send heartbeat ping to Node.js
-- **Response timeout:** Expect pong within 10 seconds
-- **Dead declaration:** After 60 seconds of no response (2 consecutive missed checks), declare Node.js dead and restart
-- These values are constants in `Watchdog.kt` — easy to tune later
-
-## Build Priority Order
-
-1. Project setup (Gradle, dependencies, theme)
-2. Navigation (4 screens with bottom bar)
-3. Setup screen (QR scan + manual entry + notification permission request)
-4. Config encryption (KeystoreHelper + ConfigManager)
-5. Dashboard screen (status UI with mock data)
-6. Settings screen (config display/edit)
-7. Foreground Service (basic, without Node.js first)
-8. nodejs-mobile integration (get Node.js running)
-9. **Phase 1 mock:** Simple Node.js Telegram bot responding to hardcoded message
-10. **Phase 2:** Replace mock with real OpenClaw gateway bundle
-11. Boot receiver + auto-start
-12. Watchdog + crash recovery (30s check / 10s timeout / 60s dead)
-13. Logs screen (connect to real Node.js output)
-14. Polish & testing
-
-## File System Layout (On Device)
-
-```
-/data/data/com.seekerclaw.app/
-├── files/
-│   ├── nodejs/              # Node.js runtime (bundled in APK)
-│   ├── openclaw/            # OpenClaw JS package (bundled, extracted on first launch)
-│   ├── workspace/           # OpenClaw working directory (preserved across updates)
-│   │   ├── config.yaml
-│   │   ├── SOUL.md          # Agent personality (seeded on first launch)
-│   │   ├── MEMORY.md        # Long-term memory (empty on first launch)
-│   │   ├── memory/          # Daily memory files
-│   │   ├── HEARTBEAT.md
-│   │   └── node_debug.log   # Node runtime debug log (LEVEL|epochMs|message; ~5MB continuous rotation → node_debug.log.old)
-│   └── service_logs         # Kotlin service-log mirror (300-line in-memory ring + 1MB→512KB file compaction)
-├── databases/seekerclaw.db
-└── shared_prefs/seekerclaw_prefs.xml
-```
-
-## Mobile-Specific Config
-
-OpenClaw config overrides for mobile environment:
-- Heartbeat interval: 5 min (save battery vs desktop default)
-- Memory max daily files: 30 (limit disk usage)
-- Debug log (node_debug.log): ~5MB continuous rotation, previous generation kept as .old (size-based, no time retention); service_logs mirror: 300-line ring + 1MB→512KB compaction
-- Max context tokens: 100,000 (limit memory usage)
-- Web fetch timeout: 15s (shorter for mobile networks)
-- Disabled skills: browser, canvas, nodes, screen
+A custom model ID typed in the picker is also supported on Anthropic/OpenAI and survives reconcile (BAT-1032). To add or retire a model, follow *Shipping a new AI model* in `CONTRIBUTING.md`.
 
 ## Memory Preservation (CRITICAL)
 
@@ -318,7 +105,7 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 | `MEMORY.md` | Long-term memory | YES |
 | `memory/*.md` | Daily memory files | YES |
 | `HEARTBEAT.md` | Last heartbeat | YES |
-| `config.yaml` | Config (regenerated) | Regenerated from encrypted store |
+| `config.json` | Config handoff to Node (holds secrets) | Rewritten from stored config on each service start, deleted ~5s later |
 | `skills/*.md` | Custom user skills | YES |
 
 ### Rules for Developers
@@ -327,7 +114,7 @@ The agent's memory is sacred. These files live in the workspace directory and mu
 2. **Never overwrite** existing SOUL.md, MEMORY.md, IDENTITY.md, USER.md
 3. **Seed files only if they don't exist** (`if (!file.exists())`)
 4. **BOOTSTRAP.md** is the only file the agent itself deletes (after first-run ritual)
-5. **Config.yaml** is regenerated from encrypted storage on each service start — this is fine
+5. **config.json** is a short-lived handoff: rewritten from stored config (secrets decrypted) on each service start and deleted ~5s later — this is fine
 6. **Use `adb install -r`** (replace) to preserve app data during development
 7. **Export/Import** feature exists in Settings for backup/restore
 
@@ -446,35 +233,17 @@ The `/model` and `/provider` commands shipped functional but invisible — devic
   - `shell_exec` uses Android's `/system/bin/sh` (toybox) — completely separate from the Node.js process
   - To run JavaScript code, tools must use `eval()`/`require()` inside the existing Node.js process (`js_eval` tool)
   - All existing tools (read, write, web_fetch, etc.) already work within the Node.js process — they don't shell out
-- **Phase 1 mock:** Create `assets/openclaw/` with `package.json` and `index.js` that starts a Telegram bot (`grammy`/`telegraf`), responds to a hardcoded message from the owner, and sends heartbeat pings back to the Android bridge.
-- **Phase 2 real:** Replace mock with actual OpenClaw gateway bundle. Config, workspace, and all features work as documented.
 - **Logs:** Node writes `node_debug.log` (workspace/) via `log()` in `LEVEL|epochMs|message` format, continuously rotated at ~5MB (previous kept as `.old`, no carryover). A Kotlin FileObserver forwarder (SeekerClawService) mirrors new lines into `service_logs` (filesDir) — a 300-line in-memory ring surfaced in the Logs screen, plus a 1MB→512KB compacted file. `service_logs` is a bounded diagnostic mirror, NOT an authoritative replica; `node_debug.log` is the full Node transcript.
 - **Battery:** On first launch after setup, show dialog explaining battery optimization exemption, then call `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`.
 - **ServiceState:** Singleton with `StateFlow<ServiceStatus>` (STOPPED, STARTING, RUNNING, ERROR), uptime, and message count. UI observes these flows.
 - **Metrics:** Message count, uptime, and response times tracked locally on-device. Usage analytics (Firebase) tracks feature usage, service health, and model selection — no personal data, no messages, no wallet keys. Fully optional — users can disable in Settings.
 
-## Jupiter / Solana Integration (Live-tested 2026-02-22)
-
-Full Jupiter DEX integration via MWA (Mobile Wallet Adapter). Tested on Solana Seeker with real funds.
-
-**Capabilities:** wallet connect, balance, quotes, swaps (Jupiter Ultra — gasless), SOL/SPL transfers, token search, price lookup, security checks, holdings
-
-**Safety layers (all verified):**
-- Two-step confirmation gate (quote → YES/NO prompt → 60s auto-cancel)
-- Balance pre-check blocks insufficient-funds swaps before wallet popup
-- Rate limiting (15s cooldown on swap/send)
-- MWA sign-only mode (no private keys in app)
-- Clean error handling on wallet rejection, timeout, network loss
-
-**Test docs:** `docs/internal/audits/JUPITER-AUDIT.md` (code audit), `docs/internal/audits/JUPITER-TEST-CHECKLIST.md` (29 tests, all must-pass green)
-
 ## What NOT to Build (v1)
 
-- No in-app chat (users use Telegram)
+- No in-app chat (users use Telegram or Discord)
 - No light theme
 - No multi-agent support
 - No OTA updates (update via app store)
-- No multi-channel (Telegram only)
 
 ## Product Flavors (Distribution)
 
@@ -546,276 +315,13 @@ Exit codes:
 Catches the bug class from PR #334 (missing `aspectRatio` import passed
 Node smoke, failed CI after 4 minutes).
 
-## CI/CD (GitHub Actions)
-
-**`.github/workflows/build.yml`** — runs on push/PR to main, builds both flavor debug APKs for validation.
-
-**`.github/workflows/release.yml`** — triggered by `v*` tags, 3 parallel jobs:
-1. `build-dappstore` — signed APK (`assembleDappStoreRelease`), renamed to `SeekerClaw-{tag}.apk`
-2. `build-googleplay` — signed AAB (`bundleGooglePlayRelease`), renamed to `SeekerClaw-{tag}.aab`
-3. `release` — downloads both artifacts, extracts changelog, creates GitHub Release
-
-**GitHub Secrets:**
-
-| Secret | Purpose |
-|--------|---------|
-| `KEYSTORE_BASE64` | Base64-encoded dApp Store .jks |
-| `STORE_PASSWORD` | dApp Store keystore password |
-| `KEY_ALIAS` | dApp Store key alias |
-| `KEY_PASSWORD` | dApp Store key password |
-| `PLAY_KEYSTORE_BASE64` | Base64-encoded Google Play .jks |
-| `PLAY_STORE_PASSWORD` | Google Play keystore password |
-| `PLAY_KEY_ALIAS` | Google Play key alias |
-| `PLAY_KEY_PASSWORD` | Google Play key password |
-| `GOOGLE_SERVICES_JSON` | Base64-encoded Firebase config |
-
-**Re-releasing:** To rebuild artifacts for an existing tag, delete and recreate the tag:
-```bash
-git tag -d v1.x.x && git push origin :refs/tags/v1.x.x
-git tag v1.x.x && git push origin v1.x.x
-```
-
-**Release Candidate (RC) flow:** Before submitting to dApp Store, always test the signed APK:
-1. Tag `v1.x.x-rc1` → triggers release workflow → creates **pre-release** on GitHub
-2. Download APK from GitHub Releases, install on Seeker, verify it launches and works
-3. If good → tag `v1.x.x` (final release), submit to dApp Store
-4. If bad → fix, tag `v1.x.x-rc2`, repeat
-
-## Reference Documents
-
-- `docs/internal/RESEARCH.md` — Deep feasibility research on Node.js on Android, background services, Solana Mobile, competitive landscape
-- `docs/internal/OPENCLAW_TRACKING.md` — **Critical:** Version tracking, change detection, and update process
-
----
-
 ## OpenClaw Version Tracking
 
-> **IMPORTANT:** SeekerClaw must stay in sync with OpenClaw updates. See `docs/internal/OPENCLAW_TRACKING.md` for full details.
+> SeekerClaw started as a port of OpenClaw and now treats it as a loose reference (SeekerClaw is its own line: mobile, Node 18, Solana). The update check, critical-file list, parity checklist and compatibility notes are in `docs/internal/OPENCLAW_TRACKING.md`. The reference clone lives at `openclaw-reference/`.
 
 ### Current Versions
 - **OpenClaw Reference:** 2026.4.10 (parity baseline; upstream has since diverged ~34K commits — now a loose reference)
 - **Last Sync Review:** 2026-07-06 (reviewed HEAD 538d4eeb77; nothing portable — see `docs/internal/OPENCLAW_TRACKING.md`)
-
-### Quick Update Check
-```bash
-# Check for new OpenClaw versions
-cd openclaw-reference && git fetch origin
-git log --oneline HEAD..origin/main
-
-# If updates exist, pull and review
-git pull origin main
-# Then review docs/internal/OPENCLAW_TRACKING.md for what to check
-```
-
-### When OpenClaw Updates
-
-1. **Pull the update:** `cd openclaw-reference && git pull`
-2. **Check critical files:** See priority list in `docs/internal/OPENCLAW_TRACKING.md`
-3. **Compare changes:** `git diff <old>..<new> -- <file>`
-4. **Port relevant changes** to `main.js` and skills
-5. **Update tracking docs** with new version info
-
-### Files That Require Immediate Review
-- `src/agents/system-prompt.ts` — System prompt changes
-- `src/memory/` — Memory system changes
-- `src/cron/` — Scheduling changes
-- `skills/` — New or updated skills
-
----
-
-## OpenClaw Compatibility
-
-> **Goal:** SeekerClaw should behave as close to OpenClaw as possible.
-
-### Reference Repository
-
-OpenClaw source is cloned at `openclaw-reference/` for direct comparison.
-
-```bash
-# Update OpenClaw reference
-cd openclaw-reference && git pull
-```
-
-### Key OpenClaw Files to Monitor
-
-| OpenClaw File | Purpose | SeekerClaw Equivalent |
-|---------------|---------|----------------------|
-| `src/agents/system-prompt.ts` | System prompt builder | `ai.js:buildSystemBlocks()` |
-| `src/skills/loading/` + `src/skills/discovery/` | Skills loading | `skills.js:loadSkills()` |
-| `src/memory/` | Memory management | `memory.js` (simplified) |
-| `src/cron/service/` + `src/cron/types.ts` | Cron/scheduling | `cron.js:cronService` (ported) |
-| `skills/` | 76 bundled skills | `workspace/skills/` (3 examples) |
-
-### OpenClaw Compatibility Checklist
-
-**System Prompt Sections:**
-- [x] Identity line
-- [x] Tooling section
-- [x] Tool Call Style
-- [x] Safety section (exact copy)
-- [x] Skills section
-- [x] Memory Recall
-- [x] Workspace
-- [x] Project Context (SOUL.md, MEMORY.md)
-- [x] Heartbeats
-- [x] Runtime info
-- [x] Silent Replies (SILENT_REPLY token)
-- [x] Reply Tags ([[reply_to_current]])
-- [x] User Identity
-
-**Memory System:**
-- [x] MEMORY.md
-- [x] Daily memory files (memory/*.md)
-- [x] HEARTBEAT.md
-- [ ] Vector search (requires Node 22+)
-- [ ] FTS search
-- [ ] Line citations
-
-**Skills System:**
-- [x] SKILL.md loading
-- [x] Trigger keywords
-- [x] YAML frontmatter format
-- [x] Semantic triggering (AI picks skills)
-- [ ] Requirements gating (bins, env, config)
-
-**Cron/Scheduling (ported from OpenClaw):**
-- [x] cron_create tool (one-shot + recurring)
-- [x] cron_list, cron_cancel, cron_status tools
-- [x] Natural language time parsing ("in X min", "every X hours", "tomorrow at 9am")
-- [x] JSON file persistence with atomic writes + .bak backup
-- [x] JSONL execution history per job
-- [x] Timer-based delivery (no polling)
-- [x] Zombie detection (2hr threshold)
-- [x] Recurring intervals ("every" schedule)
-- [x] HEARTBEAT_OK protocol
-
-### SKILL.md Format
-
-> **Full spec:** See `SKILL-FORMAT.md` — Claude uses this as the reference when creating skills.
-
-**SeekerClaw Format (current):**
-```yaml
----
-name: skill-name
-description: "What the skill does — AI reads this to decide when to use"
-version: "1.0.0"
-emoji: "🔧"
-image: "https://seekerclaw.xyz/assets/partner-skills/skill-name.jpg"
-requires:
-  bins: []
-  env: []
-allowed-tools:
-  - tool1
-  - tool2
----
-
-# Skill Name
-
-Instructions...
-```
-
-**Key fields:**
-- `image:` — Absolute HTTPS URL to skill logo. Displayed in Skills screen via Coil. Falls back to emoji → ⚡. **Partner skills** host images at `https://seekerclaw.xyz/assets/partner-skills/{skill-id}.{ext}`, with image files in the `SeekerClaw_Web` repo under `assets/partner-skills/`.
-- `allowed-tools:` — Restricts which tools the skill can use (important for partner skills).
-- OpenClaw's nested `metadata.openclaw` format is also supported; top-level fields take precedence.
-
-**Legacy format** (`Trigger: keyword1, keyword2`) is deprecated — still parsed but logs warnings.
-
-### SOUL.md Template
-
-SeekerClaw uses the **exact same SOUL.md template** as OpenClaw:
-
-```markdown
-# SOUL.md - Who You Are
-
-_You're not a chatbot. You're becoming someone._
-
-## Core Truths
-- Be genuinely helpful, not performatively helpful
-- Have opinions
-- Be resourceful before asking
-- Earn trust through competence
-- Remember you're a guest
-...
-```
-
-### Node.js Limitations
-
-OpenClaw requires **Node 22+** for `node:sqlite`. SeekerClaw runs on **Node 18** (nodejs-mobile limitation).
-
-**Solved:**
-- SQLite — uses **SQL.js** (WASM-compiled SQLite, v1.12.0) instead of `node:sqlite`. Bundled as `sql-wasm.js` + `sql-wasm.wasm` in assets. Currently used for API request logging (`api_request_log` table); future: conversation storage, FTS5 memory search.
-
-**Cannot implement (yet):**
-- Vector embeddings for semantic search (needs native bindings)
-
-**Current workarounds:**
-- File-based memory (MEMORY.md, daily files) — future: migrate to SQL.js
-- Keyword matching for skills
-- Full file reads for memory recall — future: FTS5 via SQL.js
-
----
-
-## Android Bridge (Phase 4)
-
-SeekerClaw extends OpenClaw with Android-native capabilities via a local HTTP bridge.
-
-### Architecture
-```
-Node.js (main.js)  ──HTTP POST──►  AndroidBridge.kt (port 8765)  ──►  Android APIs
-```
-
-### Available Endpoints
-
-| Endpoint | Purpose | Permission Required |
-|----------|---------|---------------------|
-| `/battery` | Battery level, charging status | None |
-| `/storage` | Storage stats | None |
-| `/network` | Network connectivity | None |
-| `/clipboard/get` | Read clipboard | None |
-| `/clipboard/set` | Write clipboard | None |
-| `/contacts/search` | Search contacts | READ_CONTACTS |
-| `/contacts/add` | Add contact | WRITE_CONTACTS |
-| `/sms` | Message draft: a notification the user taps to open their SMS app and send | None (needs notifications) |
-| `/call` | Call draft: a notification the user taps to open the dialer and dial | None (needs notifications) |
-| `/location` | Get GPS location | ACCESS_FINE_LOCATION |
-| `/tts` | Text-to-speech | None |
-| `/apps/list` | List installed apps | None |
-| `/apps/launch` | Launch app | None |
-| `/stats/message` | Report message for stats | None |
-| `/ping` | Health check | None |
-
-### Using from Node.js
-```javascript
-async function androidBridgeCall(endpoint, data = {}) {
-    const http = require('http');
-    return new Promise((resolve) => {
-        const req = http.request({
-            hostname: 'localhost',
-            port: 8765,
-            path: endpoint,
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-        }, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => resolve(JSON.parse(body)));
-        });
-        req.write(JSON.stringify(data));
-        req.end();
-    });
-}
-
-// Example: Get battery level
-const battery = await androidBridgeCall('/battery');
-// Returns: { level: 85, isCharging: true, chargeType: "usb" }
-```
-
----
-
-## Theme
-
-SeekerClaw uses a single **DarkOps** theme (dark navy + crimson red + green status). Colors are defined in `Theme.kt` via `DarkOpsThemeColors` and accessed globally through the `SeekerClawColors` object.
 
 ---
 
@@ -921,41 +427,11 @@ if (bootstrap && !identity) { runRitual(); }
 if (bootstrap) { runRitual(/* resume: !!identity */); }
 ```
 
-### SSE Streaming — Handle EVERY Delta Type (thinking signatures)
+### Provider Wire Contracts (BAT-1033)
 
-**When assembling a streamed API response, handle every `*_delta` type the wire can send — a dropped delta silently corrupts the block.** The Claude SSE reducer in `http.js` (`applyClaudeStreamEvent`) accumulates `text_delta`, `input_json_delta`, `thinking_delta`, and `signature_delta`. Anthropic streams a thinking block as an empty shell followed by deltas:
+Full write-ups, with the misleading error text and the probe evidence, are in `docs/internal/PITFALLS.md`. The rules:
 
-```text
-content_block_start  { type:'thinking', thinking:'', signature:'' }
-content_block_delta  { thinking_delta:  <reasoning text> }
-content_block_delta  { signature_delta: <the signature> }   ← easy to forget
-```
-
-**The v2.1.0 bug (BAT-1033):** the reducer handled only `text_delta` + `input_json_delta`, so it dropped `signature_delta`. The assembled thinking block kept the empty signature from `content_block_start`. On the next tool-loop round the block was echoed back (Anthropic requires thinking blocks to be replayed **unchanged** on tool-use turns) and the API rejected the whole request:
-
-```text
-API error (400): messages.N.content.0.thinking: each thinking block must contain thinking
-```
-
-**The message is misleading — the trigger is the empty SIGNATURE, not empty text.** Proven with a live probe (`tests/live/anthropic/test-thinking-poison.js`): a signed *empty-text* thinking block replays 200; the *same* block with `signature:''` replays 400. So:
-
-- **Capture side:** never lose the signature. `signature_delta` MUST be accumulated.
-- **Replay guard (`claude.js:_collectClaudeWireBlocks`):** skip a thinking block whose `signature` is empty/whitespace — **key on the signature, not the text** (an empty-text signed block is valid and must still replay). This also recovers checkpoints poisoned by an older build after upgrade.
-- **Why only Sonnet 5 surfaced it:** with `/think` off, Sonnet 5 emits a thinking block by default while Opus 4.8 doesn't — and emission is stochastic, which is why it flapped ("works now" → "broke again"). Any model that emits a thinking block hits it on the first tool-using turn.
-
-### Adaptive Thinking — `budget_tokens` was removed (verify per auth path)
-
-**A second, distinct BAT-1033 bug:** with `/think` **ON**, `formatRequest` used to send `thinking:{type:'enabled', budget_tokens}` (extended thinking). Anthropic **removed** extended thinking from the current models — fable-5/opus-4-8/opus-4-7/sonnet-5 reject it with `400 "thinking.type.enabled is not supported for this model. Use thinking.type.adaptive"`. Fix: send `thinking:{type:'adaptive'}` uniformly (the model auto-sizes its budget; accepted by every reasoning model). This retired the BAT-558 budget clamp (no `budget_tokens` → no `budget_tokens < max_tokens` constraint).
-
-**The trap that nearly made us defer it — auth path matters.** The `cc_version` billing masquerade on the **setup_token** path still *tolerated* the deprecated `budget_tokens` (returned 200), so probing only that path made it look "latent." On the **raw API-key** path (the common dApp-Store user, QR `anthropic_api_key`), the same request **400s**. **Always verify a provider-shape claim on BOTH auth paths** — `tests/live/anthropic/test-thinking-matrix.js` runs the per-model × extended/adaptive grid on the api-key path; `test-thinking-repro.js` covers setup_token.
-
-### Wire-Contract Bugs Need Live Probes, Not Just Mocks
-
-**A fully-mocked test cannot catch a bug in what the *live API* actually accepts.** BAT-1033 shipped even though `claude-reasoning-roundtrip.test.js` existed — its mocks only covered *missing*-signature/wrong-type blocks, never the *empty-string* signature the real stream produces. Two-layer defense:
-
-1. **Offline (CI/smoke):** extract wire-assembly into a pure exported reducer and feed it the EXACT bytes the API streams (`tests/nodejs-project/claude-thinking-signature.test.js` drives `http.js`'s real `assembleClaudeStreamMessage`). The test must fail if the fix is reverted — verify that.
-2. **Live (opt-in, `tests/live/anthropic/`):** `test-thinking-repro.js` (per-model × reasoning on/off/extended/adaptive matrix) and `test-thinking-poison.js` (verbatim vs signature-stripped replay) hit the real endpoint with a setup_token. Run before any release that touches provider request/response shaping.
-
-### Verify External API Contracts via context7 (not training memory)
-
-**Before writing or changing any provider request/response shaping — Anthropic, OpenAI, OpenRouter — pull the CURRENT API contract via the context7 MCP first; do not rely on training memory.** Model APIs change faster than the training cutoff. In BAT-1033, context7 (`platform.claude.com`) is what surfaced that Anthropic **removed** `thinking:{type:'enabled', budget_tokens}` from the current models and requires `type:'adaptive'` — a fact no amount of code-reading or memory would have revealed, and which the fix hinged on. Pair it with a live probe (above): context7 tells you the documented contract, the probe tells you what the endpoint (and our specific auth path) actually enforces. Applies to any hardcoded external identifier — API params, model ids, header/beta tags, endpoint paths.
+- **Handle every SSE `*_delta` type the enabled content blocks use.** Today `applyClaudeStreamEvent` in `http.js` accumulates `text_delta`, `input_json_delta`, `thinking_delta` **and** `signature_delta`; enabling another block type (e.g. citations) means handling its delta too. A dropped `signature_delta` leaves the thinking block with an empty signature, and replaying it on the next tool-use turn fails with `400 … each thinking block must contain thinking` — the trigger is the empty **signature**, not empty text. The replay guard in `providers/claude.js:_collectClaudeWireBlocks` skips blocks whose signature is empty; key on the signature, never the text.
+- **Thinking is `{type:'adaptive'}`, sent uniformly.** On the raw API-key path, `claude-fable-5`, `claude-opus-4-8`, `claude-opus-4-7` and `claude-sonnet-5` reject `thinking:{type:'enabled', budget_tokens}` with a 400; only the older `claude-opus-4-6` / `claude-sonnet-4-6` still accept it, and adaptive works on every reasoning model. Verify any provider-shape claim on **both** auth paths (raw API key and setup_token) — the setup_token path tolerated the old shape and hid the bug.
+- **Wire-contract bugs need live probes, not just mocks.** Offline, feed the exact streamed bytes to the exported reducer (`tests/nodejs-project/claude-thinking-signature.test.js`) and confirm the test fails if the fix is reverted. Before any release that touches provider request/response shaping, run the opt-in live probes in `tests/live/anthropic/`.
+- **Check the current API contract via the context7 MCP, not training memory**, before changing provider request/response shaping or any hardcoded external identifier (API params, model ids, header/beta tags, endpoint paths). Pair it with a live probe.

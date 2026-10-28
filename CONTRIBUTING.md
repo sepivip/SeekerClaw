@@ -39,12 +39,13 @@ Use `-r` to preserve existing app data (config, memory, skills).
 
 ## Architecture Reference
 
-See [CLAUDE.md](CLAUDE.md) for the full architecture guide, including:
+See [docs/internal/ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) for the architecture reference, including:
 - Project structure and directory tree
-- Node.js agent module breakdown (14 modules)
+- Screens, theme tokens and permissions
 - Android Bridge endpoints
-- Theme system
-- Memory preservation rules
+- On-device file layout
+
+The Node.js agent's module breakdown is in [app/src/main/assets/nodejs-project/ARCHITECTURE.md](app/src/main/assets/nodejs-project/ARCHITECTURE.md). The rules every change must follow (memory preservation, agent self-awareness, version tracking) are in [CLAUDE.md](CLAUDE.md).
 
 ## Code Style
 
@@ -132,5 +133,5 @@ rationale is evidence, and a provider's documentation does not outrank it.
 ## Questions?
 
 - Open a [Discussion](https://github.com/sepivip/SeekerClaw/discussions) for general questions
-- Check [CLAUDE.md](CLAUDE.md) for architecture details
+- Check [docs/internal/ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) for architecture details
 - Check [SKILL-FORMAT.md](SKILL-FORMAT.md) for writing custom skills
