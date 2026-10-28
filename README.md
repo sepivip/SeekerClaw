@@ -12,17 +12,20 @@
     <img src="https://img.shields.io/badge/Claude-Powered-cc785c?logo=anthropic&logoColor=white" alt="Claude">
     <img src="https://img.shields.io/badge/OpenAI-Powered-412991?logo=openai&logoColor=white" alt="OpenAI">
     <img src="https://img.shields.io/badge/OpenRouter-Powered-6467F2?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQyIDAtOC0zLjU4LTgtOHMzLjU4LTggOC04IDggMy41OCA4IDgtMy41OCA4LTggOHoiLz48L3N2Zz4=&logoColor=white" alt="OpenRouter">
+    <img src="https://img.shields.io/badge/xAI-Grok-000000?logo=x&logoColor=white" alt="xAI Grok">
     <img src="https://img.shields.io/badge/MCP-Streamable_HTTP-1a1a2e" alt="MCP">
     <img src="https://img.shields.io/badge/Solana-Seeker-9945FF?logo=solana&logoColor=white" alt="Solana">
     <img src="https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white" alt="Telegram">
+    <img src="https://img.shields.io/badge/Discord-Bot-5865F2?logo=discord&logoColor=white" alt="Discord">
     <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License">
     <a href="https://coderabbit.ai"><img src="https://img.shields.io/coderabbit/prs/github/sepivip/SeekerClaw?utm_source=oss&utm_medium=github&utm_campaign=sepivip%2FSeekerClaw&labelColor=171717&color=FF570A&label=CodeRabbit+Reviews" alt="CodeRabbit Pull Request Reviews"></a>
   </p>
   <p>
     <a href="https://play.google.com/store/apps/details?id=com.seekerclaw.app"><img src="https://img.shields.io/badge/Google_Play-Download-414141?logo=google-play&logoColor=white&style=for-the-badge" alt="Google Play"></a>
     &nbsp;
-    <a href="https://github.com/sepivip/SeekerClaw/releases/latest"><img src="https://img.shields.io/badge/dApp_Store-APK-9945FF?logo=solana&logoColor=white&style=for-the-badge" alt="dApp Store APK"></a>
+    <a href="https://github.com/sepivip/SeekerClaw/releases/latest"><img src="https://img.shields.io/badge/APK-GitHub_Releases-181717?logo=github&logoColor=white&style=for-the-badge" alt="Direct APK download"></a>
   </p>
+  <p><sub>On a Solana Seeker, SeekerClaw is also in the Solana dApp Store app.</sub></p>
   <p>
     <a href="https://www.producthunt.com/products/seekerclaw"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=seekerclaw&theme=dark" alt="SeekerClaw on Product Hunt" width="250" height="54"></a>
   </p>
@@ -32,9 +35,11 @@
 
 SeekerClaw — winner of the **Solana Mobile Hackathon (April 2026)** — embeds a Node.js AI agent inside an Android app, running 24/7 as a foreground service. You interact through Telegram or Discord — ask questions, control your phone, trade crypto, schedule tasks, **and now pay for paid APIs autonomously in USDC**.
 
-v2 introduced a **burner wallet + x402 payment client**; **v2.1 expands it into a full autonomous trading wallet.** Import a Solana key once, set per-tx and daily caps, and your agent can **trade** within those caps — **swap tokens, convert held balances (including fee-free Token-2022 like PYUSD) back to USDC/SOL, send SPL tokens, and place limit / DCA orders** — signing silently while it stays under cap and falling back to a main-wallet popup when it doesn't. It can also **pay** 44 catalogued x402 endpoints across 10 services (market data, real estate, travel, research, captcha, SMS, more) when you opt in to a paid lookup. Your Phantom / MWA wallet stays fully user-controlled.
+v2 introduced a **burner wallet + x402 payment client**; **v2.1 expands it into a full autonomous trading wallet.** Import a Solana key once, set per-tx and daily caps, and your agent can **trade** within those caps — **swap tokens, convert held balances (including fee-free Token-2022 like PYUSD) back to USDC/SOL, send SPL tokens, and set up DCA orders** — signing silently while it stays under cap and falling back to a main-wallet popup when it doesn't. It can also **pay** 44 catalogued x402 endpoints across 10 services (market data, real estate, travel, research, captcha, SMS, more) when you opt in to a paid lookup. Your Phantom / MWA wallet stays fully user-controlled.
 
-**64 built-in tools** (plus MCP remote tools), **22 bundled skills + 35+ partner skills**, two-wallet Solana with **capped autonomous trading**, multi-provider AI (Claude + OpenAI + OpenRouter + any OpenAI-compatible gateway), extended thinking preserved across tool calls, graceful Stop — all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
+**v2.2** added **xAI Grok** as a fifth AI provider (API key or Sign in with Grok) and the GPT-5.6 models. **v2.3** added **Opus 5** (the new Anthropic default), **Fable 5.1**, **Grok 4.6** (the new xAI default) and **GPT-6 Astra**, and targets Android 16.
+
+**64 built-in tools** (plus MCP remote tools), **22 bundled skills + 5 partner skills**, two-wallet Solana with **capped autonomous trading**, multi-provider AI (Claude + OpenAI + xAI Grok + OpenRouter + any OpenAI-compatible gateway), extended thinking preserved across tool calls, graceful Stop — all running locally on your device. Built for the Solana Seeker, runs on any Android 14+ phone.
 
 <div align="center">
   <img src="design/screenshots/01-first-launch.png" width="130">
@@ -57,12 +62,12 @@ SeekerClaw was selected as a winner of the Solana Mobile Hackathon, recognized f
 
 | | Feature | What it does |
 |---|---|---|
-| :robot: | **AI Engine** | Claude, OpenAI (API key + Codex OAuth), OpenRouter, or any OpenAI-compatible gateway (Custom). Multi-turn tool use, extended thinking on supported models |
-| :credit_card: | **Autonomous Wallet (trading + x402)** | A separate, app-stored burner wallet (you import a key once) lets the agent transact in USDC / SOL on Solana — within per-tx and daily caps you set in Settings. **Trading:** swaps, held-token conversions (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL, SPL transfers, and limit / DCA orders — signed silently under cap, main-wallet popup over cap. **Payments:** x402 v1 + v2 end-to-end including POST settlement (GET silent under cap, POST always confirmed), across 44 catalogued endpoints / 10 services (Stablecrypto Market Data, Tripadvisor, Rentcast, Perplexity, WolframAlpha, Reducto, CrushRewards, 2Captcha, Textbelt SMS, Purch). **OPT-IN** paid catalog — activates only when you explicitly ask to pay. Burner key encrypted under Android Keystore (AES-256-GCM); your main wallet stays user-controlled. |
-| :thought_balloon: | **Extended Thinking** | Toggle in Settings → AI Provider → Reasoning or via `/think` from chat. Supported models (Fable 5, Opus 4.8 / 4.7 / 4.6, Sonnet 4.6, GPT-5.6 Sol / Terra / Luna, GPT-5.5 / 5.4 / 5.4 Mini) think across tool calls, with reasoning preserved across `/resume` and tool-loop turns on **all four providers** (Claude, OpenAI, OpenRouter, Custom). |
+| :robot: | **AI Engine** | Claude (API key or Pro/Max setup token), OpenAI (API key or ChatGPT sign-in), xAI Grok (API key or Sign in with Grok), OpenRouter, or any OpenAI-compatible gateway (Custom). Defaults: Opus 5, GPT-5.6 Sol, Grok 4.6. Multi-turn tool use, extended thinking on supported models |
+| :credit_card: | **Autonomous Wallet (trading + x402)** | A separate, app-stored burner wallet (you import a key once) lets the agent transact in USDC / SOL on Solana — within per-tx and daily caps you set in Settings. **Trading:** swaps, held-token conversions (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL, SPL transfers, and DCA orders — signed silently under cap, main-wallet popup over cap. **Payments:** x402 v1 + v2 end-to-end including POST settlement (GET silent under cap, POST always confirmed), across 44 catalogued endpoints / 10 services (Stablecrypto Market Data, Tripadvisor, Rentcast, Perplexity, WolframAlpha, Reducto, CrushRewards, 2Captcha, Textbelt SMS, Purch). **OPT-IN** paid catalog — activates only when you explicitly ask to pay. Burner key encrypted under Android Keystore (AES-256-GCM); your main wallet stays user-controlled. |
+| :thought_balloon: | **Extended Thinking** | Toggle in Settings → AI Provider → Reasoning or via `/think` from chat. Every model in the picker except Haiku 4.5 can think (Fable 5.1 / 5, Opus 5 / 4.8, Sonnet 5 / 4.6, GPT-6 Astra, GPT-5.6 Sol / Terra / Luna, GPT-5.5 / 5.4 / 5.4 Mini, Grok 4.6 / 4.5). Reasoning is preserved across `/resume` and tool-loop turns on Claude, OpenAI, OpenRouter and Custom; on xAI Grok the toggle sets the reasoning effort. |
 | :speech_balloon: | **Channels** | Telegram (full bot — reactions, file sharing, inline keyboards, **rich messages: tables / headings / math via Bot API 10.1, with automatic plain-text fallback**) or Discord (Gateway v10 — DMs, media, reply threading) |
-| :link: | **Solana Wallets** | **Main wallet:** swaps, limit orders, DCA, transfers via Jupiter + MWA — you sign every action. **Burner wallet:** a key you import once, used for capped autonomous trading (swaps, conversions, SPL sends, limit/DCA orders — silent under cap, main-wallet popup over cap) **and** x402 payments (GET silent under cap, POST always confirmed). See Autonomous Wallet below. |
-| :iphone: | **Device Control** | Battery, GPS, camera, SMS, calls, clipboard, TTS |
+| :link: | **Solana Wallets** | **Main wallet:** swaps, DCA, transfers via Jupiter + MWA — you sign every action. **Burner wallet:** a key you import once, used for capped autonomous trading (swaps, conversions, SPL sends, DCA orders — silent under cap, main-wallet popup over cap) **and** x402 payments (GET silent under cap, POST always confirmed). See Autonomous Wallet below. |
+| :iphone: | **Device Control** | Battery, GPS, camera, contacts, apps, clipboard, TTS, plus SMS and calls that you confirm before they go out |
 | :brain: | **Memory** | Persistent personality, daily notes, ranked keyword search, session summaries preserved across user-Stop |
 | :pause_button: | **Graceful Stop** | Tapping Stop Agent triggers a bounded flush handshake — pending session summaries and dirty SQL.js writes persist before the Node.js process exits. Last ~60s of activity survives a clean Stop. |
 | :alarm_clock: | **Scheduling** | Cron jobs with natural language ("remind me in 30 min") |
@@ -70,14 +75,14 @@ SeekerClaw was selected as a winner of the Solana Mobile Hackathon, recognized f
 | :gear: | **Live Settings** | Change provider, model, MCP servers, search provider, or agent name in Settings — or from chat with `/model`, `/provider`, `/think` — and changes take effect on the very next AI turn. No agent restart, no lost session. Backed by cross-process JSON stores read by both the UI process and the `:node` service. |
 | :key: | **Env Vars** | Plug arbitrary API keys into the agent via Settings → Env Vars (single add or `.env`-style bulk paste). Skills and tools read them at runtime via `process.env.KEY`; values masked from debug logs. Skills can gate on `requires.env` so missing keys block activation cleanly |
 | :bar_chart: | **Activity** | 26-week heatmap of your agent's API requests on the System screen — see when it's active, spot quiet days. Up to 13 months of daily history persisted on-device |
-| :electric_plug: | **Extensible** | 35+ partner skills + custom skills + MCP remote tools |
+| :electric_plug: | **Extensible** | 5 partner skills + custom skills + MCP remote tools |
 
 ## Autonomous Wallet
 
 v2 made SeekerClaw the first on-device agent that can transact on the open web; **v2.1 lets it trade, too** — all within caps you control. Two wallets, two roles:
 
 - **Main wallet (you sign):** Phantom or any MWA wallet. Every action goes through a wallet popup — and any trade over your caps, or when no burner is configured, routes here.
-- **Burner wallet (agent signs, within caps):** A Solana Ed25519 keypair *you import once* (from Phantom, Solflare, a hardware wallet, or `solana-keygen`) — encrypted at rest under Android Keystore (AES-256-GCM). **SeekerClaw does not generate keys.** Used for capped autonomous **trading** — swaps, held-token conversions, SPL sends, limit/DCA orders — **and** x402 payments to paid APIs. You set per-tx and daily caps in USDC and SOL; the agent cannot exceed them.
+- **Burner wallet (agent signs, within caps):** A Solana Ed25519 keypair *you import once* (from Phantom, Solflare, a hardware wallet, or `solana-keygen`) — encrypted at rest under Android Keystore (AES-256-GCM). **SeekerClaw does not generate keys.** Used for capped autonomous **trading** — swaps, held-token conversions, SPL sends, DCA orders — **and** x402 payments to paid APIs. You set per-tx and daily caps in USDC and SOL; the agent cannot exceed them.
 
 **Capped trading is live.** `solana_swap`, `solana_send`, `solana_send_token`, `jupiter_trigger_create`, and `jupiter_dca_create` route through the burner when a trade is under your caps (signed silently) and fall back to a main-wallet popup when it's over cap or no burner is configured. Held-token conversions (e.g. PYUSD → USDC, no price oracle required, under a 1% price-impact limit) and Token-2022 balances are handled natively.
 
@@ -105,8 +110,8 @@ The catalog was built from a 72-service / 824-endpoint audit of the [pay.sh](htt
 
 ```mermaid
 graph LR
-    You["You (Telegram)"] -->|messages| Agent["SeekerClaw Agent"]
-    Agent -->|reasoning| AI["AI Provider (Claude / OpenAI / OpenRouter / Custom)"]
+    You["You (Telegram / Discord)"] -->|messages| Agent["SeekerClaw Agent"]
+    Agent -->|reasoning| AI["AI Provider (Claude / OpenAI / xAI Grok / OpenRouter / Custom)"]
     Agent -->|swaps, balance| Solana["Solana / Jupiter"]
     Agent -->|device access| Bridge["Android Bridge"]
     Agent -->|search, fetch| Web["Web APIs"]
@@ -116,12 +121,12 @@ graph LR
 **On-device stack:**
 
 ```
-Android App (Kotlin, Jetpack Compose)  ~27K lines, 68 files
+Android App (Kotlin, Jetpack Compose)  ~37.5K lines, 93 files
  └─ Foreground Service (:node process)
-     └─ Node.js Runtime (nodejs-mobile)  ~24K lines, 50+ JS modules
+     └─ Node.js Runtime (nodejs-mobile)  ~41.6K lines, 81 JS files
          ├─ ai.js                    — AI provider API, system prompt, conversations, /think
          ├─ message-handler.js       — Inbound message routing, commands, auto-resume
-         ├─ providers/               — Claude, OpenAI (API key + Codex OAuth), OpenRouter, Custom adapters
+         ├─ providers/               — Claude, OpenAI (API key + Codex OAuth), xAI Grok (API key + Sign in with Grok), OpenRouter, Custom adapters
          ├─ tools/                   — 64 tool handlers across 13 modules (incl. solana_send_token, agent_pay, wallet_status)
          ├─ payment/x402.js          — x402 v1 + v2 payment protocol (detect / build / settle — v2 settle is live end-to-end)
          ├─ wallet/dispatch.js       — Routes signing through burner (capped, silent) or main (popup)
@@ -160,7 +165,7 @@ Android App (Kotlin, Jetpack Compose)  ~27K lines, 68 files
 
 ## Quick Start
 
-**Prerequisites:** Android Studio, JDK 17, Android SDK 35
+**Prerequisites:** Android Studio, JDK 17, Android SDK 36
 
 ```bash
 git clone https://github.com/sepivip/SeekerClaw.git
@@ -169,7 +174,7 @@ cd SeekerClaw
 adb install app/build/outputs/apk/dappStore/debug/app-dappStore-debug.apk
 ```
 
-Open the app → pick your AI provider (Claude, OpenAI, or OpenRouter) → enter your API key + [Telegram bot token](https://t.me/BotFather) + choose a model + name your agent — or generate a QR code at [seekerclaw.xyz/setup](https://seekerclaw.xyz/setup) and scan it. Done. For custom gateways (DeepSeek, Ollama, LiteLLM, etc.), configure in Settings after setup.
+Open the app → pick your AI provider (Claude, OpenAI, xAI Grok, or OpenRouter) → enter your API key or sign in + [Telegram bot token](https://t.me/BotFather) + name your agent — or generate a QR code at [seekerclaw.xyz/setup](https://seekerclaw.xyz/setup) and scan it. Done. The agent starts on the provider's default model; switch any time in Settings or with `/model`. For Discord, or custom gateways (DeepSeek, Ollama, LiteLLM, etc.), configure in Settings after setup.
 
 > **Step-by-step setup guide:** [How to set up SeekerClaw](https://x.com/SeekerClaw/status/2029197829068005849)
 
@@ -177,7 +182,7 @@ Open the app → pick your AI provider (Claude, OpenAI, or OpenRouter) → enter
 
 ## Partner Skills
 
-SeekerClaw also ships 22 bundled skills out of the box — including the v2 additions `burner-wallet` and `paysh-catalog`, plus calculator, weather, news, research, summarize, translate, reminders, todo, github, crypto-prices, and more. See the [full partner skills catalog](https://seekerclaw.xyz/partner-skills) for all 35+ third-party options available from the marketplace.
+SeekerClaw also ships 22 bundled skills out of the box — including the v2 additions `burner-wallet` and `paysh-catalog`, plus calculator, weather, news, research, summarize, translate, reminders, todo, github, crypto-prices, and more. The five partner skills below come from third parties; the [partner skills catalog](https://seekerclaw.xyz/partner-skills) has the details.
 
 Install via Telegram: send your agent the install link and it handles the rest.
 
