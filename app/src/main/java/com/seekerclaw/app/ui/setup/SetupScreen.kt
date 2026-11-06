@@ -203,7 +203,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
         val modelAuthType = if (initialProvider == "openai") initialAuthType else "api_key"
         val models = modelsForProvider(initialProvider, modelAuthType)
         // Use defaultModelForProvider() instead of models[0] / firstOrNull() so
-        // newly-listed-but-tier-gated models (e.g. gpt-5.5 on lower ChatGPT plans)
+        // a newly-listed model at the head of the picker (e.g. gpt-6-astra)
         // can appear at the top of the picker without silently becoming the
         // default for fresh installs or 5.2-migration paths.
         val safeDefault = defaultModelForProvider(initialProvider, modelAuthType)
@@ -279,15 +279,18 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     // authType="api_key" for openai (QR/claim payloads don't carry OAuth
                     // tokens yet), so this branch resolves to the api_key model list
                     // today. The conditional is kept deliberately: if the importer ever
-                    // learns to produce openai+oauth claims, gpt-5.4-mini and other
-                    // OAuth-only models need the OAuth list to validate correctly.
+                    // learns to produce openai+oauth claims, any OAuth-only model needs
+                    // the OAuth list to validate correctly.
                     val qrModelAuthType = if (cfg.provider == "openai") cfg.authType else "api_key"
                     val providerModels = modelsForProvider(cfg.provider, qrModelAuthType)
                     selectedModel = if (providerModels.isEmpty()) {
                         cfg.model // OpenRouter: accept freeform model as-is
                     } else {
+                        // BAT-1661: an invalid import falls back to the provider DEFAULT,
+                        // not list[0] (the head is the most capable model, e.g. Astra).
                         cfg.model.takeIf { m -> providerModels.any { it.id == m } }
-                            ?: providerModels[0].id
+                            ?: defaultModelForProvider(cfg.provider, qrModelAuthType)
+                                .ifBlank { providerModels[0].id }
                     }
                     agentName = cfg.agentName
                     isQrImporting = false
@@ -707,10 +710,9 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                     //     otherwise use the freeform fallback.
                     //  2. Providers with a fixed list must validate existingConfig.model
                     //     against the list for the EFFECTIVE auth type. Example: an
-                    //     existing config with openai + api_key + "gpt-5.4-mini" would
-                    //     otherwise survive a provider-change round-trip even though
-                    //     gpt-5.4-mini is only present in the OAuth model list. Always
-                    //     coerce to the first valid entry when the stored model isn't.
+                    //     existing config whose model isn't listed for the effective auth
+                    //     would otherwise survive a provider-change round-trip. Always
+                    //     coerce to the provider default (BAT-1661) when it isn't.
                     val modelAuthType = if (newProvider == "openai") newAuthType else "api_key"
                     val models = modelsForProvider(newProvider, modelAuthType)
                     // Capture existingConfig into a stable local so the null check
@@ -725,9 +727,10 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         cfgModelForProvider ?: OPENROUTER_DEFAULT_MODEL
                     } else {
                         // Fixed list: restore only if the stored model is still valid
-                        // for the effective auth type; otherwise coerce to first entry.
+                        // for the effective auth type; otherwise coerce to the default.
                         cfgModelForProvider?.takeIf { m -> models.any { it.id == m } }
-                            ?: models[0].id
+                            ?: defaultModelForProvider(newProvider, modelAuthType)
+                                .ifBlank { models[0].id }
                     }
                 },
                 apiKey = apiKey,
@@ -760,15 +763,14 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                             val saved = existingConfig?.openaiApiKey
                             if (!saved.isNullOrBlank()) apiKey = saved
                         }
-                        // OpenAI's OAuth and API-key model lists overlap on the main
-                        // GPT-5.x entries but aren't identical — gpt-5.4-mini is
-                        // OAuth-only, for example. If the currently-selected model
-                        // isn't in the new auth type's list, coerce to the first valid
-                        // entry so a cross-auth stale model never gets persisted by
-                        // saveAndStart. Shared models are left alone.
+                        // If the currently-selected model isn't in the new auth type's
+                        // list, coerce to the provider default (BAT-1661: not list[0],
+                        // which is the most capable model) so a cross-auth stale model
+                        // never gets persisted by saveAndStart. Listed models are kept.
                         val validModels = modelsForProvider("openai", newAuthType)
                         if (validModels.isNotEmpty() && validModels.none { it.id == selectedModel }) {
-                            selectedModel = validModels[0].id
+                            selectedModel = defaultModelForProvider("openai", newAuthType)
+                                .ifBlank { validModels[0].id }
                         }
                     } else if (scannedProvider == "xai") {
                         // OAuth tab doesn't use the apiKey field. Switching to API Key restores
@@ -779,7 +781,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         }
                         val validModels = modelsForProvider("xai", newAuthType)
                         if (validModels.isNotEmpty() && validModels.none { it.id == selectedModel }) {
-                            selectedModel = validModels[0].id
+                            selectedModel = defaultModelForProvider("xai", newAuthType)
+                                .ifBlank { validModels[0].id }
                         }
                     }
                     apiKeyError = null

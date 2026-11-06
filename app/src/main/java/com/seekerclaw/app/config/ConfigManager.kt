@@ -1440,10 +1440,10 @@ object ConfigManager {
         // blank after a successful Setup flow, so this edge case is
         // unreachable for normal users.
         //
-        // Auth changes matter too: OpenAI's oauth model list includes
-        // gpt-5.4-mini but the api_key list doesn't, so switching oauth→
-        // api_key on OpenAI must revalidate prefs.model against the new
-        // auth mode's allowlist even when provider stays the same.
+        // Auth changes matter too: if a provider's auth modes ever list
+        // different models (the modelsByAuth mechanism), switching auth must
+        // revalidate prefs.model against the new auth mode's allowlist even
+        // when provider stays the same.
         val resolvedModel: String = resolveModelForReconcile(
             providerChanged = providerChanged,
             authChanged = authChanged,
@@ -1565,8 +1565,8 @@ object ConfigManager {
      * Branches 2-3 keep the defensive clamps: a genuine external change
      * (overlay != prefs, e.g. Node-written /model values or tampered files)
      * is validated against the effective provider+auth, and a provider/auth
-     * switch revalidates prefs.model against the NEW pair (e.g. oauth→
-     * api_key on OpenAI must clamp the oauth-only gpt-5.4-mini).
+     * switch revalidates prefs.model against the NEW pair (e.g. an auth
+     * switch must clamp a model the new auth mode doesn't list).
      */
     @VisibleForTesting
     internal fun resolveModelForReconcile(

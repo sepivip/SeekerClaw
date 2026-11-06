@@ -1117,8 +1117,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider(activeProvider, selectedAuth)
                             // Only clamp models that belonged to the OLD auth
-                            // mode's list (e.g. gpt-5.4-mini is oauth-only and
-                            // must not survive oauth→api_key). A model on
+                            // mode's list (a model only the old auth listed must
+                            // not survive the switch). A model on
                             // NEITHER list is a user-typed custom ID — leave
                             // it alone (BAT-1032). For xAI both auth lists are
                             // identical today, so this is a no-op there.
