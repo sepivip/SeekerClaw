@@ -2281,6 +2281,14 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-sonnet-4-5':   200000,
     'claude-haiku-4-5':    200000,
     'gpt-6-astra':         200000, // 1.05M actual; same mobile cap as the rest
+    // BAT-1661: GPT-6.1/6 tiers — 1,050,000-token windows per OpenAI's model
+    // pages (checked 2026-11-05) → the same 200000 mobile cap.
+    'gpt-6.1-sol':         200000,
+    'gpt-6.1-terra':       200000,
+    'gpt-6-sol':           200000,
+    'gpt-6-luna':          200000,
+    // BAT-1661: dropped from the picker — kept so existing API-key users on
+    // these ids don't fall to DEFAULT_CONTEXT_LIMIT (128000) and trim early.
     'gpt-5.6-sol':         200000, // BAT-1151: gpt-5.6 family real window 272k → 200000 mobile cap (consistent with the caps above)
     'gpt-5.6-terra':       200000,
     'gpt-5.6-luna':        200000,

@@ -201,6 +201,39 @@ function defaultModelForProvider(providerId, authType) {
 }
 
 /**
+ * BAT-1661: model ids the provider has RETIRED for a given auth type — ids
+ * that still exist (API-key users may keep them) but that the provider now
+ * rejects on this auth path. Source: the optional `retiredForAuth` map in
+ * model-registry.json, so Kotlin and Node read ONE list.
+ * Returns [] for unknown providers, missing maps, or an unlisted auth type.
+ */
+function retiredModelsFor(providerId, authType) {
+    const provider = _byId[providerId];
+    if (!provider || !provider.retiredForAuth || typeof authType !== 'string') return [];
+    const list = provider.retiredForAuth[authType];
+    return Array.isArray(list) ? list : [];
+}
+
+/**
+ * BAT-1661 read rule (contract v2.2 §1, applied at USE — dispatch, /status,
+ * display — and NEVER when a value is published to disk, per v2.4 §0).
+ *
+ * Returns the model the agent should actually use for (providerId, authType):
+ *   - the provider's default when `model` is retired for that auth type;
+ *   - otherwise `model` unchanged (custom and other non-retired ids included).
+ * Pure: no I/O. Callers pass the EFFECTIVE auth of the running transport.
+ */
+function applyRetiredModelRule(providerId, authType, model) {
+    // Never throws: config.js calls this at module load.
+    if (typeof model !== 'string') return model;
+    // Exact ids after trimming — a custom id like "gpt-5.4-mini-ft" passes.
+    if (!retiredModelsFor(providerId, authType).includes(model.trim())) return model;
+    const fallback = defaultModelForProvider(providerId, authType);
+    // A provider with no default keeps the original rather than going blank.
+    return fallback || model;
+}
+
+/**
  * Render a provider ID as a canonical brand name ("OpenAI", not
  * "Openai"). Falls back to the raw ID (capitalized) for anything
  * not in the registry so future providers don't crash the display
@@ -323,6 +356,8 @@ module.exports = {
     PROVIDER_DISPLAY_NAMES,
     modelsForProvider,
     defaultModelForProvider,
+    retiredModelsFor,
+    applyRetiredModelRule,
     reasoningSupportFor,
     authTypesForProvider,
     hasCredentialsFor,

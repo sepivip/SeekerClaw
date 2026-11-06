@@ -428,21 +428,21 @@ console.log('── 3c R6 Fix 1: Custom-Responses delegate-id resolution ──'
 // id ('openai') when Custom is configured for the Responses transport.
 // Without this routing, the user toggle would be permanently dead on
 // Custom-Responses gateways pointing at known reasoning models (e.g.,
-// gpt-5.4 on a self-hosted Responses-compatible proxy).
+// gpt-6.1-sol on a self-hosted Responses-compatible proxy).
 //
 // This test pins the underlying registry contract that ai.js relies on:
-//   - reasoningSupportFor('custom', 'gpt-5.4', 'api_key') → 'unknown'
+//   - reasoningSupportFor('custom', 'gpt-6.1-sol', 'api_key') → 'unknown'
 //     (custom is freeform; resolving here would hide a known-yes model)
-//   - reasoningSupportFor('openai', 'gpt-5.4', 'api_key') → 'yes'
-//     (openai api_key list contains gpt-5.4; the delegate resolution
+//   - reasoningSupportFor('openai', 'gpt-6.1-sol', 'api_key') → 'yes'
+//     (openai api_key list contains gpt-6.1-sol; the delegate resolution
 //      lights up the toggle path)
 const { reasoningSupportFor: rsf } = require('../../app/src/main/assets/nodejs-project/model-catalog');
-ok("Custom registry resolution: 'gpt-5.4' under 'custom' is 'unknown' (freeform)",
-    rsf('custom', 'gpt-5.4', 'api_key') === 'unknown',
-    `actual: ${rsf('custom', 'gpt-5.4', 'api_key')}`);
-ok("Delegate routing target: 'gpt-5.4' under 'openai' api_key is 'yes'",
-    rsf('openai', 'gpt-5.4', 'api_key') === 'yes',
-    `actual: ${rsf('openai', 'gpt-5.4', 'api_key')}`);
+ok("Custom registry resolution: 'gpt-6.1-sol' under 'custom' is 'unknown' (freeform)",
+    rsf('custom', 'gpt-6.1-sol', 'api_key') === 'unknown',
+    `actual: ${rsf('custom', 'gpt-6.1-sol', 'api_key')}`);
+ok("Delegate routing target: 'gpt-6.1-sol' under 'openai' api_key is 'yes'",
+    rsf('openai', 'gpt-6.1-sol', 'api_key') === 'yes',
+    `actual: ${rsf('openai', 'gpt-6.1-sol', 'api_key')}`);
 ok("Delegate-id robustness: unknown model id under 'openai' stays 'unknown'",
     rsf('openai', 'some-unknown-deepseek-id', 'api_key') === 'unknown');
 

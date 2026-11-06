@@ -26,6 +26,10 @@
 //     would have hidden a working model. Do NOT re-snapshot the roster here; assert
 //     the mechanism, plus the few membership facts this PR deliberately decided
 //     (luna reachable on oauth, 5.4-mini on api_key, 5.3-codex retired from both).
+//     BAT-1661 (2026-11-05): the roster IS now pinned — owner decision D1 picks an
+//     explicit list (GPT-6.1 + GPT-6, "line = generation" for OpenAI), and OpenAI
+//     retired 5.5/5.4/5.4-mini for ChatGPT sign-in (live 400s), recorded as registry
+//     data in `retiredForAuth.oauth`.
 //
 //     KNOWN GAP (follow-up): openai was the ONLY provider carrying `modelsByAuth`, so
 //     with the override gone NO Node test exercises the override branch of
@@ -35,7 +39,7 @@
 //     coverage needs `modelsForProvider` to accept an injected provider (it resolves
 //     `_byId[providerId]` from the module-level registry today) — a production change
 //     deliberately kept out of this PR's scope.
-//   - defaultModelForProvider('openai') returns gpt-5.6-sol, present in BOTH
+//   - defaultModelForProvider('openai') returns gpt-6.1-sol, present in BOTH
 //     auth lists (a legitimate shared default; not tier-gated).
 //   - Defaults are EXPLICIT constants, not list-order-derived — a new
 //     model added at the top of a display list must not change defaults.
@@ -75,7 +79,8 @@ console.log('── modelsForProvider ──────────────
 // 200/4070ms), so it needs no modelsByAuth.oauth override.
 check('openai api_key list starts with gpt-6-astra (most capable first; NOT the default)', mc.modelsForProvider('openai', 'api_key')[0].id, 'gpt-6-astra');
 check('openai oauth list includes gpt-6-astra (Codex path verified live 2026-09-07)', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-6-astra'), true);
-check('openai default is still gpt-5.6-sol — astra is offered, not defaulted (cost)', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-5.6-sol');
+// BAT-1661 D2: the default moved to gpt-6.1-sol — the same Sol tier/price class as gpt-5.6-sol.
+check('openai default is gpt-6.1-sol — astra is offered, not defaulted (cost; BAT-1661 D2)', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-6.1-sol');
 // BAT-1151 (re-swept 2026-07-17): EVERY listed openai model answers 200 on BOTH auth paths
 // (verified live via the BAT-1144 exact-agent-copy harness), so there is no per-auth split and
 // the registry carries NO `modelsByAuth.oauth` override. These pin the documented fallback
@@ -87,9 +92,14 @@ check('openai oauth list === api_key list (fallback: no modelsByAuth override)',
     mc.modelsForProvider('openai', 'oauth').map((m) => m.id),
     mc.modelsForProvider('openai', 'api_key').map((m) => m.id));
 check('openai oauth list is non-empty', mc.modelsForProvider('openai', 'oauth').length > 0, true);
-// gpt-5.6-luna: 200 on oauth (5/5 runs) — it is NOT api_key-only. The earlier 404 verdict was stale.
-check('openai oauth list includes gpt-5.6-luna', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === 'gpt-5.6-luna'), true);
-check('openai api_key list includes gpt-5.4-mini', mc.modelsForProvider('openai', 'api_key').some((m) => m.id === 'gpt-5.4-mini'), true);
+// BAT-1661 D1 (owner, 2026-11-05): for OpenAI, "line" = GENERATION — the tiers (Astra/Sol/Terra/
+// Luna) don't split into lines — so "latest + one previous" = GPT-6.1 + GPT-6, most capable first.
+// All five answered 200 on BOTH auth paths with the exact agent payload (live, 2026-11-05).
+check('openai list is GPT-6.1 + GPT-6 only, most capable first (BAT-1661 D1: line = generation)',
+    mc.modelsForProvider('openai', 'api_key').map((m) => m.id),
+    ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna']);
+check('openai lists none of the dropped 5.x ids (BAT-1661 D1)',
+    mc.modelsForProvider('openai', 'api_key').some((m) => /^gpt-5\./.test(m.id)), false);
 // gpt-5.3-codex retired (superseded; also 400s on oauth "not supported with a ChatGPT account").
 check('openai lists NO gpt-5.3-codex on either path',
     mc.modelsForProvider('openai', 'api_key').concat(mc.modelsForProvider('openai', 'oauth')).some((m) => m.id === 'gpt-5.3-codex'),
@@ -115,13 +125,14 @@ check('null → Unknown', mc.displayNameForProvider(null), 'Unknown');
 console.log();
 console.log('── defaultModelForProvider (decoupled from list order) ──');
 check('claude default explicit (NOT list[0])', mc.defaultModelForProvider('claude', 'api_key'), mc.CLAUDE_DEFAULT_MODEL);
-check('openai api_key default is gpt-5.6-sol', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-5.6-sol');
-check('openai oauth default is gpt-5.6-sol (shared — present in both auth lists)', mc.defaultModelForProvider('openai', 'oauth'), 'gpt-5.6-sol');
+check('openai api_key default is gpt-6.1-sol', mc.defaultModelForProvider('openai', 'api_key'), 'gpt-6.1-sol');
+check('openai oauth default is gpt-6.1-sol (shared — present in both auth lists)', mc.defaultModelForProvider('openai', 'oauth'), 'gpt-6.1-sol');
+check('openai default is IN the list it defaults for', mc.modelsForProvider('openai', 'oauth').some((m) => m.id === mc.defaultModelForProvider('openai', 'oauth')), true);
 check('openrouter default is anthropic/claude-sonnet-4-6', mc.defaultModelForProvider('openrouter', 'api_key'), 'anthropic/claude-sonnet-4-6');
 check('custom default is blank (user must type model)', mc.defaultModelForProvider('custom', 'api_key'), '');
 check('unknown provider default is blank', mc.defaultModelForProvider('bogus', null), '');
 check('exports CLAUDE_DEFAULT_MODEL const', typeof mc.CLAUDE_DEFAULT_MODEL === 'string' && mc.CLAUDE_DEFAULT_MODEL.length > 0, true);
-check('exports OPENAI_DEFAULT_MODEL const', mc.OPENAI_DEFAULT_MODEL, 'gpt-5.6-sol');
+check('exports OPENAI_DEFAULT_MODEL const', mc.OPENAI_DEFAULT_MODEL, 'gpt-6.1-sol');
 
 console.log();
 console.log('── authTypesForProvider ─────────────────────────');
@@ -132,11 +143,13 @@ check('custom has api_key only', mc.authTypesForProvider('custom'), ['api_key'])
 
 console.log();
 console.log('── validateModelForProvider (allowlist) ─────────');
-check('gpt-5.5 valid on openai api_key', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.5').ok, true);
-// BAT-1151 re-sweep 2026-07-17: no per-auth split — every listed model validates on BOTH paths.
-check('gpt-5.4-mini valid on openai oauth', mc.validateModelForProvider('openai', 'oauth', 'gpt-5.4-mini').ok, true);
-check('gpt-5.4-mini valid on openai api_key', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.4-mini').ok, true);
-check('gpt-5.6-luna valid on openai oauth', mc.validateModelForProvider('openai', 'oauth', 'gpt-5.6-luna').ok, true);
+// No per-auth split: every listed model validates on BOTH paths (BAT-1151, re-confirmed BAT-1661).
+check('gpt-6.1-sol valid on openai api_key', mc.validateModelForProvider('openai', 'api_key', 'gpt-6.1-sol').ok, true);
+check('gpt-6-luna valid on openai oauth', mc.validateModelForProvider('openai', 'oauth', 'gpt-6-luna').ok, true);
+check('gpt-6.1-terra valid on openai oauth', mc.validateModelForProvider('openai', 'oauth', 'gpt-6.1-terra').ok, true);
+// BAT-1661: dropped ids are no longer offered (existing users keep them via the Kotlin equality gate).
+check('gpt-5.4 INVALID on openai api_key (dropped from the picker)', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.4').ok, false);
+check('gpt-5.6-sol INVALID on openai oauth (dropped from the picker)', mc.validateModelForProvider('openai', 'oauth', 'gpt-5.6-sol').ok, false);
 // A retired id must still be rejected by the allowlist on both paths.
 check('gpt-5.3-codex INVALID on openai api_key (retired)', mc.validateModelForProvider('openai', 'api_key', 'gpt-5.3-codex').ok, false);
 check('gpt-5.3-codex INVALID on openai oauth (retired)', mc.validateModelForProvider('openai', 'oauth', 'gpt-5.3-codex').ok, false);
@@ -423,29 +436,31 @@ check('claude/claude-haiku-4-5 → no',
     mc.reasoningSupportFor('claude', 'claude-haiku-4-5', 'api_key'), 'no');
 
 // OpenAI api_key path
-check('openai/gpt-5.5 (api_key) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.5', 'api_key'), 'yes');
-check('openai/gpt-5.4 (api_key) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.4', 'api_key'), 'yes');
-check('openai/gpt-5.6-sol (api_key) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.6-sol', 'api_key'), 'yes');
+check('openai/gpt-6-astra (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6-astra', 'api_key'), 'yes');
+check('openai/gpt-6.1-sol (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-sol', 'api_key'), 'yes');
+check('openai/gpt-6-sol (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6-sol', 'api_key'), 'yes');
 
-// BAT-1151 re-sweep 2026-07-17: no per-auth split — every listed model resolves on BOTH paths.
-check('openai/gpt-5.4-mini (oauth) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'oauth'), 'yes');
-check('openai/gpt-5.4-mini (api_key) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.4-mini', 'api_key'), 'yes');
-check('openai/gpt-5.6-luna (api_key) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.6-luna', 'api_key'), 'yes');
-check('openai/gpt-5.6-luna (oauth) → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.6-luna', 'oauth'), 'yes');
+// No per-auth split — every listed model resolves on BOTH paths.
+check('openai/gpt-6.1-terra (oauth) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-terra', 'oauth'), 'yes');
+check('openai/gpt-6-luna (api_key) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6-luna', 'api_key'), 'yes');
+check('openai/gpt-6-luna (oauth) → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6-luna', 'oauth'), 'yes');
+// BAT-1661 D4 (owner-accepted, documented in CHANGELOG): an API-key user still on a dropped id
+// keeps the model but it resolves "unknown", so Extended Thinking is no longer sent for it.
+check('openai/gpt-5.4 (api_key) → unknown after the drop (BAT-1661 D4 accepted reasoning loss)',
+    mc.reasoningSupportFor('openai', 'gpt-5.4', 'api_key'), 'unknown');
 
 // The strict-authType semantics still hold regardless of the roster: an unlisted/retired id
 // is "unknown" on both paths, and a null authType never falls through to the api_key list.
 check('openai/gpt-5.3-codex (api_key) → unknown (retired, unlisted)',
     mc.reasoningSupportFor('openai', 'gpt-5.3-codex', 'api_key'), 'unknown');
-check('openai/gpt-5.6-sol (null authType) → unknown (strict)',
-    mc.reasoningSupportFor('openai', 'gpt-5.6-sol', null), 'unknown');
+check('openai/gpt-6.1-sol (null authType) → unknown (strict)',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-sol', null), 'unknown');
 
 // Freeform providers → always unknown (we don't list specific models)
 check('openrouter/<any> → unknown',
@@ -470,17 +485,40 @@ check('empty modelId → unknown',
     mc.reasoningSupportFor('claude', '', 'api_key'), 'unknown');
 
 // 3a R1 thread 2: OpenAI strict authType handling — match modelsForProvider
-check('openai/gpt-5.4 with null authType → unknown (NOT yes)',
-    mc.reasoningSupportFor('openai', 'gpt-5.4', null), 'unknown');
-check('openai/gpt-5.4 with undefined authType → unknown',
-    mc.reasoningSupportFor('openai', 'gpt-5.4', undefined), 'unknown');
-check('openai/gpt-5.4 with bogus authType → unknown',
-    mc.reasoningSupportFor('openai', 'gpt-5.4', 'invalid'), 'unknown');
+check('openai/gpt-6.1-sol with null authType → unknown (NOT yes)',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-sol', null), 'unknown');
+check('openai/gpt-6.1-sol with undefined authType → unknown',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-sol', undefined), 'unknown');
+check('openai/gpt-6.1-sol with bogus authType → unknown',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-sol', 'invalid'), 'unknown');
 // Sanity: explicit api_key / oauth still resolves correctly
-check('openai/gpt-5.4 with api_key → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.4', 'api_key'), 'yes');
-check('openai/gpt-5.4 with oauth → yes',
-    mc.reasoningSupportFor('openai', 'gpt-5.4', 'oauth'), 'yes');
+check('openai/gpt-6.1-sol with api_key → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-sol', 'api_key'), 'yes');
+check('openai/gpt-6.1-sol with oauth → yes',
+    mc.reasoningSupportFor('openai', 'gpt-6.1-sol', 'oauth'), 'yes');
+
+console.log();
+console.log('── BAT-1661 retired-for-auth read rule ──────────');
+// Evidence: live 2026-11-05 — gpt-5.5 / gpt-5.4 / gpt-5.4-mini return HTTP 400 "not supported when
+// using Codex with a ChatGPT account" on oauth, 200 on api_key. Registry data: retiredForAuth.oauth.
+check('retiredModelsFor(openai, oauth) is the three ids OpenAI retired for ChatGPT sign-in',
+    mc.retiredModelsFor('openai', 'oauth'), ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']);
+check('retiredModelsFor(openai, api_key) is empty (API keys still serve them)', mc.retiredModelsFor('openai', 'api_key'), []);
+check('retiredModelsFor(claude, api_key) is empty', mc.retiredModelsFor('claude', 'api_key'), []);
+check('retiredModelsFor(unknown provider) is empty', mc.retiredModelsFor('bogus', 'oauth'), []);
+check('retiredModelsFor(openai, null) is empty', mc.retiredModelsFor('openai', null), []);
+for (const id of ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']) {
+    check(`rule: ${id} on openai oauth → gpt-6.1-sol`, mc.applyRetiredModelRule('openai', 'oauth', id), 'gpt-6.1-sol');
+    check(`rule: ${id} on openai api_key → unchanged`, mc.applyRetiredModelRule('openai', 'api_key', id), id);
+}
+check('rule: padded retired id still matches (trimmed exact)', mc.applyRetiredModelRule('openai', 'oauth', ' gpt-5.4 '), 'gpt-6.1-sol');
+check('rule: custom id sharing a prefix is NOT retired (exact, not prefix)', mc.applyRetiredModelRule('openai', 'oauth', 'gpt-5.4-mini-ft'), 'gpt-5.4-mini-ft');
+check('rule: non-retired dropped id (gpt-5.6-sol) passes on oauth', mc.applyRetiredModelRule('openai', 'oauth', 'gpt-5.6-sol'), 'gpt-5.6-sol');
+check('rule: listed id passes', mc.applyRetiredModelRule('openai', 'oauth', 'gpt-6-astra'), 'gpt-6-astra');
+check('rule: a non-retired value is returned byte-identical (no trim)', mc.applyRetiredModelRule('openai', 'oauth', ' gpt-6-astra '), ' gpt-6-astra ');
+check('rule: other provider untouched even with a retired-looking id', mc.applyRetiredModelRule('claude', 'oauth', 'gpt-5.4'), 'gpt-5.4');
+check('rule: null model passes through (never throws at config load)', mc.applyRetiredModelRule('openai', 'oauth', null), null);
+check('rule: undefined model passes through', mc.applyRetiredModelRule('openai', 'oauth', undefined), undefined);
 
 console.log();
 if (failures === 0) {

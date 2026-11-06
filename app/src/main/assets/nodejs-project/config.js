@@ -6,6 +6,9 @@ const path = require('path');
 // BAT-1071: pure, require-safe bridge-token validator (no config init).
 const { isCanonicalBridgeToken } = require('./bridge-token');
 const { formatSessionBanner } = require('./log-safe');
+// BAT-1661: pure registry helpers (model-catalog requires only fs/path — no
+// cycle back into config.js).
+const { applyRetiredModelRule } = require('./model-catalog');
 
 // ============================================================================
 // WORKSPACE & LOG PATHS
@@ -459,7 +462,7 @@ const OPENROUTER_FALLBACK_CONTEXT = parseInt(config.openrouterFallbackContext, 1
 // them — the same shape as ConfigClaimImporter.kt's `when`. Update all of them
 // together, or a fresh install lands on a different model than the registry
 // advertises. Tracked for a proper single-source fix.
-const _defaultModel = PROVIDER === 'openai' ? 'gpt-5.6-sol'
+const _defaultModel = PROVIDER === 'openai' ? 'gpt-6.1-sol'
     : PROVIDER === 'openrouter' ? 'anthropic/claude-sonnet-4-6'
     : PROVIDER === 'custom' ? ''
     : PROVIDER === 'xai' ? 'grok-4.6'
@@ -474,7 +477,14 @@ const _runtimeModel = (_runtimeStateValues && typeof _runtimeStateValues.model =
     && _runtimeStateValues.model.trim())
     ? _runtimeStateValues.model.trim()
     : '';
-const MODEL = _runtimeModel || config.model || _defaultModel;
+// BAT-1661: the auth this process's transport actually runs with — the
+// scope of the retired-model read rule (OpenAI resolves oauth/api_key above).
+const _EFFECTIVE_AUTH = PROVIDER === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE;
+// BAT-1661 read rule at USE: a model the provider retired for this auth
+// (e.g. gpt-5.4 on ChatGPT sign-in) is served as the provider default. The
+// stored value is left untouched — durable repair is Kotlin's job (v2.3+).
+const MODEL = applyRetiredModelRule(PROVIDER, _EFFECTIVE_AUTH,
+    _runtimeModel || config.model || _defaultModel);
 
 // BAT-515: agentName + searchProvider are no longer startup-frozen
 // constants — they're resolved per-call via the precedence chain below
@@ -643,7 +653,10 @@ function resolveActiveModel() {
                 return MODEL;
             }
             const m = typeof s.model === 'string' ? s.model.trim() : '';
-            if (m) return m;
+            // BAT-1661: re-applied on every call, so a still-on-disk retired
+            // overlay (e.g. a failed repair) never reaches dispatch, and a
+            // valid newer choice is returned as-is.
+            if (m) return applyRetiredModelRule(PROVIDER, _EFFECTIVE_AUTH, m);
         }
     } catch (_) {}
     return MODEL;
