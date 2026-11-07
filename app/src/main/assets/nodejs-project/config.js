@@ -390,7 +390,7 @@ const XAI_OAUTH_REFRESH = normalizeSecret(config.xaiOAuthRefresh || '');
 // "expiry-unknown" and does one opportunistic refresh on first use.
 const XAI_OAUTH_EXPIRES_AT = (typeof config.xaiOAuthExpiresAt === 'string' ? config.xaiOAuthExpiresAt.trim() : '');
 // BAT-1155: xAI OAuth durability — the single-writer store's control fields, sourced
-// (decrypted for the tokens above) from files/xai_oauth.json via Kotlin writeConfigJson,
+// (decrypted for the tokens above) from files/xai_oauth.json via Kotlin emitConfigJson,
 // NOT from prefs. epoch drives the rotation CAS (xai.js sends expectedEpoch); the reauth
 // flags drive the boot dead-family gate + notify-once suppression.
 const XAI_OAUTH_EPOCH = Number(config.xaiOAuthEpoch) || 0;
@@ -498,7 +498,7 @@ const MODEL = applyRetiredModelRule(PROVIDER, _EFFECTIVE_AUTH,
 //   1. agent_preferences.json (live, validated by readLiveOrNull) —
 //      what Settings/Telegram-flow writes update.
 //   2. config.json `agentName` / `searchProvider` (cold-start
-//      fallback) — what saveConfig.writeConfigJson last wrote. Stays
+//      fallback) — what Kotlin emitConfigJson last wrote at service start. Stays
 //      readable across service restarts even if the live file is
 //      genuinely absent or corrupt.
 //   3. Hardcoded fallback ('MyAgent' / 'brave') — unreachable under
@@ -723,7 +723,7 @@ if (config.firecrawlApiKey) config.firecrawlApiKey = normalizeSecret(config.fire
 // boolean so handlers can branch on `config.useTriggerV2 === true` without
 // truthy-coercing a string "false".
 //
-// PR #388 R7: Kotlin's writeConfigJson() does not yet emit a `useTriggerV2`
+// PR #388 R7: Kotlin's emitConfigJson() does not yet emit a `useTriggerV2`
 // field (that arrives with PR C's Settings toggle), so the JSON-load path
 // always normalizes to false in the live runtime. To make PR B actually
 // enable-able for the PR C live-smoke phase WITHOUT shipping the UI early,

@@ -294,7 +294,7 @@ class SafeFsWriteTest {
 
     /**
      * R3: a refused write ends in "the caller's existing failure path… Never a crash." The two
-     * pre-Node writers that throw (writeConfigJson, seedWorkspace) run on the service's main looper,
+     * pre-Node writers that throw (the config.json emit inside ModelRepair.serviceStart, seedWorkspace) run on the service's main looper,
      * where an uncaught IOException would kill `:node` with no Logs-screen line; the start
      * continuation catches it and ends the start through failBeforeNode. (writeAgentSettingsJson
      * and writePlatformMd catch their own failures.)
@@ -304,7 +304,7 @@ class SafeFsWriteTest {
         val service = File("src/main/java/com/seekerclaw/app/service/SeekerClawService.kt").readText()
             .replace("\r\n", "\n")
         val body = service.substringAfter("private fun continueStart(").substringBefore("\n    private fun ")
-        for ((call, reason) in listOf("ConfigManager.writeConfigJson(" to "CONFIG_WRITE", "ConfigManager.seedWorkspace(" to "WORKSPACE_SEED")) {
+        for ((call, reason) in listOf("ModelRepair.serviceStart(" to "CONFIG_WRITE", "ConfigManager.seedWorkspace(" to "WORKSPACE_SEED")) {
             val at = body.indexOf(call)
             assertTrue("continueStart calls $call", at >= 0)
             val tryAt = body.lastIndexOf("try {", at)

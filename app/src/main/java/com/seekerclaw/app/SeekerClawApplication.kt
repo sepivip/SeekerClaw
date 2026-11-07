@@ -41,19 +41,26 @@ class SeekerClawApplication : Application() {
         // ancestor-rule root) and an Android directory fsync for durable writes. Set first, in
         // EVERY process, before any store is constructed or any file is written.
         SafeFs.filesRoot = filesDir.toPath()
+        // BAT-1661: the checked form throws (the model repair intent must be known durable before
+        // any store is changed); the ordinary form keeps today's best-effort behaviour.
+        SafeFs.dirSyncChecked = { dir ->
+            // O_RDONLY on a directory is valid on Linux; OsConstants has no O_DIRECTORY.
+            val fd = android.system.Os.open(dir.toString(), android.system.OsConstants.O_RDONLY, 0)
+            try {
+                android.system.Os.fsync(fd)
+            } finally {
+                android.system.Os.close(fd)
+            }
+        }
         SafeFs.dirSync = { dir ->
             try {
-                // O_RDONLY on a directory is valid on Linux; OsConstants has no O_DIRECTORY.
-                val fd = android.system.Os.open(dir.toString(), android.system.OsConstants.O_RDONLY, 0)
-                try {
-                    android.system.Os.fsync(fd)
-                } finally {
-                    android.system.Os.close(fd)
-                }
+                SafeFs.dirSyncChecked(dir)
             } catch (_: Exception) {
                 // The rename already happened atomically; durability is best effort.
             }
         }
+        // BAT-1661: the model-selection lock lives in filesDir and is taken in BOTH processes.
+        com.seekerclaw.app.config.ModelSelectionLock.init(filesDir.toPath())
         createNotificationChannel()
 
         // BAT-517: load the shared provider+model registry FIRST,
@@ -82,7 +89,7 @@ class SeekerClawApplication : Application() {
         // processes: the MAIN process (sign-in via XaiOAuthActivity,
         // sign-out, loadConfig sourcing) AND the `:node` process (the
         // AndroidBridge rotation/mark-reauth handlers, the shutdown
-        // durability gate, and the writeConfigJson/loadConfig migration).
+        // durability gate, and the emitConfigJson/loadConfig migration).
         // init() is idempotent, so a second call is a no-op.
         XaiOAuthTokenStore.init(this)
 

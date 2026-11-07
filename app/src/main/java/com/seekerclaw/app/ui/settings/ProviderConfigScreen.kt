@@ -279,7 +279,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         // Resolve the effective authType for the new provider. OpenAI defaults to OAuth
         // (ChatGPT subscription) on first switch-in — the OAuth section shows a Sign In
-        // button. writeConfigJson translates oauth+blank → api_key only so Node doesn't
+        // button. emitConfigJson translates oauth+blank → api_key only so Node doesn't
         // crash on an unsupported authType combination; a valid OpenAI API key is still
         // required if the user never completes sign-in. Explicit picker choice is
         // remembered per-provider via lastAuthType_<id>.
@@ -398,9 +398,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
                         ConfigField(
                             label = "Model",
-                            value = availableModels.find { it.id == config?.model }
+                            value = availableModels.find { it.id == config?.displayModel }
                                 ?.displayName
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.displayModel?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
@@ -457,9 +457,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                         ConfigField(
                             label = "Model",
-                            value = openaiModelList.find { it.id == config?.model }
+                            value = openaiModelList.find { it.id == config?.displayModel }
                                 ?.displayName
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.displayModel?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
@@ -513,9 +513,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                         ConfigField(
                             label = "Model",
-                            value = xaiModelList.find { it.id == config?.model }
+                            value = xaiModelList.find { it.id == config?.displayModel }
                                 ?.displayName
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.displayModel?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
@@ -830,7 +830,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         var selectedModel by remember(activeProvider, effectiveAuthType) {
             // Preserve the user's current model even when it's not in the known list —
             // otherwise opening the picker would silently overwrite a custom model ID.
-            val current = config?.model.orEmpty()
+            val current = config?.displayModel.orEmpty() // BAT-1661: what the row shows
             mutableStateOf(
                 when {
                     current.isNotBlank() -> current
@@ -1093,7 +1093,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // without a token yet, that's fine — the OAuth section will render
                         // with a Sign In button. resolveAuthType() preserves the
                         // "oauth selected, sign-in pending" state in SharedPreferences;
-                        // the oauth+blank → api_key fallback only happens at writeConfigJson
+                        // the oauth+blank → api_key fallback only happens at emitConfigJson
                         // time so Node never sees an unstartable combination.
                         // Multi-step save: short-circuit the model
                         // fallback if the authType save failed.
@@ -1747,7 +1747,8 @@ private fun runReasoningUpdate(
 ) {
     scope.launch(Dispatchers.IO) {
         val ok = try {
-            RuntimeStateStore.update(transform)
+            // BAT-1661: the record carries the model too, so it is written under the lock.
+            RuntimeStateStore.updateInOwnTransaction(transform)
         } catch (_: IllegalArgumentException) {
             false
         }
@@ -1821,7 +1822,7 @@ private fun CustomEchoReasoningRow() {
                 // customEchoReasoning field is mutated.
                 scope.launch(Dispatchers.IO) {
                     val ok = try {
-                        RuntimeStateStore.update { it.copy(customEchoReasoning = newValue) }
+                        RuntimeStateStore.updateInOwnTransaction { it.copy(customEchoReasoning = newValue) }
                     } catch (_: IllegalArgumentException) {
                         false
                     }

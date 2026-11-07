@@ -44,14 +44,18 @@ class StartOrderGuardTest {
 
     // ------------------------------------------------------------- secrets written only on proceed
 
-    /** Violations of "writeBridgeToken/writeConfigJson only in continueStart; continueStart only via proceed". */
+    /**
+     * Violations of "the bridge token and config.json are written only in continueStart;
+     * continueStart only via proceed". config.json is written by `emitConfigJson`, which runs only
+     * inside `ModelRepair.serviceStart` (BAT-1661), so both names are guarded.
+     */
     private fun secretWriteViolations(sources: List<Pair<String, String>>): List<String> {
         val out = mutableListOf<String>()
         for ((path, src) in sources) {
             val code = SourceText.codeOnly(src)
             val isService = path.endsWith(servicePath)
             val continueBody = if (isService) SourceText.functionBody(code, "continueStart") else IntRange.EMPTY
-            for (name in listOf("writeBridgeToken", "writeConfigJson")) {
+            for (name in listOf("writeBridgeToken", "emitConfigJson", "serviceStart")) {
                 for (m in Regex("""\b$name\b""").findAll(code)) {
                     val at = m.range.first
                     if (Regex("""\bfun\s+$""").containsMatchIn(code.substring(maxOf(0, at - 16), at))) continue
@@ -97,7 +101,7 @@ class StartOrderGuardTest {
         // A comment or a log message naming the call is not a call.
         val commented = mutate(
             service, "        ServiceState.init(applicationContext)\n",
-            "        // ServiceState.writeBridgeToken(x) and ConfigManager.writeConfigJson(this, x)\n" +
+            "        // ServiceState.writeBridgeToken(x) and ConfigManager.emitConfigJson(this, c, x)\n" +
                 "        LogCollector.append(\"continueStart(fence) writeBridgeToken(\")\n" +
                 "        ServiceState.init(applicationContext)\n",
         )
@@ -110,9 +114,14 @@ class StartOrderGuardTest {
         assertNotEquals(emptyList<String>(), secretWriteViolations(withService(early)))
         val config = mutate(
             service, "        ServiceState.init(applicationContext)\n",
-            "        ServiceState.init(applicationContext)\n        ConfigManager.writeConfigJson(this, \"x\")\n",
+            "        ServiceState.init(applicationContext)\n        ConfigManager.emitConfigJson(this, c, \"x\")\n",
         )
         assertNotEquals(emptyList<String>(), secretWriteViolations(withService(config)))
+        val repair = mutate(
+            service, "        ServiceState.init(applicationContext)\n",
+            "        ServiceState.init(applicationContext)\n        ModelRepair.serviceStart(this) { \"\" }\n",
+        )
+        assertNotEquals(emptyList<String>(), secretWriteViolations(withService(repair)))
         val secondRef = mutate(
             service, "        override fun abort(fence: StartCoordinator.Fence) = abortStart()",
             "        override fun abort(fence: StartCoordinator.Fence) = continueStart(fence)",

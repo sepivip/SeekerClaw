@@ -121,7 +121,7 @@ class XaiProviderContractTest {
         )
     }
 
-    // ── BAT-1143: writeConfigJson must emit the OAuth expiry Node needs ──────────
+    // ── BAT-1143: emitConfigJson must emit the OAuth expiry Node needs ──────────
     //
     // The full "read the actual generated config.json" round-trip (Context +
     // SharedPreferences + KeystoreHelper) is device-deferred exactly like the L1
@@ -135,7 +135,7 @@ class XaiProviderContractTest {
     // generated-config.json read is the acceptance gate (device soak).
 
     @Test
-    fun `BAT-1143 - writeConfigJson emits xaiOAuthExpiresAt into config json`() {
+    fun `BAT-1143 - emitConfigJson emits xaiOAuthExpiresAt into config json`() {
         val cm = readRepoFile(
             "app/src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
             "src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
@@ -144,20 +144,20 @@ class XaiProviderContractTest {
         // the AppConfig field decl, the SharedPreferences key, and comments — so match the
         // emission specifically (this is the line whose absence was the fix-defeating bug).
         assertTrue(
-            "ConfigManager.writeConfigJson must put(\"xaiOAuthExpiresAt\", config.xaiOAuthExpiresAt) — " +
+            "ConfigManager.emitConfigJson must put(\"xaiOAuthExpiresAt\", config.xaiOAuthExpiresAt) — " +
                 "without it config.js never sees the expiry and BAT-1143's refresh is dead code",
             Regex("""put\(\s*"xaiOAuthExpiresAt"\s*,\s*config\.xaiOAuthExpiresAt\s*\)""").containsMatchIn(cm),
         )
     }
 
     @Test
-    fun `BAT-1143 - writeConfigJson emits openaiOAuthExpiresAt for OpenAI symmetry`() {
+    fun `BAT-1143 - emitConfigJson emits openaiOAuthExpiresAt for OpenAI symmetry`() {
         val cm = readRepoFile(
             "app/src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
             "src/main/java/com/seekerclaw/app/config/ConfigManager.kt",
         )
         assertTrue(
-            "writeConfigJson must also put(\"openaiOAuthExpiresAt\", ...) — Q6 data-plumbing symmetry",
+            "emitConfigJson must also put(\"openaiOAuthExpiresAt\", ...) — Q6 data-plumbing symmetry",
             Regex("""put\(\s*"openaiOAuthExpiresAt"\s*,\s*config\.openaiOAuthExpiresAt\s*\)""").containsMatchIn(cm),
         )
     }

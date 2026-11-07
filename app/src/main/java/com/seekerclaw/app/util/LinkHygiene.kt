@@ -550,6 +550,9 @@ class LinkHygiene(
             "agent_preferences.json", "agent_preferences.json.tmp", "mcp_servers.json", "mcp_servers.json.tmp",
             "xai_oauth.json", "xai_oauth.lock", "xai_oauth.migrated",
             "skill_state.json", "skill_state.init", "skill_state.floor", "skill_state.lock",
+            // BAT-1661: the model-selection lock and the repair intent (written via .kwrite/;
+            // the .tmp name is listed so a planted link there is also refused).
+            "model_selection.lock", "model_repair_intent.json", "model_repair_intent.json.tmp",
         )
 
         /** Directories Node core reads; walked first and completely in step 2. */

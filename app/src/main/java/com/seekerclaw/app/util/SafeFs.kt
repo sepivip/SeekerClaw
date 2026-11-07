@@ -131,9 +131,20 @@ object SafeFs {
     @Volatile
     var dirSync: (Path) -> Unit = { dir ->
         try {
-            FileChannel.open(dir, StandardOpenOption.READ).use { it.force(true) }
+            dirSyncChecked(dir)
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * BAT-1661 (contract v2.4 §1.2): the same directory fsync, but a failure PROPAGATES. Used
+     * where a later step is only allowed once the write is known durable (the model repair
+     * intent). Android replaces it with an `Os.open` + `Os.fsync` version, because Android's
+     * `FileChannel.open` refuses a directory.
+     */
+    @Volatile
+    var dirSyncChecked: (Path) -> Unit = { dir ->
+        FileChannel.open(dir, StandardOpenOption.READ).use { it.force(true) }
     }
 
     /**
@@ -209,6 +220,32 @@ object SafeFs {
             } catch (_: IOException) {
             }
         }
+    }
+
+    /**
+     * BAT-1661 (contract v2.4 §1.2) — a write whose durability is CHECKED, for state a later
+     * step depends on. [writeAtomic] (temp file, force, `ATOMIC_MOVE`), then a directory fsync
+     * that throws on failure ([dirSyncChecked]), then a no-follow read-back compared byte for
+     * byte. Any failure throws; the caller must then not take the step that depended on it.
+     */
+    fun writeAtomicVerified(root: Path, target: Path, bytes: ByteArray) {
+        writeAtomicFrom(root, target, durable = false) { out -> out.write(bytes) }
+        dirSyncChecked(target.toAbsolutePath().parent)
+        val back = readBytesNoFollow(root, target)
+        if (!back.contentEquals(bytes)) throw IOException("read-back mismatch: $target")
+    }
+
+    /**
+     * BAT-1661 — deletes [target] (a file, or a link, which is unlinked and never followed),
+     * then fsyncs its directory with [dirSyncChecked] and confirms the entry is gone. Throws on
+     * any failure. A missing [target] is not an error.
+     */
+    fun deleteChecked(root: Path, target: Path) {
+        checkAncestors(root, target)
+        if (isRealDir(target)) throw UnsafePathException("delete target is a directory: $target")
+        Files.deleteIfExists(target)
+        dirSyncChecked(target.toAbsolutePath().parent)
+        if (existsNoFollow(target)) throw IOException("still present after delete: $target")
     }
 
     /** `rename(2)` [src] over [dst], replacing a file or link at [dst] without following it. */

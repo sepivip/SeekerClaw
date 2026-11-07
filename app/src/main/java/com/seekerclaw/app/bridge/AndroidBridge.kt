@@ -1008,13 +1008,23 @@ class AndroidBridge(
         return try {
             val config = ConfigManager.loadConfig(context)
                 ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
-            ConfigManager.saveConfig(
-                context, config.copy(
-                    openaiOAuthToken = accessToken,
-                    openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else config.openaiOAuthRefresh,
-                    openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else config.openaiOAuthExpiresAt,
-                )
+            val updated = config.copy(
+                openaiOAuthToken = accessToken,
+                openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else config.openaiOAuthRefresh,
+                openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else config.openaiOAuthExpiresAt,
             )
+            // BAT-1661: saveConfig returns false when the model-selection lock stays busy past its
+            // bound (a Settings save or a service start in the other process). The refresh token
+            // rotates, so a lost save must reach Node as an error, never as success. One retry
+            // covers the common short overlap.
+            val saved = ConfigManager.saveConfig(context, updated) || ConfigManager.saveConfig(context, updated)
+            if (!saved) {
+                Log.w(TAG, "OpenAI OAuth token save failed (settings busy or not writable)")
+                return jsonResponse(503, mapOf(
+                    "error" to "Failed to save OpenAI OAuth tokens",
+                    "code" to "OPENAI_OAUTH_SAVE_FAILED",
+                ))
+            }
             jsonResponse(200, mapOf("success" to true))
         } catch (e: Exception) {
             // Log full details locally; never echo internal exception messages

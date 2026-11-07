@@ -3,6 +3,8 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.seekerclaw.app.config.ModelRegistry
+import com.seekerclaw.app.config.ModelSelectionLock
 import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
@@ -109,6 +111,9 @@ object RuntimeStateStore {
     private const val KEY_AUTH_TYPE = "auth_type"
     private const val KEY_MODEL = "model"
 
+    /** BAT-1661: the collector's mirror waits this long for the model-selection lock (IO thread). */
+    private const val MIRROR_LOCK_TIMEOUT_MS = 5_000L
+
     private val initialized = AtomicBoolean(false)
     private val _state = MutableStateFlow(RuntimeState())
     private var appContext: Context? = null
@@ -154,7 +159,7 @@ object RuntimeStateStore {
         appContext = app
         val sp = app.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
         val seeded = seedFromPrefs(sp)
-        _state.value = seeded
+        _state.value = forDisplay(seeded)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         ownedScope = scope
         val cps = CrossProcessStore(
@@ -229,10 +234,53 @@ object RuntimeStateStore {
         // adds only the production-side concern: cross-process
         // broadcast on a successful mirror. If onObserved drifts in
         // the future, both paths drift together.
-        val applied = onObserved(observed, sp)
+        //
+        // BAT-1661: the mirror writes prefs provider/auth_type/model, so it runs under the
+        // model-selection lock, and mirrors the file as it is NOW (re-read under the lock), not
+        // the possibly older emission — a stale emission must never revert a newer save. This
+        // runs on the collector's IO thread, so it may wait longer than a UI save would.
+        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { _ ->
+            onObserved(store?.read() ?: observed, sp)
+        }
+        val applied = when (r) {
+            is ModelSelectionLock.Result.Acquired -> r.value
+            is ModelSelectionLock.Result.Busy -> {
+                // Display still follows the file; prefs catch up on the next emission, or on the
+                // next locked load (ConfigManager syncs prefs from the file before reconciling).
+                if (isValidPair(observed.provider, observed.authType)) _state.value = forDisplay(observed)
+                Log.w(TAG, "prefs mirror deferred: model-selection lock busy (${r.reason})")
+                false
+            }
+        }
         if (applied) {
             appContext?.let { com.seekerclaw.app.config.ConfigManager.signalConfigChanged(it) }
         }
+    }
+
+    /**
+     * BAT-1661: inside a locked load (main process), copy the file's provider/auth_type/model into
+     * prefs before reconcile reads them. Main-process prefs are a per-process cache that a
+     * `:node` write never refreshes. Returns true when prefs changed.
+     */
+    fun syncPrefsFromFile(tx: ModelSelectionLock.Tx, prefs: SharedPreferences): Boolean {
+        tx.requireOpen()
+        val current = store?.read() ?: return false
+        if (!isValidPair(current.provider, current.authType)) return false
+        return mirrorIfChanged(prefs, current)
+    }
+
+    /**
+     * BAT-1661 (contract v2.4 §0): the state the UI shows. A model the current sign-in can no
+     * longer use shows as the provider default — what Node actually sends. Display only: the
+     * prefs mirror and every write use the stored value.
+     */
+    internal fun forDisplay(s: RuntimeState): RuntimeState {
+        val shown = try {
+            ModelRegistry.applyRetiredModelRule(s.provider, s.authType, s.model)
+        } catch (_: IllegalStateException) {
+            s.model // registry not initialised (unit tests)
+        }
+        return if (shown == s.model) s else s.copy(model = shown)
     }
 
     /**
@@ -254,7 +302,8 @@ object RuntimeStateStore {
      * (caller surfaces via Snackbar/Telegram-reply per the BAT-513
      * failure-UX contract). Returns `false` if [init] wasn't called.
      */
-    fun write(value: RuntimeState): Boolean {
+    fun write(tx: ModelSelectionLock.Tx, value: RuntimeState): Boolean {
+        tx.requireOpen()
         require(isValidPair(value.provider, value.authType)) {
             "Invalid (provider=${value.provider}, authType=${value.authType})"
         }
@@ -272,8 +321,15 @@ object RuntimeStateStore {
      * INSIDE the lock so a transform that produces an invalid
      * combination throws [IllegalArgumentException] without poisoning
      * the file.
+     *
+     * BAT-1661: [write] and [update] take the [ModelSelectionLock] transaction token. Every
+     * record they persist carries provider/authType/model — even a field-local reasoning toggle —
+     * so an unlocked write could put an old model back over a `:node` repair. The caller opens the
+     * transaction (or passes the one it holds); these never acquire it themselves, so a caller
+     * that hops threads (saveConfig's `runBlocking(Dispatchers.IO)`) keeps ownership.
      */
-    suspend fun update(transform: (RuntimeState) -> RuntimeState): Boolean {
+    suspend fun update(tx: ModelSelectionLock.Tx, transform: (RuntimeState) -> RuntimeState): Boolean {
+        tx.requireOpen()
         val s = store ?: return false
         return s.update { current ->
             val next = transform(current)
@@ -282,6 +338,20 @@ object RuntimeStateStore {
             }
             next
         }
+    }
+
+    /**
+     * BAT-1661: [update] inside its own [ModelSelectionLock] transaction, for field-local UI
+     * toggles (reasoning, custom echo). Call from an IO dispatcher — it may wait for the lock.
+     * Returns false when the lock is busy (the caller's existing "save failed" path) or the write
+     * failed. [IllegalArgumentException] from [transform] propagates, as from [update].
+     */
+    fun updateInOwnTransaction(transform: (RuntimeState) -> RuntimeState): Boolean {
+        val r = ModelSelectionLock.transaction { tx ->
+            // CrossProcessStore.update never actually suspends (a synchronized block).
+            kotlinx.coroutines.runBlocking { update(tx, transform) }
+        }
+        return r is ModelSelectionLock.Result.Acquired && r.value
     }
 
     /**
@@ -359,7 +429,7 @@ object RuntimeStateStore {
             )
             return false
         }
-        _state.value = observed
+        _state.value = forDisplay(observed)
         return mirrorIfChanged(prefs, observed)
     }
 
@@ -393,7 +463,19 @@ object RuntimeStateStore {
      */
     internal fun initForTest(injectedSeed: RuntimeState) {
         if (!initialized.compareAndSet(false, true)) return
-        _state.value = injectedSeed
+        _state.value = forDisplay(injectedSeed)
+    }
+
+    /**
+     * BAT-1661 test seam: wire a REAL [CrossProcessStore] on [filesDir] (no FileObserver, no
+     * broadcast), so `saveConfig` and reconcile run their production runtime-state writes in JVM
+     * tests. Production MUST NOT call this.
+     */
+    internal fun initWithStoreForTest(filesDir: File, seed: RuntimeState = RuntimeState()) {
+        if (!initialized.compareAndSet(false, true)) return
+        val cps = CrossProcessStore(filesDir, FILE_NAME, RuntimeState.serializer(), seed)
+        store = cps
+        _state.value = forDisplay(cps.read())
     }
 
     /**

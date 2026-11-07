@@ -556,7 +556,7 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 **Symptoms:** User toggled `/think on` (or Settings > AI Provider > Reasoning > Extended thinking ON) but responses look the same as before.
 **Diagnosis:** The toggle is a no-op for models the registry doesn't list as supporting reasoning (Haiku 4.5; any freeform / unregistered model id). Run `/think` (no args) — it surfaces a user-facing hint when the active model isn't supported, e.g. "This model does not support extended thinking..." or "This model is not in SeekerClaw's known model list...". The agent's system prompt also exposes this state — the agent itself can tell the user.
 **Fix:**
-- "does not support" hint: switch to a yes-supporting model (Fable 5, Opus 4.8/4.7/4.6, Sonnet 4.6, GPT-5.6 Sol/Terra/Luna, GPT-5.5/5.4/5.4 Mini) via `/model` or Settings.
+- "does not support" hint: switch to a yes-supporting model (Fable 5, Opus 4.8/4.7/4.6, Sonnet 4.6, GPT-6 Astra, GPT-6.1 Sol/Terra, GPT-6 Sol/Luna) via `/model` or Settings.
 - "not in known model list" hint: this is the safe default for models not in the registry. If the user is on Custom — or typed a custom model ID on Anthropic/OpenAI (supported since BAT-1032) — and knows their endpoint supports thinking, ask them to confirm — the request param genuinely isn't sent because the registry is the source of truth (a "thinking" status that lies about whether thinking is happening would be worse than no status).
 
 ### Custom + DeepSeek V4: 400 Loop on `/resume` After Tool Calls
@@ -730,6 +730,20 @@ session_status
 **Symptoms:** User typed a custom model ID in Settings > AI Provider > Model > Custom model (Anthropic/OpenAI) — it works — but `/model <same-id>` replies "Unknown model for claude/openai. Options: ...".
 **Diagnosis:** By design, not a bug. The Settings picker's Custom entry is freeform — any ID is accepted, persists across restarts, and is the live model (verify: the system prompt's Runtime line shows it as active). `/model` validates against the registry allowlist as a typo guard in a no-autocomplete chat channel.
 **Fix:** Nothing to fix — explain the asymmetry. Off-list IDs are set via Settings only; `/model` switches between registry-listed IDs. If the user believes their custom ID stopped working, check for an API 404 (see "If API calls keep failing" — a 404 means the ID itself is wrong/unknown at the provider).
+
+### OpenAI Model Changed On Its Own After An Update (BAT-1661)
+**Symptoms:** A user on OpenAI with ChatGPT sign-in had GPT-5.5, GPT-5.4 or GPT-5.4 Mini selected; after updating, Settings, the dashboard and the agent show GPT-6.1 Sol.
+**Check:** Logs screen, or:
+```
+grep -iE "ModelRepair" node_debug.log
+```
+**Diagnosis:** By design. OpenAI no longer serves those three models with a ChatGPT sign-in (every turn would fail with a 400). The agent uses the OpenAI default instead, and on the next start the app updates the saved choice everywhere. Log lines:
+- `[ModelRepair] openai model <old> is not available with ChatGPT sign-in — now <new>` (INFO) — the repair finished.
+- `[ModelRepair] pending repair cancelled: <reason>` (INFO) — the user chose another model before the repair finished; their choice is kept.
+- `[ModelRepair] could not persist the repair intent` / `repair write failed` / `stores not yet on <model>` (WARN) — nothing is lost; the agent still uses a working model and the repair retries on the next start. Repeated on every start usually means storage is full.
+- `[ModelRepair] lock busy at start — read-only boot, repair deferred` (WARN) — another save held the settings at that moment; the repair runs on the next start.
+API-key users are not affected: they keep the model, without Extended Thinking, because it is no longer in the registry.
+**Fix:** Nothing to fix. To use a different model, pick it in Settings > AI Provider > Model or with `/model`. If WARN lines repeat on every start, check storage (`android_storage`) and restart the agent.
 
 ### Custom Model ID Returns API 404 (Model Not Found)
 **Symptoms:** Every AI turn fails after setting a custom model ID; logs show HTTP 404 / `model_not_found` from the provider API.
