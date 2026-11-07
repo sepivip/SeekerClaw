@@ -366,11 +366,16 @@ class ModelRepairTest {
         bootCrashing(Step.PUBLISH)
         assertNull(ModelRepair.decide(snapshot()))
         assertTrue(intentPresent())
-        val before = com.seekerclaw.app.util.LogCollector.logs.value.size
+        // The log is a 300-entry ring shared across the JVM: anchor on the newest entry by
+        // identity, not on a count that an eviction would throw off.
+        val anchor = com.seekerclaw.app.util.LogCollector.logs.value.lastOrNull()
         boot()
         assertAllOn("gpt-6.1-sol")
         // The resume (not a silent stale-delete) is what reports the repair to the user.
-        val logged = com.seekerclaw.app.util.LogCollector.logs.value.drop(before).map { it.message }
+        val all = com.seekerclaw.app.util.LogCollector.logs.value
+        val from = if (anchor == null) 0 else all.indexOfFirst { it === anchor } + 1
+        assertTrue("anchor still in the ring", anchor == null || from > 0)
+        val logged = all.drop(from).map { it.message }
         assertTrue(
             "INFO line on resume: $logged",
             logged.any { it.contains("openai model gpt-5.4 is not available with ChatGPT sign-in — now gpt-6.1-sol") },
