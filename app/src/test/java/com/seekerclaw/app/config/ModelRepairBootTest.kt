@@ -106,6 +106,59 @@ class ModelRepairBootTest {
         assertTrue("one WARN: $last", last != null && last.level == LogLevel.WARN && last.message == ModelRepair.BUSY_WARNING)
     }
 
+    @Test
+    fun `a failed repair write - no publish, the intent stays for the next start`() {
+        // CodeRabbit R2 (PR #465): runtime on a valid newer model, prefs still retired, no overlay.
+        // The decision keeps runtime's gpt-6-astra. If the overlay write fails and the boot then
+        // published, the overlay would get prefs' retired gpt-5.4: the agent would run the default
+        // and the next resume would cancel over that "newer" value, losing gpt-6-astra.
+        val seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-6-astra", reasoningEnabled = true)
+        CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), seed).write(seed)
+        val runtime = dir.resolve(RuntimeStateFile.NAME)
+        val runtimeBefore = Files.readAllBytes(runtime) to Files.getLastModifiedTime(runtime)
+        val overlay = AgentSettingsFile.path(dir)
+
+        val ctx = FakeContext(
+            dir.toFile(),
+            mapOf(
+                "setup_complete" to true,
+                "provider" to "openai",
+                "auth_type" to "oauth",
+                "model" to "gpt-5.4",
+                // rawPrefsModelTuple downgrades oauth without a stored token to api_key.
+                "openai_oauth_token_enc" to "present",
+            ),
+        )
+        val anchor = LogCollector.logs.value.lastOrNull()
+        var emitted: AppConfig? = null
+        var repairCalls = 0
+        val channel = ModelRepair.serviceStart(
+            ctx,
+            repair = { _, _, _ ->
+                repairCalls++
+                false // the overlay write failed
+            },
+        ) { cfg ->
+            emitted = cfg
+            "telegram"
+        }
+
+        assertEquals(1, repairCalls)
+        assertEquals("the boot still proceeds", "telegram", channel)
+        assertNotNull(emitted)
+        assertFalse("no overlay published from the retired prefs model", Files.exists(overlay))
+        assertArrayEquals("runtime_state bytes", runtimeBefore.first, Files.readAllBytes(runtime))
+        assertEquals("runtime_state mtime", runtimeBefore.second, Files.getLastModifiedTime(runtime))
+        val intent = ModelRepair.readIntent(dir)
+        assertTrue("intent kept for resume: $intent", intent is ModelRepair.IntentRead.Present)
+        assertEquals("gpt-6-astra", (intent as ModelRepair.IntentRead.Present).intent.target)
+        // The fake token makes the (compute-only) load log a decrypt line too, so find the WARN
+        // among the lines this start logged rather than taking the last one.
+        val all = LogCollector.logs.value
+        val logged = all.drop(if (anchor == null) 0 else all.indexOfFirst { it === anchor } + 1)
+        assertTrue("repair-incomplete WARN: ${logged.map { it.message }}", logged.any { it.level == LogLevel.WARN && it.message == ModelRepair.REPAIR_FAILED_BOOT_WARNING })
+    }
+
     /** `Context` backed by [filesDir] and one read-only in-memory prefs file. */
     private class FakeContext(private val filesDir: File, private val prefs: Map<String, Any>) : ContextWrapper(null) {
         override fun getFilesDir(): File = filesDir

@@ -36,6 +36,8 @@ object ModelRepair {
 
     const val BUSY_WARNING = "[ModelRepair] lock busy at start — read-only boot, repair deferred"
 
+    const val REPAIR_FAILED_BOOT_WARNING = "[ModelRepair] repair incomplete — model settings left as they are this start, resume next start"
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /** The overlay as captured when the intent was created. */
@@ -384,12 +386,27 @@ object ModelRepair {
      * [emit] writes config.json from the given config and returns the boot channel; production
      * passes [ConfigManager.emitConfigJson]. Throws what [emit] throws (the service ends the
      * start through failBeforeNode). Returns null when no config could be loaded.
+     *
+     * A repair write that fails ends the model work for this start: the boot continues
+     * read-only for the model stores (compute-only reconcile, config.json only, no overlay
+     * publish), and the intent stays for the next start. Publishing would write the still-retired
+     * prefs model into the overlay, which the next resume would then read as a newer selection
+     * and cancel the decision over, losing a valid target such as one kept from runtime_state.
      */
-    fun serviceStart(context: Context, emit: (AppConfig) -> String): String? {
+    fun serviceStart(
+        context: Context,
+        /** The repair step; injectable only so a failed repair write is testable. */
+        repair: (ModelSelectionLock.Tx, Path, RepairIntent) -> Boolean = ::applyRepair,
+        emit: (AppConfig) -> String,
+    ): String? {
         val filesDir = context.filesDir.toPath()
         val r = ModelSelectionLock.transaction { tx ->
             val plan = plan(tx, filesDir, ConfigManager.modelSnapshot(context))
-            plan.intent?.let { applyRepair(tx, filesDir, it) }
+            val repaired = plan.intent?.let { repair(tx, filesDir, it) } ?: true
+            if (!repaired) {
+                LogCollector.append(REPAIR_FAILED_BOOT_WARNING, LogLevel.WARN)
+                return@transaction ConfigManager.loadConfigReadOnly(context)?.let(emit)
+            }
             val config = ConfigManager.loadConfigForBoot(context, tx, plan.approved)
             if (config == null) {
                 LogCollector.append("[Config] service start: no config to publish (setup incomplete?)", LogLevel.WARN)

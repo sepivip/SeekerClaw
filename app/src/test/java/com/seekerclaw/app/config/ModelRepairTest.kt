@@ -529,6 +529,21 @@ class ModelRepairTest {
         assertEquals("gpt-5.4", cfg.copy(authType = "api_key").displayModel)
     }
 
+    @Test
+    fun `Custom signature on an unrelated save is computed for the stored model, not the form's`() {
+        // CodeRabbit R2: /model moved Custom to model-b after the form loaded model-a.
+        val form = cfg(ModelTuple("custom", "api_key", "model-a")).copy(
+            provider = "custom", authType = "api_key", model = "model-a",
+            customBaseUrl = "https://gw.example/v1", customFormat = "chat_completions",
+        )
+        val stored = RuntimeState(provider = "custom", authType = "api_key", model = "model-b", customConfigSignature = "old")
+        fun sig(model: String) = com.seekerclaw.app.state.CustomConfigSignature.compute(model, form.customBaseUrl, form.customFormat, form.customHeaders)
+        assertEquals("unrelated save → stored model", sig("model-b"), ConfigManager.customSignatureForSave(false, form, stored))
+        assertEquals("selection → the form's model", sig("model-a"), ConfigManager.customSignatureForSave(true, form, stored))
+        val offCustom = stored.copy(provider = "openai", model = "gpt-6.1-sol")
+        assertEquals("stored provider not Custom → carried", "old", ConfigManager.customSignatureForSave(false, form, offCustom))
+    }
+
     private fun cfg(loaded: ModelTuple?) = AppConfig(
         anthropicApiKey = "",
         authType = "oauth",

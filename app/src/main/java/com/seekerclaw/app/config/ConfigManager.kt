@@ -794,10 +794,11 @@ object ConfigManager {
         // for a separate cleanup PR.
         //
         // Custom-signature reset:
-        //   - Only recompute when config.provider == "custom" because
-        //     AppConfig has no separate "customModel" field; config.model
-        //     is the active model, which represents Custom only when
-        //     on Custom. Switching providers and back must NOT reset
+        //   - Only recompute when the provider being stored is "custom"
+        //     (BAT-1661: config.provider/model on a selection, the stored
+        //     provider/model on an unrelated save) because AppConfig has
+        //     no separate "customModel" field; the model represents Custom
+        //     only when on Custom. Switching providers and back must NOT reset
         //     the override — only direct edits to Custom config fields.
         //   - When the new sig != current.customConfigSignature, reset
         //     customEchoReasoning to false (gateway-specific contract;
@@ -819,17 +820,8 @@ object ConfigManager {
             kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
                 RuntimeStateStore.update(tx) { current ->
                     preForwardRuntime = current
-                    val newCustomSig = if (config.provider == "custom") {
-                        CustomConfigSignature.compute(
-                            customModel = config.model,
-                            customBaseUrl = config.customBaseUrl,
-                            customFormat = config.customFormat,
-                            customHeaders = config.customHeaders,
-                        )
-                    } else {
-                        current.customConfigSignature
-                    }
-                    val customSigChanged = config.provider == "custom"
+                    val newCustomSig = customSignatureForSave(isSelection, config, current)
+                    val customSigChanged = (if (isSelection) config.provider else current.provider) == "custom"
                         && current.customConfigSignature != newCustomSig
                     val newCustomEcho = if (customSigChanged) false else current.customEchoReasoning
                     if (customSigChanged && current.customEchoReasoning) {
@@ -1078,6 +1070,24 @@ object ConfigManager {
         // observers already saw the configVersion bump above.
         broadcastConfigChanged(context)
         return true
+    }
+
+    /**
+     * The Custom-provider signature [saveConfig] stores (BAT-1661). An unrelated save keeps the
+     * stored provider and model, so the signature is computed for THAT pair, not the form's: a
+     * `/model` change after the form loaded would otherwise keep a stale signature (and echo
+     * override) for the new model. Off Custom, the stored signature is carried unchanged.
+     */
+    internal fun customSignatureForSave(isSelection: Boolean, config: AppConfig, current: RuntimeState): String? {
+        val provider = if (isSelection) config.provider else current.provider
+        val model = if (isSelection) config.model else current.model
+        if (provider != "custom") return current.customConfigSignature
+        return CustomConfigSignature.compute(
+            customModel = model,
+            customBaseUrl = config.customBaseUrl,
+            customFormat = config.customFormat,
+            customHeaders = config.customHeaders,
+        )
     }
 
     private fun rollbackModelSelection(
