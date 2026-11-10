@@ -2102,6 +2102,9 @@ object ConfigManager {
         }
     }
 
+    /** BAT-1661: lock bound for [syncXaiRuntimeAuthType] (its callers are on Dispatchers.IO). */
+    private const val XAI_SYNC_LOCK_TIMEOUT_MS = 5_000L
+
     /**
      * BAT-1155 H5 — after a MAIN-process sign-in/sign-out writes the store,
      * re-derive the xai `runtime_state.json` authType through the same H5 gate
@@ -2115,8 +2118,10 @@ object ConfigManager {
         bumpConfigVersionOnMain()
         if (!RuntimeStateStore.isInitialized) return
         try {
-            // BAT-1661: a runtime_state write, so it runs under the model-selection lock.
-            val r = ModelSelectionLock.transaction { tx ->
+            // BAT-1661: a runtime_state write, so it runs under the model-selection lock. Both
+            // callers are on Dispatchers.IO, so it waits longer than a UI save: a skipped sync
+            // leaves runtime_state (which Node reads first) on the old xai auth mode.
+            val r = ModelSelectionLock.transaction(XAI_SYNC_LOCK_TIMEOUT_MS) { tx ->
                 val reloaded = loadConfigUnchecked(context, tx, null)
                 if (reloaded.provider == "xai") {
                     kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
