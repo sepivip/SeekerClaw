@@ -20,14 +20,14 @@ Delta: every percentage below is against the **audited surface only**, not the f
 | B: Diagnostics — curated (2 rows touched) | 6 | 6 | 6 |
 | B: Diagnostics — discovered (16 sites) | 30 | 48 | 48 |
 | C: Tool Consistency | N/A (no tool description changed) | — | — |
-| D: Behavioral Probes (4) | 8 | 12 | 12 |
-| **Combined (audited surface)** | **49 (65.3%)** | **75 (100%)** | **75** |
+| D: Behavioral Probes (4) | 6 | 12 | 12 |
+| **Combined (audited surface)** | **47 (62.7%)** | **75 (100%)** | **75** |
 
 ## Pre-fix Trend
 | Audit | Mode | Pre-fix % | Post-fix % | Drift or correction |
 |-------|------|-----------|------------|---------------------|
 | v48 (v2.3.2) | Full (v4) | 68.8 | 87.4 | both |
-| **v49 (BAT-1661)** | **Delta (v4)** | **65.3 (surface)** | **100 (surface)** | 8 drift caught pre-merge, 1 correction |
+| **v49 (BAT-1661)** | **Delta (v4)** | **62.7 (surface)** | **100 (surface)** | 8 drift caught pre-merge, 2 corrections |
 
 ## Section A — Knowledge & Doors: 5 → 9
 
@@ -77,13 +77,13 @@ All are Kotlin `LogCollector` lines (Logs screen and `service_logs`) except B-16
 
 No tool `description` changed in the range (`git diff 2d547379..HEAD -- app/src/main/assets/nodejs-project/tools/` is empty), so no tool is force-included.
 
-## Section D — Behavioral Probes: 8 → 12
+## Section D — Behavioral Probes: 6 → 12
 
 | Probe | Door → target | Pre | Post |
 |---|---|---|---|
 | "I switched the model but nothing changed" | Config Awareness (BAT-504/1083) → "/model or /provider Switch Didn't Take Effect" | ✅ | ✅ |
 | **New failure mode:** "My OpenAI model changed to GPT-6.1 Sol by itself" | Pre-fix: only the generic DIAGNOSTICS pointer, the BAT-1083 line pointed to the wrong cause, and the entry's check grepped `node_debug.log` for Kotlin-only lines (finds nothing). Post-fix: an OAuth-block door plus an entry that says to read the `Model:` line and ask the user for the Logs-screen lines. | ⚠️ | ✅ |
-| "`/think on` doesn't change anything" | `/think` hint → "/think on Toggled But…", whose model list is updated to GPT-6.1/6 in this PR. API-key users on a removed id get the "not in known model list" path, which is accurate (D4). | ✅ | ✅ |
+| "`/think on` doesn't change anything" | `/think` hint → "/think on Toggled But…". This PR updated the OpenAI names, but the list still named Opus 4.7/4.6 (no longer in the registry, so the toggle is a no-op for them) and omitted Fable 5.1, Opus 5, Sonnet 5 and Grok 4.6/4.5. Found by CodeRabbit on PR #465 after this audit first scored it ✅; the list now matches `model-registry.json`. API-key users on a removed id get the "not in known model list" path, which is accurate (D4). | ⚠️ | ✅ |
 | "Sign in with ChatGPT keeps asking me to sign in again" | OAuth playbook → "OpenAI Codex OAuth — Token Refresh Failure". Pre-fix this did not list a refreshed token that was never saved as a cause. | ⚠️ | ✅ |
 
 ## Provider-aware check
@@ -101,6 +101,7 @@ The new prompt line is injected only for `PROVIDER === 'openai' && OPENAI_AUTH_T
 7. **D:** sites 14–15 had no guidance (both were already uncovered before this PR under their old wording).
 8. **D:** the OpenAI token-persist failure (site 16) was missing from the refresh-failure causes.
 9. **D:** probes 2 and 4 failed for the reasons above.
+10. **C:** the `/think` model list (probe 3) was stale from earlier registry updates (Opus 4.7/4.6 removed; Fable 5.1, Opus 5, Sonnet 5, Grok missing). Missed by this audit, caught by CodeRabbit; fixed in this branch.
 
 ## Fixes Applied
 

@@ -424,8 +424,12 @@ object ConfigManager {
      * overlay) and cancels a pending model repair. Any other save leaves them, and the repair
      * intent, exactly as stored (contract v2.5 §2).
      */
-    fun saveConfig(context: Context, config: AppConfig): Boolean {
-        val r = ModelSelectionLock.transaction { tx -> saveConfigLocked(context, config, tx) }
+    fun saveConfig(
+        context: Context,
+        config: AppConfig,
+        lockTimeoutMs: Long = ModelSelectionLock.LOCK_TIMEOUT_MS,
+    ): Boolean {
+        val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx) }
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {

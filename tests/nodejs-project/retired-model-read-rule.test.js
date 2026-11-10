@@ -126,9 +126,18 @@ t('ai.js chat turn resolves its model through resolveActiveModel()', () => {
 // overlay's `model` key — otherwise a retired overlay could bypass the read rule.
 t('only config.js reads agent_settings.json `model`', () => {
     const offenders = [];
-    for (const f of fs.readdirSync(BUNDLE)) {
+    // Recursive: providers/, tools/ and other subdirectories read settings too.
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        if (e.name === 'node_modules' || e.name === 'workspace') return [];
+        const p = path.join(dir, e.name);
+        return e.isDirectory() ? walk(p) : [p];
+    });
+    const files = walk(BUNDLE);
+    assert.ok(files.some((p) => p.endsWith(path.join('providers', 'openai.js'))), 'walk reaches subdirectories');
+    for (const full of files) {
+        const f = path.relative(BUNDLE, full).split(path.sep).join('/');
         if (!f.endsWith('.js') || f === 'config.js') continue;
-        const lines = fs.readFileSync(path.join(BUNDLE, f), 'utf8').split(/\r?\n/);
+        const lines = fs.readFileSync(full, 'utf8').split(/\r?\n/);
         if (!lines.some((l) => l.includes('agent_settings.json'))) continue;
         lines.forEach((line, i) => {
             if (/^\s*\/\//.test(line)) return; // comments describe, they don't read

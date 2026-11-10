@@ -55,6 +55,9 @@ class AndroidBridge(
 
     companion object {
         private const val TAG = "AndroidBridge"
+
+        /** BAT-1661: lock wait for the OpenAI OAuth token save (bridge worker thread; < Node's 10 s bridge timeout). */
+        private const val OPENAI_OAUTH_SAVE_LOCK_TIMEOUT_MS = 5_000L
         private const val AUTH_HEADER = "X-Bridge-Token"
         // BAT-514: MCP server id format mirrors McpServersStore.ID_REGEX.
         // Validated at the bridge boundary as defense-in-depth /
@@ -1014,10 +1017,11 @@ class AndroidBridge(
                 openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else config.openaiOAuthExpiresAt,
             )
             // BAT-1661: saveConfig returns false when the model-selection lock stays busy past its
-            // bound (a Settings save or a service start in the other process). The refresh token
-            // rotates, so a lost save must reach Node as an error, never as success. One retry
-            // covers the common short overlap.
-            val saved = ConfigManager.saveConfig(context, updated) || ConfigManager.saveConfig(context, updated)
+            // bound (a Settings save or the collector mirror in the main process). The refresh token
+            // rotates, so a lost save must reach Node as an error, never as success. This handler
+            // runs on a bridge worker thread, so it waits longer than a UI save. Retrying a rotated
+            // pair until it lands belongs to the durable OpenAI token store (BAT-1157).
+            val saved = ConfigManager.saveConfig(context, updated, lockTimeoutMs = OPENAI_OAUTH_SAVE_LOCK_TIMEOUT_MS)
             if (!saved) {
                 Log.w(TAG, "OpenAI OAuth token save failed (settings busy or not writable)")
                 return jsonResponse(503, mapOf(
