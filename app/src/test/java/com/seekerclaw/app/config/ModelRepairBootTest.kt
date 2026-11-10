@@ -159,6 +159,45 @@ class ModelRepairBootTest {
         assertTrue("repair-incomplete WARN: ${logged.map { it.message }}", logged.any { it.level == LogLevel.WARN && it.message == ModelRepair.REPAIR_FAILED_BOOT_WARNING })
     }
 
+    @Test
+    fun `intent persistence fails - no publish, no repair this start`() {
+        // CodeRabbit R3 (PR #465): a failed writeIntent used to look like "nothing to repair"
+        // (Plan.NONE), and the boot published the retired prefs model into a new overlay.
+        val seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-6-astra", reasoningEnabled = true)
+        CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), seed).write(seed)
+        val runtime = dir.resolve(RuntimeStateFile.NAME)
+        val runtimeBefore = Files.readAllBytes(runtime) to Files.getLastModifiedTime(runtime)
+        val ctx = FakeContext(
+            dir.toFile(),
+            mapOf(
+                "setup_complete" to true,
+                "provider" to "openai",
+                "auth_type" to "oauth",
+                "model" to "gpt-5.4",
+                "openai_oauth_token_enc" to "present",
+            ),
+        )
+        // writeIntent's checked directory fsync fails; the read-only path calls nothing that uses it.
+        SafeFs.dirSyncChecked = { throw java.io.IOException("injected fsync failure") }
+        var repairCalls = 0
+        var emitted: AppConfig? = null
+        val channel = ModelRepair.serviceStart(ctx, repair = { _, _, _ -> repairCalls++; true }) { cfg ->
+            emitted = cfg
+            "telegram"
+        }
+
+        assertEquals("the boot still proceeds", "telegram", channel)
+        assertNotNull(emitted)
+        assertEquals("no repair without a persisted intent", 0, repairCalls)
+        assertFalse("no overlay published from the retired prefs model", Files.exists(AgentSettingsFile.path(dir)))
+        assertArrayEquals("runtime_state bytes", runtimeBefore.first, Files.readAllBytes(runtime))
+        assertEquals("runtime_state mtime", runtimeBefore.second, Files.getLastModifiedTime(runtime))
+        // The atomic rename landed before the checked fsync failed, so the file can exist. It then
+        // holds this start's own decision, which the next start resumes; never a different target.
+        val left = ModelRepair.readIntent(dir)
+        if (left is ModelRepair.IntentRead.Present) assertEquals("gpt-6-astra", left.intent.target)
+    }
+
     /** `Context` backed by [filesDir] and one read-only in-memory prefs file. */
     private class FakeContext(private val filesDir: File, private val prefs: Map<String, Any>) : ContextWrapper(null) {
         override fun getFilesDir(): File = filesDir

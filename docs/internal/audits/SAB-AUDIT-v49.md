@@ -116,6 +116,10 @@ The new prompt line is injected only for `PROVIDER === 'openai' && OPENAI_AUTH_T
   - `ModelSelectionSourceGuardTest` and `XaiProviderContractTest` passed.
   - The door line renders from the registry: "OpenAI no longer serves gpt-5.5, gpt-5.4, gpt-5.4-mini with ChatGPT sign-in: if one is selected, gpt-6.1-sol is used instead…".
 
+## Post-audit additions (from CodeRabbit rounds 2–3 on PR #465)
+
+- New WARN `[ModelRepair] repair incomplete — model settings left as they are this start, retry next start`. It is logged when a repair write fails, or when the intent could not be persisted, and the start then leaves the model stores alone. Covered in the "OpenAI Model Changed On Its Own After An Update" entry. It was added after this audit's scoring, so it is not in the score table.
+
 ## Code Issues Found
 
 - **xAI runtime auth sync could be skipped under a 1 s lock bound (fixed here, same PR).** `ConfigManager.syncXaiRuntimeAuthType` runs only on `Dispatchers.IO`, after an xAI sign-in or sign-out. With the default 1 s bound, a concurrent settings change could skip it and leave `runtime_state.json`, which Node reads first, on the old xai auth mode: the boot split that BAT-1155 H5 exists to prevent. It now waits up to 5 s (`XAI_SYNC_LOCK_TIMEOUT_MS`, the same order as the collector mirror). It stays bounded and logs the WARN if it still cannot get the lock.

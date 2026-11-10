@@ -36,7 +36,7 @@ object ModelRepair {
 
     const val BUSY_WARNING = "[ModelRepair] lock busy at start — read-only boot, repair deferred"
 
-    const val REPAIR_FAILED_BOOT_WARNING = "[ModelRepair] repair incomplete — model settings left as they are this start, resume next start"
+    const val REPAIR_FAILED_BOOT_WARNING = "[ModelRepair] repair incomplete — model settings left as they are this start, retry next start"
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -270,12 +270,17 @@ object ModelRepair {
 
     // -------------------------------------------------------------------------------- planning
 
-    /** The outcome of step 1–2: the intent to carry out (persisted), or none. */
-    data class Plan(val intent: RepairIntent?) {
+    /**
+     * The outcome of step 1–2: the intent to carry out (persisted), or none. [persistFailed]: a
+     * repair was needed but its intent could not be written — distinct from "nothing to repair",
+     * because the start must then leave the model stores alone ([serviceStart]).
+     */
+    data class Plan(val intent: RepairIntent?, val persistFailed: Boolean = false) {
         val approved: ApprovedTarget? get() = intent?.let { ApprovedTarget(it.provider, it.authType, it.target) }
 
         companion object {
             val NONE = Plan(null)
+            val PERSIST_FAILED = Plan(null, persistFailed = true)
         }
     }
 
@@ -316,7 +321,7 @@ object ModelRepair {
                 "[ModelRepair] could not persist the repair intent (${e.message}) — stores left as they are, retry next start",
                 LogLevel.WARN,
             )
-            Plan.NONE
+            Plan.PERSIST_FAILED
         }
     }
 
@@ -387,7 +392,8 @@ object ModelRepair {
      * passes [ConfigManager.emitConfigJson]. Throws what [emit] throws (the service ends the
      * start through failBeforeNode). Returns null when no config could be loaded.
      *
-     * A repair write that fails ends the model work for this start: the boot continues
+     * A repair write that fails, or an intent that could not be persisted, ends the model work
+     * for this start: the boot continues
      * read-only for the model stores (compute-only reconcile, config.json only, no overlay
      * publish), and the intent stays for the next start. Publishing would write the still-retired
      * prefs model into the overlay, which the next resume would then read as a newer selection
@@ -402,7 +408,7 @@ object ModelRepair {
         val filesDir = context.filesDir.toPath()
         val r = ModelSelectionLock.transaction { tx ->
             val plan = plan(tx, filesDir, ConfigManager.modelSnapshot(context))
-            val repaired = plan.intent?.let { repair(tx, filesDir, it) } ?: true
+            val repaired = !plan.persistFailed && (plan.intent?.let { repair(tx, filesDir, it) } ?: true)
             if (!repaired) {
                 LogCollector.append(REPAIR_FAILED_BOOT_WARNING, LogLevel.WARN)
                 return@transaction ConfigManager.loadConfigReadOnly(context)?.let(emit)
