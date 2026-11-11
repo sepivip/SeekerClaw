@@ -347,7 +347,8 @@ object ConfigManager {
         if (normalized != raw && tx != null) {
             tx.requireOpen()
             Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider)")
-            p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
+            // BAT-1661 (Codex diff review #4): commit(), not apply() — under the lock, checked.
+            if (!p.edit().putString(KEY_AUTH_TYPE, normalized).commit()) tx.markWriteFailed()
         }
         return normalized
     }
@@ -428,8 +429,16 @@ object ConfigManager {
         context: Context,
         config: AppConfig,
         lockTimeoutMs: Long = ModelSelectionLock.LOCK_TIMEOUT_MS,
+    ): Boolean = saveConfigWith(context, config, lockTimeoutMs, SecretSealer.Keystore)
+
+    /** [saveConfig] with an explicit [sealer] — the JVM tests' entry point (see [SecretSealer]). */
+    internal fun saveConfigWith(
+        context: Context,
+        config: AppConfig,
+        lockTimeoutMs: Long,
+        sealer: SecretSealer,
     ): Boolean {
-        val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx) }
+        val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx, sealer) }
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {
@@ -448,7 +457,7 @@ object ConfigManager {
         return loaded != ModelTuple(config.provider, config.authType, config.model)
     }
 
-    private fun saveConfigLocked(context: Context, config: AppConfig, tx: ModelSelectionLock.Tx): Boolean {
+    private fun saveConfigLocked(context: Context, config: AppConfig, tx: ModelSelectionLock.Tx, sealer: SecretSealer): Boolean {
         val isSelection = isModelSelection(config)
         // BAT-513: validate the (provider, authType) matrix BEFORE any
         // persistence. Without this, the matrix gate inside
@@ -526,6 +535,20 @@ object ConfigManager {
         val oldAgentName = oldAgentPrefs?.agentName ?: sp.getString(KEY_AGENT_NAME, null)
         val oldSearchProvider = oldAgentPrefs?.searchProvider ?: sp.getString(KEY_SEARCH_PROVIDER, null)
 
+        // Restore the prefs this save may have changed to their pre-save values. commit(), not
+        // apply(): the caller is told the save failed, so the rollback must be on disk first.
+        fun rollbackPrefs(): Boolean {
+            val rollback = sp.edit()
+            // BAT-1661: only a selection wrote these three, so only a selection rolls them back.
+            if (isSelection) rollbackModelSelection(tx, rollback, oldProvider, oldAuthType, oldModel)
+            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
+            else rollback.remove(KEY_AGENT_NAME)
+            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
+            else rollback.remove(KEY_SEARCH_PROVIDER)
+            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
+            return rollback.commit()
+        }
+
         // BAT-515 v3 §4 step 2: pre-validate agent-preferences fields
         // BEFORE any persistence. The cap/allowlist gates inside
         // AgentPreferencesStore.update would fire AFTER prefs.commit
@@ -558,12 +581,12 @@ object ConfigManager {
             }
         }
 
-        val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
-        val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
+        val encApiKey = sealer.seal(config.anthropicApiKey)
+        val encBotToken = sealer.seal(config.telegramBotToken)
 
         val editor = sp.edit()
-            .putString(KEY_API_KEY_ENC, Base64.encodeToString(encApiKey, Base64.NO_WRAP))
-            .putString(KEY_BOT_TOKEN_ENC, Base64.encodeToString(encBotToken, Base64.NO_WRAP))
+            .putString(KEY_API_KEY_ENC, encApiKey)
+            .putString(KEY_BOT_TOKEN_ENC, encBotToken)
             .putString(KEY_OWNER_ID, config.telegramOwnerId)
             .putString(KEY_AGENT_NAME, config.agentName)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
@@ -580,15 +603,15 @@ object ConfigManager {
 
         // Store setup token separately so switching auth type preserves both
         if (config.setupToken.isNotBlank()) {
-            val encSetupToken = KeystoreHelper.encrypt(config.setupToken)
-            editor.putString(KEY_SETUP_TOKEN_ENC, Base64.encodeToString(encSetupToken, Base64.NO_WRAP))
+            val encSetupToken = sealer.seal(config.setupToken)
+            editor.putString(KEY_SETUP_TOKEN_ENC, encSetupToken)
         } else {
             editor.remove(KEY_SETUP_TOKEN_ENC)
         }
 
         if (config.braveApiKey.isNotBlank()) {
-            val encBrave = KeystoreHelper.encrypt(config.braveApiKey)
-            editor.putString(KEY_BRAVE_API_KEY_ENC, Base64.encodeToString(encBrave, Base64.NO_WRAP))
+            val encBrave = sealer.seal(config.braveApiKey)
+            editor.putString(KEY_BRAVE_API_KEY_ENC, encBrave)
         } else {
             editor.remove(KEY_BRAVE_API_KEY_ENC)
         }
@@ -596,57 +619,57 @@ object ConfigManager {
         editor.putString(KEY_SEARCH_PROVIDER, config.searchProvider)
 
         if (config.perplexityApiKey.isNotBlank()) {
-            val encPerplexity = KeystoreHelper.encrypt(config.perplexityApiKey)
-            editor.putString(KEY_PERPLEXITY_API_KEY_ENC, Base64.encodeToString(encPerplexity, Base64.NO_WRAP))
+            val encPerplexity = sealer.seal(config.perplexityApiKey)
+            editor.putString(KEY_PERPLEXITY_API_KEY_ENC, encPerplexity)
         } else {
             editor.remove(KEY_PERPLEXITY_API_KEY_ENC)
         }
 
         if (config.exaApiKey.isNotBlank()) {
-            val encExa = KeystoreHelper.encrypt(config.exaApiKey)
-            editor.putString(KEY_EXA_API_KEY_ENC, Base64.encodeToString(encExa, Base64.NO_WRAP))
+            val encExa = sealer.seal(config.exaApiKey)
+            editor.putString(KEY_EXA_API_KEY_ENC, encExa)
         } else {
             editor.remove(KEY_EXA_API_KEY_ENC)
         }
 
         if (config.tavilyApiKey.isNotBlank()) {
-            val encTavily = KeystoreHelper.encrypt(config.tavilyApiKey)
-            editor.putString(KEY_TAVILY_API_KEY_ENC, Base64.encodeToString(encTavily, Base64.NO_WRAP))
+            val encTavily = sealer.seal(config.tavilyApiKey)
+            editor.putString(KEY_TAVILY_API_KEY_ENC, encTavily)
         } else {
             editor.remove(KEY_TAVILY_API_KEY_ENC)
         }
 
         if (config.firecrawlApiKey.isNotBlank()) {
-            val encFirecrawl = KeystoreHelper.encrypt(config.firecrawlApiKey)
-            editor.putString(KEY_FIRECRAWL_API_KEY_ENC, Base64.encodeToString(encFirecrawl, Base64.NO_WRAP))
+            val encFirecrawl = sealer.seal(config.firecrawlApiKey)
+            editor.putString(KEY_FIRECRAWL_API_KEY_ENC, encFirecrawl)
         } else {
             editor.remove(KEY_FIRECRAWL_API_KEY_ENC)
         }
 
         if (config.jupiterApiKey.isNotBlank()) {
-            val encJupiter = KeystoreHelper.encrypt(config.jupiterApiKey)
-            editor.putString(KEY_JUPITER_API_KEY_ENC, Base64.encodeToString(encJupiter, Base64.NO_WRAP))
+            val encJupiter = sealer.seal(config.jupiterApiKey)
+            editor.putString(KEY_JUPITER_API_KEY_ENC, encJupiter)
         } else {
             editor.remove(KEY_JUPITER_API_KEY_ENC)
         }
 
         if (config.heliusApiKey.isNotBlank()) {
-            val encHelius = KeystoreHelper.encrypt(config.heliusApiKey)
-            editor.putString(KEY_HELIUS_API_KEY_ENC, Base64.encodeToString(encHelius, Base64.NO_WRAP))
+            val encHelius = sealer.seal(config.heliusApiKey)
+            editor.putString(KEY_HELIUS_API_KEY_ENC, encHelius)
         } else {
             editor.remove(KEY_HELIUS_API_KEY_ENC)
         }
 
         if (config.openaiApiKey.isNotBlank()) {
-            val encOpenai = KeystoreHelper.encrypt(config.openaiApiKey)
-            editor.putString(KEY_OPENAI_API_KEY_ENC, Base64.encodeToString(encOpenai, Base64.NO_WRAP))
+            val encOpenai = sealer.seal(config.openaiApiKey)
+            editor.putString(KEY_OPENAI_API_KEY_ENC, encOpenai)
         } else {
             editor.remove(KEY_OPENAI_API_KEY_ENC)
         }
 
         if (config.openrouterApiKey.isNotBlank()) {
-            val encOpenRouter = KeystoreHelper.encrypt(config.openrouterApiKey)
-            editor.putString(KEY_OPENROUTER_API_KEY_ENC, Base64.encodeToString(encOpenRouter, Base64.NO_WRAP))
+            val encOpenRouter = sealer.seal(config.openrouterApiKey)
+            editor.putString(KEY_OPENROUTER_API_KEY_ENC, encOpenRouter)
         } else {
             editor.remove(KEY_OPENROUTER_API_KEY_ENC)
         }
@@ -655,15 +678,15 @@ object ConfigManager {
         editor.putString(KEY_OPENROUTER_FALLBACK_CONTEXT, config.openrouterFallbackContext)
 
         if (config.customApiKey.isNotBlank()) {
-            val encCustom = KeystoreHelper.encrypt(config.customApiKey)
-            editor.putString(KEY_CUSTOM_API_KEY_ENC, Base64.encodeToString(encCustom, Base64.NO_WRAP))
+            val encCustom = sealer.seal(config.customApiKey)
+            editor.putString(KEY_CUSTOM_API_KEY_ENC, encCustom)
         } else {
             editor.remove(KEY_CUSTOM_API_KEY_ENC)
         }
         editor.putString(KEY_CUSTOM_BASE_URL, config.customBaseUrl)
         if (config.customHeaders.isNotBlank()) {
-            val encHeaders = KeystoreHelper.encrypt(config.customHeaders)
-            editor.putString(KEY_CUSTOM_HEADERS_ENC, Base64.encodeToString(encHeaders, Base64.NO_WRAP))
+            val encHeaders = sealer.seal(config.customHeaders)
+            editor.putString(KEY_CUSTOM_HEADERS_ENC, encHeaders)
         } else {
             editor.remove(KEY_CUSTOM_HEADERS_ENC)
         }
@@ -671,39 +694,26 @@ object ConfigManager {
 
         editor.putString(KEY_CHANNEL, config.channel)
         if (config.discordBotToken.isNotBlank()) {
-            val encDiscord = KeystoreHelper.encrypt(config.discordBotToken)
-            editor.putString(KEY_DISCORD_BOT_TOKEN_ENC, Base64.encodeToString(encDiscord, Base64.NO_WRAP))
+            val encDiscord = sealer.seal(config.discordBotToken)
+            editor.putString(KEY_DISCORD_BOT_TOKEN_ENC, encDiscord)
         } else {
             editor.remove(KEY_DISCORD_BOT_TOKEN_ENC)
         }
         editor.putString(KEY_DISCORD_OWNER_ID, config.discordOwnerId)
 
-        if (config.openaiOAuthToken.isNotBlank()) {
-            val encOAuthToken = KeystoreHelper.encrypt(config.openaiOAuthToken)
-            editor.putString(KEY_OPENAI_OAUTH_TOKEN_ENC, Base64.encodeToString(encOAuthToken, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
-        }
-        if (config.openaiOAuthRefresh.isNotBlank()) {
-            val encOAuthRefresh = KeystoreHelper.encrypt(config.openaiOAuthRefresh)
-            editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, Base64.encodeToString(encOAuthRefresh, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
-        }
-        if (config.openaiOAuthEmail.isNotBlank()) {
-            // Email is PII — encrypt at rest like other OAuth fields.
-            val encEmail = KeystoreHelper.encrypt(config.openaiOAuthEmail)
-            editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encEmail, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
-        }
-        editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
+        // BAT-1661: the OpenAI OAuth token, refresh token, email and expiry are NOT written here.
+        // Node rotates the pair through the bridge (saveOpenAIOAuthRotation) while a Settings form
+        // may hold the pair it loaded earlier; writing the form's copy back would restore a used,
+        // single-use refresh token and sign the user out at the next refresh. Their writers are
+        // persistOpenAIOAuthTokens (sign-in, and sign-out with blanks) and saveOpenAIOAuthRotation.
+        // Every saveConfig caller only carried the stored pair through. Same fix as BAT-1155 for
+        // the xAI triple, below.
 
         // BAT-1124: xAI api-key secret (api_key path). The xAI *OAuth* triple
         // is intentionally NOT written here anymore.
         if (config.xaiApiKey.isNotBlank()) {
-            val encXai = KeystoreHelper.encrypt(config.xaiApiKey)
-            editor.putString(KEY_XAI_API_KEY_ENC, Base64.encodeToString(encXai, Base64.NO_WRAP))
+            val encXai = sealer.seal(config.xaiApiKey)
+            editor.putString(KEY_XAI_API_KEY_ENC, encXai)
         } else {
             editor.remove(KEY_XAI_API_KEY_ENC)
         }
@@ -814,6 +824,27 @@ object ConfigManager {
         // update's writeLock acquisition.
         var preForwardRuntime: RuntimeState? = null
         var loggedSigReset = false
+
+        // Undo the RuntimeStateStore forward update by restoring the captured snapshot. Skip when
+        // preForwardRuntime is null (RuntimeStateStore wasn't initialized OR an
+        // IllegalArgumentException short-circuited the lambda before assignment — in that latter
+        // case the forward update never persisted, so there's nothing to undo).
+        fun undoRuntimeWrite(): Boolean {
+            val snapshot = preForwardRuntime
+            return if (RuntimeStateStore.isInitialized && snapshot != null) try {
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    RuntimeStateStore.update(tx) { _ -> snapshot }
+                }
+            } catch (e: IllegalArgumentException) {
+                // Should not happen — the snapshot came out of RuntimeStateStore itself, so its
+                // (provider,authType) is guaranteed valid. Defense-in-depth log.
+                LogCollector.append(
+                    "[Config] RuntimeStateStore rollback rejected snapshot (unexpected): ${e.message}",
+                    LogLevel.ERROR,
+                )
+                false
+            } else true
+        }
         val runtimeWritten = if (RuntimeStateStore.isInitialized) try {
             // BAT-1661: the IO hop runs on another thread; the transaction is the `tx` token, which
             // crosses it, so nothing is re-acquired here (contract v2.4 §4).
@@ -872,9 +903,7 @@ object ConfigManager {
             // skip Setup on next launch, leaving the user stranded
             // with an unconfigured agent. For existing users (snapshot
             // already true), the rollback is a no-op.
-            val rollback = sp.edit()
-            // BAT-1661: only a selection wrote these three, so only a selection rolls them back.
-            if (isSelection) rollbackModelSelection(tx, rollback, oldProvider, oldAuthType, oldModel)
+            //
             // R5 Copilot: BAT-515 added KEY_AGENT_NAME / KEY_SEARCH_PROVIDER
             // to the same `editor.commit()` block above (lines 367, 389).
             // The pre-BAT-515 rollback only covered the BAT-513 runtime
@@ -885,14 +914,8 @@ object ConfigManager {
             // the old values. Without these two extra rollback lines,
             // prefs and the cross-process files would diverge on the
             // RuntimeStateStore-failure path, undoing the v3 §4 atomicity
-            // contract. Mirror the same put-or-remove shape the later
-            // AgentPreferencesStore-failure rollback already uses.
-            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
-            else rollback.remove(KEY_AGENT_NAME)
-            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
-            else rollback.remove(KEY_SEARCH_PROVIDER)
-            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
-            val rollbackOk = rollback.commit()
+            // contract. rollbackPrefs restores both, as every rollback path does.
+            val rollbackOk = rollbackPrefs()
             if (!rollbackOk) {
                 // Synchronous commit failed (rare — usually means the
                 // disk is genuinely full). Log loudly; the partial
@@ -981,14 +1004,7 @@ object ConfigManager {
             // intentional rollback semantic. /think writes are
             // tolerable to lose under this rare path; preferring user-
             // intent atomicity over inter-update concurrent retention.
-            val rollback = sp.edit()
-            if (isSelection) rollbackModelSelection(tx, rollback, oldProvider, oldAuthType, oldModel)
-            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
-            else rollback.remove(KEY_AGENT_NAME)
-            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
-            else rollback.remove(KEY_SEARCH_PROVIDER)
-            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
-            val rollbackOk = rollback.commit()
+            val rollbackOk = rollbackPrefs()
             if (!rollbackOk) {
                 LogCollector.append(
                     "[Config] Rollback commit() returned false — prefs may be in inconsistent state " +
@@ -996,26 +1012,7 @@ object ConfigManager {
                     LogLevel.ERROR,
                 )
             }
-            // Undo the RuntimeStateStore forward update by restoring
-            // the captured snapshot. Skip when preForwardRuntime is
-            // null (RuntimeStateStore wasn't initialized OR an
-            // IllegalArgumentException short-circuited the lambda
-            // before assignment — in that latter case the forward
-            // update never persisted, so there's nothing to undo).
-            val runtimeUndone = if (RuntimeStateStore.isInitialized && preForwardRuntime != null) try {
-                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                    RuntimeStateStore.update(tx) { _ -> preForwardRuntime!! }
-                }
-            } catch (e: IllegalArgumentException) {
-                // Should not happen — preForwardRuntime came out of
-                // RuntimeStateStore itself, so its (provider,authType)
-                // is guaranteed valid. Defense-in-depth log.
-                LogCollector.append(
-                    "[Config] RuntimeStateStore rollback rejected snapshot (unexpected): ${e.message}",
-                    LogLevel.ERROR,
-                )
-                false
-            } else true
+            val runtimeUndone = undoRuntimeWrite()
             bumpConfigVersionOnMain()
             LogCollector.append(
                 "[Config] AgentPreferencesStore.update failed — rolled back prefs to " +
@@ -1024,6 +1021,43 @@ object ConfigManager {
                     "KEY_SETUP_COMPLETE to $oldSetupComplete " +
                     "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone)",
                 LogLevel.WARN,
+            )
+            return false
+        }
+
+        // BAT-513 round-9: the overlay is written ONLY after prefs, runtime_state.json and
+        // agent_preferences.json all succeeded. It persists provider/authType/model too; writing
+        // it first would mean a failure-path rollback would also need to revert the overlay (and
+        // the next loadConfig's reconcileWithAgentSettings would re-adopt it back into prefs).
+        //
+        // Publish THIS config directly: a loadConfig round-trip would
+        // re-trigger reconcile (PR #339 device-test regression fix).
+        // BAT-1661: an unrelated save keeps the overlay's provider/authType/model.
+        //
+        // BAT-1661 (Codex diff review #2): its outcome is checked. Node reads the overlay first,
+        // so a selection acknowledged over a failed overlay write would be reverted by the old
+        // overlay, and would clear a pending repair on top. The write is atomic, so the previous
+        // file is still in place: undo every store this save wrote and report the failure.
+        if (!writeAgentSettingsJson(context, tx, config, publishModelFields = isSelection)) {
+            val rollbackOk = rollbackPrefs()
+            val runtimeUndone = undoRuntimeWrite()
+            val agentPrefsUndone = if (AgentPreferencesStore.isInitialized && oldAgentPrefs != null) try {
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    AgentPreferencesStore.update { current ->
+                        current.copy(searchProvider = oldAgentPrefs.searchProvider, agentName = oldAgentPrefs.agentName)
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                false
+            } else true
+            bumpConfigVersionOnMain()
+            LogCollector.append(
+                "[Config] agent_settings.json write failed — rolled back prefs to " +
+                    "(provider=$oldProvider, authType=$oldAuthType, model=$oldModel, " +
+                    "agentName=$oldAgentName, searchProvider=$oldSearchProvider) and " +
+                    "KEY_SETUP_COMPLETE to $oldSetupComplete " +
+                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone, agent_prefs_undone=$agentPrefsUndone)",
+                if (rollbackOk && runtimeUndone && agentPrefsUndone) LogLevel.WARN else LogLevel.ERROR,
             )
             return false
         }
@@ -1047,22 +1081,8 @@ object ConfigManager {
             )
         }
 
-        // BAT-513 round-9: write the overlay AND broadcast the change
-        // ONLY after both prefs commit + RuntimeStateStore.write
-        // succeeded. The overlay persists provider/authType/model too;
-        // writing it before the runtime-state write would mean a
-        // failure-path rollback would also need to revert the
-        // overlay (and the next loadConfig's reconcileWithAgentSettings
-        // would re-adopt the unreverted overlay back into prefs).
-        // Deferring keeps all three persistent stores (prefs, overlay,
-        // runtime_state.json) atomic at the runtime-fields level —
-        // either all updated together or all left at the prior values.
-        //
-        // Publish THIS config directly: a loadConfig round-trip would
-        // re-trigger reconcile (PR #339 device-test regression fix).
-        // BAT-1661: an unrelated save keeps the overlay's provider/authType/model.
-        writeAgentSettingsJson(context, tx, config, publishModelFields = isSelection)
-        // BAT-1661 (v2.5 §2): a successful selection supersedes a pending model repair.
+        // BAT-1661 (v2.5 §2): a successful selection — every store written, the overlay included —
+        // supersedes a pending model repair.
         if (isSelection) ModelRepair.cancelAfterSelection(tx, context.filesDir.toPath())
         // Notify the OTHER process — main-process UI relies on this
         // to refresh after :node-process writes (e.g. /provider
@@ -1186,10 +1206,13 @@ object ConfigManager {
         migrateXaiOAuthToStoreIfNeeded(context)
         val p = prefs(context)
         // BAT-1661: in the main process, prefs are a per-process cache that `:node` writes cannot
-        // refresh; runtime_state.json is the cross-process truth for the selection. Bring prefs up
-        // to date from it BEFORE reconciling, so reconcile never mistakes a stale prefs model for a
-        // user change and clamps a repaired, valid-but-unlisted model away (contract v2.4 §2).
-        if (tx != null && RuntimeStateStore.isInitialized && RuntimeStateStore.syncPrefsFromFile(tx, p)) {
+        // refresh. Bring the prefs MODEL up to date from runtime_state.json BEFORE reconciling, so
+        // reconcile never mistakes a stale prefs model for a user change and clamps a repaired,
+        // valid-but-unlisted model away (contract v2.4 §2). Model only, same provider and auth
+        // only — see syncPrefsFromFile (Codex diff review #3).
+        if (tx != null && RuntimeStateStore.isInitialized &&
+            RuntimeStateStore.syncPrefsFromFile(tx, context.filesDir.toPath(), p)
+        ) {
             postConfigVersionBump()
         }
 
@@ -1646,7 +1669,19 @@ object ConfigManager {
         // completes, so the broadcast can't outrun the data. Same
         // class of bug as 76041c1 (apply→commit before killProcess in
         // onDestroy); same fix.
-        editor.commit()
+        if (!editor.commit()) {
+            // BAT-1661 (Codex diff review #2): false means not on disk, while the in-memory prefs
+            // already hold the new values, so no re-read can tell. Flag the transaction (the
+            // service start then keeps any repair intent), and stop here: no runtime_state write
+            // and no broadcast for a reconcile that did not persist. This load still returns it.
+            tx.markWriteFailed()
+            LogCollector.append(
+                "[Config] Reconcile: prefs commit failed — model selection not saved this time " +
+                    "(provider=${reconciled.provider}, authType=${reconciled.authType}, model=${reconciled.model})",
+                LogLevel.ERROR,
+            )
+            return reconciled
+        }
 
         // Bump same-process configVersion so any in-process UI observer
         // recomposes. /provider Telegram → :node service-start reconcile
@@ -1703,6 +1738,7 @@ object ConfigManager {
                 ),
             )
             if (!runtimeWritten) {
+                tx.markWriteFailed()
                 LogCollector.append(
                     "[Config] Reconcile: RuntimeStateStore.write returned false — " +
                         "runtime_state.json may be stale vs prefs until next successful write",
@@ -1921,6 +1957,38 @@ object ConfigManager {
 
     fun setKeepScreenOn(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_KEEP_SCREEN_ON, enabled).commit()
+    }
+
+    /**
+     * BAT-1661 (Codex diff review #5): persist an OpenAI OAuth pair that Node just rotated (bridge
+     * `/openai/oauth/save-tokens`). Writes ONLY the token keys — the access token, plus the refresh
+     * token and expiry when given (blank keeps the stored value) — and no provider, auth type or
+     * model, so it takes no model-selection lock: a Settings save or the start-up repair holding
+     * that lock can no longer make the save of a rotated pair wait out and fail. Committed
+     * synchronously; returns false when the write did not reach disk.
+     */
+    fun saveOpenAIOAuthRotation(context: Context, accessToken: String, refreshToken: String, expiresAt: String): Boolean =
+        saveOpenAIOAuthRotationWith(context, accessToken, refreshToken, expiresAt, SecretSealer.Keystore)
+
+    /** [saveOpenAIOAuthRotation] with an explicit [sealer] (JVM tests; see [SecretSealer]). */
+    internal fun saveOpenAIOAuthRotationWith(
+        context: Context,
+        accessToken: String,
+        refreshToken: String,
+        expiresAt: String,
+        sealer: SecretSealer,
+    ): Boolean {
+        require(accessToken.isNotBlank()) { "accessToken required" }
+        val editor = prefs(context).edit().putString(KEY_OPENAI_OAUTH_TOKEN_ENC, sealer.seal(accessToken))
+        if (refreshToken.isNotBlank()) editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, sealer.seal(refreshToken))
+        if (expiresAt.isNotBlank()) editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, expiresAt)
+        if (!editor.commit()) {
+            LogCollector.append("[Config] Failed to persist rotated OpenAI OAuth tokens (commit=false)", LogLevel.ERROR)
+            return false
+        }
+        bumpConfigVersionOnMain()
+        broadcastConfigChanged(context)
+        return true
     }
 
     /**
@@ -2211,16 +2279,14 @@ object ConfigManager {
                 saveOwnerIdToFile(context, value, "discord")
                 config.copy(discordOwnerId = value)
             }
-            "openaiOAuthToken" -> config.copy(openaiOAuthToken = value)
-            "openaiOAuthRefresh" -> config.copy(openaiOAuthRefresh = value)
-            "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
-            "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
             "xaiApiKey" -> config.copy(xaiApiKey = value)
             // BAT-1155: the xAI OAuth triple is owned by XaiOAuthTokenStore
             // (sign-in / rotation / sign-out) — NOT settable via updateConfigField
             // anymore (saveConfig no longer persists these fields). The prior
             // "xaiOAuthToken/Refresh/Email/ExpiresAt" cases were removed so a
             // caller can't silently no-op a token write here.
+            // BAT-1661: the same for the OpenAI OAuth fields ("openaiOAuthToken/Refresh/
+            // Email/ExpiresAt"): persistOpenAIOAuthTokens and saveOpenAIOAuthRotation own them.
             else -> return false
         }
         // saveConfig now syncs the agent_settings.json overlay
@@ -2571,13 +2637,17 @@ object ConfigManager {
      * unrelated Settings save) leaves the overlay's provider/authType/model
      * keys exactly as stored (contract v2.5 §2). Every key it does not own is
      * kept, in order (kotlinx JSON: testable on the JVM, unlike org.json).
+     *
+     * Returns false when the file was not written (logged as a WARN). The write is
+     * atomic and not durable, so a failure leaves the previous file in place:
+     * callers must not acknowledge a save, or clear a repair intent, on false.
      */
     fun writeAgentSettingsJson(
         context: Context,
         tx: ModelSelectionLock.Tx,
         config: AppConfig,
         publishModelFields: Boolean,
-    ) {
+    ): Boolean {
         tx.requireOpen()
         try {
             ensureWorkspaceDir(context)
@@ -2601,8 +2671,10 @@ object ConfigManager {
             // Ensure apiKeys object exists (agent writes individual keys into it)
             if (!o.containsKey("apiKeys")) put("apiKeys", kotlinx.serialization.json.JsonObject(emptyMap()))
             AgentSettingsFile.write(files, o)
+            return true
         } catch (e: Exception) {
             LogCollector.append("[Config] Failed to write agent_settings.json: ${e.message}", LogLevel.WARN)
+            return false
         }
     }
 

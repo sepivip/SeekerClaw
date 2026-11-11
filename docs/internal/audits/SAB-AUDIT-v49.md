@@ -120,6 +120,16 @@ The new prompt line is injected only for `PROVIDER === 'openai' && OPENAI_AUTH_T
 
 - New WARN `[ModelRepair] repair incomplete — model settings left as they are this start, retry next start`. It is logged when a repair write fails, or when the intent could not be persisted, and the start then leaves the model stores alone. Covered in the "OpenAI Model Changed On Its Own After An Update" entry. It was added after this audit's scoring, so it is not in the score table.
 
+## Post-audit additions (from the Codex diff review of 09e0614c, Linear 8248fb2c)
+
+These log sites were added after the scoring, so they are not in the score table. Each one is covered:
+
+- WARN `[ModelRepair] model settings not fully saved this start — repair stays pending, retry next start`: the repair ran, but a later write in the same start (prefs commit, runtime_state, the overlay publish) failed, so the intent is kept. Covered in "OpenAI Model Changed On Its Own After An Update".
+- ERROR `[Config] Reconcile: prefs commit failed — model selection not saved this time (…)`: covered by the same entry (it names this line as the usual companion of the WARN above).
+- WARN/ERROR `[Config] agent_settings.json write failed — rolled back prefs to (…)`: a Settings save whose overlay write failed is undone and reported as failed. Covered in "Settings Says \"Couldn't save\" Right After A Start Or A Model Change".
+- ERROR `[Config] Failed to persist rotated OpenAI OAuth tokens (commit=false)`: covered in the OpenAI OAuth refresh section, next to `OPENAI_OAUTH_SAVE_FAILED`. The bridge save of a rotated pair no longer takes the model-selection lock, so "a settings change held it" is no longer a cause; the entry now says so.
+- The `RuntimeStateStore` seed and mirror lines (`first-launch seed …`, `prefs mirror not committed`) are logcat-only (`Log.w`/`Log.i`), not on the Logs screen, so they need no entry.
+
 ## Code Issues Found
 
 - **xAI runtime auth sync could be skipped under a 1 s lock bound (fixed here, same PR).** `ConfigManager.syncXaiRuntimeAuthType` runs only on `Dispatchers.IO`, after an xAI sign-in or sign-out. With the default 1 s bound, a concurrent settings change could skip it and leave `runtime_state.json`, which Node reads first, on the old xai auth mode: the boot split that BAT-1155 H5 exists to prevent. It now waits up to 5 s (`XAI_SYNC_LOCK_TIMEOUT_MS`, the same order as the collector mirror). It stays bounded and logs the WARN if it still cannot get the lock.

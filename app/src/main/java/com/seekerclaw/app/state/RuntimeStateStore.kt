@@ -203,8 +203,7 @@ object RuntimeStateStore {
         // save (Settings UI / Telegram /provider /model) retries the
         // file write.
         scope.launch {
-            val file = File(app.filesDir, FILE_NAME)
-            if (!file.exists() && !cps.write(seeded)) {
+            if (!seedIfMissing(app.filesDir, sp) { cps.write(it) }) {
                 Log.w(
                     TAG,
                     "first-launch migration write to $FILE_NAME failed — " +
@@ -213,6 +212,38 @@ object RuntimeStateStore {
                 )
             }
             cps.state.collect { observed -> observeFromCollector(observed, sp) }
+        }
+    }
+
+    /**
+     * First-launch migration: create runtime_state.json from prefs when it is missing. Returns
+     * false only when the write was attempted and failed.
+     *
+     * BAT-1661 (Codex diff review #4): a runtime_state.json write, so it runs under the
+     * model-selection lock and decides from what is there NOW — the file is re-checked and prefs
+     * re-read inside the transaction, never a tuple captured earlier (which can predate a start-up
+     * repair in `:node`). While a repair intent is pending the repair owns the stores, so nothing is
+     * seeded. A busy lock or a pending repair defers the seed: a later launch or the first save
+     * creates the file, and until then `:node` falls back to config.json.
+     */
+    internal fun seedIfMissing(filesDir: File, sp: SharedPreferences, write: (RuntimeState) -> Boolean): Boolean {
+        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { _ ->
+            when {
+                File(filesDir, FILE_NAME).exists() -> true
+                com.seekerclaw.app.config.ModelRepair.readIntent(filesDir.toPath()) !is
+                    com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> {
+                    Log.i(TAG, "first-launch seed skipped: a model repair is pending")
+                    true
+                }
+                else -> write(seedFromPrefs(sp))
+            }
+        }
+        return when (r) {
+            is ModelSelectionLock.Result.Acquired -> r.value
+            is ModelSelectionLock.Result.Busy -> {
+                Log.w(TAG, "first-launch seed deferred: model-selection lock busy (${r.reason})")
+                true
+            }
         }
     }
 
@@ -258,15 +289,35 @@ object RuntimeStateStore {
     }
 
     /**
-     * BAT-1661: inside a locked load (main process), copy the file's provider/auth_type/model into
-     * prefs before reconcile reads them. Main-process prefs are a per-process cache that a
-     * `:node` write never refreshes. Returns true when prefs changed.
+     * BAT-1661: inside a locked load (main process), bring the prefs MODEL up to date from
+     * runtime_state.json before reconcile reads it. Main-process prefs are a per-process cache
+     * that a `:node` write (the start-up repair) never refreshes; a stale prefs model would make
+     * reconcile treat the repaired overlay model as an outside change and clamp it.
+     *
+     * Narrow on purpose (Codex diff review #3):
+     *  - the model only, and only when the file's provider AND auth type equal the ones in prefs.
+     *    runtime_state's auth may differ by design (the xAI oauth-without-token → api_key boot
+     *    guard, [com.seekerclaw.app.config.ConfigManager.runtimeAuthTypeFor]); copying it into
+     *    prefs would undo the user's selected auth, and reconcile would write it back on every
+     *    load — a write and Settings-reload loop;
+     *  - only from a record actually read from the file: no file, an unparsable one, or an invalid
+     *    pair syncs nothing (never the in-memory fallback seed);
+     *  - committed synchronously; a failed commit flags [tx] ([ModelSelectionLock.Tx.writeFailed]).
+     *
+     * Returns true when the prefs model changed.
      */
-    fun syncPrefsFromFile(tx: ModelSelectionLock.Tx, prefs: SharedPreferences): Boolean {
+    fun syncPrefsFromFile(tx: ModelSelectionLock.Tx, filesDir: java.nio.file.Path, prefs: SharedPreferences): Boolean {
         tx.requireOpen()
-        val current = store?.read() ?: return false
-        if (!isValidPair(current.provider, current.authType)) return false
-        return mirrorIfChanged(prefs, current)
+        val file = com.seekerclaw.app.config.RuntimeStateFile.readTuple(filesDir) ?: return false
+        if (file.provider != prefs.getString(KEY_PROVIDER, null)) return false
+        if (file.authType != prefs.getString(KEY_AUTH_TYPE, null)) return false
+        if (file.model == prefs.getString(KEY_MODEL, null)) return false
+        if (!prefs.edit().putString(KEY_MODEL, file.model).commit()) {
+            tx.markWriteFailed()
+            Log.w(TAG, "prefs model sync from $FILE_NAME not committed")
+            return false
+        }
+        return true
     }
 
     /**
@@ -449,7 +500,12 @@ object RuntimeStateStore {
         if (curProvider != observed.provider) editor.putString(KEY_PROVIDER, observed.provider)
         if (curAuth != observed.authType) editor.putString(KEY_AUTH_TYPE, observed.authType)
         if (curModel != observed.model) editor.putString(KEY_MODEL, observed.model)
-        editor.apply()
+        // BAT-1661 (Codex diff review #4): commit(), not apply(). The caller holds the
+        // model-selection lock; apply() would queue the disk write to land after it is released.
+        if (!editor.commit()) {
+            Log.w(TAG, "prefs mirror not committed (disk write failed)")
+            return false
+        }
         return true
     }
 

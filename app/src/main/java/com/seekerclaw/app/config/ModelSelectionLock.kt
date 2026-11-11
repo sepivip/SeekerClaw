@@ -59,6 +59,20 @@ object ModelSelectionLock {
         fun requireOpen() {
             check(open) { "ModelSelectionLock.Tx#$id used after its transaction ended" }
         }
+
+        /**
+         * True once a writer under this transaction reported a write that did not reach disk —
+         * e.g. `SharedPreferences.commit() == false`, which still leaves the new value in the
+         * in-memory prefs. A re-read cannot detect that, so the service start checks this flag
+         * before it treats the stores as repaired and clears the intent (Codex diff review #2).
+         */
+        @Volatile
+        var writeFailed: Boolean = false
+            private set
+
+        fun markWriteFailed() {
+            writeFailed = true
+        }
     }
 
     sealed class Result<out T> {

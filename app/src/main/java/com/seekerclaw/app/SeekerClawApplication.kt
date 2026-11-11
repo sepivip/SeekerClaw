@@ -246,7 +246,10 @@ class SeekerClawApplication : Application() {
         /** Firebase Analytics and its user properties (model, auth type, wallet presence). */
         fun initAnalytics(context: Context) {
             Analytics.init(context)
-            ConfigManager.loadConfig(context)?.let { config ->
+            // BAT-1661: read-only. In `:node` this runs at the top of continueStart, BEFORE the
+            // model-repair transaction; a reconciling load there could clamp and commit a model
+            // the repair has not decided on yet. Analytics only reads two properties.
+            ConfigManager.loadConfigReadOnly(context)?.let { config ->
                 Analytics.setUserProperty("model", config.model)
                 Analytics.setUserProperty("auth_type", config.authType)
             }

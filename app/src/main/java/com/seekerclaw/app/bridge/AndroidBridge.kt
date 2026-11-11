@@ -55,9 +55,6 @@ class AndroidBridge(
 
     companion object {
         private const val TAG = "AndroidBridge"
-
-        /** BAT-1661: lock wait for the OpenAI OAuth token save (bridge worker thread; < Node's 10 s bridge timeout). */
-        private const val OPENAI_OAUTH_SAVE_LOCK_TIMEOUT_MS = 5_000L
         private const val AUTH_HEADER = "X-Bridge-Token"
         // BAT-514: MCP server id format mirrors McpServersStore.ID_REGEX.
         // Validated at the bridge boundary as defense-in-depth /
@@ -1009,21 +1006,17 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "accessToken required"))
         }
         return try {
-            val config = ConfigManager.loadConfig(context)
-                ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
-            val updated = config.copy(
-                openaiOAuthToken = accessToken,
-                openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else config.openaiOAuthRefresh,
-                openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else config.openaiOAuthExpiresAt,
-            )
-            // BAT-1661: saveConfig returns false when the model-selection lock stays busy past its
-            // bound (a Settings save or the collector mirror in the main process). The refresh token
-            // rotates, so a lost save must reach Node as an error, never as success. This handler
-            // runs on a bridge worker thread, so it waits longer than a UI save. Retrying a rotated
-            // pair until it lands belongs to the durable OpenAI token store (BAT-1157).
-            val saved = ConfigManager.saveConfig(context, updated, lockTimeoutMs = OPENAI_OAUTH_SAVE_LOCK_TIMEOUT_MS)
+            if (!ConfigManager.isSetupComplete(context)) {
+                return jsonResponse(500, mapOf("error" to "config not loaded"))
+            }
+            // BAT-1661 (Codex diff review #5): a token-only write. It touches no model field, so it
+            // takes no model-selection lock and cannot be refused because a Settings save or the
+            // start-up repair holds it. The refresh token rotates, so a write that did not reach
+            // disk must still reach Node as an error, never as success. A durable OpenAI token
+            // store, retrying until a pair lands, is BAT-1157.
+            val saved = ConfigManager.saveOpenAIOAuthRotation(context, accessToken, refreshToken, expiresAt)
             if (!saved) {
-                Log.w(TAG, "OpenAI OAuth token save failed (settings busy or not writable)")
+                Log.w(TAG, "OpenAI OAuth token save failed (not writable)")
                 return jsonResponse(503, mapOf(
                     "error" to "Failed to save OpenAI OAuth tokens",
                     "code" to "OPENAI_OAUTH_SAVE_FAILED",

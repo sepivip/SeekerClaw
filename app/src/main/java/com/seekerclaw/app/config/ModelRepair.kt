@@ -38,6 +38,9 @@ object ModelRepair {
 
     const val REPAIR_FAILED_BOOT_WARNING = "[ModelRepair] repair incomplete — model settings left as they are this start, retry next start"
 
+    /** A settings write after the repair (prefs commit, runtime_state, the overlay publish) failed. */
+    const val PUBLISH_FAILED_WARNING = "[ModelRepair] model settings not fully saved this start — repair stays pending, retry next start"
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /** The overlay as captured when the intent was created. */
@@ -419,8 +422,17 @@ object ModelRepair {
                 return@transaction null
             }
             val channel = emit(config)
-            ConfigManager.writeAgentSettingsJson(context, tx, config, publishModelFields = true)
-            plan.intent?.let { verifyAndClear(tx, filesDir, it, ConfigManager.modelSnapshot(context).prefs) }
+            val published = ConfigManager.writeAgentSettingsJson(context, tx, config, publishModelFields = true)
+            plan.intent?.let { intent ->
+                // A write under this transaction that did not reach disk (a failed prefs commit
+                // keeps the new value in memory, where a re-read would see it) or a failed publish:
+                // the stores are not known to be repaired, so the intent stays for the next start.
+                if (!published || tx.writeFailed) {
+                    LogCollector.append(PUBLISH_FAILED_WARNING, LogLevel.WARN)
+                } else {
+                    verifyAndClear(tx, filesDir, intent, ConfigManager.modelSnapshot(context).prefs)
+                }
+            }
             channel
         }
         return when (r) {

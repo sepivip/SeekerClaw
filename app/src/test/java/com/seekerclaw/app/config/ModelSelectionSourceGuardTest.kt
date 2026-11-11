@@ -33,6 +33,12 @@ class ModelSelectionSourceGuardTest {
             """writeAgentSettingsJson\(""",
     )
 
+    /** In RuntimeStateStore only: its CrossProcessStore under the local name `cps` (the first-launch seed). */
+    private val runtimeCpsWriter = Regex("""\bcps\.(write|update)\(""")
+
+    private fun isWriter(path: String, line: String) =
+        writer.containsMatchIn(line) || (path.endsWith("state/RuntimeStateStore.kt") && runtimeCpsWriter.containsMatchIn(line))
+
     private fun isComment(line: String) = line.trimStart().let { it.startsWith("//") || it.startsWith("*") || it.startsWith("/*") }
 
     /**
@@ -47,13 +53,13 @@ class ModelSelectionSourceGuardTest {
         return lines[i].trim() to lines.subList(i, index + 1).joinToString("\n")
     }
 
-    @Test
-    fun `every model-store writer holds or opens the model selection lock`() {
+    /** Writers outside the lock in [srcs], and how many writers were seen. */
+    private fun writerOffenders(srcs: Map<String, List<String>>): Pair<Int, List<String>> {
         val offenders = mutableListOf<String>()
         var seen = 0
-        for ((path, lines) in sources) {
+        for ((path, lines) in srcs) {
             lines.forEachIndexed { i, line ->
-                if (isComment(line) || !writer.containsMatchIn(line)) return@forEachIndexed
+                if (isComment(line) || !isWriter(path, line)) return@forEachIndexed
                 if (line.contains("fun writeAgentSettingsJson(")) return@forEachIndexed // the declaration
                 seen++
                 val (sig, body) = enclosing(lines, i)
@@ -62,16 +68,71 @@ class ModelSelectionSourceGuardTest {
                 val guarded = header.contains("ModelSelectionLock.Tx") ||
                     body.contains("ModelSelectionLock.transaction") ||
                     // Helpers whose every caller is checked in the next test.
-                    (path.endsWith("RuntimeStateStore.kt") && lockedHelpers.any { sig.contains("fun $it(") })
+                    (path.endsWith("RuntimeStateStore.kt") && lockedHelpers.any { sig.contains("fun $it(") }) ||
+                    // The seed's write, handed to seedIfMissing, which runs it inside its transaction.
+                    (path.endsWith("RuntimeStateStore.kt") && line.contains("seedIfMissing("))
                 if (!guarded) offenders += "$path:${i + 1}  in  $sig"
             }
         }
+        return seen to offenders
+    }
+
+    @Test
+    fun `every model-store writer holds or opens the model selection lock`() {
+        val (seen, offenders) = writerOffenders(sources)
         assertTrue("guard found no writers — the pattern drifted", seen >= 10)
         assertEquals("writers outside the lock:\n" + offenders.joinToString("\n"), emptyList<String>(), offenders)
     }
 
+    @Test
+    fun `writer guard rejects the pre-fix first-launch seed outside the lock`() {
+        // 09e0614c: `if (!file.exists() && !cps.write(seeded))` straight in init's coroutine.
+        val path = "com/seekerclaw/app/state/RuntimeStateStore.kt"
+        val lines = sources.getValue(path)
+        val at = lines.indexOfFirst { it.contains("seedIfMissing(app.filesDir, sp)") }
+        assertTrue("the seed call is in the source", at >= 0)
+        val mutated = lines.toMutableList().apply { this[at] = "            if (!File(app.filesDir, FILE_NAME).exists() && !cps.write(seeded)) {" }
+        val (_, offenders) = writerOffenders(sources + (path to mutated))
+        assertTrue("the unlocked seed is reported: $offenders", offenders.any { it.startsWith("$path:${at + 1}") })
+    }
+
     /** RuntimeStateStore helpers that write prefs and take no tx; their callers must hold it. */
     private val lockedHelpers = listOf("onObserved", "mirrorIfChanged")
+
+    /**
+     * A member function that puts a model key and then calls `apply()`: the disk write is queued
+     * and can land after the lock is released (Codex diff review #4). Model-key writes commit().
+     */
+    private fun applyOffenders(srcs: Map<String, List<String>>): List<String> {
+        val out = mutableListOf<String>()
+        val memberFun = Regex("""^ {4}(?:(?:private|internal|public|override|suspend|inline)\s+)*fun\s""")
+        for ((path, lines) in srcs) {
+            var sig = "<top>"
+            var putsModelKey = false
+            lines.forEachIndexed { i, line ->
+                if (memberFun.containsMatchIn(line)) {
+                    sig = line.trim()
+                    putsModelKey = false
+                }
+                if (isComment(line)) return@forEachIndexed
+                if (Regex("""putString\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b""").containsMatchIn(line)) putsModelKey = true
+                if (putsModelKey && line.contains(".apply()")) out += "$path:${i + 1}  in  $sig"
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun `model-key prefs writes are committed, never apply()`() {
+        assertEquals(emptyList<String>(), applyOffenders(sources))
+        // Negative control: the pre-fix auth normalizer (09e0614c).
+        val path = "com/seekerclaw/app/config/ConfigManager.kt"
+        val lines = sources.getValue(path)
+        val at = lines.indexOfFirst { it.contains("putString(KEY_AUTH_TYPE, normalized).commit()") }
+        assertTrue("the normalizer is in the source", at >= 0)
+        val mutated = lines.toMutableList().apply { this[at] = "            p.edit().putString(KEY_AUTH_TYPE, normalized).apply()" }
+        assertTrue(applyOffenders(mapOf(path to mutated)).isNotEmpty())
+    }
 
     @Test
     fun `the prefs-mirror helpers are called only with the lock held`() {
@@ -89,7 +150,9 @@ class ModelSelectionSourceGuardTest {
                 assertTrue("$helper call at line ${i + 1} (in $sig) does not hold the lock", ok)
             }
         }
-        assertTrue("guard found no helper calls — the pattern drifted", calls >= 3)
+        // onObserved → mirrorIfChanged, and observeFromCollector → onObserved (syncPrefsFromFile
+        // writes the model itself since the Codex diff review #3).
+        assertTrue("guard found no helper calls — the pattern drifted", calls >= 2)
     }
 
     @Test

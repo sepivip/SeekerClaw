@@ -573,7 +573,10 @@ class SeekerClawService : Service() {
         // Owner ID may be blank on first run — this is expected. Node.js auto-detects
         // it from the first Telegram message and persists it via the /config/save-owner
         // bridge callback; the service logs a warning here rather than blocking startup.
-        if (ConfigManager.loadConfig(this)?.telegramOwnerId.isNullOrBlank()) {
+        // BAT-1661: the owner alone, read-only (the same lookup loadConfig uses). A full loadConfig
+        // here would reconcile BEFORE the repair transaction, clamping a valid model the repair has
+        // not decided on yet and committing the result (Codex diff review #1).
+        if (ConfigManager.loadOwnerIdFromFile(this, "telegram").isBlank()) {
             LogCollector.append(
                 "[Service] Owner ID not configured — first Telegram message will claim ownership.",
                 LogLevel.WARN,

@@ -217,7 +217,7 @@ grep -iE "OAuth refresh|oauth_refresh|invalid_grant" node_debug.log
 - **User signed out of ChatGPT on another device** — may invalidate the SeekerClaw session
 - **Refresh token revoked** — manual revocation in OpenAI account settings
 - **OpenAI rotated client secret** — rare, would affect all users
-- **A refreshed token was not saved** — `[OpenAI] Failed to persist refreshed tokens: …` (WARN) in `node_debug.log`. The app refused the save (`OPENAI_OAUTH_SAVE_FAILED`, usually because a settings change held it). The new token keeps working until the agent restarts; after a restart the old one may be rejected and the user has to sign in again.
+- **A refreshed token was not saved** — `[OpenAI] Failed to persist refreshed tokens: …` (WARN) in `node_debug.log`. The app could not write it (`OPENAI_OAUTH_SAVE_FAILED`; on the app's Logs screen `[Config] Failed to persist rotated OpenAI OAuth tokens (commit=false)` (ERROR)), usually because storage is full. The new token keeps working until the agent restarts; after a restart the old one may be rejected and the user has to sign in again.
 **Fix:**
 1. Check the exact refresh error: `grep "OAuth refresh failed" node_debug.log` — look for `error_description`
 2. Tell the user to re-sign-in: Settings > AI Provider > OpenAI > Sign in with ChatGPT
@@ -741,6 +741,7 @@ session_status
 - `[ModelRepair] could not persist the repair intent` / `repair write failed` / `stores not yet on <model>` (WARN) — nothing is lost; the agent still uses a working model and the repair retries on the next start. Repeated on every start usually means storage is full.
 - `[ModelRepair] lock busy at start — read-only boot, repair deferred` (WARN) — another save held the settings at that moment; the repair runs on the next start.
 - `[ModelRepair] repair incomplete — model settings left as they are this start, retry next start` (WARN) — saving the repair record or one of the settings files failed, so the app did not touch the saved model on this start (the agent still runs on a working model) and tries again on the next start. Repeated on every start usually means storage is full.
+- `[ModelRepair] model settings not fully saved this start — repair stays pending, retry next start` (WARN) — the repair ran, but saving the result to one of the settings stores failed. Often next to `[Config] Reconcile: prefs commit failed …` (ERROR). The agent still runs on a working model; the next start finishes the repair. Repeated on every start usually means storage is full.
 - `[ModelRepair] repair intent unreadable … — ignored`, `could not clear a cancelled repair intent`, `could not clear the repair intent after a selection`, `stores repaired but the intent could not be cleared` (WARN) — housekeeping of the small record the repair keeps between starts. The model in use is not affected; the next start cleans it up. Repeated on every start usually means storage is full.
 API-key users are not affected: they keep the model, without Extended Thinking, because it is no longer in the registry.
 **Fix:** Nothing to fix. To use a different model, pick it in Settings > AI Provider > Model or with `/model`. If WARN lines repeat on every start, check storage (`android_storage`) and restart the agent.
@@ -750,6 +751,7 @@ API-key users are not affected: they keep the model, without Extended Thinking, 
 **Check:** app (Kotlin) lines on the **Logs screen** (not in `node_debug.log`) — ask the user for:
 - `[Config] saveConfig: model selection is being updated (…) — nothing saved` (WARN)
 - `[Config] xAI OAuth runtime_state sync skipped: lock busy (…)` (WARN)
+- `[Config] agent_settings.json write failed — rolled back prefs to (…)` (WARN; ERROR when part of the rollback also failed) — the settings file could not be written, so the whole save was undone and reported as failed. Usually storage is full.
 **Diagnosis:** Changes to the provider, sign-in type and model are made one at a time across the app and the agent's service. If another change (usually the agent starting up) holds them for more than about a second (five seconds for the xAI step), the save is refused rather than half-applied. Nothing was changed. The xAI line means the sign-in (or sign-out) was saved, but the agent may still start on the previous xAI auth mode — after an xAI sign-in that can look like a sign-in that "didn't stick". The stored tokens are safe.
 **Fix:** Wait a few seconds and save again. If it fails every time, Stop the agent, save, then start it again. After the xAI line, sign in with Grok again (or sign out again) in Settings > AI Provider > xAI — a restart alone does not re-run that step.
 
