@@ -332,14 +332,24 @@ class CrossProcessStore<T> private constructor(
      * a WARN; in that scenario the caller MUST treat T as immutable.
      */
     fun read(): T {
+        // Missing or malformed: a fresh copy of the initial value per caller (BAT-512).
+        return readOrNull() ?: cloneSafe(initialSnapshot)
+    }
+
+    /**
+     * The record actually on disk, or null when the file is missing or does not decode (logged).
+     * [read] falls back to the initial value instead; use this where acting on that fallback as
+     * if it were stored would be wrong (BAT-1661: the runtime_state prefs mirror).
+     */
+    fun readOrNull(): T? {
         // BAT-1409 P1-J: lstat-based existence and a no-follow read — a link at the store
         // path decodes as a failure (initial), never as the link target's contents.
-        if (!SafeFs.existsNoFollow(file.toPath())) return cloneSafe(initialSnapshot)
+        if (!SafeFs.existsNoFollow(file.toPath())) return null
         return try {
             json.decodeFromString(serializer, SafeFs.readTextNoFollow(filesDirRoot.toPath(), file.toPath()))
         } catch (e: Exception) {
             Log.w(TAG, "[$fileName] decode failed, returning initial: ${e.message}")
-            cloneSafe(initialSnapshot)
+            null
         }
     }
 

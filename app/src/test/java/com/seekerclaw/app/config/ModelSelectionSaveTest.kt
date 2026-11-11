@@ -502,6 +502,24 @@ class ModelSelectionSaveTest {
         assertEquals("oauth", prefs.disk["auth_type"])
     }
 
+    @Test
+    fun `collector mirror - only a record on disk is mirrored, never the launch seed`() {
+        seedPrefs("gpt-6-astra")
+        mainProcess() // the store's fallback is RuntimeState(): a different provider and model
+        val runtime = dir.resolve(RuntimeStateFile.NAME)
+        val mirror = { ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) } }
+
+        assertEquals("missing file", ModelSelectionLock.Result.Acquired(false), mirror())
+        runtime.toFile().writeText("{not json")
+        assertEquals("malformed file", ModelSelectionLock.Result.Acquired(false), mirror())
+        assertEquals("prefs untouched", "openai", prefs.disk["provider"])
+        assertEquals("gpt-6-astra", prefs.disk["model"])
+
+        writeRuntime("gpt-6.1-sol")
+        assertEquals(ModelSelectionLock.Result.Acquired(true), mirror())
+        assertEquals("gpt-6.1-sol", prefs.disk["model"])
+    }
+
     // ---------------------------- review #4: the first-launch seed runs under the lock
 
     @Test
@@ -549,7 +567,11 @@ class ModelSelectionSaveTest {
     // ----------------------------- review #5: a rotated OpenAI pair never waits on the lock
 
     @Test
-    fun `rotated OpenAI pair persists while the model-selection lock is held, and survives a restart`() {
+    fun `rotated OpenAI pair persists while the model-selection lock is held, and survives a restart of the writing process`() {
+        // Scope: the writer and its own process. A LATER commit from the other process can still
+        // write its older cached pair back, because commit() persists a process's whole map —
+        // the known gap that BAT-1157 (a token store outside the shared prefs file) closes.
+        // FakePrefs models one process's cache, so it cannot show that case.
         seedPrefs("gpt-6.1-sol")
         prefs.seed("openai_oauth_refresh_enc" to "sealed:old-refresh", "openai_oauth_expires_at" to "2026-11-01")
         val held = CountDownLatch(1)
@@ -579,25 +601,6 @@ class ModelSelectionSaveTest {
     }
 
     @Test
-    fun `a Settings save from a form loaded before a rotation keeps the rotated pair`() {
-        seedPrefs("gpt-6.1-sol")
-        prefs.seed("openai_oauth_refresh_enc" to "sealed:old-refresh", "openai_oauth_expires_at" to "2026-11-01")
-        mainProcess()
-        // The form was loaded with the old pair (form() carries openaiOAuthToken = "old-access").
-        val stale = form(ModelTuple("openai", "oauth", "gpt-6.1-sol")) {
-            it.copy(openaiOAuthRefresh = "old-refresh", openaiOAuthExpiresAt = "2026-11-01", agentName = "Renamed")
-        }
-        // Node rotates the pair; then the user saves an unrelated field from that form.
-        assertTrue(ConfigManager.saveOpenAIOAuthRotationWith(ctx, "new-access", "new-refresh", "2026-12-01", sealer))
-        assertTrue(save(stale))
-
-        assertEquals("the save landed", "Renamed", prefs.disk["agent_name"])
-        assertEquals("sealed:new-access", prefs.disk["openai_oauth_token_enc"])
-        assertEquals("sealed:new-refresh", prefs.disk["openai_oauth_refresh_enc"])
-        assertEquals("2026-12-01", prefs.disk["openai_oauth_expires_at"])
-    }
-
-    @Test
     fun `rotated OpenAI pair - blank refresh keeps the stored one, a failed commit reports false`() {
         seedPrefs("gpt-6.1-sol")
         prefs.seed("openai_oauth_refresh_enc" to "sealed:old-refresh")
@@ -614,6 +617,11 @@ class ModelSelectionSaveTest {
      * SharedPreferences with Android's commit semantics: the edit reaches [memory] first; the
      * disk write may fail ([failCommits]), and then commit() returns false. [restartProcess]
      * reloads [memory] from [disk], as a new process would.
+     *
+     * It models ONE process's cache, and commit() writes only the edited keys. Real Android
+     * writes the process's whole map, so two processes caching the same file can undo each
+     * other's keys; tests here switch processes only through [restartProcess] and never assert
+     * on that interleaving.
      */
     class FakePrefs : SharedPreferences {
         val disk = LinkedHashMap<String, Any?>()

@@ -701,13 +701,28 @@ object ConfigManager {
         }
         editor.putString(KEY_DISCORD_OWNER_ID, config.discordOwnerId)
 
-        // BAT-1661: the OpenAI OAuth token, refresh token, email and expiry are NOT written here.
-        // Node rotates the pair through the bridge (saveOpenAIOAuthRotation) while a Settings form
-        // may hold the pair it loaded earlier; writing the form's copy back would restore a used,
-        // single-use refresh token and sign the user out at the next refresh. Their writers are
-        // persistOpenAIOAuthTokens (sign-in, and sign-out with blanks) and saveOpenAIOAuthRotation.
-        // Every saveConfig caller only carried the stored pair through. Same fix as BAT-1155 for
-        // the xAI triple, below.
+        // OpenAI OAuth pair. Known gap (BAT-1157): these keys live in the MAIN prefs file, which
+        // both processes cache. A pair `:node` rotates (saveOpenAIOAuthRotation) can be written
+        // back to its old value by ANY later main-process commit, because commit() persists the
+        // process's whole in-memory map, not only the keys it edits. Removing these writes would
+        // not close that; moving the pair to its own store (as BAT-1155 did for xAI) does.
+        if (config.openaiOAuthToken.isNotBlank()) {
+            editor.putString(KEY_OPENAI_OAUTH_TOKEN_ENC, sealer.seal(config.openaiOAuthToken))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
+        }
+        if (config.openaiOAuthRefresh.isNotBlank()) {
+            editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, sealer.seal(config.openaiOAuthRefresh))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
+        }
+        if (config.openaiOAuthEmail.isNotBlank()) {
+            // Email is PII — encrypt at rest like other OAuth fields.
+            editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, sealer.seal(config.openaiOAuthEmail))
+        } else {
+            editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
+        }
+        editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
 
         // BAT-1124: xAI api-key secret (api_key path). The xAI *OAuth* triple
         // is intentionally NOT written here anymore.
@@ -2279,14 +2294,16 @@ object ConfigManager {
                 saveOwnerIdToFile(context, value, "discord")
                 config.copy(discordOwnerId = value)
             }
+            "openaiOAuthToken" -> config.copy(openaiOAuthToken = value)
+            "openaiOAuthRefresh" -> config.copy(openaiOAuthRefresh = value)
+            "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
+            "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
             "xaiApiKey" -> config.copy(xaiApiKey = value)
             // BAT-1155: the xAI OAuth triple is owned by XaiOAuthTokenStore
             // (sign-in / rotation / sign-out) — NOT settable via updateConfigField
             // anymore (saveConfig no longer persists these fields). The prior
             // "xaiOAuthToken/Refresh/Email/ExpiresAt" cases were removed so a
             // caller can't silently no-op a token write here.
-            // BAT-1661: the same for the OpenAI OAuth fields ("openaiOAuthToken/Refresh/
-            // Email/ExpiresAt"): persistOpenAIOAuthTokens and saveOpenAIOAuthRotation own them.
             else -> return false
         }
         // saveConfig now syncs the agent_settings.json overlay

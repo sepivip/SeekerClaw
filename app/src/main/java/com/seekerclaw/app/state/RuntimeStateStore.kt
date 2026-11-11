@@ -257,6 +257,18 @@ object RuntimeStateStore {
      * redundant emissions (mirrorIfChanged returned false → nothing
      * to refresh).
      */
+    /**
+     * The collector's mirror, under the lock: the record on disk now, never a fallback. When the
+     * file is missing or does not decode, [CrossProcessStore.read] would return the launch-time
+     * seed, and mirroring that would revert newer prefs; nothing is mirrored then (CodeRabbit,
+     * PR #465). Returns true when prefs changed.
+     */
+    internal fun mirrorFromDisk(tx: ModelSelectionLock.Tx, sp: SharedPreferences): Boolean {
+        tx.requireOpen()
+        val onDisk = store?.readOrNull() ?: return false
+        return onObserved(onDisk, sp)
+    }
+
     private fun observeFromCollector(observed: RuntimeState, sp: SharedPreferences) {
         // Single chokepoint via onObserved (BAT-513 round-14): the
         // pure-logic gate (validity check, _state update, prefs
@@ -270,9 +282,7 @@ object RuntimeStateStore {
         // model-selection lock, and mirrors the file as it is NOW (re-read under the lock), not
         // the possibly older emission — a stale emission must never revert a newer save. This
         // runs on the collector's IO thread, so it may wait longer than a UI save would.
-        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { _ ->
-            onObserved(store?.read() ?: observed, sp)
-        }
+        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { tx -> mirrorFromDisk(tx, sp) }
         val applied = when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {
