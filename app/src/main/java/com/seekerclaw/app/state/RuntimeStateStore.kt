@@ -140,6 +140,9 @@ object RuntimeStateStore {
 
     private var ownedScope: CoroutineScope? = null
     private var store: CrossProcessStore<RuntimeState>? = null
+
+    /** `filesDir`, for the pending-repair check in [mirrorFromDisk] (BAT-1661). */
+    private var filesDir: File? = null
     // No `prefs` field — internal helpers (seedFromPrefs, mirrorIfChanged,
     // onObserved) take SharedPreferences as a parameter so unit tests can
     // inject a fake without instantiating the singleton's full graph. The
@@ -157,6 +160,7 @@ object RuntimeStateStore {
         if (!initialized.compareAndSet(false, true)) return
         val app = context.applicationContext
         appContext = app
+        filesDir = app.filesDir
         val sp = app.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
         val seeded = seedFromPrefs(sp)
         _state.value = forDisplay(seeded)
@@ -262,11 +266,41 @@ object RuntimeStateStore {
      * file is missing or does not decode, [CrossProcessStore.read] would return the launch-time
      * seed, and mirroring that would revert newer prefs; nothing is mirrored then (CodeRabbit,
      * PR #465). Returns true when prefs changed.
+     *
+     * While a model repair is pending in the record's scope, prefs are written only when the
+     * record already holds the repair's target — the same rule as the load's same-scope sync
+     * ([syncPrefsFromFile] `onlyTo`). Otherwise mirroring would overwrite the retired prefs model
+     * the repair decides from (CodeRabbit on f943231d). The display still follows the record.
      */
     internal fun mirrorFromDisk(tx: ModelSelectionLock.Tx, sp: SharedPreferences): Boolean {
         tx.requireOpen()
         val onDisk = store?.readOrNull() ?: return false
+        val pending = pendingRepair(sp)
+        if (pending != null && onDisk.provider == pending.provider && onDisk.authType == pending.authType &&
+            onDisk.model != pending.target
+        ) {
+            if (isValidPair(onDisk.provider, onDisk.authType)) _state.value = forDisplay(onDisk)
+            Log.i(TAG, "prefs mirror held: a model repair is pending (target ${pending.target})")
+            return false
+        }
         return onObserved(onDisk, sp)
+    }
+
+    /** [com.seekerclaw.app.config.ModelRepair.pendingRepair] from the stores as they are now; null when none. */
+    private fun pendingRepair(sp: SharedPreferences): com.seekerclaw.app.config.ModelRepair.RepairIntent? {
+        val dir = filesDir?.toPath() ?: return null
+        return try {
+            com.seekerclaw.app.config.ModelRepair.pendingRepair(
+                dir,
+                com.seekerclaw.app.config.ModelRepair.Snapshot(
+                    prefs = com.seekerclaw.app.config.ConfigManager.rawPrefsModelTuple(sp),
+                    runtime = com.seekerclaw.app.config.RuntimeStateFile.readTuple(dir),
+                    overlay = com.seekerclaw.app.config.AgentSettingsFile.read(dir),
+                ),
+            )
+        } catch (_: IllegalStateException) {
+            null // registry not initialised (unit tests)
+        }
     }
 
     private fun observeFromCollector(observed: RuntimeState, sp: SharedPreferences) {
@@ -550,6 +584,7 @@ object RuntimeStateStore {
         if (!initialized.compareAndSet(false, true)) return
         val cps = CrossProcessStore(filesDir, FILE_NAME, RuntimeState.serializer(), seed)
         store = cps
+        this.filesDir = filesDir
         _state.value = forDisplay(cps.read())
     }
 
@@ -563,6 +598,7 @@ object RuntimeStateStore {
         store?.close()
         store = null
         appContext = null
+        filesDir = null
         _state.value = RuntimeState()
         initialized.set(false)
     }

@@ -527,6 +527,55 @@ class ModelSelectionSaveTest {
     }
 
     @Test
+    fun `mixed state - the collector mirror keeps the evidence too, then load and start keep 5_6`() {
+        // CodeRabbit on f943231d: the MAIN collector mirrors runtime_state into prefs on its first
+        // emission and on every change — the same erase as the load's sync, by another writer.
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-6-astra")
+        writeOverlay("gpt-5.6")
+        mainProcess()
+        val mirrored = ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) }
+        assertEquals("nothing mirrored while the repair is pending", ModelSelectionLock.Result.Acquired(false), mirrored)
+        assertEquals("the retired prefs model is kept", "gpt-5.4", prefs.disk["model"])
+        assertEquals("the display still follows runtime_state", "gpt-6-astra", RuntimeStateStore.read().model)
+
+        assertEquals("gpt-5.6", ConfigManager.loadConfig(ctx)!!.model)
+        nodeProcess()
+        assertEquals("gpt-5.6", serviceStart().model)
+        assertEquals("gpt-5.6", overlayModel())
+        assertEquals("gpt-5.6", prefs.disk["model"])
+
+        // Once runtime_state holds the target, the collector mirrors again.
+        mainProcess()
+        prefs.seed("model" to "gpt-5.4") // MAIN's stale cache after the :node repair
+        assertEquals(ModelSelectionLock.Result.Acquired(true), ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) })
+        assertEquals("gpt-5.6", prefs.disk["model"])
+    }
+
+    @Test
+    fun `while a repair is pending, Node model and provider changes still reach prefs through the collector`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        mainProcess()
+        val mirror = { ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) } }
+
+        // Node /model gpt-6-astra writes the overlay, then runtime_state (message-handler.js).
+        writeOverlay("gpt-6-astra")
+        writeRuntime("gpt-6-astra")
+        assertEquals(ModelSelectionLock.Result.Acquired(true), mirror())
+        assertEquals("a valid /model choice reaches prefs", "gpt-6-astra", prefs.disk["model"])
+
+        // Node /provider xai: a scope with no retired list.
+        prefs.seed("model" to "gpt-5.4")
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key")
+        writeRuntime("grok-4.6", provider = "xai", auth = "api_key")
+        assertEquals(ModelSelectionLock.Result.Acquired(true), mirror())
+        assertEquals("xai", prefs.disk["provider"])
+        assertEquals("grok-4.6", prefs.disk["model"])
+    }
+
+    @Test
     fun `a pending repair still lets the sync move prefs to the repair's target`() {
         // The sync's own job (contract v2.4 §2) survives: after a :node repair, MAIN's cached prefs
         // still say 5.4 while runtime_state and the overlay hold the target.
