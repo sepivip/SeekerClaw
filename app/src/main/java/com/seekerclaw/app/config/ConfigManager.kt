@@ -1661,6 +1661,20 @@ object ConfigManager {
 
         if (!providerChanged && !authChanged && !modelChanged) return fromPrefs
 
+        // BAT-1661 (Codex re-review of 29ed3c72, #1): a model-only change while a model repair is
+        // pending in this scope. Committing it would clamp away the evidence the repair decides
+        // from (e.g. a valid unlisted overlay model next to a retired prefs model) before the
+        // start sees it. Leave every store as it is and report the model the repair will settle
+        // on. Not the boot transaction (it passes `approved`), and never a provider or auth
+        // switch, which reconciles as before.
+        if (approved == null && !providerChanged && !authChanged) {
+            val pending = ModelRepair.pendingRepair(context.filesDir.toPath(), modelSnapshot(context))
+            if (pending != null && pending.provider == fromPrefs.provider && pending.authType == fromPrefs.authType) {
+                Log.i(TAG, "model repair pending — load leaves the stored model as it is (shows ${pending.target})")
+                return fromPrefs.copy(model = pending.target)
+            }
+        }
+
         val reconciled = fromPrefs.copy(
             provider = if (providerChanged) validProvider!! else fromPrefs.provider,
             authType = if (authChanged) validAuthType!! else fromPrefs.authType,

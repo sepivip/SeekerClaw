@@ -194,6 +194,26 @@ object ModelRepair {
     }
 
     /**
+     * The repair the next start would carry out, as things stand now: a pending intent that would
+     * finish, else a fresh decision; null when there is none. Reads the intent file, writes
+     * nothing.
+     *
+     * Codex re-review of 29ed3c72 (#1): an ordinary load must not destroy the repair's input. With
+     * prefs and runtime_state on a retired id and the overlay on a valid unlisted model, reconcile
+     * would clamp the overlay model to the default and commit it; the start would then see nothing
+     * retired, and the user's model would be lost. Reconcile asks this first and, while a repair
+     * is pending in its scope, leaves the stored model alone ([ConfigManager] reconcile).
+     */
+    fun pendingRepair(filesDir: Path, s: Snapshot, rules: Rules = Rules.Registry): RepairIntent? {
+        val existing = readIntent(filesDir)
+        if (existing is IntentRead.Present) {
+            val r = classifyResume(existing.intent, s)
+            if (r is Resume.Finish) return r.intent
+        }
+        return decide(s, rules)
+    }
+
+    /**
      * Whether the overlay, as it is now, still belongs to the captured decision: it holds the
      * captured value, or the repair already moved it to [target].
      */

@@ -15,7 +15,6 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -454,10 +453,66 @@ class ModelSelectionSaveTest {
     }
 
     @Test
-    fun `service entry - the pre-fix preflight (a reconciling loadConfig) loses 5_6`() {
-        // Negative control for the test above: 09e0614c's owner check called loadConfig first.
+    fun `service entry - even a reconciling loadConfig before the start keeps 5_6`() {
+        // 09e0614c's owner check called loadConfig first, which clamped 5.6 before the repair saw
+        // 5.4. The service no longer does (StartOrderGuardTest), and since the Codex re-review of
+        // 29ed3c72 the load itself leaves the model alone while a repair is pending — so a future
+        // reconciling call here is safe too. Removing that reconcile guard fails this test.
         startFromInverseState { c -> ConfigManager.loadConfig(c) }
-        assertNotEquals("the reconciling preflight clamps 5.6 before the repair sees 5.4", "gpt-5.6", overlayModel())
+        assertEquals("gpt-5.6", overlayModel())
+        assertEquals("gpt-5.6", runtimeModel())
+        assertEquals("gpt-5.6", prefs.disk["model"])
+    }
+
+    @Test
+    fun `production order - MAIN load, service start, first dispatch, restart - unlisted 5_6 kept`() {
+        // Codex re-review of 29ed3c72, #1: prefs AND runtime on retired 5.4, an applicable overlay
+        // on the valid unlisted 5.6, no intent. The same-scope sync is a no-op here, so before the
+        // fix a MAIN load (Dashboard) clamped 5.6 to the default and committed it to prefs and
+        // runtime; the start then saw nothing retired and published the default over 5.6.
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.6")
+        mainProcess()
+        val writes = prefs.modelKeyWrites
+        val runtimeBytes = Files.readAllBytes(dir.resolve(RuntimeStateFile.NAME))
+
+        val shown = ConfigManager.loadConfig(ctx)!!
+        assertEquals("the load shows the model the repair will keep", "gpt-5.6", shown.model)
+        assertEquals("no prefs model-key write", writes, prefs.modelKeyWrites)
+        assertArrayEquals("runtime_state untouched", runtimeBytes, Files.readAllBytes(dir.resolve(RuntimeStateFile.NAME)))
+        assertEquals("overlay untouched", "gpt-5.6", overlayModel())
+        // An unrelated Settings save from that form is not a selection and keeps the evidence.
+        assertTrue(save(form(ModelTuple(shown.provider, shown.authType, shown.model)) { it.copy(heartbeatIntervalMinutes = 45) }))
+        assertEquals("gpt-5.4", prefs.disk["model"])
+        assertEquals("gpt-5.6", overlayModel())
+
+        nodeProcess()
+        assertEquals("config.json", "gpt-5.6", serviceStart().model)
+        assertEquals("first dispatch reads the overlay", "gpt-5.6", overlayModel())
+        assertEquals("gpt-5.6", ModelRegistry.applyRetiredModelRule("openai", "oauth", overlayModel()!!))
+        assertEquals("gpt-5.6", runtimeModel())
+        assertEquals("gpt-5.6", prefs.disk["model"])
+        assertEquals("intent cleared", null, intent())
+
+        nodeProcess()
+        assertEquals("restart", "gpt-5.6", serviceStart().model)
+        mainProcess()
+        assertEquals("a MAIN load after the repair", "gpt-5.6", ConfigManager.loadConfig(ctx)!!.model)
+        assertEquals("gpt-5.6", overlayModel())
+    }
+
+    @Test
+    fun `a provider switch still reconciles in MAIN while a repair is pending`() {
+        // The guard covers a model-only change in the repair's scope; /provider is a selection.
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key")
+        mainProcess()
+        val c = ConfigManager.loadConfig(ctx)!!
+        assertEquals("xai", c.provider)
+        assertEquals("xai", prefs.disk["provider"])
+        assertEquals("grok-4.6", prefs.disk["model"])
     }
 
     // ------------------------------------ review #3: the prefs sync never moves the auth
