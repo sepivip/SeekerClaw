@@ -312,16 +312,25 @@ object RuntimeStateStore {
      *    load — a write and Settings-reload loop;
      *  - only from a record actually read from the file: no file, an unparsable one, or an invalid
      *    pair syncs nothing (never the in-memory fallback seed);
-     *  - committed synchronously; a failed commit flags [tx] ([ModelSelectionLock.Tx.writeFailed]).
+     *  - committed synchronously; a failed commit flags [tx] ([ModelSelectionLock.Tx.writeFailed]);
+     *  - [onlyTo] non-null (a model repair is pending, decided by the caller before this sync):
+     *    only a sync TO that target runs. Any other value would overwrite the retired prefs model
+     *    the repair decides from (CodeRabbit on PR #465).
      *
      * Returns true when the prefs model changed.
      */
-    fun syncPrefsFromFile(tx: ModelSelectionLock.Tx, filesDir: java.nio.file.Path, prefs: SharedPreferences): Boolean {
+    fun syncPrefsFromFile(
+        tx: ModelSelectionLock.Tx,
+        filesDir: java.nio.file.Path,
+        prefs: SharedPreferences,
+        onlyTo: String? = null,
+    ): Boolean {
         tx.requireOpen()
         val file = com.seekerclaw.app.config.RuntimeStateFile.readTuple(filesDir) ?: return false
         if (file.provider != prefs.getString(KEY_PROVIDER, null)) return false
         if (file.authType != prefs.getString(KEY_AUTH_TYPE, null)) return false
         if (file.model == prefs.getString(KEY_MODEL, null)) return false
+        if (onlyTo != null && file.model != onlyTo) return false
         if (!prefs.edit().putString(KEY_MODEL, file.model).commit()) {
             tx.markWriteFailed()
             Log.w(TAG, "prefs model sync from $FILE_NAME not committed")

@@ -1225,8 +1225,19 @@ object ConfigManager {
         // reconcile never mistakes a stale prefs model for a user change and clamps a repaired,
         // valid-but-unlisted model away (contract v2.4 §2). Model only, same provider and auth
         // only — see syncPrefsFromFile (Codex diff review #3).
+        //
+        // The pending repair is decided FIRST, from the stores as they are (CodeRabbit on
+        // f1607b5d): the sync would otherwise overwrite a retired prefs model — the repair's
+        // evidence — with runtime_state's, and reconcile would then find nothing pending and clamp
+        // a valid unlisted overlay model. While a repair is pending, the sync may only move prefs
+        // to the repair's own target. The boot transaction ([approved] set) decides for itself.
+        val pending = if (approved != null) null else try {
+            ModelRepair.pendingRepair(context.filesDir.toPath(), modelSnapshot(context))
+        } catch (_: IllegalStateException) {
+            null // registry not initialised (unit tests); production inits it in Application.onCreate
+        }
         if (tx != null && RuntimeStateStore.isInitialized &&
-            RuntimeStateStore.syncPrefsFromFile(tx, context.filesDir.toPath(), p)
+            RuntimeStateStore.syncPrefsFromFile(tx, context.filesDir.toPath(), p, onlyTo = pending?.target)
         ) {
             postConfigVersionBump()
         }
@@ -1524,7 +1535,7 @@ object ConfigManager {
         // restart. Node writes provider/authType/model directly to this
         // file; we adopt them here and mirror back to SharedPreferences so
         // the next loadConfig reads a consistent state.
-        val reconciled = reconcileWithAgentSettings(context, p, fromPrefs, tx, approved)
+        val reconciled = reconcileWithAgentSettings(context, p, fromPrefs, tx, approved, pending)
         // BAT-1661: what the caller loaded — saveConfig compares the edited tuple to it.
         return reconciled.copy(loadedModelTuple = ModelTuple(reconciled.provider, reconciled.authType, reconciled.model))
     }
@@ -1537,6 +1548,8 @@ object ConfigManager {
     /**
      * [tx] null: compute-only (the reconciled config is returned, nothing is committed).
      * [approved]: the boot transaction's repair target (BAT-1661), see [resolveModelForReconcile].
+     * [pending]: the repair pending outside the boot transaction, decided by the caller BEFORE the
+     * prefs sync could remove its evidence ([ModelRepair.pendingRepair]); null when none.
      */
     private fun reconcileWithAgentSettings(
         context: Context,
@@ -1544,6 +1557,7 @@ object ConfigManager {
         fromPrefs: AppConfig,
         tx: ModelSelectionLock.Tx?,
         approved: ModelRepair.ApprovedTarget?,
+        pending: ModelRepair.RepairIntent?,
     ): AppConfig {
         // BAT-1409 P1-C/P1-J: lstat + no-follow read — a link here is treated as unreadable.
         // BAT-1661: kotlinx JSON (AgentSettingsFile) — org.json is a stub in JVM tests.
@@ -1668,7 +1682,6 @@ object ConfigManager {
         // on. Not the boot transaction (it passes `approved`), and never a provider or auth
         // switch, which reconciles as before.
         if (approved == null && !providerChanged && !authChanged) {
-            val pending = ModelRepair.pendingRepair(context.filesDir.toPath(), modelSnapshot(context))
             if (pending != null && pending.provider == fromPrefs.provider && pending.authType == fromPrefs.authType) {
                 Log.i(TAG, "model repair pending — load leaves the stored model as it is (shows ${pending.target})")
                 return fromPrefs.copy(model = pending.target)

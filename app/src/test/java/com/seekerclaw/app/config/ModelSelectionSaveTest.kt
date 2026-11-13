@@ -503,6 +503,43 @@ class ModelSelectionSaveTest {
     }
 
     @Test
+    fun `mixed state - MAIN load keeps the overlay 5_6 though runtime holds another valid model`() {
+        // CodeRabbit on f1607b5d: prefs on retired 5.4, runtime_state on a different valid model,
+        // the overlay on unlisted 5.6. The same-scope sync used to copy runtime's model into prefs
+        // first, erasing the retired id; reconcile then saw no pending repair and clamped 5.6.
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-6-astra")
+        writeOverlay("gpt-5.6")
+        mainProcess()
+        val runtimeBytes = Files.readAllBytes(dir.resolve(RuntimeStateFile.NAME))
+
+        assertEquals("shows the repair's target (the effective overlay model)", "gpt-5.6", ConfigManager.loadConfig(ctx)!!.model)
+        assertEquals("the retired prefs model is kept as evidence", "gpt-5.4", prefs.disk["model"])
+        assertArrayEquals("runtime_state untouched", runtimeBytes, Files.readAllBytes(dir.resolve(RuntimeStateFile.NAME)))
+        assertEquals("gpt-5.6", overlayModel())
+
+        nodeProcess()
+        assertEquals("gpt-5.6", serviceStart().model)
+        assertEquals("gpt-5.6", overlayModel())
+        assertEquals("gpt-5.6", runtimeModel())
+        assertEquals("gpt-5.6", prefs.disk["model"])
+        assertEquals("intent cleared", null, intent())
+    }
+
+    @Test
+    fun `a pending repair still lets the sync move prefs to the repair's target`() {
+        // The sync's own job (contract v2.4 §2) survives: after a :node repair, MAIN's cached prefs
+        // still say 5.4 while runtime_state and the overlay hold the target.
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.6")
+        writeOverlay("gpt-5.6")
+        mainProcess()
+        assertEquals("gpt-5.6", ConfigManager.loadConfig(ctx)!!.model)
+        assertEquals("prefs synced to the target", "gpt-5.6", prefs.disk["model"])
+        assertEquals("gpt-5.6", runtimeModel())
+    }
+
+    @Test
     fun `a provider switch still reconciles in MAIN while a repair is pending`() {
         // The guard covers a model-only change in the repair's scope; /provider is a selection.
         seedPrefs("gpt-5.4")
