@@ -506,7 +506,7 @@ function writeAgentSettingsPatch(patch) {
 // rather than the workspace/config.json snapshot Node loaded at startup.
 // Without this, /provider openai oauth would reject immediately after a
 // user completed OAuth sign-in (token in SharedPrefs but not yet in
-// config.json — writeConfigJson only runs at service start).
+// config.json — emitConfigJson only runs at service start).
 // Kotlin returns placeholder strings for set fields and "" for unset, so
 // modelCatalog.hasCredentialsFor's nonBlank() checks work unchanged.
 // On bridge failure, falls back to the startup _config snapshot — degraded
@@ -569,7 +569,7 @@ function resolveActiveProviderState() {
     // module-level consts in config.js, set once from config.json at
     // Node startup. The overlay in agent_settings.json carries the
     // user's INTENDED authType (what Kotlin's Settings UI saved), but
-    // Kotlin's writeConfigJson can DOWNGRADE it before Node boots:
+    // Kotlin's emitConfigJson can DOWNGRADE it before Node boots:
     // e.g. "oauth selected with a blank token" gets written to
     // config.json as authType=api_key so Node's strict validation
     // doesn't crash on startup. If we honored overlay.authType here,

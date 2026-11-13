@@ -1006,15 +1006,22 @@ class AndroidBridge(
             return jsonResponse(400, mapOf("error" to "accessToken required"))
         }
         return try {
-            val config = ConfigManager.loadConfig(context)
-                ?: return jsonResponse(500, mapOf("error" to "config not loaded"))
-            ConfigManager.saveConfig(
-                context, config.copy(
-                    openaiOAuthToken = accessToken,
-                    openaiOAuthRefresh = if (refreshToken.isNotBlank()) refreshToken else config.openaiOAuthRefresh,
-                    openaiOAuthExpiresAt = if (expiresAt.isNotBlank()) expiresAt else config.openaiOAuthExpiresAt,
-                )
-            )
+            if (!ConfigManager.isSetupComplete(context)) {
+                return jsonResponse(500, mapOf("error" to "config not loaded"))
+            }
+            // BAT-1661 (Codex diff review #5): a token-only write. It touches no model field, so it
+            // takes no model-selection lock and cannot be refused because a Settings save or the
+            // start-up repair holds it. The refresh token rotates, so a write that did not reach
+            // disk must still reach Node as an error, never as success. A durable OpenAI token
+            // store, retrying until a pair lands, is BAT-1157.
+            val saved = ConfigManager.saveOpenAIOAuthRotation(context, accessToken, refreshToken, expiresAt)
+            if (!saved) {
+                Log.w(TAG, "OpenAI OAuth token save failed (not writable)")
+                return jsonResponse(503, mapOf(
+                    "error" to "Failed to save OpenAI OAuth tokens",
+                    "code" to "OPENAI_OAUTH_SAVE_FAILED",
+                ))
+            }
             jsonResponse(200, mapOf("success" to true))
         } catch (e: Exception) {
             // Log full details locally; never echo internal exception messages

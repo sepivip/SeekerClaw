@@ -116,6 +116,7 @@ jobs:
             claude-thinking-signature \
             claude-adaptive-thinking \
             model-catalog \
+            retired-model-read-rule \
             reasoning-request-enablement \
             xai \
             quiesce \

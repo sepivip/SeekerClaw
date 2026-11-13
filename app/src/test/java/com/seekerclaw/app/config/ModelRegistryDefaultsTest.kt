@@ -146,6 +146,59 @@ class ModelRegistryDefaultsTest {
         )
     }
 
+    /**
+     * BAT-1661 D1 (owner, 2026-11-05) — for OpenAI, "line" = GENERATION.
+     *
+     * OpenAI's tiers (Astra / Sol / Terra / Luna) are not separate lines, so
+     * "latest + one previous" means the two newest GENERATIONS: GPT-6.1 + GPT-6.
+     * Head = most capable (Astra); the DEFAULT is gpt-6.1-sol, not the head
+     * (Astra is $10/$50 vs Sol's $4/$20 — offered, never defaulted).
+     * All five answered 200 on BOTH auth paths with the exact agent payload
+     * (live, 2026-11-05), so there is no per-auth split.
+     */
+    @Test
+    fun `openai list is GPT-6_1 plus GPT-6, default gpt-6_1-sol`() {
+        val openai = providers().first { it.jsonObject["id"]!!.jsonPrimitive.content == "openai" }.jsonObject
+        assertEquals(
+            listOf("gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"),
+            openai["models"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.content },
+        )
+        assertEquals("gpt-6.1-sol", openai["defaultModel"]!!.jsonPrimitive.content)
+    }
+
+    /**
+     * BAT-1661 — the retired-for-sign-in list is read by Kotlin from the SAME JSON
+     * Node reads, and the read rule behaves identically (trimmed exact match).
+     * Evidence: live 2026-11-05, gpt-5.5 / gpt-5.4 / gpt-5.4-mini return HTTP 400
+     * "not supported when using Codex with a ChatGPT account" on oauth; 200 on api_key.
+     */
+    @Test
+    fun `shipped registry retires 5_5, 5_4, 5_4-mini for openai oauth only and the rule maps them to the default`() {
+        val parsed = json.decodeFromJsonElement(
+            kotlinx.serialization.builtins.ListSerializer(ProviderInfo.serializer()),
+            providers(),
+        )
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(parsed)
+        try {
+            assertEquals(listOf("gpt-5.5", "gpt-5.4", "gpt-5.4-mini"), ModelRegistry.retiredModelsFor("openai", "oauth"))
+            assertEquals(emptyList<String>(), ModelRegistry.retiredModelsFor("openai", "api_key"))
+            assertEquals(emptyList<String>(), ModelRegistry.retiredModelsFor("claude", "api_key"))
+            assertEquals(emptyList<String>(), ModelRegistry.retiredModelsFor("openai", null))
+            for (id in listOf("gpt-5.5", "gpt-5.4", "gpt-5.4-mini")) {
+                assertEquals("$id on oauth", "gpt-6.1-sol", ModelRegistry.applyRetiredModelRule("openai", "oauth", id))
+                assertEquals("$id on api_key", id, ModelRegistry.applyRetiredModelRule("openai", "api_key", id))
+            }
+            assertEquals("gpt-6.1-sol", ModelRegistry.applyRetiredModelRule("openai", "oauth", " gpt-5.4 "))
+            assertEquals("gpt-5.4-mini-ft", ModelRegistry.applyRetiredModelRule("openai", "oauth", "gpt-5.4-mini-ft"))
+            assertEquals("gpt-5.6-sol", ModelRegistry.applyRetiredModelRule("openai", "oauth", "gpt-5.6-sol"))
+            assertEquals(" gpt-6-astra ", ModelRegistry.applyRetiredModelRule("openai", "oauth", " gpt-6-astra "))
+            assertEquals("gpt-5.4", ModelRegistry.applyRetiredModelRule("claude", "oauth", "gpt-5.4"))
+        } finally {
+            ModelRegistry.resetForTest()
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private fun providers() =

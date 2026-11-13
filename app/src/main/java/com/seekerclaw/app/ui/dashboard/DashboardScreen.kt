@@ -142,7 +142,7 @@ fun DashboardScreen(
     }
     val hasCredential = remember(config) {
         when (config?.provider) {
-            // OpenAI is valid if EITHER credential is present — writeConfigJson falls
+            // OpenAI is valid if EITHER credential is present — emitConfigJson falls
             // back to api_key when oauth is selected without a token, so the agent is
             // startable as long as one of the two is non-blank.
             "openai" -> config?.openaiOAuthToken?.isNotBlank() == true ||
@@ -704,7 +704,7 @@ fun DashboardScreen(
 
             val aiSubtitle = if (!hasCredential) "Credential missing" else when (status) {
                 ServiceStatus.RUNNING -> when (health.apiStatus) {
-                    "degraded" -> "${modelDisplayName(config?.model)} (retrying)"
+                    "degraded" -> "${modelDisplayName(config?.displayModel)} (retrying)"
                     "error" -> when (health.lastErrorType) {
                         "auth" -> "Auth expired"
                         "billing" -> "Billing issue"
@@ -712,7 +712,7 @@ fun DashboardScreen(
                         else -> "API error"
                     }
                     "stale" -> "Unresponsive"
-                    else -> modelDisplayName(config?.model)
+                    else -> modelDisplayName(config?.displayModel)
                 }
                 ServiceStatus.STARTING -> "Loading model..."
                 ServiceStatus.ERROR -> "Model error"

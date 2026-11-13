@@ -43,10 +43,13 @@ import org.junit.Test
 class ModelRegistryTest {
 
     /**
-     * Production-shaped fixture used to exercise registry behavior on
-     * the JVM without an Android Context. Hand-kept aligned with
-     * `model-registry.json`; this file does not provide direct asset
-     * parity verification (see class KDoc).
+     * Registry-SHAPED fixture (provider/field layout matches the real file)
+     * used to exercise registry behavior on the JVM without an Android
+     * Context. The model ROSTERS here are deliberately synthetic and are
+     * NOT kept in sync with `model-registry.json` (BAT-1661 relabel: the
+     * shipped openai list is now GPT-6.1 + GPT-6). Asset parity — the real
+     * rosters, defaults and `retiredForAuth` — is pinned by
+     * ModelRegistryDefaultsTest, which reads the shipped JSON.
      */
     private val productionProviders: List<ProviderInfo> = listOf(
         ProviderInfo(

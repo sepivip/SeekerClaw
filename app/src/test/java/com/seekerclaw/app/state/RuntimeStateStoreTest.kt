@@ -300,7 +300,7 @@ class RuntimeStateStoreTest {
         // value. Catching the throw proves the precondition
         // protects the persistence layer.
         RuntimeStateStore.initForTest(RuntimeState())
-        RuntimeStateStore.write(RuntimeState("openrouter", "oauth", "x"))
+        inTx { tx -> RuntimeStateStore.write(tx, RuntimeState("openrouter", "oauth", "x")) }
     }
 
     @Test
@@ -310,7 +310,19 @@ class RuntimeStateStoreTest {
         // really a "do not crash if order ever drifts" case.
         // resetForTest left store == null. Validity check passes →
         // store?.write(value) ?: false short-circuits to false.
-        assertFalse(RuntimeStateStore.write(RuntimeState("claude", "api_key", "claude-opus-4-7")))
+        assertFalse(inTx { tx -> RuntimeStateStore.write(tx, RuntimeState("claude", "api_key", "claude-opus-4-7")) })
+    }
+
+    /** BAT-1661: writers take the model-selection transaction; run [block] inside a real one. */
+    private fun <T> inTx(block: (com.seekerclaw.app.config.ModelSelectionLock.Tx) -> T): T {
+        val dir = java.nio.file.Files.createTempDirectory("rss-lock")
+        com.seekerclaw.app.config.ModelSelectionLock.initForTest(dir)
+        try {
+            val r = com.seekerclaw.app.config.ModelSelectionLock.transaction(block = block)
+            return (r as com.seekerclaw.app.config.ModelSelectionLock.Result.Acquired).value
+        } finally {
+            com.seekerclaw.app.config.ModelSelectionLock.initForTest(null)
+        }
     }
 
     // --- in-memory SharedPreferences fake ---

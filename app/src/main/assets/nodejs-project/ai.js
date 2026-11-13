@@ -21,7 +21,7 @@ const {
     config: _config,
     runtimeState: _runtimeState,
 } = require('./config');
-const { reasoningSupportFor, displayNameForProvider } = require('./model-catalog');
+const { reasoningSupportFor, displayNameForProvider, retiredModelsFor, defaultModelForProvider } = require('./model-catalog');
 const { logSuppression: _logSuppression, SUPPRESSION_REASONS: _SUPPRESSION_REASONS } = require('./reasoning-gating');
 
 const { redactSecrets } = require('./security');
@@ -1125,7 +1125,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
     lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom|xai>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
     lines.push('**Your model can change mid-conversation (BAT-1083):** The active model is re-resolved every turn, so a switch in Settings or via `/model` takes effect on your very next reply — your "Model:" line above always reflects the CURRENT model. You cannot see your own PAST model values across a conversation. If a user asks why an earlier reply named a different model, say it was most likely switched between turns — do NOT guess or claim you "misread" it.');
-    lines.push('**Custom model IDs (BAT-1032):** The Settings model picker has a "Custom model" entry — users can type ANY model ID for Anthropic/OpenAI; it persists across restarts and is NOT clamped to the known list. `/model` only accepts registry-listed IDs by design — for an off-list ID, point users to Settings > AI Provider > Model > Custom model. See DIAGNOSTICS.md "/model Rejects a Model ID That Settings Accepted".');
+    lines.push('**Custom model IDs (BAT-1032):** The Settings model picker has a "Custom model" entry — users can type ANY model ID for Anthropic/OpenAI; it persists across restarts and is NOT clamped to the known list — except a model the provider no longer serves for the current sign-in, which is replaced by the default (see DIAGNOSTICS.md "OpenAI Model Changed On Its Own After An Update"). `/model` only accepts registry-listed IDs by design — for an off-list ID, point users to Settings > AI Provider > Model > Custom model. See DIAGNOSTICS.md "/model Rejects a Model ID That Settings Accepted".');
     lines.push('');
 
     // Environment Variables — user-set secrets accessible to tool code (BAT-495)
@@ -1486,6 +1486,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push(`You are running on OpenAI (model: ${activeModel}, auth: ${OPENAI_AUTH_TYPE}).`);
         if (OPENAI_AUTH_TYPE === 'oauth') {
             lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
+            // BAT-1661: read from the registry so the door never drifts from the retired list.
+            const retiredOnSignIn = retiredModelsFor('openai', 'oauth');
+            if (retiredOnSignIn.length) {
+                lines.push(`OpenAI no longer serves ${retiredOnSignIn.join(', ')} with ChatGPT sign-in: if one is selected, ${defaultModelForProvider('openai', 'oauth')} is used instead and the app updates the saved choice on its next start. If the user asks why their model changed after an update, that is why — see DIAGNOSTICS.md → "OpenAI Model Changed On Its Own After An Update".`);
+            }
         } else {
             lines.push('Auth mode: **API Key** — the user configured an OpenAI platform API key. Requests route through api.openai.com. To switch to ChatGPT OAuth (free with a Plus/Pro subscription), the user can change auth type in Settings > AI Provider > OpenAI.');
         }
@@ -2281,6 +2286,14 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-sonnet-4-5':   200000,
     'claude-haiku-4-5':    200000,
     'gpt-6-astra':         200000, // 1.05M actual; same mobile cap as the rest
+    // BAT-1661: GPT-6.1/6 tiers — 1,050,000-token windows per OpenAI's model
+    // pages (checked 2026-11-05) → the same 200000 mobile cap.
+    'gpt-6.1-sol':         200000,
+    'gpt-6.1-terra':       200000,
+    'gpt-6-sol':           200000,
+    'gpt-6-luna':          200000,
+    // BAT-1661: dropped from the picker — kept so existing API-key users on
+    // these ids don't fall to DEFAULT_CONTEXT_LIMIT (128000) and trim early.
     'gpt-5.6-sol':         200000, // BAT-1151: gpt-5.6 family real window 272k → 200000 mobile cap (consistent with the caps above)
     'gpt-5.6-terra':       200000,
     'gpt-5.6-luna':        200000,

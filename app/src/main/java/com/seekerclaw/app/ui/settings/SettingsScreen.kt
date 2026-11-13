@@ -509,7 +509,7 @@ fun SettingsScreen(
                     label = "AI Configuration",
                     value = config?.let { cfg ->
                         val providerName = providerById(cfg.provider).displayName
-                        val modelName = ModelRegistry.modelDisplayName(cfg.model)
+                        val modelName = ModelRegistry.modelDisplayName(cfg.displayModel)
                         val aiAuthLabel = when (cfg.provider) {
                             "claude" -> if (cfg.authType == "setup_token") "Setup token" else "API key"
                             "openai", "xai" -> if (cfg.authType == "oauth") "OAuth" else "API key"

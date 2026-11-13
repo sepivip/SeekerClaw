@@ -217,6 +217,7 @@ grep -iE "OAuth refresh|oauth_refresh|invalid_grant" node_debug.log
 - **User signed out of ChatGPT on another device** — may invalidate the SeekerClaw session
 - **Refresh token revoked** — manual revocation in OpenAI account settings
 - **OpenAI rotated client secret** — rare, would affect all users
+- **A refreshed token was not saved** — `[OpenAI] Failed to persist refreshed tokens: …` (WARN) in `node_debug.log`. The app could not write it (`OPENAI_OAUTH_SAVE_FAILED`; on the app's Logs screen `[Config] Failed to persist rotated OpenAI OAuth tokens (commit=false)` (ERROR)), usually because storage is full. The new token keeps working until the agent restarts; after a restart the old one may be rejected and the user has to sign in again.
 **Fix:**
 1. Check the exact refresh error: `grep "OAuth refresh failed" node_debug.log` — look for `error_description`
 2. Tell the user to re-sign-in: Settings > AI Provider > OpenAI > Sign in with ChatGPT
@@ -556,7 +557,7 @@ BAT-549 introduced reasoning content preservation across all 4 providers, plus a
 **Symptoms:** User toggled `/think on` (or Settings > AI Provider > Reasoning > Extended thinking ON) but responses look the same as before.
 **Diagnosis:** The toggle is a no-op for models the registry doesn't list as supporting reasoning (Haiku 4.5; any freeform / unregistered model id). Run `/think` (no args) — it surfaces a user-facing hint when the active model isn't supported, e.g. "This model does not support extended thinking..." or "This model is not in SeekerClaw's known model list...". The agent's system prompt also exposes this state — the agent itself can tell the user.
 **Fix:**
-- "does not support" hint: switch to a yes-supporting model (Fable 5, Opus 4.8/4.7/4.6, Sonnet 4.6, GPT-5.6 Sol/Terra/Luna, GPT-5.5/5.4/5.4 Mini) via `/model` or Settings.
+- "does not support" hint: switch to a yes-supporting model (Fable 5.1/5, Opus 5/4.8, Sonnet 5/4.6, GPT-6 Astra, GPT-6.1 Sol/Terra, GPT-6 Sol/Luna, Grok 4.6/4.5) via `/model` or Settings.
 - "not in known model list" hint: this is the safe default for models not in the registry. If the user is on Custom — or typed a custom model ID on Anthropic/OpenAI (supported since BAT-1032) — and knows their endpoint supports thinking, ask them to confirm — the request param genuinely isn't sent because the registry is the source of truth (a "thinking" status that lies about whether thinking is happening would be worse than no status).
 
 ### Custom + DeepSeek V4: 400 Loop on `/resume` After Tool Calls
@@ -730,6 +731,40 @@ session_status
 **Symptoms:** User typed a custom model ID in Settings > AI Provider > Model > Custom model (Anthropic/OpenAI) — it works — but `/model <same-id>` replies "Unknown model for claude/openai. Options: ...".
 **Diagnosis:** By design, not a bug. The Settings picker's Custom entry is freeform — any ID is accepted, persists across restarts, and is the live model (verify: the system prompt's Runtime line shows it as active). `/model` validates against the registry allowlist as a typo guard in a no-autocomplete chat channel.
 **Fix:** Nothing to fix — explain the asymmetry. Off-list IDs are set via Settings only; `/model` switches between registry-listed IDs. If the user believes their custom ID stopped working, check for an API 404 (see "If API calls keep failing" — a 404 means the ID itself is wrong/unknown at the provider).
+
+### OpenAI Model Changed On Its Own After An Update (BAT-1661)
+**Symptoms:** A user on OpenAI with ChatGPT sign-in had GPT-5.5, GPT-5.4 or GPT-5.4 Mini selected; after updating, Settings, the dashboard and the agent show GPT-6.1 Sol.
+**Check:** your own "Model:" line shows the model in use now. The `[ModelRepair]` lines are app (Kotlin) lines on the **Logs screen**, not in `node_debug.log` (grepping it finds nothing); ask the user for them.
+**Diagnosis:** By design. OpenAI no longer serves those three models with a ChatGPT sign-in (every turn would fail with a 400). The agent uses the OpenAI default instead, and on the next start the app updates the saved choice everywhere. Log lines:
+- `[ModelRepair] openai model <old> is not available with ChatGPT sign-in — now <new>` (INFO) — the repair finished.
+- `[ModelRepair] pending repair cancelled: <reason>` (INFO) — the user chose another model before the repair finished; their choice is kept.
+- `[ModelRepair] could not persist the repair intent` / `repair write failed` / `stores not yet on <model>` (WARN) — nothing is lost; the agent still uses a working model and the repair retries on the next start. Repeated on every start usually means storage is full.
+- `[ModelRepair] lock busy at start — read-only boot, repair deferred` (WARN) — another save held the settings at that moment; the repair runs on the next start.
+- `[ModelRepair] repair incomplete — model settings left as they are this start, retry next start` (WARN) — saving the repair record or one of the settings files failed, so the app did not touch the saved model on this start (the agent still runs on a working model) and tries again on the next start. Repeated on every start usually means storage is full.
+- `[ModelRepair] model settings not fully saved this start — repair stays pending, retry next start` (WARN) — the repair ran, but saving the result to one of the settings stores failed. Often next to `[Config] Reconcile: prefs commit failed …` (ERROR). The agent still runs on a working model; the next start finishes the repair. Repeated on every start usually means storage is full.
+- `[ModelRepair] repair intent unreadable … — ignored`, `could not clear a cancelled repair intent`, `could not clear the repair intent after a selection`, `stores repaired but the intent could not be cleared` (WARN) — housekeeping of the small record the repair keeps between starts. The model in use is not affected; the next start cleans it up. Repeated on every start usually means storage is full.
+API-key users are not affected: they keep the model, without Extended Thinking, because it is no longer in the registry.
+**Fix:** Nothing to fix. To use a different model, pick it in Settings > AI Provider > Model or with `/model`. If WARN lines repeat on every start, check storage (`android_storage`) and restart the agent.
+
+### Settings Says "Couldn't save" Right After A Start Or A Model Change (BAT-1661)
+**Symptoms:** Saving in Settings fails with "Couldn't save"; or the user reports a sign-in that "didn't stick" after a restart.
+**Check:** app (Kotlin) lines on the **Logs screen** (not in `node_debug.log`) — ask the user for:
+- `[Config] saveConfig: model selection is being updated (…) — nothing saved` (WARN)
+- `[Config] xAI OAuth runtime_state sync skipped: lock busy (…)` (WARN)
+- `[Config] agent_settings.json write failed — rolled back prefs to (…)` (WARN) — the settings file could not be written, so the save was undone and reported as failed. Usually storage is full. The same line at ERROR level means part of the undo also failed (it ends with `commit_ok=false`, `runtime_undone=false` or `agent_prefs_undone=false`): some of the new values may have stayed. Have the user check Settings (provider, model, agent name, search provider) before saving again.
+**Diagnosis:** Changes to the provider, sign-in type and model are made one at a time across the app and the agent's service. If another change (usually the agent starting up) holds them for more than about a second (five seconds for the xAI step), the save is refused rather than half-applied: after the `nothing saved` line, nothing was changed. The xAI line means the sign-in (or sign-out) was saved, but the agent may still start on the previous xAI auth mode — after an xAI sign-in that can look like a sign-in that "didn't stick". The stored tokens are safe.
+**Fix:** Wait a few seconds and save again. If it fails every time, Stop the agent, save, then start it again. After the xAI line, sign in with Grok again (or sign out again) in Settings > AI Provider > xAI — a restart alone does not re-run that step.
+
+### Deploy Agent Stops With `[Service] Config not available (config.json not written) — cannot start`
+**Symptoms:** Deploy Agent ends in Error right after install or after clearing the app's data. You are not running while this happens: these are app (Kotlin) lines on the **Logs screen** — ask the user for them.
+**Check:** the line just above it is usually `[Config] service start: no config to publish (setup incomplete?)` (WARN).
+**Diagnosis:** Setup was not completed, so there is no configuration to give the agent.
+**Fix:** Finish Setup in the app, then Deploy Agent.
+
+### `[Config] agent_settings.json unreadable (…) — skipping reconciliation`
+**Symptoms:** App (Kotlin) WARN on the **Logs screen**; the agent still starts. A change made from chat (`/model`, heartbeat) may not show up in Settings.
+**Diagnosis:** The live settings file is corrupt, or a link. A corrupt file is rewritten from the app's settings on the next start; anything only stored in it (for example API keys you saved there from chat) is lost and must be set again. A link is not written through: the start check removes it on the next Stop Agent → Deploy Agent.
+**Fix:** Stop Agent, then Deploy Agent. Re-enter any setting that was only stored in that file.
 
 ### Custom Model ID Returns API 404 (Model Not Found)
 **Symptoms:** Every AI turn fails after setting a custom model ID; logs show HTTP 404 / `model_not_found` from the provider API.

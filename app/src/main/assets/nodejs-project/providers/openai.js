@@ -353,11 +353,12 @@ function formatRequest(model, maxTokens, instructions, input, tools, requestOpti
 
     // Decide whether to enable reasoning. The Codex endpoint serves
     // reasoning models exclusively — every model on
-    // chatgpt.com/backend-api/codex (gpt-5.6-sol, gpt-5.6-terra,
-    // gpt-5.4, gpt-5.4-mini, etc.) REQUIRES the `reasoning` parameter or
-    // it returns `output: []`. The 3c user-toggle branch adds a second
-    // path: api_key calls to non-codex reasoning models (e.g., raw
-    // gpt-5.4) when the user has explicitly toggled reasoning on AND
+    // chatgpt.com/backend-api/codex (gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol,
+    // etc.) REQUIRES the `reasoning` parameter or it returns `output: []`.
+    // (BAT-1661: gpt-5.5 / gpt-5.4 / gpt-5.4-mini are no longer served
+    // there for ChatGPT accounts — model-registry.json retiredForAuth.oauth.)
+    // The 3c user-toggle branch adds a second path: api_key calls to
+    // non-codex reasoning models (e.g., raw gpt-6.1-sol) when the user has explicitly toggled reasoning on AND
     // the registry confirms support.
     //
     // BAT-558 v4 R3 — `reasoningMode: 'off'` (heartbeats / future

@@ -12,7 +12,7 @@ object SettingsHelpTexts {
     const val PROVIDER =
         "Which AI provider powers your agent.\n\n" +
         "\u2022 Anthropic — Claude models (default). Supports API keys & setup tokens.\n" +
-        "\u2022 OpenAI — GPT & Codex models. API key only.\n\n" +
+        "\u2022 OpenAI — GPT models. API key or ChatGPT sign-in.\n\n" +
         "Both keys are saved — switch freely without losing credentials."
 
     const val OPENAI_API_KEY =
@@ -54,7 +54,7 @@ object SettingsHelpTexts {
     const val MODEL =
         "Your agent's brain. Models depend on your provider.\n\n" +
         "Anthropic examples: Fable 5 (frontier), Opus 4.8 (powerful), Sonnet 4.6 (balanced), Haiku 4.5 (fast).\n" +
-        "OpenAI examples: GPT-5.5 (frontier), GPT-5.4 (flagship), GPT-5.3 Codex (code agent).\n\n" +
+        "OpenAI examples: GPT-6 Astra (frontier), GPT-6.1 Sol (default), GPT-6 Luna (fast).\n\n" +
         "Exact options may change over time \u2014 pick your fighter \uD83E\uDDE0"
 
     const val AGENT_NAME =

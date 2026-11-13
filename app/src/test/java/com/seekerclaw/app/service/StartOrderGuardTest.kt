@@ -44,14 +44,18 @@ class StartOrderGuardTest {
 
     // ------------------------------------------------------------- secrets written only on proceed
 
-    /** Violations of "writeBridgeToken/writeConfigJson only in continueStart; continueStart only via proceed". */
+    /**
+     * Violations of "the bridge token and config.json are written only in continueStart;
+     * continueStart only via proceed". config.json is written by `emitConfigJson`, which runs only
+     * inside `ModelRepair.serviceStart` (BAT-1661), so both names are guarded.
+     */
     private fun secretWriteViolations(sources: List<Pair<String, String>>): List<String> {
         val out = mutableListOf<String>()
         for ((path, src) in sources) {
             val code = SourceText.codeOnly(src)
             val isService = path.endsWith(servicePath)
             val continueBody = if (isService) SourceText.functionBody(code, "continueStart") else IntRange.EMPTY
-            for (name in listOf("writeBridgeToken", "writeConfigJson")) {
+            for (name in listOf("writeBridgeToken", "emitConfigJson", "serviceStart")) {
                 for (m in Regex("""\b$name\b""").findAll(code)) {
                     val at = m.range.first
                     if (Regex("""\bfun\s+$""").containsMatchIn(code.substring(maxOf(0, at - 16), at))) continue
@@ -97,7 +101,7 @@ class StartOrderGuardTest {
         // A comment or a log message naming the call is not a call.
         val commented = mutate(
             service, "        ServiceState.init(applicationContext)\n",
-            "        // ServiceState.writeBridgeToken(x) and ConfigManager.writeConfigJson(this, x)\n" +
+            "        // ServiceState.writeBridgeToken(x) and ConfigManager.emitConfigJson(this, c, x)\n" +
                 "        LogCollector.append(\"continueStart(fence) writeBridgeToken(\")\n" +
                 "        ServiceState.init(applicationContext)\n",
         )
@@ -110,9 +114,14 @@ class StartOrderGuardTest {
         assertNotEquals(emptyList<String>(), secretWriteViolations(withService(early)))
         val config = mutate(
             service, "        ServiceState.init(applicationContext)\n",
-            "        ServiceState.init(applicationContext)\n        ConfigManager.writeConfigJson(this, \"x\")\n",
+            "        ServiceState.init(applicationContext)\n        ConfigManager.emitConfigJson(this, c, \"x\")\n",
         )
         assertNotEquals(emptyList<String>(), secretWriteViolations(withService(config)))
+        val repair = mutate(
+            service, "        ServiceState.init(applicationContext)\n",
+            "        ServiceState.init(applicationContext)\n        ModelRepair.serviceStart(this) { \"\" }\n",
+        )
+        assertNotEquals(emptyList<String>(), secretWriteViolations(withService(repair)))
         val secondRef = mutate(
             service, "        override fun abort(fence: StartCoordinator.Fence) = abortStart()",
             "        override fun abort(fence: StartCoordinator.Fence) = continueStart(fence)",
@@ -228,6 +237,48 @@ class StartOrderGuardTest {
         assertNotEquals(emptyList<String>(), applicationViolations(analyticsFirst))
         val writesInGuard = mutate(app, "            return\n        }\n", "            ServiceState.init(this)\n            return\n        }\n")
         assertNotEquals(emptyList<String>(), applicationViolations(writesInGuard))
+    }
+
+    // ------------------------------------------------------------- no reconcile before the repair
+
+    /**
+     * BAT-1661 (Codex diff review #1): a reconciling load commits provider/authType/model to
+     * prefs. In `:node` it has no runtime_state.json to sync from, so one that runs before
+     * `ModelRepair.serviceStart` clamps a valid-but-unlisted overlay model and commits the default
+     * before the repair ever sees the retired id. So the service calls no reconciling load or save
+     * at all (its model view comes from `serviceStart`), and `initAnalytics`, which runs at the
+     * top of `continueStart`, only loads read-only.
+     */
+    private val reconcilingLoad = Regex("""\bConfigManager\.(loadConfig|loadConfigOrBootstrap|saveConfig)\s*\(""")
+
+    private fun preRepairLoadViolations(serviceSrc: String, appSrc: String): List<String> {
+        val out = mutableListOf<String>()
+        val serviceCode = SourceText.codeOnly(serviceSrc)
+        reconcilingLoad.findAll(serviceCode).forEach {
+            out += "$servicePath:${SourceText.lineOf(serviceCode, it.range.first)}: ${it.value.trimEnd('(', ' ')} in the service"
+        }
+        val appCode = SourceText.codeOnly(appSrc)
+        val analytics = appCode.substring(SourceText.functionBody(appCode, "initAnalytics"))
+        reconcilingLoad.findAll(analytics).forEach { out += "initAnalytics calls ${it.value.trimEnd('(', ' ')}" }
+        if (!analytics.contains("ConfigManager.loadConfigReadOnly(")) out += "initAnalytics must load read-only"
+        return out
+    }
+
+    @Test
+    fun noReconcilingLoadRunsBeforeTheModelRepair() {
+        assertEquals(emptyList<String>(), preRepairLoadViolations(service, app))
+    }
+
+    @Test
+    fun preRepairLoadGuardRejectsAReconcilingLoadInTheServiceOrInAnalytics() {
+        // The pre-fix owner check (09e0614c).
+        val ownerCheck = mutate(
+            service, "ConfigManager.loadOwnerIdFromFile(this, \"telegram\").isBlank()",
+            "ConfigManager.loadConfig(this)?.telegramOwnerId.isNullOrBlank()",
+        )
+        assertNotEquals(emptyList<String>(), preRepairLoadViolations(ownerCheck, app))
+        val analytics = mutate(app, "ConfigManager.loadConfigReadOnly(context)?.let", "ConfigManager.loadConfig(context)?.let")
+        assertNotEquals(emptyList<String>(), preRepairLoadViolations(service, analytics))
     }
 
     // ------------------------------------------------------------- the service's unsafe branches

@@ -18,6 +18,7 @@ import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.ModelRepair
 import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.state.XaiOAuthDurabilityGate
 import com.seekerclaw.app.state.XaiOAuthTokenStore
@@ -572,7 +573,10 @@ class SeekerClawService : Service() {
         // Owner ID may be blank on first run — this is expected. Node.js auto-detects
         // it from the first Telegram message and persists it via the /config/save-owner
         // bridge callback; the service logs a warning here rather than blocking startup.
-        if (ConfigManager.loadConfig(this)?.telegramOwnerId.isNullOrBlank()) {
+        // BAT-1661: the owner alone, read-only (the same lookup loadConfig uses). A full loadConfig
+        // here would reconcile BEFORE the repair transaction, clamping a valid model the repair has
+        // not decided on yet and committing the result (Codex diff review #1).
+        if (ConfigManager.loadOwnerIdFromFile(this, "telegram").isBlank()) {
             LogCollector.append(
                 "[Service] Owner ID not configured — first Telegram message will claim ownership.",
                 LogLevel.WARN,
@@ -689,22 +693,26 @@ class SeekerClawService : Service() {
         if (!fence.holds()) return abortStart()
 
         // BAT-1155 boot reconcile (amendment 3): convert an armed rotation marker to durable reauth
-        // and clear a stale stop fence — MUST run BEFORE writeConfigJson so the emitted token reflects
+        // and clear a stale stop fence — MUST run BEFORE the config.json emit so the emitted token reflects
         // the conversion (a potentially-consumed refresh token is never handed to the provider).
         reconcileXaiOAuthOnBoot(fence.baseline)
 
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
-        // but writeConfigJson reads the XML file fresh on first access per process.
+        // but the boot load reads the XML file fresh on first access per process.
         // BAT-1409 P1-D: the channel written for this boot is the one the bridge's owner claim checks.
         // BAT-1409 P1-J (R3): a refused or failed write ends the start on the error path, never in
         // a crash of this process. writeAgentSettingsJson and writePlatformMd log their own failures.
+        // BAT-1661: one model-selection transaction — repair a retired sign-in model (decide,
+        // checked intent, repair, publish config.json + agent_settings.json, verify, clear). On a
+        // busy lock it is a read-only boot: config.json only, no shared store written.
         val bootChannel = try {
-            ConfigManager.writeConfigJson(this, bridgeToken).orEmpty()
+            ModelRepair.serviceStart(this) { config ->
+                ConfigManager.emitConfigJson(this, config, bridgeToken)
+            }.orEmpty()
         } catch (e: java.io.IOException) {
             return failBeforeNode("CONFIG_WRITE (${e.javaClass.simpleName}: ${e.message})")
         }
-        ConfigManager.writeAgentSettingsJson(this) // non-ephemeral settings for live Node.js reads
 
         // Validate by checking the written file — more reliable than cross-process SharedPreferences
         val workDir = File(filesDir, "workspace").apply { mkdirs() }
