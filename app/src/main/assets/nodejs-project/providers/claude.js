@@ -99,6 +99,15 @@ function invalidateWireSnapshot(msg, messages, toolCalls) {
     if (Array.isArray(toolCalls)) msg.toolCalls = toolCalls;
 }
 
+// BAT-1664 C0: a structural history edit that does not touch an assistant
+// message's own content (a splice of an orphan tool result, a summary splice,
+// a trim, a recovery truncation) still changes the prefix every later thinking
+// signature is bound to. Bump the epoch so chat() strips thinking for the rest
+// of the turn.
+function noteHistoryEdit(messages) {
+    if (Array.isArray(messages)) _wireEditEpochs.set(messages, (_wireEditEpochs.get(messages) || 0) + 1);
+}
+
 function wireEditEpoch(messages) {
     return Array.isArray(messages) ? (_wireEditEpochs.get(messages) || 0) : 0;
 }
@@ -434,6 +443,14 @@ function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestO
         messages,
     };
     if (tools && tools.length > 0) body.tools = tools;
+    // BAT-1664 C0 — the loop-final round on a stable-history (flagged) model
+    // keeps the turn's FROZEN tools array (removing it would change the prefix
+    // every in-turn thinking signature is bound to) and forbids tool use with
+    // `tool_choice: none` instead. `none` is accepted alongside thinking (only
+    // forced `any`/`tool` are rejected). Without tools there is nothing to forbid.
+    if (requestOptions && requestOptions.toolChoiceNone === true && body.tools) {
+        body.tool_choice = { type: 'none' };
+    }
 
     // BAT-1664 C2 — thinking block binding. `bindThinking` is the per-request
     // decision ai.js makes ONCE (registry `thinkingBinding` flag && the
@@ -697,5 +714,6 @@ module.exports = {
     setWireSnapshot,
     getWireSnapshot,
     invalidateWireSnapshot,
+    noteHistoryEdit,
     wireEditEpoch,
 };

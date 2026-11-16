@@ -116,6 +116,7 @@ jobs:
             claude-thinking-signature \
             claude-adaptive-thinking \
             claude-thinking-binding \
+            claude-stable-history \
             model-catalog \
             reasoning-request-enablement \
             xai \

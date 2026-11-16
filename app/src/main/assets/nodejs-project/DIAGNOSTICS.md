@@ -161,6 +161,7 @@ grep -iE "400|context.*length|too many tokens" node_debug.log
 1. Use `/new` to archive and clear conversation history
 2. If a specific tool result was too large, note that tool results are auto-truncated at ~50K characters (HARD_MAX_TOOL_RESULT_CHARS) but the conversation can still accumulate
 3. MAX_HISTORY (35 messages) should prevent this in normal use — if it happens, it's likely a single very large message or tool result
+4. On first-party Claude this 400 should no longer happen: the request is measured before it is sent and, if it would be over the limit, it is not sent (see "Claude: turn stopped at the context limit" below)
 
 ### Agent Loses the Task Mid-Turn / Confabulates on a Long Turn (BAT-1186)
 **Symptoms:** During a long single turn (many tool rounds), the agent suddenly acts as if it never got the request — says things like "I didn't receive any text", treats the triggering input as an "unexplained leftover file", or abandons a multi-step task partway and invents a reason. The message *was* received (it shows in the reply), and there's no crash, timeout, or 4xx.
@@ -168,7 +169,7 @@ grep -iE "400|context.*length|too many tokens" node_debug.log
 ```
 grep -E "\[History\]|\[AnchorGuard\]" node_debug.log
 ```
-**Diagnosis:** The conversation is trimmed to `MAX_HISTORY` (35) each tool round. The current turn's user instruction (the "anchor") is now **exempt** from that trim (additive-exempt — `nonAnchorLen <= 35`, so preserving it never costs a findings slot). The two log lines report on this:
+**Diagnosis:** The conversation is trimmed to `MAX_HISTORY` (35) each tool round — except on models that keep the history stable within a turn (registry `thinkingBinding`, today Fable 5.1, BAT-1664): there it is trimmed once when the turn ends (`[History]` with `"site":"turnEnd"`) and by the end-of-turn append (`"site":"addToConversation"`), never mid-turn, and the context budget check keeps each request under the limit in between. The current turn's user instruction (the "anchor") is now **exempt** from that trim (additive-exempt — `nonAnchorLen <= 35`, so preserving it never costs a findings slot). The two log lines report on this:
 - `[History] {... anchorSkipped:1, anchorExempt:1, nonAnchorLen, len ...}` — the anchor-preserving trim engaged and skipped over the instruction instead of deleting it. On a long turn this is **normal and expected** — it's the fix working. First skip per turn+site logs `WARN`, later same-turn skips `DEBUG`.
 - `[AnchorGuard] {... event:"anchor_missing_repaired" ...}` at **ERROR** — a last-resort net just before the request found the anchor missing and re-inserted it. In a healthy build this should **never** fire. If it does, some trimming path is not anchor-aware — capture the log and file a bug (it means a regression slipped past the structural fix).
 **Fix:**
@@ -187,6 +188,22 @@ grep -iE "out of extra usage|SelfHeal|invalid_request_error" node_debug.log
 **Fix (only if it persists after the auto-retry):**
 1. Content vs usage: if a short message succeeds but longer turns keep failing, it's content — trim any unusual phrase from recent memory files, or use `/new` to reset the conversation.
 2. If even a short message fails with this message, the subscription's Claude-Code usage really is exhausted → add usage at claude.ai/settings/usage, wait for the reset window, or switch to a direct Anthropic API key in Settings.
+
+### Claude: turn stopped at the context limit — `context_budget_exceeded` (BAT-1664)
+**Symptoms:** On a first-party Claude model, a long tool-using turn ends with: "I stopped before sending: this conversation has reached the model's context limit (about 200k tokens), even after trimming older history (task <id>). The latest results are kept in full, so 'continue' or /resume may hit the same limit again. Try a smaller step (for example, fewer or smaller files at a time), or start a fresh context with /new and restate what you need."
+**Check:**
+```
+grep -E "\[ContextBudget\]|context_budget_exceeded" node_debug.log
+```
+**Diagnosis:** Before every first-party Claude request is sent, SeekerClaw measures the exact request body (replayed reasoning, tool schemas and JSON overhead included — things the cheaper running estimate does not see) against 90% of the model's context limit (the same threshold the adaptive trim uses). An attached photo counts as a fixed ~1,600 tokens, not its file size, so sending a photo never trips this on its own. The log lines:
+- `[ContextBudget] request ~N tokens (P% of L) is over the 90% budget — reducing once (strip thinking, age results, trim) | turnId=…` (WARN) — the request was too big. SeekerClaw stops replaying the model's earlier reasoning for the rest of the turn, shortens older large tool results, and trims the oldest history (never the user's current request, never half a tool call/result pair), once.
+- `[ContextBudget] reduced to ~N tokens (P% of L) — sending | turnId=…` (INFO) — that was enough; the turn continues normally. Nothing for the user to do.
+- `[ContextBudget] still ~N tokens (P% of L) after reduction — not sending; ending the turn (context_budget_exceeded) | turnId=…` (WARN) — the newest material alone (typically a very large batch of recent tool results, which is kept in full) is too big. The request is NOT sent, so no API error and no charge. The turn ends with the message above, a `[Trace] {… "reason":"context_budget_exceeded" …}` WARN line, and a checkpoint with reason `context_budget_exceeded`.
+- `[ContextBudget] closing-summary request is over the context budget — not sending; using the built-in summary | turnId=…` (WARN) — the optional "summarize what you did" call at the end of a tool turn was too big; the user gets the short built-in "Done — took N steps (…)" summary instead.
+**Fix:**
+1. Ask for a smaller step: fewer or smaller files per request, narrower searches, a smaller page fetched.
+2. Start a fresh context with `/new` and restate the task. `/resume` or "continue" keeps the same latest results, so it can stop at the same limit again — it is not guaranteed to make progress.
+3. Frequent on short tasks → a tool is returning very large results; report it with the log.
 
 ### Claude: "Invalid `signature` in `thinking` block" (400) — auto-healed once per turn (BAT-1664)
 **Symptoms:** On a first-party Claude model (Anthropic API key or Pro/Max sign-in), a tool-using turn briefly fails and then continues on its own; or, rarely, the turn ends with `API error (400): …Invalid signature in thinking block The block is bound to a different conversation…`. Most likely on Fable 5.1 and newer models, for accounts created on or after 2026-08-31.

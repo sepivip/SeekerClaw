@@ -332,7 +332,9 @@ async function main() {
         const stripped = ai._sanitizeConversationForTest(conv, 'turn-sanitize');
         ok('Sanitize pin: the orphan call was stripped', stripped === 1 && a1.toolCalls.length === 1);
         ok('Sanitize pin: the edited message lost its snapshot', claude.getWireSnapshot(a1) === null);
-        ok('Sanitize pin: the conversation epoch moved (→ stripAllThinking for the turn)', claude.wireEditEpoch(conv) === epoch0 + 1);
+        // +1 from invalidateWireSnapshot (the edited message), +1 from the
+        // sanitizer's own noteHistoryEdit (BAT-1664 slice B: any repair).
+        eq('Sanitize pin: the conversation epoch moved by exactly 2 (snapshot invalidation + repair)', claude.wireEditEpoch(conv), epoch0 + 2);
         const post = claude.toApiMessages(conv, 'm', { turnAnchor: anchor });
         ok('Sanitize pin: the edited message emits no orphan tool_use', !post[1].content.some((b) => b.type === 'tool_use' && b.id === 'k2'));
         ok('Sanitize pin: the edited message AND the later valid one carry no thinking', !anyThinking({ messages: post }));
