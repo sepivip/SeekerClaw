@@ -403,8 +403,11 @@ async function main() {
         eq(`budget/irreducible (${model}): the spy saw no oversized body`, VIOLATIONS.length, 0);
         ok(`budget/irreducible (${model}): one blocked request counted`, ai.budgetGateStats.blocked === blockedBefore + 1);
         ok(`budget/irreducible (${model}): the user is told it is the context limit`, /context limit/.test(reply), reply);
-        ok(`budget/irreducible (${model}): P3 — no promise that /resume progresses; offers a smaller step or a fresh context`,
-            /may hit the same limit/.test(reply) && /smaller step/.test(reply) && /\/new/.test(reply));
+        ok(`budget/irreducible (${model}): opening unchanged (the system-prompt playbook line 3b quotes it)`,
+            reply.startsWith("I stopped before sending: this conversation has reached the model's context limit"));
+        ok(`budget/irreducible (${model}): P3 — no promise that /resume progresses (may hit the limit again OR lose the results); offers a smaller step or a fresh context`,
+            /may hit the same limit again or lose these latest results/.test(reply) && /smaller step/.test(reply) && /\/new/.test(reply)
+            && !/kept in full/.test(reply));
         const cp = CHECKPOINTS.slice(cpBefore).pop();
         ok(`budget/irreducible (${model}): checkpoint kept with reason context_budget_exceeded`, !!cp && cp.reason === 'context_budget_exceeded' && cp.complete === false);
         ok(`budget/irreducible (${model}): the checkpoint keeps the anchor`, !!cp && cp.conversationSlice.some((m) => m.role === 'user' && m.content === 'read the huge file'));
@@ -414,6 +417,42 @@ async function main() {
         let pairsOk = true;
         for (let i = 0; i < conv.length; i++) if (conv[i].role === 'tool' && !(conv[i - 1] && conv[i - 1].toolCalls)) pairsOk = false;
         ok(`budget/irreducible (${model}): no tool call/result pair broken`, pairsOk);
+    }
+
+    // B1a (CodeRabbit #467 round 2): a 40-result irreducible batch. The exit's
+    // fallback append goes through the MAX_HISTORY cap, which removes the whole
+    // 41-entry group — so the text must not promise the results are kept. The
+    // conversation must stay well-formed.
+    {
+        currentAdapter = claude; currentModel = 'claude-fable-5-1'; toolResultSize = 23000; // 40 × 23k ≈ 230k tokens
+        const chatId = newChatId();
+        SENT.length = 0; VIOLATIONS.length = 0;
+        const ids = Array.from({ length: 40 }, (_, i) => `big${i + 1}`);
+        SCRIPT = [ok200(toolResp([th('b40'), ...ids.map((id) => tu(id))])), ok200(textResp('never'))];
+        const mark = LOGS.length;
+        let reply; try { reply = await ai.chat(chatId, 'read forty big files'); } catch (e) { reply = `THREW: ${e.message}`; }
+        eq('40-batch: only round 1 was sent', SENT.length, 1);
+        eq('40-batch: the spy saw no oversized body', VIOLATIONS.length, 0);
+        ok('40-batch: the new fallback text', /^I stopped before sending: this conversation has reached the model's context limit/.test(reply)
+            && /may hit the same limit again or lose these latest results/.test(reply) && !/kept in full/.test(reply), reply);
+        const conv = ai.getConversation(chatId);
+        const trimLines = turnLogs(mark, /"site":"addToConversation"/);
+        ok('40-batch: the fallback append trimmed history through the cap', trimLines.length >= 1);
+        const removed = trimLines.reduce((n, l) => n + (Number((l.msg.match(/"removed":(\d+)/) || [])[1]) || 0), 0);
+        eq('40-batch: the cap removed the whole 41-entry group (call + 40 results), not part of it', removed, 41);
+        ok('40-batch: the anchor is kept', conv.some((m) => m.role === 'user' && m.content === 'read forty big files'));
+        eq('40-batch: the fallback is the last entry', conv[conv.length - 1].content, reply);
+        const callIds = new Set(); const resultIds = new Set();
+        for (const m of conv) {
+            if (m.role === 'assistant' && Array.isArray(m.toolCalls)) for (const tc of m.toolCalls) callIds.add(tc.id);
+            if (m.role === 'tool') resultIds.add(m.toolCallId);
+        }
+        ok('40-batch: no orphan tool_use (every call has its result)', [...callIds].every((id) => resultIds.has(id)));
+        ok('40-batch: no orphan tool_result (every result has its call)', [...resultIds].every((id) => callIds.has(id)));
+        const cp = CHECKPOINTS.filter((c) => c.reason === 'context_budget_exceeded').pop();
+        ok('40-batch: checkpoint slice keeps the anchor and has no orphan result at its head',
+            !!cp && cp.conversationSlice.some((m) => m.role === 'user' && m.content === 'read forty big files')
+            && cp.conversationSlice[0] && cp.conversationSlice[0].role !== 'tool');
     }
 
     // B1b: an inline photo (the turn anchor) is NOT text bulk — a 700 KB JPEG

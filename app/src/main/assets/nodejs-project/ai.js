@@ -3336,8 +3336,8 @@ async function chat(chatId, userMessage, options = {}) {
                     _stripAllThinking = true;
                     _wireSnap.noteHistoryEdit(messages);
                     // Age older results (this turn's included) but NEVER the newest
-                    // assistant message's batch: the exit message promises the latest
-                    // results are kept in full, and the model needs them to continue.
+                    // assistant message's batch: the model needs those fresh results
+                    // to continue, and a placeholdered batch would be a silent loss.
                     // If that batch alone is too big, the no-send exit below runs.
                     ageToolResults(messages, turnId, _newestAssistantIndex(messages));
                     if (adaptiveTrim(messages, _gate.usage, turnId, _turnAnchor) > 0) sanitizeConversation(messages, turnId);
@@ -4011,9 +4011,11 @@ async function chat(chatId, userMessage, options = {}) {
         // BAT-1664 budget gate: the request stayed over the context budget after
         // the bounded reduction and was NOT sent. Recoverable exit, shaped like the
         // step-limit exit: the checkpoint is kept (reason context_budget_exceeded)
-        // and the user is told it is the context limit. P3: the most recent batch
-        // is kept in full, so /resume alone may hit the same wall — offer a
-        // smaller step or a fresh context instead of implying it will progress.
+        // and the user is told it is the context limit. P3: never imply /resume
+        // will progress. The irreducible batch may still be in history (resume
+        // hits the same wall) or may be trimmed away by the end-of-turn cap /
+        // the 8-message checkpoint slice (resume loses those results) — the text
+        // states both, and offers a smaller step or a fresh context.
         if (_budgetExceeded) {
             const task = getActiveTask(chatId);
             if (task) {
@@ -4022,7 +4024,7 @@ async function chat(chatId, userMessage, options = {}) {
             }
             log(`[Trace] ${JSON.stringify({ turnId, taskId, chatId: String(chatId || ''), stepCount, reason: 'context_budget_exceeded', estimatedTokens: _budgetExceeded.estimatedTokens, limit: _budgetExceeded.limit, userFallbackSent: true })}`, 'WARN');
             const limitK = Math.round(_budgetExceeded.limit / 1000);
-            const fallback = `I stopped before sending: this conversation has reached the model's context limit (about ${limitK}k tokens), even after trimming older history (task ${taskId}). The latest results are kept in full, so 'continue' or /resume may hit the same limit again. Try a smaller step (for example, fewer or smaller files at a time), or start a fresh context with /new and restate what you need.`;
+            const fallback = `I stopped before sending: this conversation has reached the model's context limit (about ${limitK}k tokens), even after trimming older history (task ${taskId}). Continuing with 'continue' or /resume may hit the same limit again or lose these latest results. Try a smaller step (fewer or smaller files), or start a fresh context with /new and restate what you need.`;
             addToConversation(chatId, 'assistant', fallback, null, _turnAnchor);
             saveCheckpoint(taskId, {
                 taskId,

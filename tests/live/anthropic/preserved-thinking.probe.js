@@ -238,7 +238,12 @@ const EXPECT = {
     },
     sig400: (res) => isSig400(res),
     droppedPrefix: (res, tc) => res.status === 200 && tc.present && tc.prefix >= 1,
-    recordOnly: () => true,
+    // Records any real API answer (200, a binding-rejection 400, …) as OK, but a
+    // missing response or a server error (5xx) is never a recorded result
+    // (CodeRabbit #467): it proves nothing about the binding.
+    recordOnly: (res) => (!res || typeof res.status !== 'number' || res.status >= 500 ? null : true),
+    // A row the probe deliberately did NOT send (outcome implied by an earlier row).
+    notSent: () => true,
 };
 
 async function runConversation(ctx) {
@@ -384,7 +389,7 @@ async function runCompat(ctx) {
         addRow(ctx, 'T1R3-ERR loop-final, tools removed, "error"', 'probe-added', req, res, EXPECT.recordOnly,
             res.status === 200 ? 'accepted' : (isSig400(res) ? 'SIGNATURE 400 (tools change breaks the binding)' : scrub(errText(res))));
     } else {
-        addRow(ctx, 'T1R3-ERR loop-final, tools removed, "error"', 'not sent', null, null, EXPECT.recordOnly,
+        addRow(ctx, 'T1R3-ERR loop-final, tools removed, "error"', 'not sent', null, null, EXPECT.notSent,
             !nobindOk ? 'implied 400 (already 400 without opting in)'
                 : (runsCheck ? 'skipped (PT_SKIP_ERR=1; 400 already confirmed for checking models)' : 'implied 200 (model does not run the prefix check)'));
     }
@@ -532,6 +537,22 @@ async function selfCheck() {
         check('ok200Empty: a 200 with model_binding_mismatch is NOT OK', EXPECT.ok200Empty(modelDrop, transformCounts(modelDrop)) === false);
         check('ok200Empty: a 200 with an unrecognised entry is NOT OK', EXPECT.ok200Empty(unknown, transformCounts(unknown)) === false);
         check('ok200Empty: a 200 with an empty array is OK', EXPECT.ok200Empty(mk([]), transformCounts(mk([]))) === true);
+        // recordOnly: real answers are recorded, server errors / no response are not OK.
+        check('recordOnly: a 500 is NOT OK', EXPECT.recordOnly({ status: 500, data: { error: { type: 'api_error', message: 'boom' } } }) !== true);
+        check('recordOnly: a 529 overloaded is NOT OK', EXPECT.recordOnly({ status: 529, data: {} }) !== true);
+        check('recordOnly: a missing response is NOT OK', EXPECT.recordOnly(null) !== true && EXPECT.recordOnly(undefined) !== true);
+        check('recordOnly: a 200 is recorded OK', EXPECT.recordOnly({ status: 200, data: {} }) === true);
+        check('recordOnly: a binding-rejection 400 is recorded OK', EXPECT.recordOnly({ status: 400, data: { error: { type: 'invalid_request_error', message: 'thinking.adaptive.block_binding: Extra inputs are not permitted' } } }) === true);
+        {
+            // End-to-end: a 500 on the compat NOBIND row surfaces as a not-OK verdict.
+            ROWS.length = 0;
+            let calls = 0;
+            const t = selfCheckTransport({});
+            const ctx5 = { model: 'claude-opus-5', auth: 'api_key', key: 'x', send: async (req) => (++calls === 2 ? { status: 500, data: { error: { type: 'api_error', message: 'Internal server error' } } } : t(req)) };
+            await runCompat(ctx5);
+            const r5 = ROWS.find((r) => r.scenario.startsWith('T1R3-NOBIND'));
+            check('recordOnly: a 500 on a compat row is reported not OK', !!r5 && r5.status === 500 && r5.verdict !== 'OK');
+        }
         // Exit code: any non-OK row → process.exitCode = 1 (restored afterwards).
         const saved = process.exitCode;
         process.exitCode = 0;
