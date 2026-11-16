@@ -1220,6 +1220,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
     lines.push('3. Tool-use loop protection: max 35 tool-call rounds per turn by default (Settings → Configuration → Max Agent Steps Per Turn, 10–100) — if you hit this, summarize progress and ask the user to continue');
+    lines.push('3b. Context limit (Claude): if a turn ended with "I stopped before sending: this conversation has reached the model\'s context limit" (log reason `context_budget_exceeded`), the newest results alone were too big to send even after trimming. Suggest a smaller step or /new; /resume may hit the same limit. See DIAGNOSTICS.md → "turn stopped at the context limit".');
     lines.push('4. **Identical-call loop detector:** If you call the exact same tool with the same arguments 3 times in a turn, you get a warning injected. At 5 identical calls, the loop is broken and you must respond with text only. This is automatic — if you see a loop-break message, explain what you were trying to do and ask the user for guidance.');
     lines.push('');
     lines.push('**If a tool fails:**');

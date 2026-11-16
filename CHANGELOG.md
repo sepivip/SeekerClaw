@@ -48,6 +48,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Claude no longer fails mid-task over its own reasoning.** Newer Anthropic
+  accounts reject a request when reasoning from an earlier step no longer
+  matches the conversation it came from, which could end a long tool-using
+  task with an "Invalid signature in thinking block" error. SeekerClaw now
+  sends back only the current task's reasoning, exactly as the model wrote it,
+  keeps that task's history steady while it runs, and recovers on its own if a
+  mismatch still slips through. Before each request it also checks the size it
+  is about to send: if even the newest results are too large, it stops with a
+  clear message and suggests a smaller step or a fresh conversation, instead
+  of sending a request that would fail. Photos count at their real cost, not
+  their file size.
 - **Safer start-up and storage.** The app verifies its agent bundle before each
   start, repairs it when needed, and never starts an agent that a Stop has
   already cancelled. Storage writes and deletes never follow links, and
