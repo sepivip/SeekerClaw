@@ -19,9 +19,23 @@ class TwoProcessPrefs(val filesDir: File) {
 
     private val caches = mutableMapOf<String, MutableMap<String, Any?>>()
 
+    /** The next N commits that reach the file write fail (commit() returns false). */
+    var failNextCommits = 0
+
+    /** Commits that actually wrote the file (a test can tell a real write from a skipped one). */
+    var diskWrites = 0
+        private set
+
+    // SharedPreferencesImpl's per-instance generations: memory advances on a commit that changes
+    // something; disk catches up on a successful write. A write is skipped only when they match.
+    private val memGen = mutableMapOf<String, Long>()
+    private val diskGen = mutableMapOf<String, Long>()
+
     /** Forces [proc] to re-read from disk on its next open (a process restart). */
     fun restart(proc: String) {
         caches.remove(proc)
+        memGen.remove(proc)
+        diskGen.remove(proc)
     }
 
     /** A Context for [proc] ("main" or "node"): filesDir plus this process's prefs view. */
@@ -67,12 +81,26 @@ class TwoProcessPrefs(val filesDir: File) {
             override fun clear() = apply { clear = true }
             override fun commit(): Boolean {
                 val c = cache(proc)
+                val before = LinkedHashMap(c)
                 if (clear) c.clear()
                 removes.forEach { c.remove(it) }
                 puts.forEach { (k, v) -> if (v == null) c.remove(k) else c[k] = v }
+                // Android (`SharedPreferencesImpl.commitToMemory`) changes the cache FIRST and bumps
+                // the memory generation only when something changed. `writeToFile` skips the write
+                // (and returns true) only when the disk generation has caught up — so after a
+                // failed write, even a commit that changes nothing writes the file.
+                if (c != before) memGen[proc] = (memGen[proc] ?: 0L) + 1L
+                if ((memGen[proc] ?: 0L) == (diskGen[proc] ?: 0L)) return true
+                // An injected write failure: the cache keeps the change, the file does not.
+                if (failNextCommits > 0) {
+                    failNextCommits--
+                    return false
+                }
                 // Android writes the process's WHOLE cached map, not just this editor's keys.
                 disk.clear()
                 disk.putAll(c)
+                diskGen[proc] = memGen[proc] ?: 0L
+                diskWrites++
                 return true
             }
             override fun apply() {

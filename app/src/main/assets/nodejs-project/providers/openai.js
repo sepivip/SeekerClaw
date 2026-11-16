@@ -438,6 +438,12 @@ let _authState = OPENAI_OAUTH_RECONNECT_REQUIRED ? 'reconnect' : 'ok';
 // failing request's own message is chosen.
 let _storageFailureAt = 0;
 const STORAGE_FAILURE_WINDOW_MS = 15000;
+// When handleUnauthorized last refused a refresh because a save is unacknowledged (Codex #3).
+// classifyError reads it: within the window a 401 on the CURRENT pair shows MSG_SAVE_PENDING;
+// otherwise a 401 stays retryable, so a delayed 401 from a stale generation (ctx.usedGen) reaches
+// handleUnauthorized and retries on the current pair. A time window, for the same concurrency
+// reason as above.
+let _saveBlockedAt = 0;
 // A save the bridge has not acknowledged: { familyId, expectedEpoch, rotationId, ... }.
 let _pendingSave = null;
 let _saveRetryTimer = null;
@@ -482,7 +488,9 @@ const streamProtocol = 'openai-responses';
 
 // ── Error classification ────────────────────────────────────────────────────
 
-function classifyError(status, data) {
+// [ctx] (optional): { usedGen } — the credential generation the failing request was sent with;
+// ai.js passes it from its retry loop (Codex #3).
+function classifyError(status, data, ctx) {
     if (status === 401 || status === 403) {
         // BAT-1157: a sign-in that cannot recover by a refresh says why, as a non-retryable
         // 'reauth' — the message the user sees (ai.js classifies again after the retry loop).
@@ -490,7 +498,17 @@ function classifyError(status, data) {
             if (_authState === 'latched') return { type: 'reauth', retryable: false, userMessage: MSG_LATCHED };
             if (_authState === 'reconnect') return { type: 'reauth', retryable: false, userMessage: MSG_RECONNECT };
             // Transient states are NOT 'reauth' (that type drives ai.js's autonomous reconnect notice).
-            if (_pendingSave) return { type: 'storage', retryable: false, userMessage: MSG_SAVE_PENDING };
+            if (_pendingSave) {
+                // A 401 from a request sent with an OLDER pair always reaches handleUnauthorized,
+                // which retries it on the current pair — even inside the "saving" window below.
+                const stale = !!ctx && typeof ctx.usedGen === 'number' && ctx.usedGen < _gen;
+                if (!stale && _saveBlockedAt && Date.now() - _saveBlockedAt < STORAGE_FAILURE_WINDOW_MS) {
+                    return { type: 'storage', retryable: false, userMessage: MSG_SAVE_PENDING };
+                }
+                // Retryable 'auth': ai.js hands it to handleUnauthorized(usedGen), which retries a
+                // stale generation on the current pair and refuses (never refreshes) otherwise.
+                return { type: 'auth', retryable: true, userMessage: MSG_SAVE_PENDING };
+            }
             if (_storageFailureAt && Date.now() - _storageFailureAt < STORAGE_FAILURE_WINDOW_MS) {
                 return { type: 'storage', retryable: false, userMessage: MSG_STORAGE };
             }
@@ -568,6 +586,7 @@ function _latch(why) {
     _authState = 'latched';
     _clearSaveRetry();
     _pendingSave = null;
+    _saveBlockedAt = 0;
     log(`[OpenAI] OAuth token save rejected (sign-in changed) — dropped this session's tokens (${why})`, 'WARN');
 }
 
@@ -586,7 +605,10 @@ async function handleUnauthorized(usedGen) {
     if (base < _gen && _authState === 'ok') throw _retryable('OAuth credential already rotated — retry');
     if (!_recoverInFlight) {
         if (_authState !== 'ok') throw _fatal('OAuth sign-in needs attention');
-        if (_pendingSave) throw _fatal('OAuth refreshed sign-in not saved yet');
+        if (_pendingSave) {
+            _saveBlockedAt = Date.now();
+            throw _fatal('OAuth refreshed sign-in not saved yet');
+        }
         if (!_cred.refresh) throw _fatal('No OAuth refresh token');
         _storageFailureAt = 0; // a fresh attempt
         _recoverInFlight = _recover().finally(() => { _recoverInFlight = null; });
@@ -635,10 +657,11 @@ async function _confirmFamily() {
     const b = r.body;
     if (r.status === 200 && b && b.success === true) {
         const fam = typeof b.familyId === 'string' ? b.familyId : '';
-        const ep = Number(b.epoch);
-        const exact = req.familyId
+        const ep = b.epoch;
+        // Codex #4: a JSON number that is a SAFE integer — above 2^53 two epochs compare equal.
+        const exact = Number.isSafeInteger(ep) && (req.familyId
             ? (fam === req.familyId && ep === req.epoch)
-            : (fam.length > 0 && Number.isInteger(ep) && ep >= 1);
+            : (fam.length > 0 && ep >= 1));
         if (exact) {
             _cred = { ..._cred, familyId: fam, epoch: ep, confirmed: true };
             return true;
@@ -661,9 +684,11 @@ async function _confirmFamily() {
 async function _sendSave(save) {
     const r = await androidBridgeCallWithStatus('/openai/oauth/save-tokens', save);
     const b = r.body;
-    if (r.status === 200 && b && b.success === true && Number(b.epoch) === save.expectedEpoch + 1) {
-        _cred = { ..._cred, epoch: Number(b.epoch), confirmed: true };
+    if (r.status === 200 && b && b.success === true && Number.isSafeInteger(b.epoch)
+        && Number.isSafeInteger(save.expectedEpoch) && b.epoch === save.expectedEpoch + 1) {
+        _cred = { ..._cred, epoch: b.epoch, confirmed: true };
         _pendingSave = null;
+        _saveBlockedAt = 0;
         _clearSaveRetry();
         return 'ok';
     }

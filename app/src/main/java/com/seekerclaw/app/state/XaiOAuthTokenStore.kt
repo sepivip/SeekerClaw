@@ -486,7 +486,14 @@ object XaiOAuthTokenStore {
         // until a new sign-in replaces it.
         when (cps.readState()) {
             is CrossProcessStore.ReadState.Unreadable -> return@withStoreLock Result.Failed("store unreadable")
-            is CrossProcessStore.ReadState.Present -> return@withStoreLock Result.Ok(current) // no-op, epoch kept
+            // Present: re-prove the visible record with a fresh checked rewrite before the caller
+            // writes the marker, so the marker can never outlive the only durable record (Codex #1).
+            is CrossProcessStore.ReadState.Present -> return@withStoreLock try {
+                cps.rewriteVerified()
+                Result.Ok(current) // no-op, epoch kept
+            } catch (e: Exception) {
+                Result.Failed("record not confirmed")
+            }
             CrossProcessStore.ReadState.Absent -> Unit
         }
         val next = XaiOAuthTokens(
@@ -515,28 +522,30 @@ object XaiOAuthTokenStore {
      * BAT-1157: before MAIN sweeps the legacy xAI prefs keys, prove — in THIS process — that the
      * store record (when present) and [marker] are durable, by a fresh checked rewrite of each. A
      * marker left visible by a failed sync is no permission to drop the only other copy. An
-     * unreadable record never qualifies. Never throws.
+     * unreadable record never qualifies, and an Absent store while prefs still hold a legacy
+     * access token ([legacyAccessPresent]) is [SweepGate.KEEP_LEGACY] (Codex #1). Never throws.
      */
-    fun confirmedForSweep(marker: File): Boolean {
-        val cps = store ?: return false
-        val d = lockDir ?: return false
+    fun confirmedForSweep(marker: File, legacyAccessPresent: Boolean): SweepGate {
+        val cps = store ?: return SweepGate.NOT_CONFIRMED
+        val d = lockDir ?: return SweepGate.NOT_CONFIRMED
         return try {
             when (val o = sidecar.withLock {
-                if (!SafeFs.existsNoFollow(marker.toPath())) return@withLock false
+                if (!SafeFs.existsNoFollow(marker.toPath())) return@withLock SweepGate.NOT_CONFIRMED
                 when (cps.readState()) {
-                    is CrossProcessStore.ReadState.Unreadable -> return@withLock false
+                    is CrossProcessStore.ReadState.Unreadable -> return@withLock SweepGate.NOT_CONFIRMED
                     is CrossProcessStore.ReadState.Present -> cps.rewriteVerified()
-                    CrossProcessStore.ReadState.Absent -> Unit
+                    CrossProcessStore.ReadState.Absent ->
+                        if (legacyAccessPresent) return@withLock SweepGate.KEEP_LEGACY
                 }
                 SafeFs.rewriteVerified(d.toPath(), marker.toPath())
-                true
+                SweepGate.CONFIRMED
             }) {
                 is SidecarFileLock.Outcome.Ran -> o.value
-                is SidecarFileLock.Outcome.NotAcquired -> false
+                is SidecarFileLock.Outcome.NotAcquired -> SweepGate.NOT_CONFIRMED
             }
         } catch (e: Exception) {
             Log.w(TAG, "sweep confirmation failed: ${e.javaClass.simpleName}")
-            false
+            SweepGate.NOT_CONFIRMED
         }
     }
 

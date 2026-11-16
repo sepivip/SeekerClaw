@@ -401,10 +401,10 @@ const OPENAI_OAUTH_EXPIRES_AT = (typeof config.openaiOAuthExpiresAt === 'string'
 // BAT-1157: the sign-in family + epoch of the pair above, from the same token-store read (Kotlin
 // writeConfigJson). null family = the pair came from the legacy prefs keys (migration not yet
 // confirmed). Either way openai.js confirms the family with the bridge before its first refresh.
-const OPENAI_OAUTH_FAMILY = (typeof config.openaiOAuthFamily === 'string' && config.openaiOAuthFamily.trim())
-    ? config.openaiOAuthFamily.trim() : null;
-const _openaiOAuthEpoch = Number(config.openaiOAuthEpoch);
-const OPENAI_OAUTH_EPOCH = Number.isFinite(_openaiOAuthEpoch) && _openaiOAuthEpoch >= 0 ? _openaiOAuthEpoch : 0;
+// Codex #4: only a safe-integer epoch ≥ 1 keeps the family (see oauth-family.js).
+const _openaiFamily = require('./oauth-family').normalizeOAuthFamily(config.openaiOAuthFamily, config.openaiOAuthEpoch);
+const OPENAI_OAUTH_FAMILY = _openaiFamily.familyId;
+const OPENAI_OAUTH_EPOCH = _openaiFamily.epoch;
 
 // Normalize authType (trim/lowercase) so values like " OAuth\n" don't silently fall
 // through to api_key. For OpenAI, alias known legacy values (e.g. "setup_token" left

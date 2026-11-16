@@ -20,6 +20,7 @@ import com.seekerclaw.app.state.CustomConfigSignature
 import com.seekerclaw.app.state.OpenAIOAuthTokenStore
 import com.seekerclaw.app.state.RuntimeState
 import com.seekerclaw.app.state.RuntimeStateStore
+import com.seekerclaw.app.state.SweepGate
 import com.seekerclaw.app.state.TombstoneOutcome
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.LogCollector
@@ -297,6 +298,9 @@ object ConfigManager {
     // token-presence heuristic (which would resurrect a signed-out family
     // from stale legacy prefs). Sign-out preserves the marker.
     private const val XAI_OAUTH_MIGRATED_MARKER = "xai_oauth.migrated"
+
+    /** BAT-1157: bumped by every legacy sign-in sweep so a retried commit is a real write. */
+    private const val KEY_LEGACY_SWEEP_SEQ = "legacy_oauth_sweep_seq"
 
     // Process-local latch: once this process has confirmed migration +
     // legacy-key sweep, skip the per-loadConfig FS check. Each process
@@ -1810,28 +1814,85 @@ object ConfigManager {
      * MAIN only. Removes the legacy OpenAI keys once the store and the marker are proven durable
      * IN THIS PROCESS (a fresh checked rewrite of each): a marker left visible by a failed sync is
      * never permission to drop the only other copy. Checks the `commit()` result; on failure the
-     * keys stay and a later load retries.
+     * keys stay pending and a later load retries ([commitLegacySweep]).
      */
-    private fun sweepLegacyOpenAIOAuthKeysIfConfirmed(context: Context, p: PrefsReader) {
+    internal fun sweepLegacyOpenAIOAuthKeysIfConfirmed(context: Context, p: PrefsReader) {
         if (openaiLegacySwept) return
-        if (OPENAI_LEGACY_KEYS.none { p.contains(it) }) {
+        val pending = OPENAI_LEGACY_KEYS.any { it in legacySweepPending }
+        if (!pending && OPENAI_LEGACY_KEYS.none { p.contains(it) }) {
             openaiLegacySwept = true
             return
         }
         if (System.currentTimeMillis() < openaiSweepNotBefore) return
-        if (!OpenAIOAuthTokenStore.confirmedForSweep()) {
-            openaiSweepNotBefore = System.currentTimeMillis() + 60_000L
-            return
+        // A pending retry was confirmed by this process already; its cache has dropped the keys.
+        if (!pending) {
+            val legacyAccess = !(p.getString(KEY_OPENAI_OAUTH_TOKEN_ENC, "") ?: "").isBlank()
+            when (OpenAIOAuthTokenStore.confirmedForSweep(legacyAccess)) {
+                SweepGate.CONFIRMED -> Unit
+                SweepGate.NOT_CONFIRMED -> {
+                    openaiSweepNotBefore = System.currentTimeMillis() + 60_000L
+                    return
+                }
+                SweepGate.KEEP_LEGACY -> {
+                    openaiLegacySwept = true // never sweep it, never refill from it
+                    LogCollector.append(
+                        "[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again",
+                        LogLevel.WARN,
+                    )
+                    return
+                }
+            }
         }
-        val sp = prefsForWrite(context, "sweepLegacyOpenAIOAuthKeys") ?: return
-        val editor = sp.edit()
-        OPENAI_LEGACY_KEYS.forEach { editor.remove(it) }
-        if (editor.commit()) {
+        if (commitLegacySweep(context, "sweepLegacyOpenAIOAuthKeys", OPENAI_LEGACY_KEYS)) {
             openaiLegacySwept = true
         } else {
             openaiSweepNotBefore = System.currentTimeMillis() + 60_000L
             LogCollector.append("[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry", LogLevel.WARN)
         }
+    }
+
+    /**
+     * Keys a MAIN sweep removed whose checked `commit()` has not yet succeeded (Codex #2). Android
+     * drops removed keys from the process's cache BEFORE writing the file, so after a failed commit
+     * `contains()` already says they are gone while the file still holds them. Cleared by a
+     * successful commit; lost on a process restart, where a cold read sees the keys again.
+     */
+    private val legacySweepPending: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * MAIN only: removes [keys] with a checked commit. A retry after a failed commit removes keys
+     * the cache no longer has, so it changes nothing by itself. AOSP's `SharedPreferencesImpl`
+     * still writes then (its disk generation lags after the failed write), but that is an
+     * implementation detail, not API; the counter bump makes every sweep commit a real change,
+     * so the retry writes the whole map on any implementation. Defence in depth.
+     */
+    internal fun commitLegacySweep(context: Context, site: String, keys: List<String>): Boolean {
+        val sp = prefsForWrite(context, site) ?: return false
+        val editor = sp.edit()
+        keys.forEach { editor.remove(it) }
+        editor.putLong(KEY_LEGACY_SWEEP_SEQ, sp.getLong(KEY_LEGACY_SWEEP_SEQ, 0L) + 1L)
+        return if (editor.commit()) {
+            legacySweepPending.removeAll(keys.toSet())
+            true
+        } else {
+            legacySweepPending.addAll(keys)
+            false
+        }
+    }
+
+    /** Test seam: is a sweep of [key] waiting for a successful commit? */
+    internal fun legacySweepPendingForTest(key: String): Boolean = key in legacySweepPending
+
+    /** Test seam: a fresh process's sweep state (no back-off, nothing pending, not yet swept). */
+    internal fun resetLegacySweepForTest() {
+        openaiLegacySwept = false
+        openaiSweepNotBefore = 0L
+        legacySweepPending.clear()
+    }
+
+    /** Test seam: lets a test retry within the 60 s back-off, as a later load would. */
+    internal fun skipLegacySweepBackoffForTest() {
+        openaiSweepNotBefore = 0L
     }
 
     /**
@@ -1841,6 +1902,7 @@ object ConfigManager {
     fun signInOpenAI(context: Context, accessToken: String, refreshToken: String, email: String, expiresAt: String): Boolean {
         val r = OpenAIOAuthTokenStore.signIn(accessToken, refreshToken, email, expiresAt)
         if (r is OpenAIOAuthTokenStore.Result.Ok) {
+            rearmOpenAILegacySweep()
             sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
             bumpConfigVersionOnMain()
             return true
@@ -1860,9 +1922,20 @@ object ConfigManager {
             LogCollector.append("[Config] OpenAI sign-out could not be saved (${r.javaClass.simpleName})", LogLevel.ERROR)
             return false
         }
+        rearmOpenAILegacySweep()
         sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
         bumpConfigVersionOnMain()
         return true
+    }
+
+    /**
+     * A sign-in or sign-out just wrote the store, so an earlier "nothing to sweep" or KEEP_LEGACY
+     * verdict in this process is stale: the store is Present now and any legacy copy (possibly a
+     * credential the user just revoked) must go now, not at the next app start.
+     */
+    private fun rearmOpenAILegacySweep() {
+        openaiLegacySwept = false
+        openaiSweepNotBefore = 0L
     }
 
     /**
@@ -1988,12 +2061,24 @@ object ConfigManager {
     private fun sweepLegacyXaiOAuthKeysIfConfirmed(context: Context, p: PrefsReader): Boolean {
         if (ProcessRole.isNode) return true
         val keys = listOf(KEY_XAI_OAUTH_TOKEN_ENC, KEY_XAI_OAUTH_REFRESH_ENC, KEY_XAI_OAUTH_EMAIL_ENC, KEY_XAI_OAUTH_EXPIRES_AT)
-        if (keys.none { p.contains(it) }) return true
-        if (!XaiOAuthTokenStore.confirmedForSweep(File(context.filesDir, XAI_OAUTH_MIGRATED_MARKER))) return false
-        val sp = prefsForWrite(context, "sweepLegacyXaiOAuthKeys") ?: return false
-        val editor = sp.edit()
-        keys.forEach { editor.remove(it) }
-        if (editor.commit()) return true
+        val pending = keys.any { it in legacySweepPending }
+        if (!pending && keys.none { p.contains(it) }) return true
+        // A pending retry was confirmed by this process already; its cache has dropped the keys.
+        if (!pending) {
+            val legacyAccess = !(p.getString(KEY_XAI_OAUTH_TOKEN_ENC, "") ?: "").isBlank()
+            when (XaiOAuthTokenStore.confirmedForSweep(File(context.filesDir, XAI_OAUTH_MIGRATED_MARKER), legacyAccess)) {
+                SweepGate.CONFIRMED -> Unit
+                SweepGate.NOT_CONFIRMED -> return false
+                SweepGate.KEEP_LEGACY -> {
+                    LogCollector.append(
+                        "[Config] xAI sign-in record missing after migration — legacy copy kept, sign in again",
+                        LogLevel.WARN,
+                    )
+                    return true // never sweep it, never refill from it
+                }
+            }
+        }
+        if (commitLegacySweep(context, "sweepLegacyXaiOAuthKeys", keys)) return true
         LogCollector.append("[Config] xAI legacy sign-in keys not removed (commit=false) — will retry", LogLevel.WARN)
         return false
     }
@@ -2008,6 +2093,9 @@ object ConfigManager {
      * here does not invalidate the token already durably in the store.
      */
     fun syncXaiRuntimeAuthType(context: Context) {
+        // BAT-1157: the store was just written, so an earlier "done" / KEEP_LEGACY verdict is stale;
+        // the reload below re-runs the confirmed sweep of any legacy copy.
+        xaiOAuthMigrationDone = false
         bumpConfigVersionOnMain()
         if (!RuntimeStateStore.isInitialized) return
         try {

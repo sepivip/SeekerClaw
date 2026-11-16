@@ -202,10 +202,15 @@ async function main() {
         const timerMark = timers.length; // only this section's timers count below
         ok('ambiguous save: the refresh itself succeeded (retry)', (await outcome(p, 0)) === 'retry');
         ok('ambiguous save: the new pair is in use', p.buildHeaders('').Authorization !== 'Bearer acc0', p.buildHeaders('').Authorization);
-        const c = p.classifyError(401, {});
-        ok("ambiguous save: a 401 now says 'saving', type is not 'reauth'", c.type === 'storage' && /Saving your refreshed/.test(c.userMessage));
+        // Codex #3: before the handler has refused, a 401 stays a retryable 'auth' so a delayed 401
+        // (stale generation) reaches handleUnauthorized and retries on the current pair.
+        const c0 = p.classifyError(401, {});
+        ok("ambiguous save: before any refusal a 401 is retryable 'auth' (never 'reauth')", c0.type === 'auth' && c0.retryable === true, JSON.stringify(c0));
+        ok('ambiguous save: a delayed 401 (stale generation) retries without a refresh', (await outcome(p, 0)) === 'retry' && upstreamPosts === 1);
         upstreamPosts = 0;
         ok('ambiguous save: no new upstream refresh while unacknowledged', (await outcome(p, p.currentRefreshGeneration())) === 'fatal' && upstreamPosts === 0);
+        const c = p.classifyError(401, {});
+        ok("ambiguous save: after the refusal a 401 says 'saving', type is not 'reauth'", c.type === 'storage' && /Saving your refreshed/.test(c.userMessage), JSON.stringify(c));
         ok('ambiguous save: health sees the unsaved pair (isPersistPending)', p.isPersistPending() === true);
         const armed = timers.slice(timerMark).filter(t => t.delay >= 2000 && !t.cleared);
         ok('ambiguous save: exactly one save-retry timer is armed', armed.length === 1, `armed=${armed.length}`);
@@ -234,6 +239,42 @@ async function main() {
         await new Promise(r => realSetTimeout(r, 20));
         const rearmed = timers.slice(mark).filter(t => t.delay >= 2000 && !t.cleared);
         ok('a save reply arriving after shutdown does not re-arm the retry timer', rearmed.length === 0, `rearmed=${rearmed.length}`);
+    }
+
+    // 7c. Codex #4: epochs are safe integers. Above 2^53 two epochs compare equal, so an unsafe or
+    //     non-number epoch never confirms a family or acknowledges a save.
+    {
+        upstreamPosts = 0;
+        confirmReply = { status: 200, body: { success: true, familyId: 'fam-new', epoch: 9007199254740993 }, transportError: null };
+        const p = load({ family: null, epoch: 0 });
+        ok('legacy confirm: an unsafe epoch in the reply does not confirm (no refresh)', (await outcome(p, 0)) === 'fatal' && upstreamPosts === 0);
+        confirmReply = { status: 200, body: { success: true, familyId: 'fam-1', epoch: '3' }, transportError: null };
+        const q = load();
+        ok('confirm: a string epoch does not confirm', (await outcome(q, 0)) === 'fatal' && upstreamPosts === 0);
+        upstreamPosts = 0; confirmReply = okConfirm();
+        saveReplies = [(d) => ({ status: 200, body: { success: true, epoch: String(d.expectedEpoch + 1) }, transportError: null })];
+        const s = load();
+        await outcome(s, 0);
+        ok('save: a string epoch is not an acknowledgement (still pending)', s.isPersistPending() === true);
+        s.shutdownOAuthTimers();
+    }
+
+    // 7d. Codex #4: config.js keeps only a safe epoch ≥ 1 (oauth-family.js), and drops the family with
+    //     a bad one, so the first recovery is a legacy confirm instead of a compare against a mangled
+    //     epoch. config.js uses this exact function; a source guard pins that below.
+    {
+        const { normalizeOAuthFamily } = require(path.join(BUNDLE, 'oauth-family.js'));
+        const good = normalizeOAuthFamily(' fam-1 ', 7);
+        ok('config: a safe epoch keeps the (trimmed) family', good.familyId === 'fam-1' && good.epoch === 7, JSON.stringify(good));
+        ok('config: the largest epoch Kotlin can write is kept', normalizeOAuthFamily('f', Number.MAX_SAFE_INTEGER - 1).epoch === Number.MAX_SAFE_INTEGER - 1);
+        for (const bad of [9007199254740993, 0, -1, '7', 1.5, null, undefined, NaN]) {
+            const r = normalizeOAuthFamily('fam-1', bad);
+            ok(`config: epoch ${String(bad)} drops the family (legacy confirm, epoch 0)`, r.familyId === null && r.epoch === 0, JSON.stringify(r));
+        }
+        ok('config: a blank family is the legacy pair', normalizeOAuthFamily('  ', 5).familyId === null);
+        const cfgSrc = require('fs').readFileSync(path.join(BUNDLE, 'config.js'), 'utf8');
+        ok('config.js derives OPENAI_OAUTH_FAMILY/EPOCH through normalizeOAuthFamily',
+            /normalizeOAuthFamily\(config\.openaiOAuthFamily, config\.openaiOAuthEpoch\)/.test(cfgSrc));
     }
 
     // 8. Pre-send checks and the transport.

@@ -204,6 +204,39 @@ class XaiOAuthTokenStoreTest {
         assertEquals("no-op leaves the sign-out epoch untouched", dead.epoch, rec.epoch)
     }
 
+    /**
+     * BAT-1157 Codex diff review #1: a fill whose sync failed is visible but not durable. The
+     * ordinary retry sees it Present and must re-prove it (fresh checked rewrite) before reporting
+     * Ok, since Ok is what lets ConfigManager write the marker. Negative control: drop the
+     * `rewriteVerified()` in migrateIfEmpty's Present branch and the power cut empties the store.
+     */
+    @Test
+    fun `failed fill, ordinary retry, power cut — an Ok fill is durable`() {
+        val fs = com.seekerclaw.app.testing.PowerLossFs().also { it.install() }
+        com.seekerclaw.app.util.SafeFs.filesRoot = workDir.toPath()
+        try {
+            fs.syncFails = true
+            assertTrue(XaiOAuthTokenStore.migrateIfEmpty("accL", "refL", "emailL", "expL") !is XaiOAuthTokenStore.Result.Ok)
+            assertEquals("the fill is visible", "accL", XaiOAuthTokenStore.read().accessTokenEnc)
+            fs.syncFails = false
+            ok(XaiOAuthTokenStore.migrateIfEmpty("accL", "refL", "emailL", "expL"))
+            fs.powerLoss()
+            assertEquals("an Ok fill survives the power cut", "accL", XaiOAuthTokenStore.read().accessTokenEnc)
+        } finally {
+            fs.uninstall()
+            com.seekerclaw.app.util.SafeFs.filesRoot = null
+        }
+    }
+
+    @Test
+    fun `Absent plus marker with a legacy access token is never swept`() {
+        val marker = File(workDir, "xai_oauth.migrated").apply { writeText("1") }
+        assertEquals(SweepGate.KEEP_LEGACY, XaiOAuthTokenStore.confirmedForSweep(marker, legacyAccessPresent = true))
+        assertEquals(SweepGate.CONFIRMED, XaiOAuthTokenStore.confirmedForSweep(marker, legacyAccessPresent = false))
+        marker.delete()
+        assertEquals("no marker, no sweep", SweepGate.NOT_CONFIRMED, XaiOAuthTokenStore.confirmedForSweep(marker, false))
+    }
+
     @Test
     fun `read reflects the last committed mutation`() {
         ok(XaiOAuthTokenStore.signIn("acc1", "ref1", "email", "exp"))

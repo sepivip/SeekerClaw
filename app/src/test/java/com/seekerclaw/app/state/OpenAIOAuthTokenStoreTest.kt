@@ -272,13 +272,44 @@ class OpenAIOAuthTokenStoreTest {
     fun `sweep confirmation re-proves a visible marker rather than trusting it`() {
         fs.syncFails = true
         store.migrateIfNeeded { legacy() } // record visible, marker not written
-        assertFalse(store.confirmedForSweep())
+        assertEquals(SweepGate.NOT_CONFIRMED, store.confirmedForSweep(legacyAccessPresent = true))
         fs.syncFails = false
         assertEquals(OpenAIOAuthTokenStore.MigrateOutcome.DONE, store.migrateIfNeeded { legacy() })
         fs.syncFails = true
-        assertFalse("a failing sync never permits the sweep", store.confirmedForSweep())
+        assertEquals("a failing sync never permits the sweep", SweepGate.NOT_CONFIRMED, store.confirmedForSweep(true))
         fs.syncFails = false
-        assertTrue(store.confirmedForSweep())
+        assertEquals(SweepGate.CONFIRMED, store.confirmedForSweep(true))
+    }
+
+    /**
+     * Codex diff review #1 (ed09115a), the exact sequence: a fill whose sync fails leaves the record
+     * visible but not durable; an ordinary retry (in `:node`, with no power cut in between) sees it
+     * Present; then the power is cut before MAIN sweeps or any 401. The marker must never outlive
+     * the record. Negative control: drop the `rewriteVerified()` in migrateIn's Present branch and
+     * the marker survives over an Absent store.
+     */
+    @Test
+    fun `failed fill, ordinary retry, power cut — the marker never outlives the record`() {
+        fs.syncFails = true
+        assertEquals(OpenAIOAuthTokenStore.MigrateOutcome.NOT_CONFIRMED, store.migrateIfNeeded { legacy() })
+        assertTrue("the fill is visible", store.snapshot() is OpenAIOAuthTokenStore.State.Present)
+        fs.syncFails = false
+        assertEquals(OpenAIOAuthTokenStore.MigrateOutcome.DONE, store.migrateIfNeeded { legacy() })
+        fs.powerLoss()
+        assertTrue(markerFile().exists())
+        assertEquals("the record the marker vouches for survived", "enc:" + "legacy-access".reversed(), present().accessTokenEnc)
+    }
+
+    @Test
+    fun `Absent plus marker with a legacy access token is never swept and never refilled`() {
+        ok(store.signIn("acc", "ref", "", "t"))
+        recordFile().delete() // the anomaly: the marker outlived the record
+        assertTrue(markerFile().exists())
+        assertEquals(SweepGate.KEEP_LEGACY, store.confirmedForSweep(legacyAccessPresent = true))
+        assertEquals("the marker means adopted: no refill", OpenAIOAuthTokenStore.MigrateOutcome.DONE, store.migrateIfNeeded { legacy() })
+        assertEquals(OpenAIOAuthTokenStore.State.Absent, store.snapshot())
+        // With only inert legacy keys (an expiry, an email) the marker alone is enough.
+        assertEquals(SweepGate.CONFIRMED, store.confirmedForSweep(legacyAccessPresent = false))
     }
 
     // ------------------------------------------------------------------ confirm-family (v4, C1)

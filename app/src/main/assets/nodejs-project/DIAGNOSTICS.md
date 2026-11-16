@@ -228,12 +228,12 @@ The ChatGPT sign-in pair lives in its own file, `files/openai_oauth.json` (outsi
 **Symptoms and what they mean:**
 - **"🔐 Reconnect OpenAI in Settings."** — OpenAI is set to sign-in, but there is no usable sign-in and no saved API key (signed out, or the stored sign-in is unreadable). The agent starts anyway and sends nothing to OpenAI. Fix: Settings > AI Provider > OpenAI > Sign in with ChatGPT.
 - **"🔐 Your ChatGPT sign-in changed. Restart the agent."** — a newer sign-in or a sign-out happened elsewhere, so this session dropped its old tokens. Fix: restart the agent (it then uses the current sign-in).
-- **"⏳ Saving your refreshed sign-in. Try again in a moment."** — a token refresh succeeded but its save is not yet confirmed; the agent keeps retrying the save and sends no new refresh meanwhile.
+- **"⏳ Saving your refreshed sign-in. Try again in a moment."** — a token refresh succeeded but its save is not yet confirmed; the agent keeps retrying the save and sends no new refresh meanwhile. A request that was already in flight with the old sign-in is retried once on the new one; only a rejection of the new sign-in itself shows this message.
 - **"⚠️ Couldn't save your ChatGPT sign-in on this device…"** — storage could not confirm the sign-in, so the agent did not refresh. Usually transient (storage busy or full); persistent → free storage or reconnect.
 - An oauth selection with no usable sign-in but a saved API key runs on the key: log `[OpenAI] Sign-in unavailable — using the saved API key` (WARN). Settings still shows "not signed in".
 **Check:**
 ```
-grep -E "OpenAI sign-in|OAuth token save rejected|Sign-in not confirmed|persist refreshed tokens|reconnect required|Sign-in unavailable|blocked a settings write" node_debug.log
+grep -E "OpenAI sign-in|xAI sign-in|OAuth token save rejected|Sign-in not confirmed|persist refreshed tokens|reconnect required|Sign-in unavailable|blocked a settings write" node_debug.log
 ```
 **Log lines:**
 - `[Config] OpenAI sign-in record unreadable — sign in again` (ERROR, once per process): the stored record does not decode or decrypt. It is treated as signed out; a new sign-in replaces it.
@@ -246,7 +246,8 @@ grep -E "OpenAI sign-in|OAuth token save rejected|Sign-in not confirmed|persist 
 - `[OpenAI] Save retry failed: …` (WARN): one re-send of an unsaved refreshed sign-in failed; it retries with back-off (2 s, 10 s, 60 s, then every 5 min) until the app confirms it.
 - `[ContextSummary] Skipped: the AI sign-in needs attention` (WARN): history summarising was skipped because the sign-in is latched or needs a reconnect; the conversation is trimmed normally instead.
 - `[Config] OpenAI sign-in could not be saved (…)` / `[Config] OpenAI sign-out could not be saved (…)` (ERROR): the sign-in or sign-out was not confirmed on disk; the app shows an error and the user should try again. A sign-out that is not confirmed is never reported as done.
-- `[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry` / `[Config] xAI legacy sign-in keys not removed …` (WARN): after an upgrade, the old copy of the sign-in in the app's settings could not be deleted yet. Harmless (the new store is used); it retries on a later app start.
+- `[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry` / `[Config] xAI legacy sign-in keys not removed …` (WARN): after an upgrade, the old copy of the sign-in in the app's settings could not be deleted yet. Harmless (the new store is used); it retries on a later settings load, and on a later app start.
+- `[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again` / `[Config] xAI sign-in record missing after migration — legacy copy kept, sign in again` (WARN): the sign-in file is gone although the upgrade had finished moving it (for example a power cut at the wrong moment). The old copy in the app's settings is kept, not deleted, and not copied back; the provider reads as signed out. Fix: sign in again; the new sign-in replaces both.
 - Bridge codes: `OPENAI_OAUTH_SAVE_FAILED` (nothing saved), `OPENAI_OAUTH_SAVE_UNCONFIRMED` (saved, not yet confirmed durable), `OPENAI_OAUTH_NOT_CONFIRMED`, `OPENAI_OAUTH_RECONNECT`, `OPENAI_OAUTH_FAMILY_CHANGED`, `OPENAI_OAUTH_EPOCH_CONFLICT`.
 **Known limits:** if the agent restarts (or the user taps Stop) after a refresh but before its save is confirmed, the stored refresh token is already spent and the user must reconnect.
 

@@ -171,11 +171,12 @@ object OpenAIOAuthTokenStore {
     private fun currentEpoch(state: State): Long = (state as? State.Present)?.record?.epoch ?: 0L
 
     /**
-     * Readable epochs are 1 until EPOCH_LIMIT (exclusive); far beyond any real number of rotations,
-     * but a corrupt record could hold anything. Every write stays inside the range, so a successful
+     * Readable epochs are 1 until EPOCH_LIMIT (exclusive), JavaScript's largest exact integer, so the
+     * epoch crosses the bridge to Node without loss. Far beyond any real number of rotations, but a
+     * corrupt record could hold anything. Every write stays inside the range, so a successful
      * write always reads back as Present.
      */
-    internal const val EPOCH_LIMIT: Long = Long.MAX_VALUE / 2
+    internal const val EPOCH_LIMIT: Long = 9_007_199_254_740_991L // Number.MAX_SAFE_INTEGER: Node reads it exactly
 
     /**
      * The epoch for a NEW family or a tombstone. At the limit it restarts at 1: that is safe because
@@ -323,7 +324,14 @@ object OpenAIOAuthTokenStore {
         if (markerExists()) return MigrateOutcome.DONE
         when (stateOf(cps)) {
             is State.Unreadable -> return MigrateOutcome.UNREADABLE
-            is State.Present -> Unit
+            // A visible record may be one whose rename was never made durable (a fill whose sync
+            // failed). The marker must never outlive the only durable record, so the record is
+            // re-proved with a fresh checked rewrite BEFORE the marker is written (Codex #1).
+            is State.Present -> try {
+                cps.rewriteVerified()
+            } catch (_: Exception) {
+                return MigrateOutcome.NOT_CONFIRMED
+            }
             State.Absent -> {
                 val l = legacy()
                 if (l != null && l.accessEnc.isNotBlank()) {
@@ -357,23 +365,30 @@ object OpenAIOAuthTokenStore {
     }
 
     /**
-     * Before MAIN sweeps the legacy keys: in THIS process, the record must read Present and be
-     * confirmed durable by a fresh checked rewrite, and the marker likewise. A marker left behind by
-     * a failed sync is visible but proves nothing, so it is rewritten too.
+     * Before MAIN sweeps the legacy keys: in THIS process, the marker and (when present) the record
+     * are proven durable by a fresh checked rewrite. A marker left behind by a failed sync is
+     * visible but proves nothing, so it is rewritten too. [legacyAccessPresent]: prefs still hold a
+     * legacy access token; with an Absent store that is [SweepGate.KEEP_LEGACY] (Codex #1).
      */
-    fun confirmedForSweep(): Boolean = locked({ false }) { cps ->
-        if (!markerExists()) return@locked false
-        val state = stateOf(cps)
-        // Absent + marker: the migration found no legacy token, so only inert keys (expiry, a
-        // plaintext email) can remain; the marker alone must be proven durable.
-        if (state is State.Unreadable) return@locked false
+    fun confirmedForSweep(legacyAccessPresent: Boolean): SweepGate = locked({ SweepGate.NOT_CONFIRMED }) { cps ->
+        if (!markerExists()) return@locked SweepGate.NOT_CONFIRMED
+        when (stateOf(cps)) {
+            is State.Unreadable -> return@locked SweepGate.NOT_CONFIRMED
+            // Absent + marker is only safe to sweep when the legacy keys are inert (an expiry, an
+            // email). A legacy access token here may be the only copy left: keep it.
+            State.Absent -> if (legacyAccessPresent) return@locked SweepGate.KEEP_LEGACY
+            is State.Present -> try {
+                cps.rewriteVerified()
+            } catch (_: Exception) {
+                return@locked SweepGate.NOT_CONFIRMED
+            }
+        }
         try {
-            if (state is State.Present) cps.rewriteVerified()
-            val d = dir ?: return@locked false
+            val d = dir ?: return@locked SweepGate.NOT_CONFIRMED
             SafeFs.rewriteVerified(d.toPath(), File(d, MARKER_NAME).toPath())
-            true
+            SweepGate.CONFIRMED
         } catch (_: Exception) {
-            false
+            SweepGate.NOT_CONFIRMED
         }
     }
 

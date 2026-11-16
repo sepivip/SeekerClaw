@@ -1694,8 +1694,9 @@ const AUTH_FAIL_THRESHOLD = 3;
 const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
 
 // BAT-315: Error classification delegated to provider adapter
-function classifyApiError(status, data) {
-    return getAdapter(PROVIDER).classifyError(status, data);
+// [ctx] (optional, BAT-1157): { usedGen } from claudeApiCall's retry loop; adapters may ignore it.
+function classifyApiError(status, data, ctx) {
+    return getAdapter(PROVIDER).classifyError(status, data, ctx);
 }
 
 // BAT-1130: Anthropic's setup_token (Claude Code OAuth) path mislabels some
@@ -1927,7 +1928,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 
             // Classify error and decide whether to retry (BAT-22)
             if (res.status !== 200) {
-                const errClass = classifyApiError(res.status, res.data);
+                const errClass = classifyApiError(res.status, res.data, { usedGen });
                 if (errClass.retryable && retries < MAX_RETRIES) {
                     // OAuth 401: refresh token before retry so the next attempt uses new credentials
                     if (errClass.type === 'auth' && typeof adapter.handleUnauthorized === 'function') {
@@ -3963,4 +3964,6 @@ module.exports = {
     _setWalletPromptSnapshotForTests,
     // BAT-1130: exposed for the content-filter self-heal regression test.
     _isUsageFilter400,
+    // BAT-1157 (Codex #3): the real request/retry loop, for the OAuth 401 dispatch test.
+    _claudeApiCallForTests: claudeApiCall,
 };

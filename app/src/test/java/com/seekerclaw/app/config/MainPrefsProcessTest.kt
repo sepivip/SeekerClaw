@@ -6,6 +6,7 @@ import com.seekerclaw.app.util.ProcessRole
 import com.seekerclaw.app.util.SafeFs
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -96,6 +97,70 @@ class MainPrefsProcessTest {
         val live = OpenAIOAuthTokenStore.livePair(OpenAIOAuthTokenStore.snapshot())!!
         assertEquals("acc2", live.access)
         assertEquals("ref2", live.refresh)
+    }
+
+    /**
+     * Codex diff review #2 (ed09115a): Android drops removed keys from the cache before writing the
+     * file, so after a failed commit `contains()` already says the legacy keys are gone. The sweep
+     * must stay pending and retry with a real write. Negative control: make the sweep trust
+     * `contains()` (drop the `pending` check) and no retry is ever sent, so the cold read still
+     * finds the legacy token. ([TwoProcessPrefs] models AOSP's disk/memory generations, so the
+     * counter bump in `commitLegacySweep` is defence in depth, not what this test pins.)
+     */
+    @Test
+    fun `a failed legacy sweep commit is retried by a later load with a real write (Codex #2)`() {
+        ConfigManager.resetLegacySweepForTest()
+        try {
+            prefs.disk["openai_oauth_token_enc"] = "enc:acc"
+            prefs.disk["openai_oauth_refresh_enc"] = "enc:ref"
+            ProcessRole.setForTest(false)
+            val main = prefs.context("main")
+            assertEquals(OpenAIOAuthTokenStore.MigrateOutcome.DONE,
+                OpenAIOAuthTokenStore.migrateIfNeeded { OpenAIOAuthTokenStore.LegacyPair("enc:acc", "enc:ref", "", "", "") })
+
+            prefs.failNextCommits = 1
+            ConfigManager.sweepLegacyOpenAIOAuthKeysIfConfirmed(main, MainPrefs.read(main))
+            assertEquals("the file still holds the token", "enc:acc", prefs.disk["openai_oauth_token_enc"])
+            assertFalse("…while the cache already lacks it", MainPrefs.read(main).contains("openai_oauth_token_enc"))
+            assertTrue(ConfigManager.legacySweepPendingForTest("openai_oauth_token_enc"))
+
+            // Another load in the same process, after the back-off.
+            ConfigManager.skipLegacySweepBackoffForTest()
+            ConfigManager.sweepLegacyOpenAIOAuthKeysIfConfirmed(main, MainPrefs.read(main))
+            assertFalse(ConfigManager.legacySweepPendingForTest("openai_oauth_token_enc"))
+            assertEquals("the retry reached the file", 1, prefs.diskWrites)
+
+            prefs.restart("main") // cold read
+            val cold = MainPrefs.read(prefs.context("main"))
+            assertFalse("swept on disk", cold.contains("openai_oauth_token_enc"))
+            assertFalse(cold.contains("openai_oauth_refresh_enc"))
+            assertEquals("unrelated settings untouched", "A", cold.getString("model", null))
+        } finally {
+            ConfigManager.resetLegacySweepForTest()
+        }
+    }
+
+    /**
+     * Reviewer finding (KEEP_LEGACY latch): a legacy access token kept because the store was Absent
+     * under its marker must be swept by the NEXT sign-in in the same process, not only after a
+     * restart. Negative control: drop `rearmOpenAILegacySweep()` from `signInOpenAI`.
+     */
+    @Test
+    fun `a sign-in after KEEP_LEGACY sweeps the kept legacy copy in the same process`() {
+        ConfigManager.resetLegacySweepForTest()
+        try {
+            prefs.disk["openai_oauth_token_enc"] = "enc:old"
+            ProcessRole.setForTest(false)
+            val main = prefs.context("main")
+            File(dir, OpenAIOAuthTokenStore.MARKER_NAME).writeText("1") // adopted, record lost
+            ConfigManager.sweepLegacyOpenAIOAuthKeysIfConfirmed(main, MainPrefs.read(main))
+            assertEquals("KEEP_LEGACY: kept", "enc:old", prefs.disk["openai_oauth_token_enc"])
+
+            assertTrue(ConfigManager.signInOpenAI(main, "acc", "ref", "", "t"))
+            assertFalse("swept by the sign-in", prefs.disk.containsKey("openai_oauth_token_enc"))
+        } finally {
+            ConfigManager.resetLegacySweepForTest()
+        }
     }
 
     @Test
