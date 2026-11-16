@@ -243,8 +243,18 @@ grep -E "OpenAI sign-in|OAuth token save rejected|Sign-in not confirmed|persist 
 - `[OpenAI] Failed to persist refreshed tokens — retrying the save, no new refresh until it lands` (WARN): the "saving" case above.
 - `[OpenAI] Sign-in no longer usable on this device — reconnect required` (WARN): the reconnect case, found at refresh time.
 - `[Config] blocked a settings write from the agent process (<site>)` (ERROR): a bug — only the app process may write settings. Report it.
+- `[OpenAI] Save retry failed: …` (WARN): one re-send of an unsaved refreshed sign-in failed; it retries with back-off (2 s, 10 s, 60 s, then every 5 min) until the app confirms it.
+- `[ContextSummary] Skipped: the AI sign-in needs attention` (WARN): history summarising was skipped because the sign-in is latched or needs a reconnect; the conversation is trimmed normally instead.
+- `[Config] OpenAI sign-in could not be saved (…)` / `[Config] OpenAI sign-out could not be saved (…)` (ERROR): the sign-in or sign-out was not confirmed on disk; the app shows an error and the user should try again. A sign-out that is not confirmed is never reported as done.
+- `[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry` / `[Config] xAI legacy sign-in keys not removed …` (WARN): after an upgrade, the old copy of the sign-in in the app's settings could not be deleted yet. Harmless (the new store is used); it retries on a later app start.
 - Bridge codes: `OPENAI_OAUTH_SAVE_FAILED` (nothing saved), `OPENAI_OAUTH_SAVE_UNCONFIRMED` (saved, not yet confirmed durable), `OPENAI_OAUTH_NOT_CONFIRMED`, `OPENAI_OAUTH_RECONNECT`, `OPENAI_OAUTH_FAMILY_CHANGED`, `OPENAI_OAUTH_EPOCH_CONFLICT`.
-**Known limits:** if the agent restarts (or the user taps Stop) after a refresh but before its save is confirmed, the stored refresh token is already spent and the user must reconnect. Reset Config that cannot confirm a sign-out says so ("Reset not finished") and keeps the settings — tap Retry.
+**Known limits:** if the agent restarts (or the user taps Stop) after a refresh but before its save is confirmed, the stored refresh token is already spent and the user must reconnect.
+
+### Reset Config — "Reset not finished" (BAT-1157)
+**Symptoms:** after Settings > Reset Config, the app shows "Reset not finished" (which sign-ins were or weren't removed) with Retry, instead of going to setup.
+**Diagnosis:** Reset removes the OpenAI and xAI sign-ins first and deletes the encryption key and settings only once both removals are confirmed on disk, so a sign-in can never survive a "finished" reset. If a removal could not be confirmed, the key and settings are kept on purpose. A sign-in started during a reset is cancelled ("Reset in progress").
+**Log lines:** `[Config] Reset incomplete: openai=… xai=… keyDeleted=… configCleared=…` (WARN), `[Config] Reset: xAI sign-in lock not acquired (…)` (WARN), `[Config] Reset: Keystore key not deleted (…)` (ERROR).
+**Fix:** tap Retry (it is always safe to repeat). If it keeps failing, free some storage and retry; the agent keeps running on the existing settings meanwhile.
 
 ### OpenAI Codex OAuth — Sign-In Flow Failures
 **Symptoms:** User taps "Sign in with ChatGPT", browser opens, but sign-in never completes. UI shows "Sign-in canceled" or hangs.

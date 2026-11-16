@@ -1255,6 +1255,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('2. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider. The OAuth section stays visible after a failed sign-in — they can tap "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.');
         lines.push('3. If OAuth refresh persistently fails: suggest the user sign out (clears OAuth tokens but keeps OAuth as the chosen auth type) and sign back in. As a fallback, they can switch to API Key in the auth picker if they have a platform key.');
         lines.push('4. Check `grep -iE "oauth|codex" node_debug.log` for OAuth-specific errors.');
+        lines.push('5. Sign-in storage (BAT-1157) — "sign-in changed, restart", "saving your refreshed sign-in", "could not save your ChatGPT sign-in" or "reconnect OpenAI": see DIAGNOSTICS.md → "OpenAI Codex OAuth — Sign-In Storage".');
         lines.push('');
     }
 
@@ -1486,6 +1487,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push(`You are running on OpenAI (model: ${activeModel}, auth: ${OPENAI_AUTH_TYPE}).`);
         if (OPENAI_AUTH_TYPE === 'oauth') {
             lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
+        } else if (AUTH_TYPE === 'oauth') {
+            // BAT-1157 (D9): ChatGPT sign-in is SELECTED, but no usable sign-in is stored, so the
+            // saved platform API key is being used. The selection itself is unchanged.
+            lines.push('Auth mode: **API Key (fallback)** — the user chose ChatGPT sign-in, but no usable sign-in is stored on this device (signed out, or the stored sign-in is unreadable), so requests use their saved OpenAI API key via api.openai.com. To go back to the ChatGPT subscription they sign in again: Settings > AI Provider > OpenAI > Sign in with ChatGPT. See DIAGNOSTICS.md → "OpenAI Codex OAuth — Sign-In Storage".');
         } else {
             lines.push('Auth mode: **API Key** — the user configured an OpenAI platform API key. Requests route through api.openai.com. To switch to ChatGPT OAuth (free with a Plus/Pro subscription), the user can change auth type in Settings > AI Provider > OpenAI.');
         }
