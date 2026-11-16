@@ -211,9 +211,11 @@ async function main() {
         ok('ambiguous save: exactly one save-retry timer is armed', armed.length === 1, `armed=${armed.length}`);
         p.shutdownOAuthTimers();
         ok('shutdownOAuthTimers (SIGTERM) cancels the save-retry timer', armed.length === 1 && armed[0].cleared === true);
+        // Advance REAL time past the first retry deadline (2 s): a timer that was not truly
+        // cancelled would fire here and send another save.
         const savesBefore = saves().length;
-        if (armed[0] && !armed[0].cleared) { armed[0].fn(); await new Promise(r => setTimeout(r, 20)); }
-        ok('after shutdown no further save is sent', saves().length === savesBefore);
+        await new Promise(r => realSetTimeout(r, armed[0] ? armed[0].delay + 200 : 0));
+        ok('after shutdown no further save is sent, even past the retry deadline', saves().length === savesBefore);
     }
 
     // 8. Pre-send checks and the transport.
@@ -237,13 +239,13 @@ async function main() {
         const send = fn.indexOf('await streamFn(', loop);
         ok('ai.js: preflightAuth runs inside the retry loop, before every streamFn send',
             loop !== -1 && pre !== -1 && send !== -1 && pre < send, `loop=${loop} pre=${pre} send=${send}`);
-        const sum = ai.slice(ai.indexOf('[ContextSummary]') - 4000);
         ok('ai.js: the context summarizer also checks preflightAuth before sending', /preflightAuth\(\)/.test(ai.slice(ai.indexOf('_sumRefreshed'), ai.indexOf('_sumRefreshed') + 800)));
     }
 
     restore();
     console.log(failures === 0 ? '\nAll openai-oauth-store tests passed' : `\n${failures} TEST(S) FAILED`);
-    process.exit(failures === 0 ? 0 : 1);
+    // No forced exit: if any timer the adapter armed were left running, the process would not end.
+    process.exitCode = failures === 0 ? 0 : 1;
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { console.error(e); process.exitCode = 1; });
