@@ -442,6 +442,8 @@ const STORAGE_FAILURE_WINDOW_MS = 15000;
 let _pendingSave = null;
 let _saveRetryTimer = null;
 let _saveRetryAttempt = 0;
+// Set by shutdownOAuthTimers (SIGTERM): a save still awaiting the bridge must not re-arm a retry.
+let _shutDown = false;
 let _recoverInFlight = null;
 
 const SAVE_RETRY_DELAYS_MS = [2000, 10000, 60000];
@@ -680,7 +682,7 @@ function _clearSaveRetry() {
 
 /** Single-flight re-send of the SAME save (same rotationId), with backoff. */
 function _scheduleSaveRetry() {
-    if (_saveRetryTimer || !_pendingSave) return;
+    if (_shutDown || _saveRetryTimer || !_pendingSave) return;
     const delay = _saveRetryAttempt < SAVE_RETRY_DELAYS_MS.length
         ? SAVE_RETRY_DELAYS_MS[_saveRetryAttempt]
         : SAVE_RETRY_STEADY_MS;
@@ -711,6 +713,7 @@ function isPersistPending() {
 
 /** BAT-1157: stop the save-retry timer (SIGTERM). */
 function shutdownOAuthTimers() {
+    _shutDown = true; // before clearing: an in-flight save's reply must not schedule a new timer
     _clearSaveRetry();
 }
 

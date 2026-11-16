@@ -218,6 +218,24 @@ async function main() {
         ok('after shutdown no further save is sent, even past the retry deadline', saves().length === savesBefore);
     }
 
+    // 7b. SIGTERM while a save is still awaiting the bridge: its reply must not re-arm a retry.
+    {
+        upstreamPosts = 0; confirmReply = okConfirm();
+        let release;
+        const slow = new Promise(r => { release = r; });
+        saveReplies = [() => slow.then(() => ({ status: 503, body: { code: 'OPENAI_OAUTH_SAVE_FAILED' }, transportError: null }))];
+        const p = load();
+        const mark = timers.length;
+        const pending = outcome(p, 0);
+        await new Promise(r => realSetTimeout(r, 30)); // the refresh is done, the save is in flight
+        p.shutdownOAuthTimers();
+        release();
+        await pending;
+        await new Promise(r => realSetTimeout(r, 20));
+        const rearmed = timers.slice(mark).filter(t => t.delay >= 2000 && !t.cleared);
+        ok('a save reply arriving after shutdown does not re-arm the retry timer', rearmed.length === 0, `rearmed=${rearmed.length}`);
+    }
+
     // 8. Pre-send checks and the transport.
     {
         const p = load({ token: '', refresh: '', reconnect: true });
