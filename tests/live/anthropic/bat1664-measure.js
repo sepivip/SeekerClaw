@@ -39,7 +39,8 @@
 // Opt-in only (never in CI):
 //   node tests/live/anthropic/bat1664-measure.js --old <path-to-old-nodejs-project>
 //   node tests/live/anthropic/bat1664-measure.js --old <path> --dry    (no network,
-//        scripted responses; MEASURE_DRY_BAD=1 → out-of-order pages → INCONCLUSIVE,
+//        scripted responses; MEASURE_DRY_BAD=1 → out-of-order pages → INCONCLUSIVE;
+//        MEASURE_DRY_BAD_REGION=1 → a fan-out region outside the expected six → INCONCLUSIVE,
 //        MEASURE_DRY_THROW=1 → a 400 mid-turn → FAILED)
 // Env: MEASURE_MODELS=claude-fable-5-1,claude-opus-5  MEASURE_SCENARIOS=long,fanout
 
@@ -160,7 +161,7 @@ async function child() {
             const page = process.env.MEASURE_DRY_BAD === '1' && round === 3 ? 5 : round;
             content.push({ type: 'tool_use', id: `toolu_dry_${round}`, name: 'read_doc', input: { page } });
         } else if (dryScenario === 'fanout' && round === 1) {
-            for (const r of ['north', 'south', 'east', 'west', 'central', 'coastal']) content.push({ type: 'tool_use', id: `toolu_dry_${r}`, name: 'fetch_report', input: { region: r } });
+            for (const r of ['north', 'south', 'east', 'west', 'central', process.env.MEASURE_DRY_BAD_REGION === '1' ? 'atlantis' : 'coastal']) content.push({ type: 'tool_use', id: `toolu_dry_${r}`, name: 'fetch_report', input: { region: r } });
         } else {
             content.push({ type: 'text', text: 'Dry-run final answer.' });
             stop = 'end_turn';
@@ -209,6 +210,21 @@ async function child() {
     };
     stub('http.js', Object.assign({}, realHttp, { httpStreamingRequest: transport }));
     const ai = require(path.join(BUNDLE, 'ai.js'));
+    // chat() re-arms its idle-summary timer internally (not through the export), so cancelling
+    // around a call cannot stop one armed mid-call from firing inside a long call. This child
+    // only measures, so any timer at least as long as the idle timeout is dropped outright:
+    // no idle summary can ever run here. Counted, so the suppression is visible.
+    const IDLE_MS = Number(ai.IDLE_TIMEOUT_MS) || 10 * 60 * 1000;
+    let SUPPRESSED_TIMERS = 0;
+    const realSetTimeout = global.setTimeout;
+    global.setTimeout = function (fn, delay, ...args) {
+        if (Number(delay) >= IDLE_MS) {
+            SUPPRESSED_TIMERS++;
+            const h = realSetTimeout(() => {}, 0);
+            return h;
+        }
+        return realSetTimeout(fn, delay, ...args);
+    };
 
     // ── deterministic tools ──
     const filler = (seed, n) => {
@@ -306,8 +322,10 @@ async function child() {
         if (sc === 'fanout') {
             if (ordered.length !== 1) return `expected 1 tool round, got ${ordered.length}`;
             const r = ordered[0];
+            const EXPECTED_REGIONS = ['north', 'south', 'east', 'west', 'central', 'coastal'];
             const regions = new Set(r.filter((t) => t.name === 'fetch_report').map((t) => String(t.input.region)));
-            if (r.length !== 6 || r.some((t) => t.name !== 'fetch_report') || regions.size !== 6) return `expected 6 fetch_report calls (all regions), got ${r.length} call(s), ${regions.size} region(s)`;
+            const missing = EXPECTED_REGIONS.filter((x) => !regions.has(x));
+            if (r.length !== 6 || r.some((t) => t.name !== 'fetch_report') || missing.length) return `expected 6 fetch_report calls covering ${EXPECTED_REGIONS.join('/')}, got ${r.length} call(s); missing: ${missing.join(',') || 'none'}`;
             return null;
         }
         return 'unknown scenario';
@@ -354,12 +372,12 @@ async function child() {
             }
         }
     } catch (e) {
-        process.stdout.write(JSON.stringify({ results, stray: STRAY, stop: scrub(e && e.message) }) + '\n');
+        process.stdout.write(JSON.stringify({ results, stray: STRAY, suppressedTimers: SUPPRESSED_TIMERS, stop: scrub(e && e.message) }) + '\n');
         try { ai.cancelAllIdleSummaries(); } catch (_) {}
         process.exit(3);
     }
     try { ai.cancelAllIdleSummaries(); } catch (_) {}
-    process.stdout.write(JSON.stringify({ results, stray: STRAY }) + '\n');
+    process.stdout.write(JSON.stringify({ results, stray: STRAY, suppressedTimers: SUPPRESSED_TIMERS }) + '\n');
     // Non-zero when the run is not a valid measurement: any INCONCLUSIVE row, or a
     // FAILED row on NEW (the version under test). OLD failures are reported only.
     const bad = results.some((x) => x.verdict === 'INCONCLUSIVE' || (x.verdict === 'FAILED' && VERSION === 'NEW'));
@@ -392,7 +410,7 @@ function parent() {
     let remaining = CAP;
     const all = [];
     let stopped = null;
-    let stray = 0;
+    let stray = 0; let suppressed = 0;
     const VERSIONS = (process.env.MEASURE_VERSIONS || 'OLD,NEW').split(',');
     for (const [version, bundle] of [['OLD', OLD], ['NEW', NEW_BUNDLE]].filter(([v]) => VERSIONS.includes(v))) {
         const r = spawnSync(process.execPath, [__filename, '--child'], {
@@ -405,6 +423,7 @@ function parent() {
         if (!out) { stopped = `${version} child produced no result (exit ${r.status})`; break; }
         for (const x of out.results || []) { all.push(x); remaining -= x.requests.length; }
         stray += out.stray || 0;
+        suppressed += out.suppressedTimers || 0;
         if (out.stop || out.fatal) { stopped = `${version}: ${out.stop || out.fatal}`; break; }
     }
 
@@ -429,7 +448,7 @@ function parent() {
         if (x.reply) console.log(`     final: ${x.reply.replace(/\s+/g, ' ').slice(0, 160)}…`);
     }
     const total = all.reduce((n, x) => n + x.requests.length, 0);
-    console.log(`\n${DRY ? 'dry' : 'live'} requests: ${total} / cap ${CAP} | stray requests blocked: ${stray}`);
+    console.log(`\n${DRY ? 'dry' : 'live'} requests: ${total} / cap ${CAP} | stray requests blocked: ${stray} | idle-summary timers suppressed: ${suppressed}`);
     const inconclusive = all.filter((x) => x.verdict === 'INCONCLUSIVE');
     const newFailed = all.filter((x) => x.verdict === 'FAILED' && x.version === 'NEW');
     const oldFailed = all.filter((x) => x.verdict === 'FAILED' && x.version === 'OLD');
