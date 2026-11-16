@@ -433,7 +433,14 @@ async function main() {
         let reply; try { reply = await ai.chat(chatId, photoMsg('what is this?')); } catch (e) { reply = `THREW: ${e.message}`; }
         eq(`image (${model}): the 700 KB photo turn is sent`, SENT.length, 1);
         eq(`image (${model}): the model's answer is returned`, reply, 'nice photo');
-        ok(`image (${model}): the photo reached the wire intact`, SENT[0] && SENT[0].raw.includes(PHOTO_B64.slice(0, 200)));
+        {
+            let sentImage = null;
+            for (const m of (SENT[0] ? SENT[0].body.messages : [])) {
+                if (m.role === 'user' && Array.isArray(m.content)) sentImage = m.content.find((b) => b.type === 'image') || sentImage;
+            }
+            ok(`image (${model}): the photo reached the wire intact (full base64 equal)`,
+                !!sentImage && sentImage.source && sentImage.source.type === 'base64' && sentImage.source.data === PHOTO_B64);
+        }
         SCRIPT = [ok200(toolResp([th('i1'), tu('i1')])), ok200(textResp('follow-up answered'))];
         let reply2; try { reply2 = await ai.chat(chatId, 'and what colour is it?'); } catch (e) { reply2 = `THREW: ${e.message}`; }
         eq(`image (${model}): the follow-up text turn is sent (2 rounds)`, SENT.length, 3);
@@ -451,6 +458,87 @@ async function main() {
         eq('image + text bulk: only round 1 (photo, no bulk yet) was sent', SENT.length, 1);
         eq('image + text bulk: the spy saw no oversized body', VIOLATIONS.length, 0);
         ok('image + text bulk: the gate still stops the over-budget text batch', /context limit/.test(reply), reply);
+    }
+
+    // B1d (CodeRabbit #467, major): the budget reduction never ages the NEWEST
+    // batch, even when it is wider than the 6-message recency window. Round 1
+    // returns a huge thinking block + 7 parallel tool calls; round 2 is over
+    // budget only because of the replayed thinking → reduce → must keep all 7.
+    {
+        currentAdapter = claude; currentModel = 'claude-fable-5-1'; toolResultSize = 1500;
+        const chatId = newChatId();
+        SENT.length = 0; VIOLATIONS.length = 0;
+        const ids = [1, 2, 3, 4, 5, 6, 7].map((i) => `nb${i}`);
+        SCRIPT = [ok200(toolResp([th('nb', 760000), ...ids.map((id) => tu(id))])), ok200(textResp('used all seven'))];
+        const redBefore = ai.budgetGateStats.reductions;
+        let reply; try { reply = await ai.chat(chatId, 'check seven things'); } catch (e) { reply = `THREW: ${e.message}`; }
+        eq('newest batch: turn completes', reply, 'used all seven');
+        ok('newest batch: the reduction ran', ai.budgetGateStats.reductions === redBefore + 1);
+        const sentTR = SENT[1] ? toolResultContents(SENT[1].body).filter((t) => ids.includes(t.id)) : [];
+        eq('newest batch: all 7 results were sent', sentTR.length, 7);
+        ok('newest batch: none of the 7 is placeholdered in the SENT body', sentTR.every((t) => !/^\[Trimmed:/.test(t.content) && t.content.length > 1000));
+        const stored = ai.getConversation(chatId).filter((m) => m.role === 'tool' && ids.includes(m.toolCallId));
+        ok('newest batch: none of the 7 is placeholdered in stored history', stored.length === 7 && stored.every((m) => !/^\[Trimmed:/.test(m.content)));
+    }
+
+    // B1e — DECISION RECORD (BAT-1664, PR #467 CodeRabbit follow-up). On an
+    // UNFLAGGED Claude model, per-round aging and the per-round MAX_HISTORY trim
+    // edit history mid-turn but deliberately do NOT strip replayed thinking:
+    // the live --compat probe (2026-11-16) showed fable-5, opus-5, opus-4-8,
+    // sonnet-5 and sonnet-4-6 never run the prefix check, and stripping from
+    // round 2 on every long turn of the DEFAULT model would cost reasoning for
+    // nothing. An unknown id that does check is covered by the C3 heal; models
+    // that check must be FLAGGED (thinkingBinding) instead. Change this only
+    // with a new --compat run.
+    console.log('\n── Unflagged per-round edits: decision record ──');
+    const DR = "unflagged Claude: per-round aging/trim does NOT strip replayed thinking — unflagged registry models don't run the prefix check (live --compat 2026-11-16); unknown checking ids rely on the C3 heal";
+    {
+        // In-turn aging: 6 parallel results in round 1, one more in round 2 → at
+        // round 3 the two oldest in-turn results leave the window and are aged.
+        currentAdapter = claude; currentModel = 'claude-opus-5'; toolResultSize = 1500;
+        const chatId = newChatId();
+        SENT.length = 0; VIOLATIONS.length = 0;
+        SCRIPT = [
+            ok200(toolResp([th('ag1'), ...[1, 2, 3, 4, 5, 6].map((i) => tu(`ag${i}`))])),
+            ok200(toolResp([th('ag2'), tu('ag7')])),
+            ok200(textResp('aged done')),
+        ];
+        const mark = LOGS.length;
+        await ai.chat(chatId, 'aging turn');
+        eq('unflagged aging: 3 requests', SENT.length, 3);
+        ok('unflagged aging: precondition — in-turn results were aged before round 3', turnLogs(mark, /^\[Aging\]/).length >= 1
+            && toolResultContents(SENT[2].body).some((t) => /^ag\d$/.test(t.id) && /^\[Trimmed:/.test(t.content)));
+        ok(`${DR} [in-turn aging: round 2 still carries thinking]`, anyThinking(SENT[1].body));
+        ok(`${DR} [in-turn aging: round 3 still carries thinking]`, anyThinking(SENT[2].body));
+    }
+    {
+        // In-turn trim: history at the MAX_HISTORY cap — the round-1 tool group
+        // pushes it over and the per-round trim removes the oldest messages.
+        currentAdapter = claude; currentModel = 'claude-opus-5'; toolResultSize = 10;
+        const chatId = newChatId();
+        seed(chatId, 15);
+        SENT.length = 0; VIOLATIONS.length = 0;
+        SCRIPT = [ok200(toolResp([th('tr1'), tu('tr1')])), ok200(textResp('trimmed done'))];
+        const mark = LOGS.length;
+        await ai.chat(chatId, 'trim turn');
+        ok('unflagged trim: precondition — the per-round trim removed messages', turnLogs(mark, /"site":"toolRound"/).length >= 1);
+        ok(`${DR} [in-turn trim: round 2 still carries thinking]`, SENT.length === 2 && anyThinking(SENT[1].body));
+    }
+    {
+        // Control: a short history below the cap whose PRE-anchor tool result is
+        // aged in round 1 (before this turn produced any thinking) → no trim, no
+        // in-turn edit → round 2 still replays thinking (no needless strip).
+        currentAdapter = claude; currentModel = 'claude-opus-5'; toolResultSize = 10;
+        const chatId = newChatId();
+        seed(chatId, 2);
+        SENT.length = 0;
+        SCRIPT = [ok200(toolResp([th('nt1'), tu('nt1')])), ok200(textResp('no trim'))];
+        const mark = LOGS.length;
+        await ai.chat(chatId, 'small turn');
+        ok('unflagged no-change: round 1 aged the pre-anchor result', turnLogs(mark, /^\[Aging\]/).length >= 1
+            && toolResultContents(SENT[0].body).some((t) => t.id === 'old_t' && /^\[Trimmed:/.test(t.content)));
+        ok('unflagged no-change: no per-round trim', turnLogs(mark, /"site":"toolRound"/).length === 0);
+        ok('unflagged no-change: round 2 still replays in-turn thinking', SENT.length === 2 && anyThinking(SENT[1].body));
     }
 
     // B2: replay over budget → strip, re-measure, send.

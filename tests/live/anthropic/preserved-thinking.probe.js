@@ -225,7 +225,10 @@ function pushToolResults(ctx, parsed) {
 }
 
 const EXPECT = {
-    ok200Empty: (res, tc) => res.status === 200 && (!tc.present || tc.prefix === 0),
+    // Unedited paths must come back with NO entries of any kind: a
+    // model_binding_mismatch or an unrecognised entry is as unexpected as a
+    // prefix drop (CodeRabbit #467).
+    ok200Empty: (res, tc) => res.status === 200 && (!tc.present || (tc.prefix === 0 && tc.model === 0 && tc.other === 0)),
     toolUseWithThinking: (res) => {
         if (res.status !== 200) return false;
         const c = res.data.content || [];
@@ -521,6 +524,25 @@ async function selfCheck() {
         check('compat: T1R3-ERR sent and rejected with the signature 400', by('T1R3-ERR') && by('T1R3-ERR').status === 400);
         check('compat: at most 4 requests per model × auth', ROWS.filter((r) => r.status !== 'n/a').length <= 4);
     }
+    {
+        // ok200Empty must reject ANY transformation entry on an unedited path.
+        const mk = (list) => ({ status: 200, data: { content: [], input_transformations: list } });
+        const modelDrop = mk([{ type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'model_binding_mismatch' }]);
+        const unknown = mk([{ type: 'thinking_mismatch_allowed', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' }]);
+        check('ok200Empty: a 200 with model_binding_mismatch is NOT OK', EXPECT.ok200Empty(modelDrop, transformCounts(modelDrop)) === false);
+        check('ok200Empty: a 200 with an unrecognised entry is NOT OK', EXPECT.ok200Empty(unknown, transformCounts(unknown)) === false);
+        check('ok200Empty: a 200 with an empty array is OK', EXPECT.ok200Empty(mk([]), transformCounts(mk([]))) === true);
+        // Exit code: any non-OK row → process.exitCode = 1 (restored afterwards).
+        const saved = process.exitCode;
+        process.exitCode = 0;
+        applyExitCode([{ verdict: 'OK' }]);
+        const afterOk = process.exitCode;
+        applyExitCode([{ verdict: 'OK' }, { verdict: 'UNEXPECTED' }]);
+        const afterBad = process.exitCode;
+        process.exitCode = saved;
+        check('exit code: all-OK rows leave exitCode 0', afterOk === 0);
+        check('exit code: a non-OK row sets exitCode 1', afterBad === 1);
+    }
     console.log(`\nself-check: ${failures === 0 ? 'ALL PASS' : failures + ' FAILED'} (requests simulated: ${REQUESTS})`);
     process.exit(failures === 0 ? 0 : 1);
 }
@@ -551,8 +573,15 @@ async function main() {
     printTable();
     console.log(`\nrequests: ${REQUESTS} | tokens: input=${TOKENS.input} output=${TOKENS.output} cacheRead=${TOKENS.cacheRead} cacheWrite=${TOKENS.cacheWrite}`);
     if (stopped) { console.log(`STOPPED: ${stopped}`); process.exit(3); }
-    const bad = ROWS.filter((r) => r.verdict !== 'OK').length;
+    const bad = applyExitCode(ROWS);
     console.log(`verdicts: ${ROWS.length - bad} OK, ${bad} not OK`);
+}
+
+// Any non-OK row fails the run (non-zero exit) without cutting off output.
+function applyExitCode(rows) {
+    const bad = rows.filter((r) => r.verdict !== 'OK').length;
+    if (bad > 0) process.exitCode = 1;
+    return bad;
 }
 
 main().catch((e) => { console.log(`FATAL: ${scrub(e && e.stack ? e.stack : e)}`); process.exit(1); });

@@ -2757,6 +2757,14 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride, anc
 const AGING_RECENCY_THRESHOLD = 6;  // messages within this distance from end are "recent"
 const AGING_SIZE_THRESHOLD = 800;   // chars — only age results larger than this
 
+// BAT-1664: index of the newest assistant message (the batch the model is about
+// to read sits after it). -1 when there is none. Used as the aging bound for the
+// budget reduction so the newest results are never placeholdered.
+function _newestAssistantIndex(messages) {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i] && messages[i].role === 'assistant') return i;
+    return -1;
+}
+
 // BAT-1664 C0: optional `endExclusive` caps the scan (stable-history models age
 // only messages BEFORE the turn anchor, once per turn).
 function ageToolResults(messages, turnId, endExclusive) {
@@ -3023,6 +3031,11 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-1664 C0: on stable-history models, ONCE per turn and only before
             // the anchor (aging an in-turn result would change a bound prefix).
             if (!_stableHistory) {
+                // BAT-1664 scope decision: per-round aging on UNFLAGGED models does
+                // NOT strip replayed thinking. The unflagged registry models do not
+                // run the prefix check (live --compat probe, 2026-11-16), so stripping
+                // would only cost reasoning quality; an unknown id that does check is
+                // covered by the C3 signature heal (one extra request per turn).
                 ageToolResults(messages, turnId);
             } else if (!_agedOnce) {
                 _agedOnce = true;
@@ -3322,7 +3335,11 @@ async function chat(chatId, userMessage, options = {}) {
                     log(`[ContextBudget] request ~${_gate.estimatedTokens} tokens (${Math.round(_gate.usage * 100)}% of ${_gate.limit}) is over the ${Math.round(CONTEXT_DANGER_THRESHOLD * 100)}% budget — reducing once (strip thinking, age results, trim) | turnId=${turnId || 'n/a'}`, 'WARN');
                     _stripAllThinking = true;
                     _wireSnap.noteHistoryEdit(messages);
-                    ageToolResults(messages, turnId);
+                    // Age older results (this turn's included) but NEVER the newest
+                    // assistant message's batch: the exit message promises the latest
+                    // results are kept in full, and the model needs them to continue.
+                    // If that batch alone is too big, the no-send exit below runs.
+                    ageToolResults(messages, turnId, _newestAssistantIndex(messages));
                     if (adaptiveTrim(messages, _gate.usage, turnId, _turnAnchor) > 0) sanitizeConversation(messages, turnId);
                     if (anchorGuardRepair(messages, _turnAnchor)) {
                         anchorGuardStats.repairs++;
@@ -3965,6 +3982,8 @@ async function chat(chatId, userMessage, options = {}) {
             // the prefix every in-turn thinking signature is bound to. They trim
             // once at turn end ('turnEnd', below) and at addToConversation; the
             // budget gate bounds the payload in between.
+            // Unflagged: no epoch bump on a removal — same scope decision as the
+            // per-round aging above (C3 heals an unknown checking id).
             if (!_stableHistory) _trimHistoryLogged(messages, MAX_HISTORY, _turnAnchor, turnId, 'toolRound');
 
             // Status reaction: back to thinking before next Claude API call
