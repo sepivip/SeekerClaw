@@ -54,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -260,9 +261,27 @@ fun SettingsScreen(
     }
     var showRunSetupDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
-    // BAT-1157: the outcome of a reset that did not finish, shown with a Retry.
+    // BAT-1157: the reset runs in ResetRunner (process scope) so it survives leaving this screen;
+    // its outcome comes back here. A reset that did not finish is shown with a Retry.
     var resetProblem by remember { mutableStateOf<String?>(null) }
-    var resetRunning by remember { mutableStateOf(false) }
+    val resetResult by ResetRunner.result.collectAsState()
+    LaunchedEffect(resetResult) {
+        when (val r = resetResult) {
+            null -> Unit
+            ConfigManager.ResetResult.Done -> {
+                ResetRunner.consume()
+                onRunSetupAgain()
+            }
+            is ConfigManager.ResetResult.Partial -> {
+                ResetRunner.consume()
+                resetProblem = describeResetProblem(r)
+            }
+            is ConfigManager.ResetResult.Failed -> {
+                ResetRunner.consume()
+                resetProblem = "Reset didn't run, so nothing was changed. Try again."
+            }
+        }
+    }
     var showClearMemoryDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showApplyConfigDialog by remember { mutableStateOf(false) }
@@ -1308,31 +1327,9 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showResetDialog = false
-                    if (!resetRunning) {
-                        resetRunning = true
+                    if (!ResetRunner.isRunning.value) {
                         SeekerClawService.stop(context)
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) { ConfigManager.resetConfig(context) }
-                            resetRunning = false
-                            when (result) {
-                                ConfigManager.ResetResult.Done -> {
-                                    // BAT-1021 same-class sweep: the reset cleared the wallet address
-                                    // with the rest of prefs, so the MWA auth-token cache is cleared in
-                                    // lockstep. BAT-1157: only once the reset really finished.
-                                    SolanaWalletManager.clearAuthToken()
-                                    Analytics.featureUsed("config_reset", mapOf("outcome" to "done"))
-                                    onRunSetupAgain()
-                                }
-                                is ConfigManager.ResetResult.Partial -> {
-                                    Analytics.featureUsed("config_reset", mapOf("outcome" to "partial"))
-                                    resetProblem = describeResetProblem(result)
-                                }
-                                is ConfigManager.ResetResult.Failed -> {
-                                    Analytics.featureUsed("config_reset", mapOf("outcome" to "failed"))
-                                    resetProblem = "Reset didn't run, so nothing was changed. Try again."
-                                }
-                            }
-                        }
+                        ResetRunner.start(context)
                     }
                 }) {
                     Text(

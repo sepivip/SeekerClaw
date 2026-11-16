@@ -1027,7 +1027,7 @@ class AndroidBridge(
         val accessToken = params.optString("accessToken", "")
         val refreshToken = params.optString("refreshToken", "")
         val expiresAt = params.optString("expiresAt", "")
-        if (familyId.isBlank() || expectedEpoch < 1L || rotationId.isBlank() || accessToken.isBlank()) {
+        if (familyId.isBlank() || expectedEpoch < 1L || expectedEpoch == Long.MAX_VALUE || rotationId.isBlank() || accessToken.isBlank()) {
             return jsonResponse(400, mapOf("error" to "familyId, expectedEpoch, rotationId and accessToken required"))
         }
         return try {

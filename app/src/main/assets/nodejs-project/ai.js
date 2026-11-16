@@ -1797,17 +1797,6 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         let refreshedThisCall = typeof adapter.currentRefreshGeneration === 'function'
             && adapter.currentRefreshGeneration() !== _genBeforeRefresh;
-        // BAT-1157 (D15): a provider whose sign-in is latched (changed elsewhere) or
-        // reconnect-required never sends an authenticated request — no blank bearer goes out. The
-        // synthetic 401 classifies through the adapter's 'reauth' class, so the caller shows its
-        // message ("Reconnect OpenAI in Settings" / "…restart the agent") like any other reply.
-        if (typeof adapter.preflightAuth === 'function') {
-            const blocked = adapter.preflightAuth();
-            if (blocked) {
-                if (!background) updateAgentHealth('error', { type: blocked.type, status: 401, message: blocked.userMessage });
-                return { status: 401, data: { error: { message: blocked.userMessage } }, headers: {} };
-            }
-        }
         // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
         // retry carries the freshly-rotated bearer, not the expired one.
         let headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
@@ -1828,6 +1817,19 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
+            // BAT-1157 (D15): checked immediately before EVERY attempt, including retries after a
+            // backoff — the sign-in may latch (changed elsewhere) or need a reconnect while this loop
+            // waits, and the retained headers must then never be sent. The synthetic 401 classifies
+            // through the adapter's 'reauth' class, so the caller shows its message
+            // ("Reconnect OpenAI in Settings" / "…restart the agent") like any other reply.
+            if (typeof adapter.preflightAuth === 'function') {
+                const blocked = adapter.preflightAuth();
+                if (blocked) {
+                    if (!background) updateAgentHealth('error', { type: blocked.type, status: 401, message: blocked.userMessage });
+                    res = { status: 401, data: { error: { message: blocked.userMessage } }, headers: {} };
+                    break;
+                }
+            }
             const attemptStart = Date.now();
             let timeoutSource = null;
 
@@ -1929,9 +1931,6 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         } catch (e) {
                             if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
                         }
-                        // BAT-1157 (D15): the recovery may have latched or required a reconnect —
-                        // then nothing more is sent.
-                        if (typeof adapter.preflightAuth === 'function' && adapter.preflightAuth()) break;
                         // IMPORTANT: handleUnauthorized signals a SUCCESSFUL refresh by
                         // THROWING { retryable:true } (see xai.js/openai.js docstrings), and a
                         // no-op (api_key mode) by returning normally — both mean "refreshed,

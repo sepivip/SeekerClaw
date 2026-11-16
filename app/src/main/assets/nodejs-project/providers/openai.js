@@ -701,6 +701,14 @@ function _scheduleSaveRetry() {
     if (_saveRetryTimer && typeof _saveRetryTimer.unref === 'function') _saveRetryTimer.unref();
 }
 
+/**
+ * BAT-1157: true while a refreshed pair is only in memory (its save not yet acknowledged). ai.js
+ * reports health 'degraded' meanwhile — a restart now would leave only the spent pair on disk.
+ */
+function isPersistPending() {
+    return !!_pendingSave;
+}
+
 /** BAT-1157: stop the save-retry timer (SIGTERM). */
 function shutdownOAuthTimers() {
     _clearSaveRetry();
@@ -894,6 +902,7 @@ module.exports = {
     preflightAuth,
     currentRefreshGeneration,
     shutdownOAuthTimers,
+    isPersistPending,
 
     // Capabilities
     supportsCache: false,

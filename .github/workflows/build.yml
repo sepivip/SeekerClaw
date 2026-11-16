@@ -118,6 +118,7 @@ jobs:
             model-catalog \
             reasoning-request-enablement \
             xai \
+            openai-oauth-store \
             quiesce \
             shutdown-flush-durability-only \
             logging-substrate \

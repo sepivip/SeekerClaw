@@ -93,7 +93,10 @@ object OpenAIOAuthTokenStore {
         CrossProcessStore.ReadState.Absent -> State.Absent
         is CrossProcessStore.ReadState.Unreadable -> State.Unreadable(s.reason)
         is CrossProcessStore.ReadState.Present ->
-            if (s.value.epoch < 1L) State.Unreadable("epoch ${s.value.epoch}") else State.Present(s.value)
+            // Every persisted record has 1 <= epoch < Long.MAX_VALUE, so `epoch + 1` never overflows;
+            // anything else is a corrupt record (contract: guard every field from persisted JSON).
+            if (s.value.epoch < 1L || s.value.epoch == Long.MAX_VALUE) State.Unreadable("epoch ${s.value.epoch}")
+            else State.Present(s.value)
     }
 
     fun markerExists(): Boolean = dir?.let { SafeFs.existsNoFollow(File(it, MARKER_NAME).toPath()) } ?: false

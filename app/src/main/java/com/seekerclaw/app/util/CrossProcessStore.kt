@@ -357,9 +357,17 @@ class CrossProcessStore<T> private constructor(
      * record. Reads disk every call, no-follow.
      */
     fun readState(): ReadState<T> {
-        if (!SafeFs.existsNoFollow(file.toPath())) return ReadState.Absent
+        // Only a CONFIRMED missing file is Absent: a failed metadata lookup (Files.exists can report
+        // false on an I/O error) must not let a fill-only migration write over a live record.
+        val text = try {
+            SafeFs.readTextNoFollow(filesDirRoot.toPath(), file.toPath())
+        } catch (_: java.nio.file.NoSuchFileException) {
+            return ReadState.Absent
+        } catch (e: Exception) {
+            return ReadState.Unreadable(e.javaClass.simpleName)
+        }
         return try {
-            ReadState.Present(json.decodeFromString(serializer, SafeFs.readTextNoFollow(filesDirRoot.toPath(), file.toPath())))
+            ReadState.Present(json.decodeFromString(serializer, text))
         } catch (e: Exception) {
             ReadState.Unreadable(e.javaClass.simpleName)
         }

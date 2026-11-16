@@ -170,7 +170,10 @@ class OpenAIOAuthActivity : ComponentActivity() {
                     // the middle of Reset Config, nor report "connected" after one. The record
                     // carries exactly what this exchange returned: no refresh token or email is
                     // inherited from a previous sign-in (it could belong to another account).
-                    val flowGen = synchronized(FLOW_LOCK) { activeFlowResetGen }
+                    // The generation captured when THIS flow (requestId) started: a reset plus a newer
+                    // flow in between leaves activeFlowId on the newer flow, so this read is null and
+                    // the commit is refused (never another flow's generation).
+                    val flowGen = synchronized(FLOW_LOCK) { if (activeFlowId == requestId) activeFlowResetGen else null }
                     val outcome = if (flowGen == null) {
                         ResetGate.Commit.Cancelled
                     } else {
@@ -716,18 +719,16 @@ class OpenAIOAuthActivity : ComponentActivity() {
         val resetGen = ResetGate.beginFlow()
         if (resetGen == null) {
             Log.w(TAG, "Sign-in refused: Reset Config in progress")
-            if (claimWrite()) {
-                EXCHANGE_SCOPE.launch {
-                    try {
-                        writeResultFileStatic(appCtx, requestId, JSONObject().apply {
-                            put("status", "error")
-                            put("message", "Reset in progress. Try again when it finishes.")
-                        })
-                    } catch (writeErr: Exception) {
-                        Log.w(TAG, "Failed to write reset-in-progress result", writeErr)
-                    } finally {
-                        markWriteCompleted()
-                    }
+            // This attempt never became the active flow, so it touches no shared flow state (a
+            // later retry's write claim stays intact); it only answers its own requestId.
+            EXCHANGE_SCOPE.launch {
+                try {
+                    writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                        put("status", "error")
+                        put("message", "Reset in progress. Try again when it finishes.")
+                    })
+                } catch (writeErr: Exception) {
+                    Log.w(TAG, "Failed to write reset-in-progress result", writeErr)
                 }
             }
             OAuthKeepAliveService.stop(appCtx)
