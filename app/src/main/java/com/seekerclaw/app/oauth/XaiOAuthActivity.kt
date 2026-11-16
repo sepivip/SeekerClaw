@@ -10,6 +10,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import com.seekerclaw.app.config.BuildProvenance
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.ResetGate
 import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.service.OAuthKeepAliveService
 import com.seekerclaw.app.service.SeekerClawService
@@ -105,6 +106,8 @@ class XaiOAuthActivity : ComponentActivity() {
         private var activeServer: CallbackServer? = null
         private var activeCallbackReceived = false
         private var activeFlowId: String? = null
+        /** BAT-1157: the ResetGate generation captured when the active flow started. */
+        private var activeFlowResetGen: Long? = null
         private var activeTimeoutJob: Job? = null
 
         private enum class WriteState { IDLE, WRITING, COMPLETED }
@@ -131,6 +134,7 @@ class XaiOAuthActivity : ComponentActivity() {
             activeServer = null
             activeCallbackReceived = false
             activeFlowId = null
+            activeFlowResetGen = null
             activeWriteState = WriteState.IDLE
         }
 
@@ -189,46 +193,59 @@ class XaiOAuthActivity : ComponentActivity() {
                 }
 
                 withContext(NonCancellable + Dispatchers.IO) {
-                    val prior = ConfigManager.loadConfigOrBootstrap(appCtx)
-                    val resolvedRefresh = refreshToken.ifBlank { prior.xaiOAuthRefresh }
-                    val resolvedEmail = email ?: prior.xaiOAuthEmail
-                    // BAT-1155: persist into the dedicated XaiOAuthTokenStore as a NEW
-                    // family (sign-in, epoch-advanced, no CAS) — NOT prefs/saveConfig.
-                    // Encrypt to the store's ciphertext-at-rest format; blanks stay "".
-                    val encAccess = Base64.encodeToString(KeystoreHelper.encrypt(accessToken), Base64.NO_WRAP)
-                    val encRefresh = if (resolvedRefresh.isNotBlank())
-                        Base64.encodeToString(KeystoreHelper.encrypt(resolvedRefresh), Base64.NO_WRAP) else ""
-                    val encEmail = if (resolvedEmail.isNotBlank())
-                        Base64.encodeToString(KeystoreHelper.encrypt(resolvedEmail), Base64.NO_WRAP) else ""
-                    val signInResult = XaiOAuthTokenStore.signIn(encAccess, encRefresh, encEmail, expiresAt)
-                    if (signInResult is XaiOAuthTokenStore.Result.Failed) {
-                        // Fail loud — the outer catch writes the error result file.
-                        throw IllegalStateException("token store sign-in write failed: ${signInResult.reason}")
-                    }
-                    // H5: keep runtime_state.json's xai authType in step with the fresh
-                    // sign-in so Node (which reads runtime_state FIRST) can't boot the
-                    // (xai, api_key) pair over a valid oauth token.
-                    ConfigManager.syncXaiRuntimeAuthType(appCtx)
-                    // Locked decision 5: recovery is restart-only. Restart :node so it
-                    // re-reads config.json and clears any in-memory _refreshDead /
-                    // reauthRequired from a prior dead family. D2 makes this restart
-                    // zero-refresh while the freshly-minted token's TTL is valid.
-                    // ONLY for in-place recovery (setup already complete → the agent is
-                    // the 24/7 service). During onboarding the SetupScreen's saveAndStart
-                    // starts the service fresh, so a premature restart here is skipped.
-                    // Kept INSIDE the NonCancellable block (CodeRabbit) so a cancellation
-                    // can't leave the store written but :node not restarted (recovery
-                    // half-done → stale in-memory dead flag persists until the next boot).
-                    if (ConfigManager.isSetupComplete(appCtx)) {
-                        try {
-                            SeekerClawService.restart(appCtx)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not restart :node after xAI sign-in", e)
+                    // BAT-1157: the commit and everything after it (runtime auth sync, service
+                    // restart, result file) run inside ResetGate's commit section, so a sign-in can
+                    // never land in the middle of Reset Config, nor report "connected" after one.
+                    val flowGen = synchronized(FLOW_LOCK) { activeFlowResetGen }
+                    val outcome = if (flowGen == null) {
+                        ResetGate.Commit.Cancelled
+                    } else {
+                        ResetGate.commit(flowGen) {
+                            val prior = ConfigManager.loadConfigOrBootstrap(appCtx)
+                            val resolvedRefresh = refreshToken.ifBlank { prior.xaiOAuthRefresh }
+                            val resolvedEmail = email ?: prior.xaiOAuthEmail
+                            // BAT-1155: persist into the dedicated XaiOAuthTokenStore as a NEW
+                            // family (sign-in, epoch-advanced, no CAS) — NOT prefs/saveConfig.
+                            // Encrypt to the store's ciphertext-at-rest format; blanks stay "".
+                            val encAccess = Base64.encodeToString(KeystoreHelper.encrypt(accessToken), Base64.NO_WRAP)
+                            val encRefresh = if (resolvedRefresh.isNotBlank())
+                                Base64.encodeToString(KeystoreHelper.encrypt(resolvedRefresh), Base64.NO_WRAP) else ""
+                            val encEmail = if (resolvedEmail.isNotBlank())
+                                Base64.encodeToString(KeystoreHelper.encrypt(resolvedEmail), Base64.NO_WRAP) else ""
+                            val signInResult = XaiOAuthTokenStore.signIn(encAccess, encRefresh, encEmail, expiresAt)
+                            if (signInResult is XaiOAuthTokenStore.Result.Failed) {
+                                // Fail loud — the outer catch writes the error result file.
+                                throw IllegalStateException("token store sign-in write failed: ${signInResult.reason}")
+                            }
+                            // H5: keep runtime_state.json's xai authType in step with the fresh
+                            // sign-in so Node (which reads runtime_state FIRST) can't boot the
+                            // (xai, api_key) pair over a valid oauth token.
+                            ConfigManager.syncXaiRuntimeAuthType(appCtx)
+                            // Locked decision 5: recovery is restart-only. Restart :node so it
+                            // re-reads config.json and clears any in-memory _refreshDead /
+                            // reauthRequired from a prior dead family. D2 makes this restart
+                            // zero-refresh while the freshly-minted token's TTL is valid.
+                            // ONLY for in-place recovery (setup already complete → the agent is
+                            // the 24/7 service). During onboarding the SetupScreen's saveAndStart
+                            // starts the service fresh, so a premature restart here is skipped.
+                            // Kept INSIDE the NonCancellable block (CodeRabbit) so a cancellation
+                            // can't leave the store written but :node not restarted (recovery
+                            // half-done → stale in-memory dead flag persists until the next boot).
+                            if (ConfigManager.isSetupComplete(appCtx)) {
+                                try {
+                                    SeekerClawService.restart(appCtx)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Could not restart :node after xAI sign-in", e)
+                                }
+                            }
+                            writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                                put("status", "success")
+                            })
                         }
                     }
-                    writeResultFileStatic(appCtx, requestId, JSONObject().apply {
-                        put("status", "success")
-                    })
+                    if (outcome is ResetGate.Commit.Cancelled) {
+                        throw IllegalStateException("sign-in cancelled: the config was reset")
+                    }
                 }
                 Log.i(TAG, "Browser flow completed successfully")
                 // BAT-1124 (device-test UX): xAI completes the loopback exchange in the
@@ -723,8 +740,31 @@ class XaiOAuthActivity : ComponentActivity() {
         server = CallbackServer(CALLBACK_PORT) { params ->
             handleCallbackStatic(appCtx, activityRef, requestId, server!!, params, state, codeVerifier)
         }
+        // BAT-1157: capture the ResetGate generation as the flow starts; refuse while a reset runs.
+        val resetGen = ResetGate.beginFlow()
+        if (resetGen == null) {
+            Log.w(TAG, "Sign-in refused: Reset Config in progress")
+            if (claimWrite()) {
+                EXCHANGE_SCOPE.launch {
+                    try {
+                        writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                            put("status", "error")
+                            put("message", "Reset in progress. Try again when it finishes.")
+                        })
+                    } catch (writeErr: Exception) {
+                        Log.w(TAG, "Failed to write reset-in-progress result", writeErr)
+                    } finally {
+                        markWriteCompleted()
+                    }
+                }
+            }
+            OAuthKeepAliveService.stop(appCtx)
+            finish()
+            return
+        }
         synchronized(FLOW_LOCK) {
             activeFlowId = requestId
+            activeFlowResetGen = resetGen
         }
         try {
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)

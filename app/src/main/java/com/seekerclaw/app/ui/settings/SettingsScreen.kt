@@ -46,7 +46,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import com.seekerclaw.app.config.BuildProvenance
-import com.seekerclaw.app.config.PrefsNames
+import com.seekerclaw.app.config.MainPrefs
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -260,6 +260,9 @@ fun SettingsScreen(
     }
     var showRunSetupDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+    // BAT-1157: the outcome of a reset that did not finish, shown with a Retry.
+    var resetProblem by remember { mutableStateOf<String?>(null) }
+    var resetRunning by remember { mutableStateOf(false) }
     var showClearMemoryDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showApplyConfigDialog by remember { mutableStateOf(false) }
@@ -1242,6 +1245,45 @@ fun SettingsScreen(
         )
     }
 
+    // BAT-1157: a reset that did not finish says what was and wasn't cleared, and offers Retry.
+    resetProblem?.let { problem ->
+        AlertDialog(
+            onDismissRequest = { resetProblem = null },
+            title = {
+                Text(
+                    "Reset not finished",
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    color = SeekerClawColors.Error,
+                )
+            },
+            text = {
+                Text(
+                    problem,
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextSecondary,
+                    lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    resetProblem = null
+                    showResetDialog = true
+                }) {
+                    Text("Retry", fontFamily = RethinkSans, fontWeight = FontWeight.Bold, color = SeekerClawColors.Error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { resetProblem = null }) {
+                    Text("Close", fontFamily = RethinkSans, color = SeekerClawColors.TextDim)
+                }
+            },
+            containerColor = SeekerClawColors.Surface,
+            shape = shape,
+        )
+    }
+
     // ==================== Reset Config Dialog ====================
     if (showResetDialog) {
         AlertDialog(
@@ -1265,16 +1307,33 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    // BAT-1021 same-class sweep: clearConfig clears the wallet
-                    // address as a side effect of clearing all prefs, so the
-                    // MWA auth-token cache must be cleared in lockstep — same
-                    // invariant as the Disconnect Wallet button.
-                    SolanaWalletManager.clearAuthToken()
-                    SeekerClawService.stop(context)
-                    ConfigManager.clearConfig(context)
-                    Analytics.featureUsed("config_reset")
                     showResetDialog = false
-                    onRunSetupAgain()
+                    if (!resetRunning) {
+                        resetRunning = true
+                        SeekerClawService.stop(context)
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) { ConfigManager.resetConfig(context) }
+                            resetRunning = false
+                            when (result) {
+                                ConfigManager.ResetResult.Done -> {
+                                    // BAT-1021 same-class sweep: the reset cleared the wallet address
+                                    // with the rest of prefs, so the MWA auth-token cache is cleared in
+                                    // lockstep. BAT-1157: only once the reset really finished.
+                                    SolanaWalletManager.clearAuthToken()
+                                    Analytics.featureUsed("config_reset", mapOf("outcome" to "done"))
+                                    onRunSetupAgain()
+                                }
+                                is ConfigManager.ResetResult.Partial -> {
+                                    Analytics.featureUsed("config_reset", mapOf("outcome" to "partial"))
+                                    resetProblem = describeResetProblem(result)
+                                }
+                                is ConfigManager.ResetResult.Failed -> {
+                                    Analytics.featureUsed("config_reset", mapOf("outcome" to "failed"))
+                                    resetProblem = "Reset didn't run, so nothing was changed. Try again."
+                                }
+                            }
+                        }
+                    }
                 }) {
                     Text(
                         "Confirm",
@@ -1810,15 +1869,14 @@ private fun requestPermissionOrOpenSettings(
     if (ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)) {
         launcher.launch(permission)
     } else {
-        val prefs = context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
         val askedKey = "permission_asked_$permission"
-        if (prefs.getBoolean(askedKey, false)) {
+        if (MainPrefs.read(context).getBoolean(askedKey, false)) {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = Uri.parse("package:${context.packageName}")
             }
             context.startActivity(intent)
         } else {
-            prefs.edit().putBoolean(askedKey, true).apply()
+            MainPrefs.forWrite(context, "Settings.permissionAsked")?.edit()?.putBoolean(askedKey, true)?.apply()
             launcher.launch(permission)
         }
     }
@@ -1982,3 +2040,17 @@ private fun WalletAddressRow(address: String, clipboardLabel: String) {
     }
 }
 
+/** BAT-1157: what a partial reset did and didn't clear, in words a user can act on. */
+private fun describeResetProblem(r: ConfigManager.ResetResult.Partial): String {
+    fun line(name: String, o: com.seekerclaw.app.state.TombstoneOutcome) = when (o) {
+        com.seekerclaw.app.state.TombstoneOutcome.CONFIRMED -> "$name sign-in removed."
+        com.seekerclaw.app.state.TombstoneOutcome.UNCONFIRMED -> "$name sign-in removal couldn't be confirmed."
+        com.seekerclaw.app.state.TombstoneOutcome.NOT_WRITTEN -> "$name sign-in not removed."
+    }
+    val rest = when {
+        r.configCleared -> "Settings cleared."
+        r.keyDeleted -> "Settings were not cleared."
+        else -> "Your settings and keys were kept."
+    }
+    return listOf(line("OpenAI", r.openai), line("xAI", r.xai), rest, "Retry to finish the reset.").joinToString("\n")
+}

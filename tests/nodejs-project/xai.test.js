@@ -849,7 +849,8 @@ async function testHandleUnauthorized() {
     // the adapter side; this proves ai.js actually re-reads it.
     const aiSrc = fs.readFileSync(path.join(BUNDLE, 'ai.js'), 'utf8');
     ok('ai.js declares `let headers` (reassignable for the rebuild)', /\blet headers\b/.test(aiSrc));
-    const authIdx = aiSrc.indexOf('handleUnauthorized()');
+    // BAT-1157: the call now passes the request's credential generation (handleUnauthorized(usedGen)).
+    const authIdx = aiSrc.indexOf('adapter.handleUnauthorized(');
     ok('ai.js still calls handleUnauthorized() in the retry loop', authIdx !== -1);
     // handleUnauthorized SIGNALS a successful refresh by THROWING {retryable:true}
     // (not by returning), so the header rebuild must live AFTER the try/catch —

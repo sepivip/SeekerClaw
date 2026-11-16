@@ -1797,9 +1797,24 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         let refreshedThisCall = typeof adapter.currentRefreshGeneration === 'function'
             && adapter.currentRefreshGeneration() !== _genBeforeRefresh;
+        // BAT-1157 (D15): a provider whose sign-in is latched (changed elsewhere) or
+        // reconnect-required never sends an authenticated request — no blank bearer goes out. The
+        // synthetic 401 classifies through the adapter's 'reauth' class, so the caller shows its
+        // message ("Reconnect OpenAI in Settings" / "…restart the agent") like any other reply.
+        if (typeof adapter.preflightAuth === 'function') {
+            const blocked = adapter.preflightAuth();
+            if (blocked) {
+                if (!background) updateAgentHealth('error', { type: blocked.type, status: 401, message: blocked.userMessage });
+                return { status: 401, data: { error: { message: blocked.userMessage } }, headers: {} };
+            }
+        }
         // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
         // retry carries the freshly-rotated bearer, not the expired one.
         let headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+        // BAT-1157 (D11): the credential generation these headers were built with. A 401 hands it
+        // to handleUnauthorized, so a delayed 401 from a request sent with an already-replaced
+        // bearer retries on the current one instead of spending another refresh token.
+        let usedGen = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -1910,10 +1925,13 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                     // OAuth 401: refresh token before retry so the next attempt uses new credentials
                     if (errClass.type === 'auth' && typeof adapter.handleUnauthorized === 'function') {
                         try {
-                            await adapter.handleUnauthorized();
+                            await adapter.handleUnauthorized(usedGen);
                         } catch (e) {
                             if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
                         }
+                        // BAT-1157 (D15): the recovery may have latched or required a reconnect —
+                        // then nothing more is sent.
+                        if (typeof adapter.preflightAuth === 'function' && adapter.preflightAuth()) break;
                         // IMPORTANT: handleUnauthorized signals a SUCCESSFUL refresh by
                         // THROWING { retryable:true } (see xai.js/openai.js docstrings), and a
                         // no-op (api_key mode) by returning normally — both mean "refreshed,
@@ -1925,6 +1943,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         // refresh path, so re-sending the stale bearer 401s again and burns a
                         // single-use refresh rotation on every attempt. No-op for api_key/claude.
                         headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+                        usedGen = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
                         refreshedThisCall = true; // BAT-1143 D8: mark the post-refresh retry
                     }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
@@ -2084,7 +2103,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             lastRateLimitTokensReset = rl.tokensReset;
             writeApiUsageState({
                 type: 'api_key',
-                auth_mode: AUTH_TYPE,
+                // BAT-1157: OpenAI reports its transport (an oauth selection on the saved key is api_key).
+                auth_mode: PROVIDER === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE,
                 provider: PROVIDER,
                 requests: rl.requests || {},
                 tokens: rl.tokens || {},
@@ -2531,6 +2551,11 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride, anc
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         const _sumRefreshed = typeof adapter.currentRefreshGeneration === 'function'
             && adapter.currentRefreshGeneration() !== _sumGenBefore;
+        // BAT-1157 (D15): no authenticated send while the sign-in is latched or reconnect-required.
+        if (typeof adapter.preflightAuth === 'function' && adapter.preflightAuth()) {
+            log('[ContextSummary] Skipped: the AI sign-in needs attention', 'WARN');
+            return false; // Fall back to normal adaptive trim
+        }
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         const summaryPrompt = [

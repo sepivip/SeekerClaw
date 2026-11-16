@@ -11,12 +11,14 @@ import androidx.core.content.ContextCompat
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.state.McpServersStore
+import com.seekerclaw.app.state.OpenAIOAuthTokenStore
 import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import android.util.Log
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.BootHygiene
 import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.ProcessRole
 import com.seekerclaw.app.util.SafeFs
 import com.seekerclaw.app.util.ServiceState
 
@@ -35,21 +37,27 @@ class SeekerClawApplication : Application() {
         // BAT-1409 P1-C step 1 (amendment v3.3 M1): in `:node`, before any store is constructed or
         // read, no planted link may remain at a critical path. A path that cannot be verified ends
         // this process's start as Failed(LINK_HYGIENE) below.
-        val isNodeProcess = getProcessName().endsWith(":node")
+        val isNodeProcess = ProcessRole.isNode
         if (isNodeProcess) BootHygiene.runStep1(dataDir)
         // BAT-1409 P1-J: the link-safe filesystem helper needs this process's filesDir (the
         // ancestor-rule root) and an Android directory fsync for durable writes. Set first, in
         // EVERY process, before any store is constructed or any file is written.
         SafeFs.filesRoot = filesDir.toPath()
+        // BAT-1157: the CHECKED form throws, for writes a later step depends on (the OAuth token
+        // store, its migration marker). Android's FileChannel.open refuses a directory, so without
+        // this override every verified write would fail on a device while JVM tests stay green.
+        SafeFs.dirSyncChecked = { dir ->
+            // O_RDONLY on a directory is valid on Linux; OsConstants has no O_DIRECTORY.
+            val fd = android.system.Os.open(dir.toString(), android.system.OsConstants.O_RDONLY, 0)
+            try {
+                android.system.Os.fsync(fd)
+            } finally {
+                android.system.Os.close(fd)
+            }
+        }
         SafeFs.dirSync = { dir ->
             try {
-                // O_RDONLY on a directory is valid on Linux; OsConstants has no O_DIRECTORY.
-                val fd = android.system.Os.open(dir.toString(), android.system.OsConstants.O_RDONLY, 0)
-                try {
-                    android.system.Os.fsync(fd)
-                } finally {
-                    android.system.Os.close(fd)
-                }
+                SafeFs.dirSyncChecked(dir)
             } catch (_: Exception) {
                 // The rename already happened atomically; durability is best effort.
             }
@@ -85,6 +93,10 @@ class SeekerClawApplication : Application() {
         // durability gate, and the writeConfigJson/loadConfig migration).
         // init() is idempotent, so a second call is a no-op.
         XaiOAuthTokenStore.init(this)
+        // BAT-1157: the OpenAI sign-in token store, in BOTH processes: MAIN signs in and out,
+        // `:node` rotates and confirms through the bridge, and either process may run the
+        // fill-only migration from the legacy prefs keys at its first config load.
+        OpenAIOAuthTokenStore.init(this)
 
         // Firebase Analytics. In `:node` it initialises in the service's start continuation instead,
         // after link hygiene step 2 has checked shared_prefs/ and databases/ (BAT-1409 P1-C, v3.3 M1).

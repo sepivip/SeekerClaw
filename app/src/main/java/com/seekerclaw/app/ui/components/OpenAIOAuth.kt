@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +40,7 @@ import com.seekerclaw.app.ui.theme.SeekerClawColors
 import com.seekerclaw.app.ui.theme.Sizing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -81,6 +83,7 @@ fun rememberOpenAIOAuthController(
     var requestId by remember { mutableStateOf<String?>(null) }
     var isPolling by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     // Clean up stale OAuth result files (>1h) on first composition.
     LaunchedEffect(Unit) {
@@ -98,7 +101,7 @@ fun rememberOpenAIOAuthController(
     }
 
     // Poll the result file written by OpenAIOAuthActivity. Tokens are persisted by
-    // the activity directly via ConfigManager.persistOpenAIOAuthTokens — we just
+    // the activity directly into OpenAIOAuthTokenStore (BAT-1157) — we just
     // watch the status flag here to update the UI state.
     LaunchedEffect(requestId, isPolling) {
         val reqId = requestId ?: return@LaunchedEffect
@@ -144,6 +147,8 @@ fun rememberOpenAIOAuthController(
     }
 
     val state = OpenAIOAuthState(
+        // BAT-1157: "signed in" means a usable OAuth pair (the store's decrypted record, or the
+        // legacy pair before its migration is confirmed) — never "the agent can start on the API key".
         isConnected = config.openaiOAuthToken.isNotBlank(),
         email = config.openaiOAuthEmail,
         isPolling = isPolling,
@@ -163,17 +168,18 @@ fun rememberOpenAIOAuthController(
             error = null
         },
         signOut = {
-            // Clear all 4 OAuth prefs directly — using updateConfigField would
-            // no-op on a fresh install (loadConfig returns null until setup is
-            // complete), leaving tokens orphaned after a mid-onboarding sign-out.
-            ConfigManager.persistOpenAIOAuthTokens(
-                context = context,
-                accessToken = "",
-                refreshToken = "",
-                email = "",
-                expiresAt = "",
-            )
-            onSignedOut()
+            // BAT-1157: a checked tombstone in OpenAIOAuthTokenStore, off the UI thread (the store
+            // lock can wait up to 1 s). Works before setup completes too. A sign-out that cannot
+            // be confirmed is reported, never shown as done over a pair that could come back.
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) { ConfigManager.signOutOpenAI(context) }
+                if (ok) {
+                    error = null
+                    onSignedOut()
+                } else {
+                    error = "Couldn't sign out on this device. Please try again."
+                }
+            }
         },
         cancel = {
             isPolling = false

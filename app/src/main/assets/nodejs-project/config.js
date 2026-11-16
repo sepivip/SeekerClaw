@@ -398,6 +398,13 @@ const _xaiReauthNotifiedEpoch = Number(config.xaiOAuthReauthNotifiedEpoch);
 const XAI_OAUTH_REAUTH_NOTIFIED_EPOCH = Number.isFinite(_xaiReauthNotifiedEpoch) ? _xaiReauthNotifiedEpoch : -1;
 // OpenAI symmetry (data-plumbing only; the OpenAI proactive hook is a follow-up).
 const OPENAI_OAUTH_EXPIRES_AT = (typeof config.openaiOAuthExpiresAt === 'string' ? config.openaiOAuthExpiresAt.trim() : '');
+// BAT-1157: the sign-in family + epoch of the pair above, from the same token-store read (Kotlin
+// writeConfigJson). null family = the pair came from the legacy prefs keys (migration not yet
+// confirmed). Either way openai.js confirms the family with the bridge before its first refresh.
+const OPENAI_OAUTH_FAMILY = (typeof config.openaiOAuthFamily === 'string' && config.openaiOAuthFamily.trim())
+    ? config.openaiOAuthFamily.trim() : null;
+const _openaiOAuthEpoch = Number(config.openaiOAuthEpoch);
+const OPENAI_OAUTH_EPOCH = Number.isFinite(_openaiOAuthEpoch) && _openaiOAuthEpoch >= 0 ? _openaiOAuthEpoch : 0;
 
 // Normalize authType (trim/lowercase) so values like " OAuth\n" don't silently fall
 // through to api_key. For OpenAI, alias known legacy values (e.g. "setup_token" left
@@ -429,9 +436,28 @@ if (PROVIDER === 'openai' && !_SUPPORTED_OPENAI_AUTH_TYPES.has(AUTH_TYPE)) {
     throw new Error(`Invalid OpenAI authType: ${JSON.stringify(config.authType)}. Supported values are "api_key" and "oauth".`);
 }
 
-// OpenAI auth type strictly follows the (normalized, validated) authType — no silent
-// fallback. The credential validation below will fail fast on missing OAuth token.
-const OPENAI_AUTH_TYPE = AUTH_TYPE === 'oauth' ? 'oauth' : 'api_key';
+// BAT-1157 (D9): OPENAI_AUTH_TYPE is the TRANSPORT — how requests actually reach OpenAI — decided
+// once, here, from the SELECTED AUTH_TYPE (runtime_state first), the sign-in token and the key.
+// The selection itself is never rewritten. Kotlin's OpenAIAuth applies the same table:
+//   oauth   + token                → oauth
+//   oauth   + no token + API key   → api_key (WARN: the saved key is used)
+//   oauth   + no token + no key    → oauth, reconnect-required: the agent starts and every request
+//                                    answers "Reconnect OpenAI in Settings" without being sent
+//   api_key                        → api_key
+// It stays 'oauth' | 'api_key' because model-catalog.js, openai.js isOAuth and _activeKey rely on it.
+let OPENAI_AUTH_TYPE = 'api_key';
+let OPENAI_OAUTH_RECONNECT_REQUIRED = false;
+if (AUTH_TYPE === 'oauth') {
+    if (OPENAI_OAUTH_TOKEN) {
+        OPENAI_AUTH_TYPE = 'oauth';
+    } else if (OPENAI_KEY) {
+        OPENAI_AUTH_TYPE = 'api_key';
+        if (PROVIDER === 'openai') log('[OpenAI] Sign-in unavailable — using the saved API key', 'WARN');
+    } else {
+        OPENAI_AUTH_TYPE = 'oauth';
+        OPENAI_OAUTH_RECONNECT_REQUIRED = PROVIDER === 'openai';
+    }
+}
 
 // Now that AUTH_TYPE is known, pick the right Claude credential. Kotlin
 // writes both fields raw. In setup_token mode, derive STRICTLY from
@@ -757,7 +783,10 @@ if (CHANNEL === 'discord' && !DISCORD_TOKEN) {
 // loop and the user never sees the reconnect message, and the D6 fail-closed
 // durability path (which also lands here as a reauth-required boot) breaks.
 const _xaiReauthStartable = PROVIDER === 'xai' && AUTH_TYPE === 'oauth' && XAI_OAUTH_REAUTH_REQUIRED;
-if (!_activeKey && !_xaiReauthStartable) {
+// BAT-1157 (D9): OpenAI oauth with no usable sign-in and no saved key boots reconnect-required
+// (openai.js preflightAuth answers every request with "Reconnect OpenAI in Settings"), never exits.
+const _openaiReauthStartable = PROVIDER === 'openai' && OPENAI_OAUTH_RECONNECT_REQUIRED;
+if (!_activeKey && !_xaiReauthStartable && !_openaiReauthStartable) {
     const keyName = PROVIDER === 'openai' ? 'openaiApiKey or openaiOAuthToken'
         : PROVIDER === 'xai' ? 'xaiApiKey or xaiOAuthToken'
         : PROVIDER === 'openrouter' ? 'openrouterApiKey'
@@ -787,9 +816,13 @@ if (!OWNER_ID) {
     // Non-claude providers use the generic AUTH_TYPE — reflect oauth vs api-key
     // accurately (an xAI/OpenAI OAuth session was previously mislabelled 'api-key'
     // in node_debug.log, which misleads device-test log triage).
+    // BAT-1157: OpenAI shows the TRANSPORT (an oauth selection running on the saved key logs
+    // api-key; one with nothing usable logs oauth-reconnect-required).
     const authLabel = PROVIDER === 'claude'
         ? (AUTH_TYPE === 'setup_token' ? 'setup-token' : 'api-key')
-        : (AUTH_TYPE === 'oauth' ? 'oauth' : 'api-key');
+        : PROVIDER === 'openai'
+            ? (OPENAI_OAUTH_RECONNECT_REQUIRED ? 'oauth-reconnect-required' : OPENAI_AUTH_TYPE === 'oauth' ? 'oauth' : 'api-key')
+            : (AUTH_TYPE === 'oauth' ? 'oauth' : 'api-key');
     log(`Agent: ${getAgentName()} | Provider: ${PROVIDER} | Model: ${MODEL} | Auth: ${authLabel} | Owner: ${OWNER_ID}`, 'DEBUG');
 }
 
@@ -905,7 +938,8 @@ const ROOT_SECRET_NAMES = new Set(['config.js', 'config.json', 'config.yaml', 's
 // BAT-1155: xai_oauth.json is the dedicated OAuth token store (filesDir sibling of
 // runtime_state.json, outside workDir); BAT-1409 adds bridge_token (filesDir), the bridge's
 // credential. Blocked by basename anywhere, so a relocated workDir or a copy can never expose them.
-const SECRETS_ANYWHERE = new Set(['xai_oauth.json', 'bridge_token']);
+// BAT-1157: openai_oauth.json is the OpenAI sign-in token store, beside xai_oauth.json.
+const SECRETS_ANYWHERE = new Set(['xai_oauth.json', 'openai_oauth.json', 'bridge_token']);
 // The union keeps the basename rule for shell_exec and js_eval until P1-F/P1-G anchor them too.
 const SECRETS_BLOCKED = new Set([...ROOT_SECRET_NAMES, ...SECRETS_ANYWHERE]);
 // BAT-1409 P1-E: workspace-root files the agent's file tools may never write, edit or delete.
@@ -1089,6 +1123,7 @@ module.exports = {
     ANTHROPIC_KEY,
     OPENAI_KEY,
     OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE, OPENAI_OAUTH_EXPIRES_AT,
+    OPENAI_OAUTH_FAMILY, OPENAI_OAUTH_EPOCH, OPENAI_OAUTH_RECONNECT_REQUIRED,
     XAI_KEY, XAI_OAUTH_TOKEN, XAI_OAUTH_REFRESH, XAI_OAUTH_EXPIRES_AT,
     XAI_OAUTH_EPOCH, XAI_OAUTH_REAUTH_REQUIRED, XAI_OAUTH_REAUTH_NOTIFIED_EPOCH,
     OPENROUTER_KEY,
