@@ -1,0 +1,348 @@
+#!/usr/bin/env node
+// bat1664-measure.js — BAT-1664 spec item 10: OLD vs NEW measurement before merge.
+//
+// Drives the REAL chat() of two bundles against the LIVE Anthropic API:
+//   OLD = a `git archive 978d108d` (origin/main before BAT-1664) extract
+//   NEW = this worktree's bundle
+// Everything except the HTTP transport is stubbed (same approach as
+// tests/nodejs-project/claude-stable-history.test.js); tools run locally and
+// return deterministic payloads. Each bundle runs in its OWN child process so
+// module caches and module-level state never mix.
+//
+// Scenarios × models (claude-fable-5-1 flagged, claude-opus-5 default/unflagged):
+//   long    — ~8 sequential tool rounds (~4 KB results) in a chat seeded near
+//             MAX_HISTORY (35), so OLD's per-round trim + aging are active
+//   fanout  — one round of 6 parallel calls (~18 KB results), then the answer
+//
+// Records per request: wire bytes, usage tokens (input / output / cache read /
+// cache write), latency, thinking blocks replayed, input_transformations drops,
+// status. Per run: heals ([ThinkingBinding]) / gate ([ContextBudget]) log lines,
+// final answer.
+//
+// API KEY ONLY. Credentials: ANTHROPIC_API_KEY from $BAT1664_MEASURE_ENV or
+// $BAT1664_MEASURE_ENV, or the gitignored .env next to this file — never printed,
+// error text scrubbed, a 401/403 stops everything. Hard cap on live requests
+// (MEASURE_CAP, default 70) across the whole run.
+//
+// Opt-in only (never in CI):
+//   node tests/live/anthropic/bat1664-measure.js --old <path-to-old-nodejs-project>
+// Env: MEASURE_MODELS=claude-fable-5-1,claude-opus-5  MEASURE_SCENARIOS=long,fanout
+
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const NEW_BUNDLE = path.resolve(__dirname, '..', '..', '..', 'app', 'src', 'main', 'assets', 'nodejs-project');
+const ENV_PATH = process.env.BAT1664_MEASURE_ENV || path.join(__dirname, '.env');
+const CAP = parseInt(process.env.MEASURE_CAP || '70', 10);
+
+function scrub(s) {
+    return String(s || '').replace(/sk-ant-[A-Za-z0-9_\-]+/g, '[redacted]').replace(/Bearer\s+\S+/g, 'Bearer [redacted]').slice(0, 200);
+}
+function readKey() {
+    if (!fs.existsSync(ENV_PATH)) return null;
+    for (const line of fs.readFileSync(ENV_PATH, 'utf8').split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t.startsWith('ANTHROPIC_API_KEY=')) continue;
+        let v = t.slice('ANTHROPIC_API_KEY='.length).trim();
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+        return v || null;
+    }
+    return null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHILD: run one bundle
+// ════════════════════════════════════════════════════════════════════════════
+async function child() {
+    const BUNDLE = process.env.M_BUNDLE;
+    const VERSION = process.env.M_VERSION;
+    const MODELS = process.env.M_MODELS.split(',');
+    const SCENARIOS = process.env.M_SCENARIOS.split(',');
+    let remaining = parseInt(process.env.M_REMAINING, 10);
+    const KEY = readKey();
+    if (!KEY) { process.stdout.write(JSON.stringify({ fatal: 'credential missing' }) + '\n'); process.exit(2); }
+
+    const TMP = fs.mkdtempSync(path.join(os.tmpdir(), `bat1664m-${VERSION}-`));
+    const TASKS_DIR = path.join(TMP, 'tasks');
+    fs.mkdirSync(TASKS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(TMP, 'agent_settings.json'), JSON.stringify({ maxStepsPerTurn: 10 }));
+    const LOGS = [];
+    const log = (msg, level) => { LOGS.push({ msg: String(msg), level: level || 'INFO' }); };
+    const stub = (rel, exports) => {
+        const resolved = require.resolve(path.join(BUNDLE, rel));
+        require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports };
+    };
+    let currentModel = MODELS[0];
+    stub('config.js', {
+        workDir: TMP, TASKS_DIR,
+        MODEL: currentModel, resolveActiveModel: () => currentModel,
+        PROVIDER: 'claude', CHANNEL: 'telegram',
+        ANTHROPIC_KEY: KEY, OPENAI_KEY: '', XAI_KEY: '', OPENROUTER_KEY: '', CUSTOM_KEY: '',
+        CUSTOM_BASE_URL: '', CUSTOM_FORMAT: '', OPENROUTER_FALLBACK_MODEL: '',
+        OPENROUTER_MODEL_CONTEXT: 0, OPENROUTER_FALLBACK_CONTEXT: 0,
+        AUTH_TYPE: 'api_key', OPENAI_AUTH_TYPE: 'api_key',
+        REACTION_GUIDANCE: 'on', REACTION_NOTIFICATIONS: 'on', MEMORY_DIR: path.join(TMP, 'memory'),
+        TOOL_RATE_LIMITS: {}, TOOL_STATUS_MAP: {}, RICH_MESSAGES_ENABLED: false,
+        API_TIMEOUT_MS: 180000,
+        API_TIMEOUT_RETRIES: 0, API_TIMEOUT_BACKOFF_MS: 10, API_TIMEOUT_MAX_BACKOFF_MS: 10,
+        truncateToolResult: (s) => s,
+        localTimestamp: () => '2026-11-16T12:00:00Z',
+        localDateStr: () => '2026-11-16',
+        log,
+        getOwnerId: () => 'OWNER',
+        USER_ENV_KEYS: [],
+        config: { agentName: 'TestAgent', jupiterApiKey: '' },
+        runtimeState: { read: () => ({ reasoningEnabled: true, reasoningDisplayInChat: false }) },
+    });
+    stub('security.js', { redactSecrets: (s) => s });
+    stub('channel.js', { sendMessage: async () => {}, sendTyping: () => {}, getOwnerChatId: () => 'OWNER' });
+    stub('telegram.js', {
+        sentMessageCache: new Map(), SENT_CACHE_TTL: 60000,
+        deferStatus: () => ({ cleanup: async () => {} }),
+        deferThinkingStatus: () => ({ cleanup: async () => {} }),
+    });
+    stub('bridge.js', { androidBridgeCall: async () => ({ error: 'mocked' }), fetchMcpToken: async () => '' });
+    stub('memory.js', {
+        loadSoul: () => '', loadBootstrap: () => '', loadIdentity: () => '', loadUser: () => '',
+        loadMemory: () => '', loadDailyMemory: () => '',
+    });
+    stub('skills.js', { findMatchingSkills: () => [], loadSkills: () => [] });
+    stub('database.js', {
+        getDb: () => null, markDbDirty: () => {}, markDbSummaryDirty: () => {}, indexMemoryFiles: () => {},
+        saveSession: () => {}, getRecentSessions: () => [],
+    });
+    stub('confirmation/index.js', {
+        getConfirmationPolicy: () => 'none',
+        normalizePolicy: (r) => (typeof r === 'string' ? { policy: r } : r),
+    });
+    stub('wallet/index.js', { getWalletState: async () => ({ burnerConfigured: false }) });
+    const claude = require(path.join(BUNDLE, 'providers', 'claude.js'));
+    stub('providers/index.js', { getAdapter: () => claude });
+
+    // ── live transport with metrics ──
+    const realHttp = require(path.join(BUNDLE, 'http.js'));
+    let REQ = [];
+    class Stop extends Error {}
+    // chat() wraps transport errors, so a stop is signalled through this flag and
+    // re-raised by the scenario loop after chat() returns or throws.
+    let STOP_REASON = null;
+    const transport = async (opts, body) => {
+        if (STOP_REASON) throw new Error('stopped');
+        if (remaining <= 0) { STOP_REASON = 'request cap reached'; throw new Error(STOP_REASON); }
+        remaining--;
+        const raw = typeof body === 'string' ? body : JSON.stringify(body);
+        let parsedBody = null; try { parsedBody = JSON.parse(raw); } catch (_) {}
+        let replayed = 0;
+        if (parsedBody) for (const m of parsedBody.messages || []) if (m.role === 'assistant' && Array.isArray(m.content)) replayed += m.content.filter((b) => b.type === 'thinking' || b.type === 'redacted_thinking').length;
+        const t0 = Date.now();
+        let res;
+        try { res = await realHttp.httpStreamingRequest(opts, raw); } catch (e) {
+            REQ.push({ status: 'net', bytes: raw.length, ms: Date.now() - t0, replayed, err: scrub(e && e.message) });
+            process.stderr.write(`  [${VERSION}] request failed: ${scrub(e && e.message)}\n`);
+            throw e;
+        }
+        const ms = Date.now() - t0;
+        const u = (res && res.data && res.data.usage) || {};
+        const it = res && res.data && Array.isArray(res.data.input_transformations) ? res.data.input_transformations : null;
+        const rec = {
+            status: res.status, bytes: raw.length, ms, replayed,
+            bind: !!(parsedBody && parsedBody.thinking && parsedBody.thinking.block_binding),
+            toolChoice: parsedBody && parsedBody.tool_choice ? parsedBody.tool_choice.type : null,
+            tools: parsedBody && Array.isArray(parsedBody.tools) ? parsedBody.tools.length : 0,
+            msgs: parsedBody && Array.isArray(parsedBody.messages) ? parsedBody.messages.length : 0,
+            input: u.input_tokens || 0, output: u.output_tokens || 0,
+            cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0,
+            stop: res.status === 200 && res.data ? String(res.data.stop_reason || '') + (res.data.stop_details && res.data.stop_details.category ? ':' + res.data.stop_details.category : '') : '',
+            drops: it ? it.filter((t) => t && t.type === 'thinking_dropped').length : null,
+            thinkingOut: res.status === 200 && res.data && Array.isArray(res.data.content) ? res.data.content.filter((b) => b.type === 'thinking').length : 0,
+            toolUses: res.status === 200 && res.data && Array.isArray(res.data.content) ? res.data.content.filter((b) => b.type === 'tool_use').length : 0,
+            err: res.status !== 200 ? scrub((res.data && res.data.error && res.data.error.message) || (typeof res.data === 'string' ? res.data : '')) : '',
+        };
+        REQ.push(rec);
+        process.stderr.write(`  [${VERSION} ${currentModel}] req ${REQ.length} status=${res.status} bytes=${raw.length} in=${rec.input} out=${rec.output} cr=${rec.cacheRead} cw=${rec.cacheWrite} replayed=${replayed} ${ms}ms (cap left ${remaining})\n`);
+        if (res.status === 401 || res.status === 403) STOP_REASON = `${res.status}: ${rec.err}`;
+        return res;
+    };
+    stub('http.js', Object.assign({}, realHttp, { httpStreamingRequest: transport }));
+    const ai = require(path.join(BUNDLE, 'ai.js'));
+
+    // ── deterministic tools ──
+    const filler = (seed, n) => {
+        const words = ['latency', 'throughput', 'replica', 'quorum', 'shard', 'ledger', 'cache', 'index', 'backoff', 'checkpoint', 'snapshot', 'region'];
+        const out = []; let i = seed * 7;
+        while (out.join(' ').length < n) out.push(words[(i++ * 5) % words.length] + (i % 9));
+        return out.join(' ').slice(0, n);
+    };
+    const TOOLS = [
+        { name: 'read_doc', description: 'Read one page of the design document. Returns the page text and the next page number.',
+            input_schema: { type: 'object', properties: { page: { type: 'integer', minimum: 1, maximum: 8 } }, required: ['page'] } },
+        { name: 'fetch_report', description: 'Fetch the quarterly operations report for one region.',
+            input_schema: { type: 'object', properties: { region: { type: 'string', enum: ['north', 'south', 'east', 'west', 'central', 'coastal'] } }, required: ['region'] } },
+    ];
+    ai.setChatDeps({
+        executeTool: async (name, input) => {
+            if (name === 'read_doc') {
+                const p = Math.max(1, Math.min(8, parseInt(input && input.page, 10) || 1));
+                return { page: p, of: 8, next: p < 8 ? `Call read_doc with page ${p + 1} next (one page per message).` : 'That was the last page.',
+                    text: `Page ${p}: key figure ${p * 17} ms p99 latency; decision D${p}. ` + filler(p, 4000) };
+            }
+            if (name === 'fetch_report') {
+                const r = String(input && input.region || 'north');
+                const idx = ['north', 'south', 'east', 'west', 'central', 'coastal'].indexOf(r) + 1;
+                return { region: r, revenue_musd: 10 + idx * 3, incidents: idx * 2, summary: `Region ${r}: uptime 99.${90 + idx}%. ` + filler(idx + 20, 18000) };
+            }
+            return { error: 'unknown tool' };
+        },
+        getTools: () => TOOLS,
+        requestConfirmation: async () => true,
+        lastToolUseTime: new Map(),
+        lastIncomingMessages: new Map(),
+        getMcpStatus: () => [],
+    });
+
+    function seedNearCap(chatId) {
+        const conv = ai.getConversation(chatId);
+        // 2 prior tool groups with large results (aging candidates) + text pairs:
+        // 2×4 + 13×2 = 34 messages; the anchor makes 35 (= MAX_HISTORY).
+        for (let g = 0; g < 2; g++) {
+            conv.push({ role: 'user', content: `Earlier question ${g}: check page ${g + 1}.` });
+            conv.push({ role: 'assistant', content: 'Checking.', toolCalls: [{ id: `toolu_seed_${g}`, name: 'read_doc', input: { page: g + 1 } }], reasoningBlocks: [] });
+            conv.push({ role: 'tool', toolCallId: `toolu_seed_${g}`, content: JSON.stringify({ page: g + 1, text: filler(90 + g, 5000) }) });
+            conv.push({ role: 'assistant', content: `Page ${g + 1} covers decision D${g + 1}.`, reasoningBlocks: [] });
+        }
+        // MEASURE_SEED=natural: varied everyday exchanges (claude-opus-5 returned
+        // stop_reason "refusal" with zero output on the repetitive default seed).
+        const NATURAL = [
+            ['Can you remind me what time my standup is tomorrow?', 'Your standup is at 09:30, same as every weekday.'],
+            ['What is a good name for a cat?', 'Miso, Pixel or Juniper are all popular choices.'],
+            ['How many minutes are in 3.5 hours?', 'That is 210 minutes.'],
+            ['Translate "good morning" to Georgian.', 'Dila mshvidobisa.'],
+            ['Suggest a quick lunch idea.', 'A lentil salad with feta, tomatoes and lemon takes ten minutes.'],
+            ['What is the capital of Portugal?', 'Lisbon.'],
+            ['Is it going to be cold this weekend?', 'I do not have a live forecast right now, but late autumn weekends are usually cool.'],
+            ['Remind me to buy coffee beans.', 'Noted — coffee beans are on your list.'],
+            ['What does SLA stand for?', 'Service Level Agreement.'],
+            ['Give me a synonym for "quick".', 'Swift.'],
+            ['How do I pronounce "quinoa"?', 'KEEN-wah.'],
+            ['What year did the first iPhone launch?', '2007.'],
+            ['Thanks for the help today!', 'Any time — happy to help.'],
+        ];
+        for (let i = 0; i < 13; i++) {
+            if (process.env.MEASURE_SEED === 'natural') {
+                conv.push({ role: 'user', content: NATURAL[i][0] });
+                conv.push({ role: 'assistant', content: NATURAL[i][1], reasoningBlocks: [] });
+            } else {
+                conv.push({ role: 'user', content: `Side question ${i}: what does term ${i} mean?` });
+                conv.push({ role: 'assistant', content: `Term ${i} is a placeholder used in the design notes.`, reasoningBlocks: [] });
+            }
+        }
+    }
+
+    const PROMPTS = {
+        long: 'Read the whole design document with read_doc: it has 8 pages. Read exactly ONE page per message, in order from page 1 to page 8 — do not request several pages at once. After page 8, give me a 5-bullet summary that cites each decision D1–D8.',
+        fanout: 'Call fetch_report for all six regions (north, south, east, west, central, coastal) — all six calls in parallel in ONE message. Then give me a one-paragraph comparison naming the region with the most incidents.',
+    };
+
+    const results = [];
+    try {
+        for (const model of MODELS) {
+            currentModel = model;
+            for (const sc of SCENARIOS) {
+                const chatId = `m-${VERSION}-${model}-${sc}`;
+                if (sc === 'long') seedNearCap(chatId);
+                REQ = [];
+                const mark = LOGS.length;
+                const t0 = Date.now();
+                let reply = null; let threw = null;
+                try { reply = await ai.chat(chatId, PROMPTS[sc]); } catch (e) {
+                    threw = scrub(e && e.message);
+                }
+                const logs = LOGS.slice(mark);
+                results.push({
+                    version: VERSION, model, scenario: sc, wallMs: Date.now() - t0, requests: REQ, reply: reply ? String(reply) : null, threw,
+                    heals: logs.filter((l) => /^\[ThinkingBinding\]/.test(l.msg) && l.level === 'WARN').map((l) => l.msg.slice(0, 120)),
+                    gate: logs.filter((l) => /^\[ContextBudget\]/.test(l.msg)).map((l) => l.msg.slice(0, 120)),
+                    dangerEstimate: logs.filter((l) => /^\[Context\] DANGER/.test(l.msg)).length,
+                    trims: logs.filter((l) => /^\[History\]/.test(l.msg)).map((l) => (l.msg.match(/"site":"(\w+)"/) || [])[1]),
+                    aging: logs.filter((l) => /^\[Aging\]/.test(l.msg)).length,
+                    finalLen: ai.getConversation(chatId).length,
+                });
+                if (STOP_REASON) throw new Stop(STOP_REASON);
+            }
+        }
+    } catch (e) {
+        process.stdout.write(JSON.stringify({ results, stop: scrub(e && e.message) }) + '\n');
+        try { ai.cancelAllIdleSummaries(); } catch (_) {}
+        process.exit(3);
+    }
+    try { ai.cancelAllIdleSummaries(); } catch (_) {}
+    process.stdout.write(JSON.stringify({ results }) + '\n');
+    process.exit(0);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PARENT
+// ════════════════════════════════════════════════════════════════════════════
+function sum(a, k) { return a.reduce((n, r) => n + (Number(r[k]) || 0), 0); }
+function p50(a) { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.floor((s.length - 1) / 2)]; }
+
+function parent() {
+    const oldIdx = process.argv.indexOf('--old');
+    const OLD = oldIdx > 0 ? path.resolve(process.argv[oldIdx + 1]) : null;
+    if (!OLD || !fs.existsSync(path.join(OLD, 'ai.js'))) {
+        console.log('usage: node tests/live/anthropic/bat1664-measure.js --old <path to OLD nodejs-project (git archive 978d108d)>');
+        process.exit(2);
+    }
+    const key = readKey();
+    if (!key) { console.log('STOP: ANTHROPIC_API_KEY not found (path not printed).'); process.exit(2); }
+    console.log(`credential: api_key present (len ${key.length}) | cap ${CAP} live requests`);
+    const MODELS = process.env.MEASURE_MODELS || 'claude-fable-5-1,claude-opus-5';
+    const SCENARIOS = process.env.MEASURE_SCENARIOS || 'long,fanout';
+    let remaining = CAP;
+    const all = [];
+    let stopped = null;
+    const VERSIONS = (process.env.MEASURE_VERSIONS || 'OLD,NEW').split(',');
+    for (const [version, bundle] of [['OLD', OLD], ['NEW', NEW_BUNDLE]].filter(([v]) => VERSIONS.includes(v))) {
+        const r = spawnSync(process.execPath, [__filename, '--child'], {
+            env: Object.assign({}, process.env, { M_BUNDLE: bundle, M_VERSION: version, M_MODELS: MODELS, M_SCENARIOS: SCENARIOS, M_REMAINING: String(Math.min(remaining, Math.floor(CAP / 2))) }), // equal share per version
+            encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 40 * 60 * 1000,
+        });
+        process.stderr.write(r.stderr || '');
+        const line = String(r.stdout || '').trim().split('\n').pop();
+        let out = null; try { out = JSON.parse(line); } catch (_) {}
+        if (!out) { stopped = `${version} child produced no result (exit ${r.status})`; break; }
+        for (const x of out.results || []) { all.push(x); remaining -= x.requests.length; }
+        if (out.stop || out.fatal) { stopped = `${version}: ${out.stop || out.fatal}`; break; }
+    }
+
+    console.log('\n| scenario | model | ver | reqs | ok | wire KB | input | output | cache read | cache write | latency s (total / p50) | replayed (max) | bind | drops | heals | gate | trims | aging | final |');
+    console.log('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    for (const x of all) {
+        const q = x.requests;
+        const okN = q.filter((r) => r.status === 200).length;
+        const lat = q.map((r) => r.ms);
+        const replayedMax = q.reduce((m, r) => Math.max(m, r.replayed || 0), 0);
+        const binds = q.filter((r) => r.bind).length;
+        const drops = q.reduce((n, r) => n + (r.drops || 0), 0);
+        const trimSites = x.trims.reduce((m, s) => { m[s] = (m[s] || 0) + 1; return m; }, {});
+        const final = x.reply ? `yes (${x.reply.length} ch)` : `NO${x.threw ? ' — ' + x.threw : ''}`;
+        console.log(`| ${x.scenario} | ${x.model} | ${x.version} | ${q.length} | ${okN} | ${(sum(q, 'bytes') / 1024).toFixed(0)} | ${sum(q, 'input')} | ${sum(q, 'output')} | ${sum(q, 'cacheRead')} | ${sum(q, 'cacheWrite')} | ${(sum(q, 'ms') / 1000).toFixed(1)} / ${(p50(lat) / 1000).toFixed(1)} | ${replayedMax} | ${binds} | ${drops} | ${x.heals.length} | ${x.gate.length} | ${JSON.stringify(trimSites)} | ${x.aging} | ${final} |`);
+    }
+    console.log('\nPer-request detail (status bytes in/out/cr/cw replayed tool_uses):');
+    for (const x of all) {
+        console.log(`  ${x.version} ${x.model} ${x.scenario}: ` + x.requests.map((r) => `${r.status}:${(r.bytes / 1024).toFixed(0)}K:${r.input}/${r.output}/${r.cacheRead}/${r.cacheWrite}:r${r.replayed}:t${r.toolUses}:${r.stop || '-'}${r.err ? ' ERR ' + r.err : ''}`).join('  '));
+        if (x.heals.length) console.log(`     heals: ${x.heals.join(' || ')}`);
+        if (x.gate.length) console.log(`     gate: ${x.gate.join(' || ')}`);
+        if (x.reply) console.log(`     final: ${x.reply.replace(/\s+/g, ' ').slice(0, 160)}…`);
+    }
+    const total = all.reduce((n, x) => n + x.requests.length, 0);
+    console.log(`\nlive requests: ${total} / cap ${CAP}`);
+    if (stopped) { console.log(`STOPPED: ${stopped}`); process.exitCode = 3; }
+}
+
+if (process.argv.includes('--child')) child().catch((e) => { process.stdout.write(JSON.stringify({ fatal: scrub(e && e.stack ? e.stack : e) }) + '\n'); process.exit(1); });
+else parent();
