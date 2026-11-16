@@ -64,7 +64,7 @@ None on the audited surface. Provider-aware note: the reconnect/latch messages a
 
 ## Addendum: Codex diff review ed09115a (same PR)
 Scope: delta on top of this audit, covering only what the review fixes changed.
-- **New log sites (2, Kotlin WARN):** `[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again` and the xAI twin. Pre-fix ⚠️ 1 each (no entry). Post-fix ✅ 3: entry under "OpenAI Codex OAuth — Sign-In Storage" with the cause and the fix (sign in again); the section's grep now also matches `xAI sign-in`.
+- **New log sites (2, Kotlin WARN):** `[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again` and the xAI twin. Pre-fix ⚠️ 1 each (no entry). Post-fix ✅ 3: entry under "OpenAI Codex OAuth — Sign-In Storage" with the cause and the fix (sign in again), marked as Logs-screen lines. CodeRabbit (aaac7ad0) caught that the section's `node_debug.log` grep matched Kotlin-only `[Config]` text; it now greps only the agent's own lines (adding `Save retry failed` and `[ContextSummary] Skipped`) and says the `[Config]` lines live on the Logs screen.
 - **Changed behaviour:** a delayed 401 while a refreshed pair's save is pending now retries on the new pair (previously ended the turn with the "saving" message). Post-fix ✅ 3: the "saving" symptom line says when it appears and when the agent retries instead.
 - **Changed wording:** the legacy-sweep WARN now retries within the process too; the entry says so.
 - No `buildSystemBlocks()` change; no tool description change. Remaining gaps: none on this surface.

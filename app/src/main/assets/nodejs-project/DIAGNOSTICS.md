@@ -233,8 +233,9 @@ The ChatGPT sign-in pair lives in its own file, `files/openai_oauth.json` (outsi
 - An oauth selection with no usable sign-in but a saved API key runs on the key: log `[OpenAI] Sign-in unavailable — using the saved API key` (WARN). Settings still shows "not signed in".
 **Check:**
 ```
-grep -E "OpenAI sign-in|xAI sign-in|OAuth token save rejected|Sign-in not confirmed|persist refreshed tokens|reconnect required|Sign-in unavailable|blocked a settings write" node_debug.log
+grep -E "OAuth token save rejected|Sign-in not confirmed|persist refreshed tokens|reconnect required|Sign-in unavailable|Save retry failed|ContextSummary\] Skipped" node_debug.log
 ```
+That grep finds the agent's `[OpenAI]` and `[ContextSummary]` lines. The `[Config]` lines below come from the app (Kotlin) and appear only on the **Logs screen**, never in `node_debug.log`.
 **Log lines:**
 - `[Config] OpenAI sign-in record unreadable — sign in again` (ERROR, once per process): the stored record does not decode or decrypt. It is treated as signed out; a new sign-in replaces it.
 - `[Config] OpenAI sign-in migration failed — using the saved pair, will retry` (WARN): an upgraded install could not yet move its sign-in into the new file; the old copy keeps working and the move retries on the next load.
@@ -246,8 +247,8 @@ grep -E "OpenAI sign-in|xAI sign-in|OAuth token save rejected|Sign-in not confir
 - `[OpenAI] Save retry failed: …` (WARN): one re-send of an unsaved refreshed sign-in failed; it retries with back-off (2 s, 10 s, 60 s, then every 5 min) until the app confirms it.
 - `[ContextSummary] Skipped: the AI sign-in needs attention` (WARN): history summarising was skipped because the sign-in is latched or needs a reconnect; the conversation is trimmed normally instead.
 - `[Config] OpenAI sign-in could not be saved (…)` / `[Config] OpenAI sign-out could not be saved (…)` (ERROR): the sign-in or sign-out was not confirmed on disk; the app shows an error and the user should try again. A sign-out that is not confirmed is never reported as done.
-- `[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry` / `[Config] xAI legacy sign-in keys not removed …` (WARN): after an upgrade, the old copy of the sign-in in the app's settings could not be deleted yet. Harmless (the new store is used); it retries on a later settings load, and on a later app start.
-- `[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again` / `[Config] xAI sign-in record missing after migration — legacy copy kept, sign in again` (WARN): the sign-in file is gone although the upgrade had finished moving it (for example a power cut at the wrong moment). The old copy in the app's settings is kept, not deleted, and not copied back; the provider reads as signed out. Fix: sign in again; the new sign-in replaces both.
+- `[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry` / `[Config] xAI legacy sign-in keys not removed …` (WARN): after an upgrade, the old copy of the sign-in in the app's settings could not be deleted yet. Harmless (the new store is used); it retries on a later settings load, and on a later app start. These are app (Kotlin) lines: read them on the Logs screen, not in `node_debug.log`.
+- `[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again` / `[Config] xAI sign-in record missing after migration — legacy copy kept, sign in again` (WARN): the sign-in file is gone although the upgrade had finished moving it (for example a power cut at the wrong moment). The old copy in the app's settings is kept, not deleted, and not copied back; the provider reads as signed out. Fix: sign in again; the new sign-in replaces both. Logs screen only (app line).
 - Bridge codes: `OPENAI_OAUTH_SAVE_FAILED` (nothing saved), `OPENAI_OAUTH_SAVE_UNCONFIRMED` (saved, not yet confirmed durable), `OPENAI_OAUTH_NOT_CONFIRMED`, `OPENAI_OAUTH_RECONNECT`, `OPENAI_OAUTH_FAMILY_CHANGED`, `OPENAI_OAUTH_EPOCH_CONFLICT`.
 **Known limits:** if the agent restarts (or the user taps Stop) after a refresh but before its save is confirmed, the stored refresh token is already spent and the user must reconnect.
 

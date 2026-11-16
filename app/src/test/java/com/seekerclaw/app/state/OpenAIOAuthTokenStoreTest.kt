@@ -312,6 +312,64 @@ class OpenAIOAuthTokenStoreTest {
         assertEquals(SweepGate.CONFIRMED, store.confirmedForSweep(legacyAccessPresent = false))
     }
 
+    // ------------------------------------------------------------------ reset tombstone outcomes
+
+    /** Runs the reset's tombstone exactly as `ConfigManager.resetConfig` does. */
+    private fun resetTombstone(): TombstoneOutcome {
+        val o = store.withLockForReset { store.signOutLocked() }
+        assertTrue("lock acquired", o is com.seekerclaw.app.util.SidecarFileLock.Outcome.Ran)
+        return (o as com.seekerclaw.app.util.SidecarFileLock.Outcome.Ran).value
+    }
+
+    /** Makes every rename onto [name] fail BEFORE it happens (a WriteNotApplied). */
+    private fun failRenamesOnto(name: String) {
+        val inner = SafeFs.beforeMove
+        SafeFs.beforeMove = { tmp, target ->
+            if (target.fileName.toString() == name) throw java.io.IOException("injected: no space")
+            inner(tmp, target)
+        }
+    }
+
+    /**
+     * These outcomes gate an irreversible step: `resetConfig` deletes the Keystore key only when
+     * both stores report CONFIRMED. An UNCONFIRMED tombstone may be undone by a power cut, so it
+     * must never be reported as CONFIRMED (CodeRabbit aaac7ad0).
+     */
+    @Test
+    fun `reset tombstone — a durable write is CONFIRMED and survives a power cut`() {
+        ok(store.signIn("acc", "ref", "", "t"))
+        assertEquals(TombstoneOutcome.CONFIRMED, resetTombstone())
+        fs.powerLoss()
+        assertTrue(present().tombstone)
+    }
+
+    @Test
+    fun `reset tombstone — a failed sync is UNCONFIRMED, never CONFIRMED`() {
+        ok(store.signIn("acc", "ref", "", "t"))
+        fs.syncFails = true
+        assertEquals(TombstoneOutcome.UNCONFIRMED, resetTombstone())
+        fs.syncFails = false
+        fs.powerLoss()
+        assertFalse("the reason it must not be CONFIRMED: a power cut undoes it", present().tombstone)
+    }
+
+    @Test
+    fun `reset tombstone — a write that fails before the rename is NOT_WRITTEN`() {
+        val live = ok(store.signIn("acc", "ref", "", "t"))
+        failRenamesOnto(OpenAIOAuthTokenStore.FILE_NAME)
+        assertEquals(TombstoneOutcome.NOT_WRITTEN, resetTombstone())
+        assertEquals("nothing changed", live, present())
+    }
+
+    @Test
+    fun `reset tombstone — a good tombstone whose marker write fails is UNCONFIRMED`() {
+        ok(store.signIn("acc", "ref", "", "t"))
+        markerFile().delete()
+        failRenamesOnto(OpenAIOAuthTokenStore.MARKER_NAME)
+        assertEquals(TombstoneOutcome.UNCONFIRMED, resetTombstone())
+        assertTrue("the tombstone itself is written", present().tombstone)
+    }
+
     // ------------------------------------------------------------------ confirm-family (v4, C1)
 
     private fun fp(s: String) = OpenAIOAuthTokenStore.fingerprint(s)

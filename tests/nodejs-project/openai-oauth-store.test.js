@@ -273,8 +273,17 @@ async function main() {
         }
         ok('config: a blank family is the legacy pair', normalizeOAuthFamily('  ', 5).familyId === null);
         const cfgSrc = require('fs').readFileSync(path.join(BUNDLE, 'config.js'), 'utf8');
-        ok('config.js derives OPENAI_OAUTH_FAMILY/EPOCH through normalizeOAuthFamily',
-            /normalizeOAuthFamily\(config\.openaiOAuthFamily, config\.openaiOAuthEpoch\)/.test(cfgSrc));
+        // Every assignment of the two exports must come from the normalizer's result, so neither
+        // can be read straight from config (CodeRabbit aaac7ad0). Strip comments first.
+        const code = cfgSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+        const m = code.match(/const (\w+) = require\('\.\/oauth-family'\)\.normalizeOAuthFamily\(config\.openaiOAuthFamily, config\.openaiOAuthEpoch\);/);
+        const famDefs = code.match(/\bOPENAI_OAUTH_FAMILY\s*=[^=][^\n;]*/g) || [];
+        const epDefs = code.match(/\bOPENAI_OAUTH_EPOCH\s*=[^=][^\n;]*/g) || [];
+        ok('config.js derives OPENAI_OAUTH_FAMILY/EPOCH only from normalizeOAuthFamily',
+            !!m && famDefs.length === 1 && epDefs.length === 1
+                && famDefs[0].replace(/\s+/g, ' ').trim() === `OPENAI_OAUTH_FAMILY = ${m[1]}.familyId`
+                && epDefs[0].replace(/\s+/g, ' ').trim() === `OPENAI_OAUTH_EPOCH = ${m[1]}.epoch`,
+            JSON.stringify({ helper: m && m[1], famDefs, epDefs }));
     }
 
     // 8. Pre-send checks and the transport.

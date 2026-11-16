@@ -228,6 +228,44 @@ class XaiOAuthTokenStoreTest {
         }
     }
 
+    /**
+     * BAT-1157 (CodeRabbit aaac7ad0): the reset's tombstone outcome gates deleting the Keystore key
+     * (irreversible), so a write a power cut can undo must never read CONFIRMED.
+     */
+    @Test
+    fun `reset tombstone outcomes — CONFIRMED, UNCONFIRMED, NOT_WRITTEN`() {
+        val fs = com.seekerclaw.app.testing.PowerLossFs().also { it.install() }
+        com.seekerclaw.app.util.SafeFs.filesRoot = workDir.toPath()
+        val tombstone = {
+            val o = XaiOAuthTokenStore.withLockForReset { XaiOAuthTokenStore.signOutLocked() }
+            (o as com.seekerclaw.app.util.SidecarFileLock.Outcome.Ran).value
+        }
+        try {
+            ok(XaiOAuthTokenStore.signIn("acc", "ref", "email", "exp"))
+            assertEquals(TombstoneOutcome.CONFIRMED, tombstone())
+            fs.powerLoss()
+            assertTrue("a CONFIRMED tombstone survives a power cut", XaiOAuthTokenStore.read().tombstone)
+
+            ok(XaiOAuthTokenStore.signIn("acc2", "ref2", "email", "exp"))
+            fs.syncFails = true
+            assertEquals(TombstoneOutcome.UNCONFIRMED, tombstone())
+            fs.syncFails = false
+            fs.powerLoss()
+            assertEquals("…and an UNCONFIRMED one is undone by it", "acc2", XaiOAuthTokenStore.read().accessTokenEnc)
+
+            val inner = com.seekerclaw.app.util.SafeFs.beforeMove
+            com.seekerclaw.app.util.SafeFs.beforeMove = { tmp, target ->
+                if (target.fileName.toString() == XaiOAuthTokenStore.FILE_NAME) throw java.io.IOException("injected")
+                inner(tmp, target)
+            }
+            assertEquals(TombstoneOutcome.NOT_WRITTEN, tombstone())
+            assertEquals("nothing changed", "acc2", XaiOAuthTokenStore.read().accessTokenEnc)
+        } finally {
+            fs.uninstall()
+            com.seekerclaw.app.util.SafeFs.filesRoot = null
+        }
+    }
+
     @Test
     fun `Absent plus marker with a legacy access token is never swept`() {
         val marker = File(workDir, "xai_oauth.migrated").apply { writeText("1") }
