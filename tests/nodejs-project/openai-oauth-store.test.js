@@ -93,6 +93,22 @@ const saves = () => bridgeCalls.filter(c => c.endpoint === '/openai/oauth/save-t
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
+// Timer recorder: openai.js schedules its save retry with setTimeout. Record every timer (callback,
+// delay, cleared) so a test can observe that shutdown really cancels it.
+const timers = [];
+const realSetTimeout = global.setTimeout;
+const realClearTimeout = global.clearTimeout;
+global.setTimeout = function (fn, delay, ...args) {
+    const h = realSetTimeout(fn, delay, ...args);
+    timers.push({ handle: h, fn, delay: delay || 0, cleared: false });
+    return h;
+};
+global.clearTimeout = function (h) {
+    const t = timers.find(x => x.handle === h);
+    if (t) t.cleared = true;
+    return realClearTimeout(h);
+};
+
 async function main() {
     mockUpstream();
 
@@ -183,6 +199,7 @@ async function main() {
             { status: 200, body: { success: true, epoch: 99 }, transportError: null }, // wrong epoch: still not acknowledged
         ];
         const p = load();
+        const timerMark = timers.length; // only this section's timers count below
         ok('ambiguous save: the refresh itself succeeded (retry)', (await outcome(p, 0)) === 'retry');
         ok('ambiguous save: the new pair is in use', p.buildHeaders('').Authorization !== 'Bearer acc0', p.buildHeaders('').Authorization);
         const c = p.classifyError(401, {});
@@ -190,8 +207,13 @@ async function main() {
         upstreamPosts = 0;
         ok('ambiguous save: no new upstream refresh while unacknowledged', (await outcome(p, p.currentRefreshGeneration())) === 'fatal' && upstreamPosts === 0);
         ok('ambiguous save: health sees the unsaved pair (isPersistPending)', p.isPersistPending() === true);
+        const armed = timers.slice(timerMark).filter(t => t.delay >= 2000 && !t.cleared);
+        ok('ambiguous save: exactly one save-retry timer is armed', armed.length === 1, `armed=${armed.length}`);
         p.shutdownOAuthTimers();
-        ok('the save retry timer is cleared by shutdownOAuthTimers (SIGTERM)', true);
+        ok('shutdownOAuthTimers (SIGTERM) cancels the save-retry timer', armed.length === 1 && armed[0].cleared === true);
+        const savesBefore = saves().length;
+        if (armed[0] && !armed[0].cleared) { armed[0].fn(); await new Promise(r => setTimeout(r, 20)); }
+        ok('after shutdown no further save is sent', saves().length === savesBefore);
     }
 
     // 8. Pre-send checks and the transport.

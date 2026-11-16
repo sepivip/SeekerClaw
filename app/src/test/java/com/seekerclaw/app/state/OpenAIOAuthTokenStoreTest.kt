@@ -86,6 +86,24 @@ class OpenAIOAuthTokenStoreTest {
     }
 
     @Test
+    fun `at the epoch limit every write still reads back as Present`() {
+        val last = OpenAIOAuthTokenStore.EPOCH_LIMIT - 1
+        fun seed(tombstone: Boolean = false) = recordFile().writeText(
+            """{"accessTokenEnc":"enc:${"acc".reversed()}","refreshTokenEnc":"enc:${"ref".reversed()}","epoch":$last,"familyId":"fam","tombstone":$tombstone}""")
+        seed()
+        assertEquals(last, present().epoch)
+        // A sign-in at the limit restarts at 1 (the new family rejects the old session) and reads back.
+        assertEquals(1L, ok(store.signIn("acc2", "ref2", "", "t")).epoch)
+        assertEquals(1L, present().epoch)
+        // A sign-out at the limit likewise.
+        seed(); assertEquals(1L, ok(store.signOut()).epoch); assertTrue(present().tombstone)
+        // A rotation at the limit fails instead of writing an unreadable record.
+        seed()
+        assertTrue(store.rotate("fam", last, "r", "a", "b", "t") is OpenAIOAuthTokenStore.Result.Failed)
+        assertEquals("the record is untouched", last, present().epoch)
+    }
+
+    @Test
     fun `a record that exists but cannot be read is never treated as absent (no fill over it)`() {
         ok(store.signIn("acc", "ref", "", "t"))
         markerFile().delete()
@@ -95,9 +113,10 @@ class OpenAIOAuthTokenStoreTest {
         recordFile().mkdirs()
         assertTrue(store.snapshot() is OpenAIOAuthTokenStore.State.Unreadable)
         assertEquals(OpenAIOAuthTokenStore.MigrateOutcome.UNREADABLE, store.migrateIfNeeded { legacy() })
-        recordFile().delete()
-        recordFile().writeBytes(live)
-        assertTrue("the live record was never overwritten by the legacy pair", recordFile().readBytes().contentEquals(live))
+        // Checked BEFORE restoring: migration left the unreadable entry exactly as it was (no fill
+        // replaced it with a legacy record) and wrote no marker.
+        assertTrue("migration did not replace the unreadable entry", recordFile().isDirectory)
+        assertFalse("no marker over an unreadable record", markerFile().exists())
     }
 
     // ------------------------------------------------------------------ sign-in / sign-out

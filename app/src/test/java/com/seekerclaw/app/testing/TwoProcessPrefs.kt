@@ -34,7 +34,12 @@ class TwoProcessPrefs(val filesDir: File) {
     private fun cache(proc: String): MutableMap<String, Any?> =
         caches.getOrPut(proc) { LinkedHashMap(disk) }
 
-    private fun prefsFor(proc: String): SharedPreferences = object : SharedPreferences {
+    private fun prefsFor(proc: String): SharedPreferences {
+        cache(proc) // like Android: the process loads its cache when it OPENS the prefs
+        return view(proc)
+    }
+
+    private fun view(proc: String): SharedPreferences = object : SharedPreferences {
         override fun getAll(): MutableMap<String, *> = LinkedHashMap(cache(proc))
         override fun getString(key: String?, defValue: String?): String? = cache(proc)[key] as? String ?: defValue
         @Suppress("UNCHECKED_CAST")

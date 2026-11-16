@@ -93,9 +93,9 @@ object OpenAIOAuthTokenStore {
         CrossProcessStore.ReadState.Absent -> State.Absent
         is CrossProcessStore.ReadState.Unreadable -> State.Unreadable(s.reason)
         is CrossProcessStore.ReadState.Present ->
-            // Every persisted record has 1 <= epoch < Long.MAX_VALUE, so `epoch + 1` never overflows;
-            // anything else is a corrupt record (contract: guard every field from persisted JSON).
-            if (s.value.epoch < 1L || s.value.epoch == Long.MAX_VALUE) State.Unreadable("epoch ${s.value.epoch}")
+            // Every persisted record has 1 <= epoch < EPOCH_LIMIT; anything else is a corrupt record
+            // (contract: guard every field from persisted JSON).
+            if (s.value.epoch < 1L || s.value.epoch >= EPOCH_LIMIT) State.Unreadable("epoch ${s.value.epoch}")
             else State.Present(s.value)
     }
 
@@ -171,6 +171,22 @@ object OpenAIOAuthTokenStore {
     private fun currentEpoch(state: State): Long = (state as? State.Present)?.record?.epoch ?: 0L
 
     /**
+     * Readable epochs are 1 until EPOCH_LIMIT (exclusive); far beyond any real number of rotations,
+     * but a corrupt record could hold anything. Every write stays inside the range, so a successful
+     * write always reads back as Present.
+     */
+    internal const val EPOCH_LIMIT: Long = Long.MAX_VALUE / 2
+
+    /**
+     * The epoch for a NEW family or a tombstone. At the limit it restarts at 1: that is safe because
+     * an old session's rotation is rejected by its familyId (a new sign-in) or by the tombstone.
+     */
+    private fun nextFamilyEpoch(state: State): Long {
+        val next = currentEpoch(state) + 1L
+        return if (next in 1L until EPOCH_LIMIT) next else 1L
+    }
+
+    /**
      * MAIN sign-in: a new family. Encrypts INSIDE the lock, inherits nothing from the previous
      * record (a blank refresh token or email stays blank), and completes the migration (marker).
      * The caller runs it inside `ResetGate`'s commit section.
@@ -184,7 +200,7 @@ object OpenAIOAuthTokenStore {
                     refreshTokenEnc = if (refreshToken.isBlank()) "" else codec.seal(refreshToken),
                     emailEnc = if (email.isBlank()) "" else codec.seal(email),
                     expiresAt = expiresAt,
-                    epoch = currentEpoch(cur) + 1L,
+                    epoch = nextFamilyEpoch(cur),
                     familyId = UUID.randomUUID().toString(),
                 )
             } catch (e: Exception) {
@@ -206,7 +222,7 @@ object OpenAIOAuthTokenStore {
     fun signOut(): Result = locked({ Result.Failed(it) }) { cps -> signOutIn(cps) }
 
     private fun signOutIn(cps: CrossProcessStore<OpenAIOAuthTokens>): Result {
-        val next = OpenAIOAuthTokens(tombstone = true, epoch = currentEpoch(stateOf(cps)) + 1L)
+        val next = OpenAIOAuthTokens(tombstone = true, epoch = nextFamilyEpoch(stateOf(cps)))
         return when (val r = persist(cps, next)) {
             // The tombstone is written (visible) either way: a marker failure is Unconfirmed, so a
             // reset reports it as such and never as "nothing changed".
@@ -250,6 +266,9 @@ object OpenAIOAuthTokenStore {
             }
         }
         if (cur.epoch != expectedEpoch) return@locked Result.Conflict(cur.epoch)
+        // A rotation keeps the family, so it cannot restart the epoch; at the limit it fails rather
+        // than write a record that reads back as Unreadable (never reached in practice).
+        if (cur.epoch + 1L >= EPOCH_LIMIT) return@locked Result.Failed("epoch exhausted")
         val next = try {
             cur.copy(
                 accessTokenEnc = codec.seal(accessToken),

@@ -10,6 +10,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.seekerclaw.app.util.LogCollector
+import com.seekerclaw.app.util.LogLevel
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -47,7 +50,12 @@ object ResetRunner {
                 }
                 // The follow-up steps never change what the reset reports: a cleanup failure after
                 // Done must not turn into "nothing was changed".
-                if (r == ConfigManager.ResetResult.Done) runCatching { SolanaWalletManager.clearAuthToken() }
+                // SolanaWalletManager requires the main thread (it asserts it): run there and wait,
+                // so the cache is really cleared before the result is published.
+                if (r == ConfigManager.ResetResult.Done) {
+                    runCatching { withContext(Dispatchers.Main) { SolanaWalletManager.clearAuthToken() } }
+                        .onFailure { LogCollector.append("[Config] Reset: wallet authorization cache not cleared (${it.javaClass.simpleName})", LogLevel.WARN) }
+                }
                 val outcome = when (r) {
                     ConfigManager.ResetResult.Done -> "done"
                     is ConfigManager.ResetResult.Partial -> "partial"

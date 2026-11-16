@@ -59,6 +59,14 @@ class MainPrefsProcessTest {
     }
 
     @Test
+    fun `negative control — a node that only OPENED prefs before a MAIN save still clobbers it on commit`() {
+        val nodeView = prefs.context("node").getSharedPreferences(PrefsNames.MAIN, 0) // opened, never read
+        prefs.context("main").getSharedPreferences(PrefsNames.MAIN, 0).edit().putString("model", "B").commit()
+        nodeView.edit().putString("owner_id", "123").commit()
+        assertEquals("the cache loaded at open is written back whole", "A", prefs.disk["model"])
+    }
+
+    @Test
     fun `in node, forWrite refuses and the read view has no way to edit`() {
         ProcessRole.setForTest(true)
         val node = prefs.context("node")
