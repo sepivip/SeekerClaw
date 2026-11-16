@@ -24,8 +24,23 @@
 // error text scrubbed, a 401/403 stops everything. Hard cap on live requests
 // (MEASURE_CAP, default 70) across the whole run.
 //
+// Each row gets a verdict: OK (final answer + the intended workload ran), FAILED
+// (chat() threw) or INCONCLUSIVE (the model did not run the workload: long must be
+// 8 rounds of exactly one read_doc, pages 1..8 in order; fanout must be one round
+// of 6 fetch_report calls covering all six regions, then the answer). Exit code is
+// non-zero on any INCONCLUSIVE row or any FAILED **NEW** row; a FAILED OLD row is
+// reported but does not fail the run (OLD is the baseline, not the subject).
+//
+// Idle-summary timers (armed by real chat()) are cancelled before and after every
+// measured call, and the transport BLOCKS any request made outside a measured
+// chat() call (counted as "stray"), so a background summary can never land in a
+// later scenario's numbers or spend live budget.
+//
 // Opt-in only (never in CI):
 //   node tests/live/anthropic/bat1664-measure.js --old <path-to-old-nodejs-project>
+//   node tests/live/anthropic/bat1664-measure.js --old <path> --dry    (no network,
+//        scripted responses; MEASURE_DRY_BAD=1 → out-of-order pages → INCONCLUSIVE,
+//        MEASURE_DRY_THROW=1 → a 400 mid-turn → FAILED)
 // Env: MEASURE_MODELS=claude-fable-5-1,claude-opus-5  MEASURE_SCENARIOS=long,fanout
 
 'use strict';
@@ -63,7 +78,8 @@ async function child() {
     const MODELS = process.env.M_MODELS.split(',');
     const SCENARIOS = process.env.M_SCENARIOS.split(',');
     let remaining = parseInt(process.env.M_REMAINING, 10);
-    const KEY = readKey();
+    const DRY = process.env.M_DRY === '1';
+    const KEY = DRY ? 'dry-run-not-a-key' : readKey();
     if (!KEY) { process.stdout.write(JSON.stringify({ fatal: 'credential missing' }) + '\n'); process.exit(2); }
 
     const TMP = fs.mkdtempSync(path.join(os.tmpdir(), `bat1664m-${VERSION}-`));
@@ -130,7 +146,31 @@ async function child() {
     // chat() wraps transport errors, so a stop is signalled through this flag and
     // re-raised by the scenario loop after chat() returns or throws.
     let STOP_REASON = null;
+    let ACTIVE = false;     // true only while a measured chat() call runs
+    let STRAY = 0;          // requests attempted outside a measured call (blocked)
+    let dryScenario = null;
+    const dryResponse = (parsedBody) => {
+        const round = REQ.length + 1; // this request's 1-based index in the scenario
+        const content = [{ type: 'thinking', thinking: '', signature: `SIG-dry-${round}-` + 'z'.repeat(16) }];
+        let stop = 'tool_use';
+        if (process.env.MEASURE_DRY_THROW === '1' && round === 2) {
+            return { status: 400, data: { type: 'error', error: { type: 'invalid_request_error', message: 'dry-run injected error' } } };
+        }
+        if (dryScenario === 'long' && round <= 8) {
+            const page = process.env.MEASURE_DRY_BAD === '1' && round === 3 ? 5 : round;
+            content.push({ type: 'tool_use', id: `toolu_dry_${round}`, name: 'read_doc', input: { page } });
+        } else if (dryScenario === 'fanout' && round === 1) {
+            for (const r of ['north', 'south', 'east', 'west', 'central', 'coastal']) content.push({ type: 'tool_use', id: `toolu_dry_${r}`, name: 'fetch_report', input: { region: r } });
+        } else {
+            content.push({ type: 'text', text: 'Dry-run final answer.' });
+            stop = 'end_turn';
+        }
+        void parsedBody;
+        return { status: 200, data: { id: `msg_dry_${round}`, type: 'message', role: 'assistant', model: currentModel, content, stop_reason: stop,
+            usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } };
+    };
     const transport = async (opts, body) => {
+        if (!ACTIVE) { STRAY++; throw new Error('stray request blocked (outside a measured chat call)'); }
         if (STOP_REASON) throw new Error('stopped');
         if (remaining <= 0) { STOP_REASON = 'request cap reached'; throw new Error(STOP_REASON); }
         remaining--;
@@ -140,7 +180,7 @@ async function child() {
         if (parsedBody) for (const m of parsedBody.messages || []) if (m.role === 'assistant' && Array.isArray(m.content)) replayed += m.content.filter((b) => b.type === 'thinking' || b.type === 'redacted_thinking').length;
         const t0 = Date.now();
         let res;
-        try { res = await realHttp.httpStreamingRequest(opts, raw); } catch (e) {
+        try { res = DRY ? dryResponse(parsedBody) : await realHttp.httpStreamingRequest(opts, raw); } catch (e) {
             REQ.push({ status: 'net', bytes: raw.length, ms: Date.now() - t0, replayed, err: scrub(e && e.message) });
             process.stderr.write(`  [${VERSION}] request failed: ${scrub(e && e.message)}\n`);
             throw e;
@@ -183,8 +223,10 @@ async function child() {
         { name: 'fetch_report', description: 'Fetch the quarterly operations report for one region.',
             input_schema: { type: 'object', properties: { region: { type: 'string', enum: ['north', 'south', 'east', 'west', 'central', 'coastal'] } }, required: ['region'] } },
     ];
+    let TOOL_LOG = [];      // { round, name, input } — round = request index that asked for it
     ai.setChatDeps({
         executeTool: async (name, input) => {
+            TOOL_LOG.push({ round: REQ.length, name, input: input || {} });
             if (name === 'read_doc') {
                 const p = Math.max(1, Math.min(8, parseInt(input && input.page, 10) || 1));
                 return { page: p, of: 8, next: p < 8 ? `Call read_doc with page ${p + 1} next (one page per message).` : 'That was the last page.',
@@ -247,6 +289,30 @@ async function child() {
         fanout: 'Call fetch_report for all six regions (north, south, east, west, central, coastal) — all six calls in parallel in ONE message. Then give me a one-paragraph comparison naming the region with the most incidents.',
     };
 
+    // Did the model run the intended workload? Returns null when it did, else a reason.
+    function workloadProblem(sc, toolLog) {
+        const rounds = new Map();
+        for (const t of toolLog) { if (!rounds.has(t.round)) rounds.set(t.round, []); rounds.get(t.round).push(t); }
+        const ordered = [...rounds.keys()].sort((a, b) => a - b).map((k) => rounds.get(k));
+        if (sc === 'long') {
+            if (ordered.length !== 8) return `expected 8 tool rounds, got ${ordered.length}`;
+            for (let i = 0; i < 8; i++) {
+                const r = ordered[i];
+                if (r.length !== 1 || r[0].name !== 'read_doc') return `round ${i + 1}: expected exactly one read_doc, got ${r.map((t) => t.name).join('+') || 'none'}`;
+                if (Number(r[0].input.page) !== i + 1) return `round ${i + 1}: expected page ${i + 1}, got page ${r[0].input.page}`;
+            }
+            return null;
+        }
+        if (sc === 'fanout') {
+            if (ordered.length !== 1) return `expected 1 tool round, got ${ordered.length}`;
+            const r = ordered[0];
+            const regions = new Set(r.filter((t) => t.name === 'fetch_report').map((t) => String(t.input.region)));
+            if (r.length !== 6 || r.some((t) => t.name !== 'fetch_report') || regions.size !== 6) return `expected 6 fetch_report calls (all regions), got ${r.length} call(s), ${regions.size} region(s)`;
+            return null;
+        }
+        return 'unknown scenario';
+    }
+
     const results = [];
     try {
         for (const model of MODELS) {
@@ -255,15 +321,28 @@ async function child() {
                 const chatId = `m-${VERSION}-${model}-${sc}`;
                 if (sc === 'long') seedNearCap(chatId);
                 REQ = [];
+                TOOL_LOG = [];
+                dryScenario = sc;
                 const mark = LOGS.length;
                 const t0 = Date.now();
                 let reply = null; let threw = null;
+                // Idle-summary timers from a previous call (or armed on entry/exit of
+                // this one) must never fire into a measured window.
+                try { ai.cancelAllIdleSummaries(); } catch (_) {}
+                ACTIVE = true;
                 try { reply = await ai.chat(chatId, PROMPTS[sc]); } catch (e) {
                     threw = scrub(e && e.message);
+                } finally {
+                    ACTIVE = false;
+                    try { ai.cancelAllIdleSummaries(); } catch (_) {}
                 }
                 const logs = LOGS.slice(mark);
+                const problem = workloadProblem(sc, TOOL_LOG);
+                const verdict = threw ? 'FAILED' : (problem || !reply ? 'INCONCLUSIVE' : 'OK');
                 results.push({
                     version: VERSION, model, scenario: sc, wallMs: Date.now() - t0, requests: REQ, reply: reply ? String(reply) : null, threw,
+                    verdict, workload: problem || (reply ? 'ok' : 'no final answer'),
+                    toolRounds: TOOL_LOG.reduce((m, t) => { m[t.round] = (m[t.round] || []).concat(`${t.name}(${t.input.page || t.input.region || ''})`); return m; }, {}),
                     heals: logs.filter((l) => /^\[ThinkingBinding\]/.test(l.msg) && l.level === 'WARN').map((l) => l.msg.slice(0, 120)),
                     gate: logs.filter((l) => /^\[ContextBudget\]/.test(l.msg)).map((l) => l.msg.slice(0, 120)),
                     dangerEstimate: logs.filter((l) => /^\[Context\] DANGER/.test(l.msg)).length,
@@ -275,13 +354,16 @@ async function child() {
             }
         }
     } catch (e) {
-        process.stdout.write(JSON.stringify({ results, stop: scrub(e && e.message) }) + '\n');
+        process.stdout.write(JSON.stringify({ results, stray: STRAY, stop: scrub(e && e.message) }) + '\n');
         try { ai.cancelAllIdleSummaries(); } catch (_) {}
         process.exit(3);
     }
     try { ai.cancelAllIdleSummaries(); } catch (_) {}
-    process.stdout.write(JSON.stringify({ results }) + '\n');
-    process.exit(0);
+    process.stdout.write(JSON.stringify({ results, stray: STRAY }) + '\n');
+    // Non-zero when the run is not a valid measurement: any INCONCLUSIVE row, or a
+    // FAILED row on NEW (the version under test). OLD failures are reported only.
+    const bad = results.some((x) => x.verdict === 'INCONCLUSIVE' || (x.verdict === 'FAILED' && VERSION === 'NEW'));
+    process.exit(bad ? 4 : 0);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -297,18 +379,24 @@ function parent() {
         console.log('usage: node tests/live/anthropic/bat1664-measure.js --old <path to OLD nodejs-project (git archive 978d108d)>');
         process.exit(2);
     }
-    const key = readKey();
-    if (!key) { console.log('STOP: ANTHROPIC_API_KEY not found (path not printed).'); process.exit(2); }
-    console.log(`credential: api_key present (len ${key.length}) | cap ${CAP} live requests`);
+    const DRY = process.argv.includes('--dry');
+    if (DRY) {
+        console.log('DRY RUN — scripted responses, no network, no credentials read');
+    } else {
+        const key = readKey();
+        if (!key) { console.log('STOP: ANTHROPIC_API_KEY not found (path not printed).'); process.exit(2); }
+        console.log(`credential: api_key present (len ${key.length}) | cap ${CAP} live requests`);
+    }
     const MODELS = process.env.MEASURE_MODELS || 'claude-fable-5-1,claude-opus-5';
     const SCENARIOS = process.env.MEASURE_SCENARIOS || 'long,fanout';
     let remaining = CAP;
     const all = [];
     let stopped = null;
+    let stray = 0;
     const VERSIONS = (process.env.MEASURE_VERSIONS || 'OLD,NEW').split(',');
     for (const [version, bundle] of [['OLD', OLD], ['NEW', NEW_BUNDLE]].filter(([v]) => VERSIONS.includes(v))) {
         const r = spawnSync(process.execPath, [__filename, '--child'], {
-            env: Object.assign({}, process.env, { M_BUNDLE: bundle, M_VERSION: version, M_MODELS: MODELS, M_SCENARIOS: SCENARIOS, M_REMAINING: String(Math.min(remaining, Math.floor(CAP / 2))) }), // equal share per version
+            env: Object.assign({}, process.env, { M_BUNDLE: bundle, M_VERSION: version, M_MODELS: MODELS, M_SCENARIOS: SCENARIOS, M_REMAINING: String(Math.min(remaining, Math.floor(CAP / 2))), M_DRY: DRY ? '1' : '0' }), // equal share per version
             encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 40 * 60 * 1000,
         });
         process.stderr.write(r.stderr || '');
@@ -316,11 +404,12 @@ function parent() {
         let out = null; try { out = JSON.parse(line); } catch (_) {}
         if (!out) { stopped = `${version} child produced no result (exit ${r.status})`; break; }
         for (const x of out.results || []) { all.push(x); remaining -= x.requests.length; }
+        stray += out.stray || 0;
         if (out.stop || out.fatal) { stopped = `${version}: ${out.stop || out.fatal}`; break; }
     }
 
-    console.log('\n| scenario | model | ver | reqs | ok | wire KB | input | output | cache read | cache write | latency s (total / p50) | replayed (max) | bind | drops | heals | gate | trims | aging | final |');
-    console.log('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    console.log('\n| scenario | model | ver | verdict | reqs | ok | wire KB | input | output | cache read | cache write | latency s (total / p50) | replayed (max) | bind | drops | heals | gate | trims | aging | final |');
+    console.log('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const x of all) {
         const q = x.requests;
         const okN = q.filter((r) => r.status === 200).length;
@@ -330,7 +419,7 @@ function parent() {
         const drops = q.reduce((n, r) => n + (r.drops || 0), 0);
         const trimSites = x.trims.reduce((m, s) => { m[s] = (m[s] || 0) + 1; return m; }, {});
         const final = x.reply ? `yes (${x.reply.length} ch)` : `NO${x.threw ? ' — ' + x.threw : ''}`;
-        console.log(`| ${x.scenario} | ${x.model} | ${x.version} | ${q.length} | ${okN} | ${(sum(q, 'bytes') / 1024).toFixed(0)} | ${sum(q, 'input')} | ${sum(q, 'output')} | ${sum(q, 'cacheRead')} | ${sum(q, 'cacheWrite')} | ${(sum(q, 'ms') / 1000).toFixed(1)} / ${(p50(lat) / 1000).toFixed(1)} | ${replayedMax} | ${binds} | ${drops} | ${x.heals.length} | ${x.gate.length} | ${JSON.stringify(trimSites)} | ${x.aging} | ${final} |`);
+        console.log(`| ${x.scenario} | ${x.model} | ${x.version} | ${x.verdict}${x.verdict === 'OK' ? '' : ' (' + (x.threw || x.workload) + ')'} | ${q.length} | ${okN} | ${(sum(q, 'bytes') / 1024).toFixed(0)} | ${sum(q, 'input')} | ${sum(q, 'output')} | ${sum(q, 'cacheRead')} | ${sum(q, 'cacheWrite')} | ${(sum(q, 'ms') / 1000).toFixed(1)} / ${(p50(lat) / 1000).toFixed(1)} | ${replayedMax} | ${binds} | ${drops} | ${x.heals.length} | ${x.gate.length} | ${JSON.stringify(trimSites)} | ${x.aging} | ${final} |`);
     }
     console.log('\nPer-request detail (status bytes in/out/cr/cw replayed tool_uses):');
     for (const x of all) {
@@ -340,7 +429,15 @@ function parent() {
         if (x.reply) console.log(`     final: ${x.reply.replace(/\s+/g, ' ').slice(0, 160)}…`);
     }
     const total = all.reduce((n, x) => n + x.requests.length, 0);
-    console.log(`\nlive requests: ${total} / cap ${CAP}`);
+    console.log(`\n${DRY ? 'dry' : 'live'} requests: ${total} / cap ${CAP} | stray requests blocked: ${stray}`);
+    const inconclusive = all.filter((x) => x.verdict === 'INCONCLUSIVE');
+    const newFailed = all.filter((x) => x.verdict === 'FAILED' && x.version === 'NEW');
+    const oldFailed = all.filter((x) => x.verdict === 'FAILED' && x.version === 'OLD');
+    if (oldFailed.length) console.log(`OLD failures (reported, not failing the run): ${oldFailed.map((x) => `${x.model}/${x.scenario}`).join(', ')}`);
+    if (inconclusive.length || newFailed.length) {
+        console.log(`NOT A VALID MEASUREMENT: ${inconclusive.length} inconclusive row(s), ${newFailed.length} failed NEW row(s)`);
+        process.exitCode = 1;
+    }
     if (stopped) { console.log(`STOPPED: ${stopped}`); process.exitCode = 3; }
 }
 
