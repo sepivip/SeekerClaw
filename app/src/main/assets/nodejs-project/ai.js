@@ -21,7 +21,7 @@ const {
     config: _config,
     runtimeState: _runtimeState,
 } = require('./config');
-const { reasoningSupportFor, displayNameForProvider } = require('./model-catalog');
+const { reasoningSupportFor, thinkingBindingFor, displayNameForProvider } = require('./model-catalog');
 const { logSuppression: _logSuppression, SUPPRESSION_REASONS: _SUPPRESSION_REASONS } = require('./reasoning-gating');
 
 const { redactSecrets } = require('./security');
@@ -60,6 +60,9 @@ const loopDetector = require('./loop-detector');
 const { buildSecurityRejectBlock } = require('./security-reject-block');
 // BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
 const _reasoningRecovery = require('./reasoning-recovery');
+// BAT-1664: verbatim thinking replay — wire-snapshot capture/invalidation and the
+// binding beta tag live with the Claude adapter (the snapshot is Claude-wire data).
+const _wireSnap = require('./providers/claude');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
 const { fingerprint: _reasoningFingerprint, byteLen: _byteLen } = require('./reasoning-redact');
 // BAT-1283: goal resolution for the checkpoint this turn writes. Pure module so the
@@ -1714,6 +1717,52 @@ function classifyNetworkError(err) {
     return getAdapter(PROVIDER).classifyNetworkError(err);
 }
 
+// BAT-1664 C2 fallback — process-local NEGATIVE capability for the thinking
+// block-binding control (decision 8, pin P2). Keyed by route (endpoint host +
+// auth type) PLUS a credential generation: an in-memory SHA-256 of the
+// credential the REJECTED request was actually sent with. A rejection on one
+// credential never disables the control for another. The Map lives in memory
+// only — the key/hash is never logged, persisted or returned.
+const _bindingNegativeCaps = new Map();
+
+function _bindingCapKey(hostname, authType, credential) {
+    const gen = crypto.createHash('sha256')
+        .update(typeof credential === 'string' ? credential : '', 'utf8').digest('hex');
+    return `${hostname || '-'}|${authType || '-'}|${gen}`;
+}
+
+function _isBindingDenied(hostname, authType, credential) {
+    return _bindingNegativeCaps.has(_bindingCapKey(hostname, authType, credential));
+}
+
+function _recordBindingDenied(hostname, authType, credential) {
+    _bindingNegativeCaps.set(_bindingCapKey(hostname, authType, credential), true);
+}
+
+// BAT-1664 C4: report what the API did to replayed thinking (the
+// `input_transformations` array, present only when the binding beta was sent).
+// Counts only — paths/blocks are never logged. Empty/absent → nothing.
+function _logInputTransformations(list, model) {
+    if (!Array.isArray(list) || list.length === 0) return;
+    let prefixDrops = 0;
+    let modelDrops = 0;
+    for (const t of list) {
+        if (!t || t.type !== 'thinking_dropped') continue;
+        if (t.reason === 'prefix_binding_mismatch') prefixDrops++;
+        else if (t.reason === 'model_binding_mismatch') modelDrops++;
+    }
+    if (prefixDrops > 0) {
+        _logSuppression(
+            _SUPPRESSION_REASONS.THINKING_DROPPED_PREFIX_MISMATCH,
+            `count=${prefixDrops} model=${String(model).slice(0, 48)}`,
+            '[ThinkingBinding]',
+        );
+    }
+    if (modelDrops > 0) {
+        log(`[ThinkingBinding] thinking dropped: model_binding_mismatch count=${modelDrops}`, 'DEBUG');
+    }
+}
+
 async function claudeApiCall(body, chatId, traceCtx = {}) {
     // Serialize: wait for any in-flight API call to complete first
     while (apiCallInFlight) {
@@ -1797,9 +1846,22 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         let refreshedThisCall = typeof adapter.currentRefreshGeneration === 'function'
             && adapter.currentRefreshGeneration() !== _genBeforeRefresh;
+        // BAT-1664 C2: extra anthropic-beta tags for THIS request (the
+        // thinking-binding beta, sent iff the body carries block_binding — one
+        // `bind` decision in chat()). Goes to BOTH header sites below. The
+        // credential each build used is tracked so a binding rejection records
+        // the negative capability against the credential ACTUALLY sent (P2).
+        const _betaExtra = Array.isArray(traceCtx.anthropicBetaExtra) && traceCtx.anthropicBetaExtra.length > 0
+            ? traceCtx.anthropicBetaExtra : null;
+        const _sentBinding = !!(_betaExtra && _betaExtra.includes(_wireSnap.THINKING_BINDING_BETA));
+        let _sentCredential = apiKey;
+        const _buildRequestHeaders = (key) => {
+            _sentCredential = key;
+            return _betaExtra ? adapter.buildHeaders(key, AUTH_TYPE, _betaExtra) : adapter.buildHeaders(key, AUTH_TYPE);
+        };
         // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
         // retry carries the freshly-rotated bearer, not the expired one.
-        let headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+        let headers = _buildRequestHeaders(apiKey);
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -1924,7 +1986,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         // pre-loop EXPIRED token — critical because this loop is xAI's ONLY
                         // refresh path, so re-sending the stale bearer 401s again and burns a
                         // single-use refresh rotation on every attempt. No-op for api_key/claude.
-                        headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+                        headers = _buildRequestHeaders(apiKey); // BAT-1664: same beta extra as the first build
                         refreshedThisCall = true; // BAT-1143 D8: mark the post-refresh retry
                     }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
@@ -1956,6 +2018,18 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         }
 
         const durationMs = Date.now() - startTime;
+
+        // BAT-1664 C2 fallback: this request sent the binding and the route /
+        // credential rejected the control itself → remember that (process-local,
+        // keyed by the credential of the actual send). The signature-400 matcher
+        // wins: a signature mismatch is never a capability rejection. chat()
+        // performs the retry; this only records.
+        if (_sentBinding && res && res.status === 400
+            && !_reasoningRecovery.isThinkingSignature400(res.status, res.data)
+            && _reasoningRecovery.isBindingRejected400(res.status, res.data, true)) {
+            try { _recordBindingDenied(endpoint && endpoint.hostname, AUTH_TYPE, _sentCredential); }
+            catch (e) { log(`[ThinkingBinding] capability record failed: ${e && e.message ? e.message : String(e)}`, 'WARN'); }
+        }
 
         // Log to database (retry_count = number of retries performed, 0 = no retries)
         // BAT-315: Extract raw usage from provider-specific location
@@ -2145,7 +2219,10 @@ function sanitizeConversation(messages, turnId) {
                 orphanDetails.push({ type: 'tool_call', id: tc.id, tool: tc.name, msgIndex: i });
             }
         }
-        msg.toolCalls = msg.toolCalls.filter(tc => !orphanedIds.has(tc.id));
+        // BAT-1664: every edit of an assistant message's toolCalls/content goes
+        // through the wire-snapshot gate (drops the verbatim snapshot + marks the
+        // conversation so the rest of the turn strips thinking).
+        _wireSnap.invalidateWireSnapshot(msg, messages, msg.toolCalls.filter(tc => !orphanedIds.has(tc.id)));
         stripped += orphanedIds.size;
 
         if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
@@ -2180,6 +2257,7 @@ function sanitizeConversation(messages, turnId) {
                 orphanDetails.push({ type: 'tool_use', id: b.id, tool: b.name, msgIndex: i });
             }
         }
+        _wireSnap.invalidateWireSnapshot(msg, messages); // BAT-1664: assistant content edit
         msg.content = msg.content.filter(b => b.type !== 'tool_use' || !orphanedIds.has(b.id));
         stripped += orphanedIds.size;
 
@@ -2768,6 +2846,17 @@ async function chat(chatId, userMessage, options = {}) {
     // BAT-1130: at most one lean self-heal retry per turn (guards against a
     // genuine usage-exhaustion 400 looping forever).
     let _contentFilterSelfHealed = false;
+    // BAT-1664 C3: at most one signature-400 heal per turn (NOT reset per round).
+    // A second match in the same turn surfaces via classifyApiError.
+    let _thinkingSignatureHealed = false;
+    // BAT-1664: turn-sticky "replay no thinking" flag. Once set it stays set for
+    // the rest of this chat() call. Set by: the C3 signature heal, the C2
+    // binding rejection, any wire-snapshot invalidation during the turn, and
+    // (slice B) the emergency history edits — sanitize repair, quarantine, lean
+    // self-heal, anchorGuardRepair, budget reduction.
+    let _stripAllThinking = false;
+    // BAT-1664 C2: at most one binding-rejection fallback retry per turn.
+    let _bindingFallbackUsed = false;
 
     // BAT-1283: resolve the goal this turn's checkpoint will carry.
     //
@@ -2802,6 +2891,13 @@ async function chat(chatId, userMessage, options = {}) {
         const _tail = messages[messages.length - 1];
         if (_tail && _tail.role === 'user') _turnAnchor = _tail;
     }
+
+    // BAT-1664: baseline of this conversation's wire-snapshot edit epoch. Any
+    // invalidateWireSnapshot() during the turn moves it → stripAllThinking.
+    const _wireEpochAtTurnStart = _wireSnap.wireEditEpoch(messages);
+    // BAT-1664 C2: registry flag, resolved ONCE per turn (first-party Claude only).
+    const _thinkingBindingFlag = adapter.id === 'claude'
+        && thinkingBindingFor('claude', activeModel, AUTH_TYPE) === true;
 
     // Call Claude API with tool use loop
     let response;
@@ -2962,6 +3058,13 @@ async function chat(chatId, userMessage, options = {}) {
                 customEchoOverride: !!(_liveRtState && _liveRtState.customEchoReasoning),
                 reasoningMode: effectiveReasoningMode,
                 synthetic: effectiveSynthetic,
+                // BAT-1664 C1: identity of THIS turn's user message — the only
+                // boundary for thinking replay. null → no replay at all.
+                turnAnchor: _turnAnchor,
+                // BAT-1664: turn-sticky strip flag (refreshed right before emission).
+                stripAllThinking: _stripAllThinking,
+                // BAT-1664 C2: registry flag; the per-request `bind` is derived below.
+                thinkingBinding: _thinkingBindingFlag,
             };
 
             // R1.3 + R2.2 Copilot: emit the SYNTHETIC_HEARTBEAT
@@ -3017,17 +3120,21 @@ async function chat(chatId, userMessage, options = {}) {
                 : AUTH_TYPE;
             const _transportRequiresReasoning = _usesOpenAIResponsesTransport
                 && (_effectiveTransportAuth === 'oauth' || _modelIsCodex);
-            if (effectiveReasoningMode === 'off'
+            // BAT-1664: evaluated AFTER the body is built (below) — when the
+            // thinking binding is sent, the request carries `thinking` and
+            // claiming "suppressed" would be false.
+            const _heartbeatSuppressionApplies = effectiveReasoningMode === 'off'
                 && effectiveSynthetic === 'heartbeat'
                 && _userToggleWouldEmit
-                && !_transportRequiresReasoning) {
+                && !_transportRequiresReasoning;
+            const _emitHeartbeatSuppressionLog = () => {
                 _logSuppression(
                     _SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT,
                     `chatId=${String(chatId).slice(0, 32)} provider=${_effectiveTransportProvider} `
                     + `auth=${_effectiveTransportAuth} `
                     + `model=${String(activeModel).slice(0, 48)}`,
                 );
-            }
+            };
 
             // Convert neutral messages to provider API format for the request.
             // BAT-549 R2 thread 3: pass `activeModel` as 2nd arg so the
@@ -3055,8 +3162,26 @@ async function chat(chatId, userMessage, options = {}) {
                     cumulative: anchorGuardStats.repairs,
                 })}`, anchorGuardStats.repairs <= 3 ? 'ERROR' : 'DEBUG');
             }
+            // BAT-1664: an in-turn wire-snapshot invalidation (sanitize orphan
+            // filter, loop-final clear, …) changed a prefix later signatures are
+            // bound to → strip thinking for the rest of the turn.
+            if (_wireSnap.wireEditEpoch(messages) !== _wireEpochAtTurnStart) _stripAllThinking = true;
+            requestOptions.stripAllThinking = _stripAllThinking;
+            requestOptions.turnAnchor = _turnAnchor;
             const apiMessages = adapter.toApiMessages(messages, activeModel, requestOptions);
-            const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools, requestOptions);
+            // BAT-1664 C2: ONE bind decision drives both the body field and the
+            // beta header (claudeApiCall, both header sites). Bind only when the
+            // model is flagged, the emitted messages actually carry thinking, and
+            // this route+credential has not rejected the control.
+            let _bind = false;
+            if (_thinkingBindingFlag && typeof adapter.messagesHaveThinking === 'function'
+                && adapter.messagesHaveThinking(apiMessages)) {
+                const _ep = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
+                _bind = !_isBindingDenied(_ep && _ep.hostname, AUTH_TYPE, getProviderApiKey());
+            }
+            const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools,
+                _bind ? Object.assign({}, requestOptions, { bindThinking: true }) : requestOptions);
+            if (_heartbeatSuppressionApplies && !_bind) _emitHeartbeatSuppressionLog();
 
             // BAT-549 Commit 6: extended-thinking status indicator.
             // Per v4 contract, the bubble appears ONLY when all three
@@ -3090,7 +3215,10 @@ async function chat(chatId, userMessage, options = {}) {
 
             let res;
             try {
-                res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
+                res = await claudeApiCall(body, chatId, {
+                    turnId, iteration: stepCount,
+                    anthropicBetaExtra: _bind ? [_wireSnap.THINKING_BINDING_BETA] : null,
+                });
             } finally {
                 // Codex v3/v4 sign-off adjustment: cleanup is
                 // fire-and-forget. Awaiting it inline would gate
@@ -3144,6 +3272,33 @@ async function chat(chatId, userMessage, options = {}) {
                     : Buffer.isBuffer(errMsg) ? errMsg.length : 0;
                 const errMsgFp = _reasoningFingerprint(errMsg);
                 log(`API error: status=${res.status} type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'ERROR');
+
+                // BAT-1664 C3: a replayed thinking block's signature no longer
+                // matches its bound prefix (first-party Claude). Evaluated FIRST
+                // (it wins over the binding-rejection matcher). Heal ONCE per
+                // turn: strip all thinking for the rest of the turn and retry.
+                // Stored history is not touched. A second match falls through to
+                // classifyApiError (it matches none of the recoveries below).
+                const _isSignature400 = adapter.id === 'claude'
+                    && _reasoningRecovery.isThinkingSignature400(res.status, res.data);
+                if (_isSignature400 && !_thinkingSignatureHealed) {
+                    _thinkingSignatureHealed = true;
+                    _stripAllThinking = true;
+                    log(`[ThinkingBinding] status=${res.status} thinking-signature mismatch — retrying turn once with replayed thinking stripped (bindingSent=${_bind ? 1 : 0})`, 'WARN');
+                    continue;
+                }
+                // BAT-1664 C2 fallback: THIS request sent the binding and the
+                // route/credential rejected the control itself. claudeApiCall has
+                // recorded the negative capability for the credential actually
+                // sent; retry once without header AND field, thinking stripped.
+                if (!_isSignature400 && !_bindingFallbackUsed
+                    && _reasoningRecovery.isBindingRejected400(res.status, res.data, _bind)) {
+                    _bindingFallbackUsed = true;
+                    _stripAllThinking = true;
+                    const _ep = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
+                    log(`[ThinkingBinding] status=${res.status} binding control rejected (host=${(_ep && _ep.hostname) || '-'} auth=${AUTH_TYPE}) — disabled for this credential until restart; retrying once without it`, 'WARN');
+                    continue;
+                }
 
                 // BAT-549: detect "reasoning_content must be passed back" 400
                 // and run adaptive 3-step quarantine recovery before bubbling
@@ -3309,6 +3464,9 @@ async function chat(chatId, userMessage, options = {}) {
 
             // BAT-315: Parse response through adapter into neutral format
             const parsed = adapter.fromApiResponse(res.data);
+            // BAT-1664 C4: what the API did to replayed thinking (counts only).
+            try { _logInputTransformations(parsed.inputTransformations, activeModel); }
+            catch (e) { log(`[ThinkingBinding] input_transformations log failed: ${e && e.message ? e.message : String(e)}`, 'DEBUG'); }
             // Keep raw response for fallback text extraction later
             response = res.data;
             response._parsed = parsed;
@@ -3339,25 +3497,33 @@ async function chat(chatId, userMessage, options = {}) {
             // Add assistant's response to history in neutral format
             // BAT-549: thread reasoningBlocks through so the next turn's
             // toApiMessages() can emit them back at the wire shape each
-            // adapter requires. Adapters that don't capture reasoning
+            // adapter requires (BAT-1664: except Claude, which replays only
+            // the in-turn verbatim wire snapshot below and never rebuilds
+            // from reasoningBlocks). Adapters that don't capture reasoning
             // (claude.js / openai.js pre-Commit-2) return undefined here;
             // `|| []` keeps the field stable so checkpoint serialization
             // doesn't churn the schema between turns. Empty array is the
             // documented "no reasoning preserved" sentinel.
-            messages.push({
+            const _assistantMsg = {
                 role: 'assistant',
                 content: parsed.text || '',
                 toolCalls: parsed.toolCalls,
                 reasoningBlocks: Array.isArray(parsed.reasoningBlocks) ? parsed.reasoningBlocks : [],
-            });
+            };
+            // BAT-1664: verbatim snapshot of the content array as received (deep
+            // copy, non-enumerable → never serialized). In-turn replay emits it.
+            if (adapter.id === 'claude' && Array.isArray(parsed.wireContent)) {
+                _wireSnap.setWireSnapshot(_assistantMsg, parsed.wireContent);
+            }
+            messages.push(_assistantMsg);
 
             // DeerFlow P1: If this is the final loop-break iteration, ignore any tool calls
             if (_loopFinalIteration && parsed.toolCalls.length > 0) {
                 log(`[LoopDetector] Final iteration — ignoring ${parsed.toolCalls.length} tool calls from model`, 'WARN');
                 // Clear tool calls from the already-pushed assistant message to prevent orphans
                 const lastMsg = messages[messages.length - 1];
-                if (lastMsg && lastMsg.role === 'assistant') lastMsg.toolCalls = [];
-                parsed.toolCalls = [];
+                if (lastMsg && lastMsg.role === 'assistant') _wireSnap.invalidateWireSnapshot(lastMsg, messages, []);
+                response._parsed = Object.assign({}, parsed, { toolCalls: [] });
                 _loopFinalIteration = false;
                 break; // Model didn't listen — force exit with text response
             }
@@ -3404,7 +3570,16 @@ async function chat(chatId, userMessage, options = {}) {
                 const toolUse = parsed.toolCalls[i];
                 // OpenClaw parity: normalize tool name before ALL gating checks
                 // (prevents whitespace-padded names from bypassing confirmation/rate-limit gates)
-                if (typeof toolUse.name === 'string') toolUse.name = toolUse.name.trim();
+                if (typeof toolUse.name === 'string') {
+                    const _trimmedName = toolUse.name.trim();
+                    // BAT-1664: toolUse IS an entry of the stored assistant message's
+                    // toolCalls — an actual change is an edit, so it goes through the
+                    // wire-snapshot gate first.
+                    if (_trimmedName !== toolUse.name) {
+                        _wireSnap.invalidateWireSnapshot(_assistantMsg, messages);
+                        toolUse.name = _trimmedName;
+                    }
+                }
                 log(`Tool use: ${toolUse.name}`, 'DEBUG');
                 // Status reaction: show tool-specific emoji (OpenClaw parity)
                 if (options.statusReaction) options.statusReaction.setTool(toolUse.name);
@@ -3934,4 +4109,15 @@ module.exports = {
     _setWalletPromptSnapshotForTests,
     // BAT-1130: exposed for the content-filter self-heal regression test.
     _isUsageFilter400,
+    // BAT-1664: test seams (claudeApiCall header/binding sites, sanitizer,
+    // capability store, input_transformations logging).
+    _claudeApiCallForTest: claudeApiCall,
+    _sanitizeConversationForTest: sanitizeConversation,
+    _bindingCapabilityForTest: {
+        isDenied: _isBindingDenied,
+        record: _recordBindingDenied,
+        reset: () => _bindingNegativeCaps.clear(),
+        size: () => _bindingNegativeCaps.size,
+    },
+    _logInputTransformations,
 };

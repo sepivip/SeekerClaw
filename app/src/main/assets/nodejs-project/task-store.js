@@ -70,6 +70,11 @@ function saveCheckpoint(taskId, state) {
         if (Array.isArray(trimmed.conversationSlice)) {
             trimmed.conversationSlice = trimmed.conversationSlice.map(msg => {
                 const clone = { ...msg };
+                // BAT-1664: the verbatim Claude wire snapshot is in-memory only
+                // (non-enumerable, so the spread above already skips it). Delete
+                // defensively in case a future path makes it enumerable — it is
+                // valid only for the turn that produced it and must never reach disk.
+                delete clone.claudeWireContent;
                 // BAT-1283: track whether redaction altered the text the goal scan
                 // would READ (turn-goal's textOfContent: a string body, or the
                 // first type:'text' block). Tool inputs and tool_result bodies are

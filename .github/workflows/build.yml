@@ -115,6 +115,7 @@ jobs:
             web-fetch-ssrf-guard \
             claude-thinking-signature \
             claude-adaptive-thinking \
+            claude-thinking-binding \
             model-catalog \
             reasoning-request-enablement \
             xai \

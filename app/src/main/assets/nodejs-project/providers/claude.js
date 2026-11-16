@@ -30,7 +30,144 @@ const { logSuppression, SUPPRESSION_REASONS } = require('../reasoning-gating');
 // skip it. It is no longer an API constraint (adaptive has no budget floor).
 const MIN_THINKING_TURN = 2048;
 
+// BAT-1664 — preserved thinking. A thinking block's signature is bound to
+// the exact request prefix (system + tools + every earlier message) that
+// produced it, and to the model. Newer models (claude-fable-5-1 for accounts
+// created on/after 2026-08-31, and later) ENFORCE that binding: replaying a
+// block whose prefix changed is a 400 `Invalid \`signature\` in \`thinking\`
+// block`. Three defences live in this adapter:
+//
+//   C1 — current-turn-only replay. Only assistant messages AFTER this turn's
+//        anchor (the user message that started the turn, passed by identity
+//        as `requestOptions.turnAnchor`) may carry thinking. Everything before
+//        the anchor is emitted with thinking stripped (both `reasoningBlocks`
+//        and legacy Anthropic-array content). No anchor / no requestOptions
+//        (vision, summaries) → no thinking at all. Never a role scan: the
+//        mid-turn `[System]` loop-warn messages are role 'user'.
+//   Verbatim — in-turn assistant messages are replayed from the content
+//        array exactly as received (`claudeWireContent`, captured in
+//        fromApiResponse as `wireContent`), not rebuilt from the neutral
+//        form (which joins text blocks and reorders thinking to the front).
+//        A missing/invalidated snapshot strips thinking from that message
+//        and every later one in the turn.
+//   C2 — `thinking.block_binding.prefix_mismatch_behavior: 'drop_block'` on
+//        registry-flagged models (`thinkingBinding: true`), so a residual
+//        prefix edit drops the block instead of failing the request. Needs
+//        the THINKING_BINDING_BETA header; ai.js sends header and field
+//        together from one `bind` decision.
+const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
+
+// ── Wire snapshot (verbatim in-turn replay) ─────────────────────────────────
+//
+// The snapshot lives on the neutral assistant message as a NON-enumerable
+// property so it can never reach a checkpoint, a conversation dump or any
+// `{...msg}` clone: JSON.stringify and object spread both skip it. It is
+// in-memory only and meaningful only for the turn that produced it.
+const WIRE_SNAPSHOT_KEY = 'claudeWireContent';
+
+// Per-conversation invalidation epoch. invalidateWireSnapshot(msg, messages)
+// bumps it so chat() can turn on stripAllThinking for the rest of the turn
+// (the edit changed a prefix later signatures are bound to). WeakMap keyed by
+// the live messages array — no cross-chat leakage, no retention.
+const _wireEditEpochs = new WeakMap();
+
+function setWireSnapshot(msg, wireContent) {
+    if (!msg || typeof msg !== 'object' || !Array.isArray(wireContent)) return;
+    let copy;
+    try { copy = JSON.parse(JSON.stringify(wireContent)); } catch (_) { return; }
+    Object.defineProperty(msg, WIRE_SNAPSHOT_KEY, {
+        value: copy, enumerable: false, writable: true, configurable: true,
+    });
+}
+
+function getWireSnapshot(msg) {
+    if (!msg || typeof msg !== 'object') return null;
+    const snap = msg[WIRE_SNAPSHOT_KEY];
+    return Array.isArray(snap) ? snap : null;
+}
+
+// THE single mutation gate for a neutral assistant message's toolCalls /
+// content (BAT-1664 decision 7). Every edit site calls this BEFORE editing:
+// it drops the verbatim snapshot (it no longer matches the message) and
+// bumps the conversation's epoch so the rest of the turn strips thinking.
+// Pass `toolCalls` to have the helper perform the assignment itself — the
+// source guard test pins that no other `.toolCalls =` assignment exists.
+function invalidateWireSnapshot(msg, messages, toolCalls) {
+    if (!msg || typeof msg !== 'object') return;
+    if (Object.prototype.hasOwnProperty.call(msg, WIRE_SNAPSHOT_KEY)) delete msg[WIRE_SNAPSHOT_KEY];
+    if (Array.isArray(messages)) _wireEditEpochs.set(messages, (_wireEditEpochs.get(messages) || 0) + 1);
+    if (Array.isArray(toolCalls)) msg.toolCalls = toolCalls;
+}
+
+function wireEditEpoch(messages) {
+    return Array.isArray(messages) ? (_wireEditEpochs.get(messages) || 0) : 0;
+}
+
+function _isThinkingBlock(b) {
+    return !!b && (b.type === 'thinking' || b.type === 'redacted_thinking');
+}
+
+// The capture validity rule (BAT-1033), applied in fromApiResponse to both
+// `reasoningBlocks` and the verbatim `wireContent` snapshot: a `thinking`
+// block needs a string `thinking` + a NON-EMPTY string `signature`;
+// `redacted_thinking` needs a string `data`. Non-thinking blocks pass.
+//
+// The signature — not the thinking text — is what Anthropic validates. A
+// thinking block with an empty/whitespace signature is rejected with 400
+// "each thinking block must contain thinking" (the message is misleading); an
+// empty-TEXT block WITH a valid signature is accepted (and is the default on
+// display:"omitted" models). Pre-fix builds streamed thinking blocks with an
+// empty signature (http.js dropped signature_delta). Key on the signature,
+// never on the text.
+function _isValidWireBlock(c) {
+    if (!c || typeof c !== 'object') return false;
+    if (c.type === 'thinking') {
+        return typeof c.thinking === 'string'
+            && typeof c.signature === 'string' && c.signature.trim() !== '';
+    }
+    if (c.type === 'redacted_thinking') return typeof c.data === 'string';
+    return true;
+}
+
+// Does an emitted (Anthropic-format) messages array carry any thinking
+// block? Drives the C2 `bind` decision: binding is only sent when there is
+// something to bind.
+function messagesHaveThinking(apiMessages) {
+    if (!Array.isArray(apiMessages)) return false;
+    for (const m of apiMessages) {
+        if (!m || m.role !== 'assistant' || !Array.isArray(m.content)) continue;
+        if (m.content.some(_isThinkingBlock)) return true;
+    }
+    return false;
+}
+
 // ── Neutral ↔ Claude message translation ────────────────────────────────────
+
+// Normalized assistant emission: text + tool_use, NO thinking. Used for every
+// assistant message that is not replayed verbatim (BAT-1664). The neutral form
+// cannot reproduce the received content array (it joins text blocks and would
+// have to reorder thinking to the front), so a thinking block replayed from
+// `reasoningBlocks` would fail the signature's prefix binding on enforcing
+// models. `reasoningBlocks` stays captured (history, diagnostics) but is never
+// replayed by this adapter.
+function _normalizedAssistant(msg) {
+    const hasToolCalls = Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0;
+    const content = [];
+    if (msg.content) {
+        content.push({ type: 'text', text: msg.content });
+    }
+    if (hasToolCalls) {
+        for (const tc of msg.toolCalls) {
+            content.push({
+                type: 'tool_use',
+                id: tc.id,
+                name: tc.name,
+                input: tc.input,
+            });
+        }
+    }
+    return { role: 'assistant', content: content.length > 0 ? content : [{ type: 'text', text: '' }] };
+}
 
 /**
  * Convert neutral internal messages to Claude API messages format.
@@ -44,49 +181,23 @@ const MIN_THINKING_TURN = 2048;
  *   { role:'user', content:[{type:'text', text:'...'}] }
  *   { role:'assistant', content:[{type:'text',text:'...'},{type:'tool_use',id,name,input}] }
  *   { role:'user', content:[{type:'tool_result', tool_use_id, content}] }
+ *
+ * BAT-1664: `requestOptions` (3rd arg) drives thinking replay.
+ *   - `turnAnchor`: identity of THIS turn's user message. Only assistant
+ *     messages after it may carry thinking (C1). Absent/not found → none.
+ *   - `stripAllThinking`: turn-sticky; strips every thinking block (set
+ *     after a signature 400, a binding rejection, a wire-snapshot
+ *     invalidation, and — slice B — the emergency history edits).
+ * Stored history is never mutated: every filter here builds new arrays.
  */
-// BAT-549 Commit 2: collect Anthropic-stamped thinking/redacted_thinking
-// wire blocks from a stored assistant message's reasoningBlocks. These
-// must be echoed back UNCHANGED + IN ORDER on tool-use turns or the
-// signature fails server-side validation. Returns an array of wire
-// objects suitable for splicing into the front of content[].
-//
-// Activation: only blocks where sourceAdapter === 'claude' (i.e. captured
-// by THIS adapter from a previous Anthropic turn). Other-provider blocks
-// (custom/openrouter) pass through silently — they don't belong here.
-function _collectClaudeWireBlocks(msg) {
-    if (!msg || !Array.isArray(msg.reasoningBlocks)) return [];
-    const out = [];
-    for (const blk of msg.reasoningBlocks) {
-        if (!blk || blk.sourceAdapter !== 'claude') continue;
-        if (typeof blk.wire !== 'object' || blk.wire === null || Array.isArray(blk.wire)) continue;
-        const t = blk.wire.type;
-        if (t !== 'thinking' && t !== 'redacted_thinking') continue;
-        // Verify the shape minimally so a corrupted checkpoint can't
-        // submit nonsense: thinking needs string `thinking` + a NON-EMPTY
-        // signature; redacted_thinking needs string `data`.
-        //
-        // BAT-1033: the signature — not the thinking text — is what Anthropic
-        // validates. A thinking block with an empty/whitespace signature is
-        // rejected with 400 "each thinking block must contain thinking" (the
-        // message is misleading); an empty-TEXT block WITH a valid signature is
-        // accepted. Pre-fix builds streamed thinking blocks with an empty
-        // signature (http.js dropped signature_delta), so guard on the signature
-        // being present. This also recovers already-poisoned v2.1.0 checkpoints
-        // after upgrade — skip the bad block rather than 400 the whole request.
-        // Do NOT reject on empty thinking text: a signed empty-text block is
-        // valid and must still be echoed back unchanged.
-        if (t === 'thinking' && (typeof blk.wire.thinking !== 'string'
-            || typeof blk.wire.signature !== 'string' || blk.wire.signature.trim() === '')) continue;
-        if (t === 'redacted_thinking' && typeof blk.wire.data !== 'string') continue;
-        out.push(blk.wire);
-    }
-    return out;
-}
-
-function toApiMessages(messages) {
+function toApiMessages(messages, _model, requestOptions) {
     const out = [];
     let pendingToolResults = [];
+    const anchor = (requestOptions && requestOptions.turnAnchor) || null;
+    const anchorIdx = anchor ? messages.indexOf(anchor) : -1;
+    // Once set, every LATER assistant message in this emission is stripped too
+    // (a signature binds the whole prefix, so a gap invalidates what follows).
+    let stripRest = anchorIdx < 0 || !!(requestOptions && requestOptions.stripAllThinking === true);
 
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
@@ -114,35 +225,31 @@ function toApiMessages(messages) {
         }
 
         if (msg.role === 'assistant') {
-            // If content is already a Claude-native array (legacy checkpoint), pass through.
-            // Such arrays may already include thinking blocks — don't re-emit from
-            // reasoningBlocks here because that would double-up.
+            const inTurn = anchorIdx >= 0 && i > anchorIdx;
+            // Legacy Claude-native array (old checkpoint). It never has a wire
+            // snapshot, so it can never be replayed with thinking: strip its
+            // thinking/redacted_thinking blocks (new array — stored content is
+            // untouched). Inside the turn it also counts as a missing snapshot.
             if (Array.isArray(msg.content)) {
-                out.push({ role: 'assistant', content: msg.content });
+                if (inTurn) stripRest = true;
+                const kept = msg.content.filter(b => !_isThinkingBlock(b));
+                out.push({ role: 'assistant', content: kept.length > 0 ? kept : [{ type: 'text', text: '' }] });
                 continue;
             }
-            // BAT-549 Commit 2: thinking/redacted_thinking blocks come FIRST
-            // in content[]. Echo only on tool-use turns (toolCalls present)
-            // — that's the Anthropic contract. For text-only assistant
-            // turns the thinking is captured but not replayed.
-            const hasToolCalls = Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0;
-            const thinkingWire = hasToolCalls ? _collectClaudeWireBlocks(msg) : [];
-            const content = [];
-            for (const w of thinkingWire) content.push(w);
-            if (msg.content) {
-                content.push({ type: 'text', text: msg.content });
-            }
-            if (hasToolCalls) {
-                for (const tc of msg.toolCalls) {
-                    content.push({
-                        type: 'tool_use',
-                        id: tc.id,
-                        name: tc.name,
-                        input: tc.input,
-                    });
+            // Verbatim in-turn replay: the content array exactly as received
+            // (order, multi-text, interleaved thinking). Only while nothing
+            // earlier in the turn forced stripping.
+            if (inTurn && !stripRest) {
+                const snap = getWireSnapshot(msg);
+                if (snap) {
+                    out.push({ role: 'assistant', content: snap.slice() });
+                    continue;
                 }
+                // Missing / invalidated snapshot: this message AND every later
+                // one go out without thinking.
+                stripRest = true;
             }
-            out.push({ role: 'assistant', content: content.length > 0 ? content : [{ type: 'text', text: '' }] });
+            out.push(_normalizedAssistant(msg));
         } else if (msg.role === 'user') {
             // User message — can be string or array of content blocks (vision)
             if (typeof msg.content === 'string') {
@@ -173,9 +280,17 @@ function toApiMessages(messages) {
  * never re-normalized — Codex v3 finding 1). Required for tool-use
  * loops with extended thinking enabled: Anthropic server-validates
  * the `signature` field on every echoed block, so we MUST preserve
- * them byte-exact + in original order. The `toApiMessages` path on the
- * NEXT request splices these wire blocks back into the assistant
- * message's content[] when the message has tool_calls.
+ * them byte-exact + in original order.
+ *
+ * BAT-1664: also returns
+ *   - `wireContent`: the content array AS RECEIVED (order, multi-text,
+ *     interleaved thinking), each block through the same validity check as
+ *     reasoningBlocks. ai.js stores a deep copy as the non-enumerable
+ *     `claudeWireContent` snapshot; toApiMessages replays it verbatim for
+ *     in-turn messages. `reasoningBlocks` is no longer replayed.
+ *   - `inputTransformations`: the response's top-level
+ *     `input_transformations` array (present only when the
+ *     thinking-binding beta was sent), or null.
  */
 function fromApiResponse(raw) {
     const content = raw.content || [];
@@ -197,16 +312,14 @@ function fromApiResponse(raw) {
         if (!c || (c.type !== 'thinking' && c.type !== 'redacted_thinking')) continue;
         // BAT-1033: reject malformed blocks at the CAPTURE boundary too, not
         // just on replay, so a poisoned block never enters a checkpoint in the
-        // first place. Mirror _collectClaudeWireBlocks exactly: a `thinking`
+        // first place (same rule as _isValidWireBlock): a `thinking`
         // block needs a string `thinking` + a NON-EMPTY string `signature`
         // (empty TEXT is valid — an empty-signature block is the poison);
         // `redacted_thinking` needs a string `data`. With the http.js delta
         // fix the normal streamed path won't produce these, but a malformed
         // block from any other source (older build, non-streaming edge) is
         // dropped here instead of persisted.
-        if (c.type === 'thinking' && (typeof c.thinking !== 'string'
-            || typeof c.signature !== 'string' || c.signature.trim() === '')) continue;
-        if (c.type === 'redacted_thinking' && typeof c.data !== 'string') continue;
+        if (!_isValidWireBlock(c)) continue;
         reasoningBlocks.push({
             schemaVersion: 1,
             provider: 'anthropic',
@@ -217,10 +330,18 @@ function fromApiResponse(raw) {
         });
     }
 
+    // BAT-1664: the verbatim snapshot source. Same validity filter, nothing
+    // else touched — no join, no reorder, no re-normalization.
+    const wireContent = content.filter(_isValidWireBlock);
+    const inputTransformations = (raw && Array.isArray(raw.input_transformations))
+        ? raw.input_transformations : null;
+
     return {
         text,
         toolCalls,
         reasoningBlocks,
+        wireContent,
+        inputTransformations,
         stopReason: raw.stop_reason || 'end_turn',
         usage: raw.usage || {},
     };
@@ -292,6 +413,17 @@ function formatTools(tools) {
  * guard so a tiny answer budget isn't consumed by reasoning. Existing
  * call sites (vision/summary) that pass small `maxTokens` (256, 500) or
  * no `requestOptions` continue to emit no `thinking` — additive change.
+ *
+ * BAT-1664: what "off" means depends on the model. Omitting `thinking`
+ * does NOT stop a model that thinks by default: Fable 5.x, Opus 5/5.5 and
+ * Sonnet 5.5 run adaptive when the field is absent. So the off / heartbeat /
+ * toggle-off paths below are "app does not ASK for thinking", not "model
+ * does not think". For registry-flagged models (`thinkingBinding: true`)
+ * whose emitted messages carry thinking, ai.js sets `bindThinking` and this
+ * function sends `{type:'adaptive', block_binding:{prefix_mismatch_behavior:
+ * 'drop_block'}}` regardless of those paths (it runs first) — that changes
+ * nothing about whether the model thinks, only how a prefix mismatch is
+ * handled.
  */
 function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestOptions) {
     const body = {
@@ -302,6 +434,25 @@ function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestO
         messages,
     };
     if (tools && tools.length > 0) body.tools = tools;
+
+    // BAT-1664 C2 — thinking block binding. `bindThinking` is the per-request
+    // decision ai.js makes ONCE (registry `thinkingBinding` flag && the
+    // emitted messages carry ≥1 thinking block && no negative capability for
+    // this route+credential); ai.js sends the THINKING_BINDING_BETA header from
+    // the SAME decision, so header and field always travel together (the field
+    // without the header is a 400).
+    //
+    // This branch runs BEFORE the reasoning-off / toggle-off / small-turn
+    // early returns on purpose. Flagged models think adaptively whether or not
+    // `thinking` is sent ("flagged models default to adaptive when thinking is
+    // omitted" — Anthropic model docs, 2026-11-06), so sending
+    // `{type:'adaptive', block_binding}` on a heartbeat / toggle-off / small
+    // turn changes nothing about whether the model thinks — it only turns a
+    // prefix-mismatch 400 into a dropped block.
+    if (requestOptions && requestOptions.bindThinking === true) {
+        body.thinking = { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } };
+        return JSON.stringify(body);
+    }
 
     // BAT-558 v4 R3 — synthetic / opt-out short-circuit. Heartbeats
     // pass `reasoningMode: 'off'` explicitly; ai.js also defensively
@@ -339,7 +490,11 @@ function formatRequest(model, maxTokens, systemBlocks, messages, tools, requestO
 
 const endpoint = { hostname: 'api.anthropic.com', path: '/v1/messages' };
 
-function buildHeaders(apiKey, authType) {
+// BAT-1664: `extra` is an optional array of additional anthropic-beta tags for
+// THIS request (today only THINKING_BINDING_BETA, from ai.js's `bind`
+// decision via traceCtx.anthropicBetaExtra). Omitted → the historical header
+// set, byte-for-byte.
+function buildHeaders(apiKey, authType, extra) {
     const auth = authType === 'setup_token'
         ? { 'Authorization': `Bearer ${apiKey}` }
         : { 'x-api-key': apiKey };
@@ -351,9 +506,18 @@ function buildHeaders(apiKey, authType) {
     // is a no-op when reasoning is OFF — the beta only activates when the
     // request actually emits thinking blocks. Safe-by-default for both
     // setup_token and api_key auth modes.
-    const betaTags = authType === 'setup_token'
+    let betaTags = authType === 'setup_token'
         ? 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14'
         : 'prompt-caching-2024-07-31,interleaved-thinking-2025-05-14';
+    if (Array.isArray(extra)) {
+        const have = betaTags.split(',');
+        for (const tag of extra) {
+            if (typeof tag === 'string' && /^[a-z0-9-]+$/.test(tag) && !have.includes(tag)) {
+                have.push(tag);
+            }
+        }
+        betaTags = have.join(',');
+    }
     return {
         'Content-Type': 'application/json',
         'anthropic-version': '2023-06-01',
@@ -525,4 +689,13 @@ module.exports = {
     // Capabilities
     supportsCache: true,
     authTypes: ['api_key', 'setup_token'],
+
+    // BAT-1664: preserved-thinking support (verbatim replay + block binding)
+    THINKING_BINDING_BETA,
+    WIRE_SNAPSHOT_KEY,
+    messagesHaveThinking,
+    setWireSnapshot,
+    getWireSnapshot,
+    invalidateWireSnapshot,
+    wireEditEpoch,
 };

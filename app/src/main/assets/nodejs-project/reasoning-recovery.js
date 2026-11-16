@@ -41,7 +41,15 @@ const _REASONING_400_SCAN_LIMIT = 4096;
 
 function isReasoningContent400(status, data) {
     if (status !== 400) return false;
-    if (!data) return false;
+    return _errorMessageCandidates(data).some((s) => REASONING_400_PATTERN.test(s));
+}
+
+// Bounded extraction of the human-readable error message(s) from a provider
+// error body: string / Buffer / object `error.message` | `message`. NO
+// JSON.stringify fallback (unbounded on input — see 2c Copilot R2 below).
+// Shared by every 400 matcher in this file so they keep identical scan rules.
+function _errorMessageCandidates(data) {
+    if (!data) return [];
     const candidates = [];
     if (typeof data === 'string') {
         candidates.push(data.length > _REASONING_400_SCAN_LIMIT
@@ -75,7 +83,56 @@ function isReasoningContent400(status, data) {
                 : data.message);
         }
     }
-    return candidates.some((s) => REASONING_400_PATTERN.test(s));
+    return candidates;
+}
+
+// ── BAT-1664: preserved-thinking 400s (first-party Claude) ──────────────────
+//
+// C3: a replayed thinking block whose signature no longer matches its bound
+// prefix (history edited mid-turn, or a pre-anchor block) on an enforcing
+// model. Exact text (Anthropic error docs, 2026-11; live-confirmed on
+// claude-fable-5-1):
+//   messages.N.content.M: Invalid `signature` in `thinking` block. The block is
+//   bound to a different conversation. Remove the block, or set
+//   `thinking.block_binding.prefix_mismatch_behavior` to "drop_block".
+// optionally followed by a hint naming the thinking-binding-controls beta,
+// and/or a sentence naming the first changed path. The hint mentions the beta
+// and `block_binding`, which is why the binding-rejection patterns below are
+// anchored at the start of the message and this matcher is evaluated first.
+// Recovery: strip all thinking for the rest of the turn, retry once.
+const THINKING_SIGNATURE_400_PATTERN = /Invalid `signature` in `thinking` block/i;
+
+function isThinkingSignature400(status, data) {
+    if (status !== 400) return false;
+    return _errorMessageCandidates(data).some((s) => THINKING_SIGNATURE_400_PATTERN.test(s));
+}
+
+// C2 fallback: the route/credential does not accept the binding control.
+// Two anchored shapes only (anything else — including the enum error for a
+// bad `prefix_mismatch_behavior` value — is NOT a rejection of the feature):
+//   1. the beta header itself is unknown on this route;
+//   2. the body field is unknown (header stripped en route / older API).
+const BINDING_REJECTED_400_PATTERNS = [
+    /^Unexpected value\(s\) `[^`]*thinking-binding-controls-[^`]*` for the `anthropic-beta` header/,
+    /^thinking\.[a-z_]+\.block_binding: Extra inputs are not permitted/,
+];
+
+function _errorType(data) {
+    return (data && typeof data === 'object' && !Buffer.isBuffer(data)
+        && data.error && typeof data.error === 'object' && typeof data.error.type === 'string')
+        ? data.error.type : null;
+}
+
+// `sentBinding` MUST be "THIS request carried the binding header+field" — a
+// request that did not send it cannot have been rejected for it. The
+// signature matcher is evaluated first by the caller and wins; this function
+// also refuses a signature-400 body defensively so the two never overlap.
+function isBindingRejected400(status, data, sentBinding) {
+    if (status !== 400 || sentBinding !== true) return false;
+    if (_errorType(data) !== 'invalid_request_error') return false;
+    const candidates = _errorMessageCandidates(data);
+    if (candidates.some((s) => THINKING_SIGNATURE_400_PATTERN.test(s))) return false;
+    return candidates.some((s) => BINDING_REJECTED_400_PATTERNS.some((re) => re.test(s)));
 }
 
 /**
@@ -472,6 +529,11 @@ module.exports = {
     stageJson,
     publishStaged,
     isReasoningContent400,
+    // BAT-1664
+    isThinkingSignature400,
+    isBindingRejected400,
+    THINKING_SIGNATURE_400_PATTERN,
+    BINDING_REJECTED_400_PATTERNS,
     findLastUserBoundary,
     findEarliestAssistantToolCallIndex,
     computeCutIndex,

@@ -263,6 +263,17 @@ function selfCheck() {
         beta.includes('prompt-caching-2024-07-31'), `anthropic-beta=${beta}`);
     A('header anthropic-beta includes interleaved-thinking-2025-05-14',
         beta.includes('interleaved-thinking-2025-05-14'), `anthropic-beta=${beta}`);
+    // BAT-1664: buildHeaders(key, auth) with no 3rd arg never carries the
+    // per-request thinking-binding beta (production adds it only together with
+    // body.thinking.block_binding, via the 3rd `extra` arg).
+    A('header anthropic-beta does NOT include thinking-binding-controls (no extra arg)',
+        !beta.includes('thinking-binding-controls-'), `anthropic-beta=${beta}`);
+    {
+        const bound = adapter.buildHeaders(cfg.ANTHROPIC_KEY, cfg.AUTH_TYPE, [adapter.THINKING_BINDING_BETA]);
+        const boundBeta = typeof bound['anthropic-beta'] === 'string' ? bound['anthropic-beta'] : '';
+        A('buildHeaders(key, auth, [binding beta]) appends thinking-binding-controls-2026-08-01',
+            boundBeta.split(',').includes('thinking-binding-controls-2026-08-01'), `anthropic-beta=${boundBeta}`);
+    }
 
     if (MODE === 'setup_token') {
         // OAuth / Pro-Max lane: Bearer auth + the oauth beta tag; NO x-api-key.

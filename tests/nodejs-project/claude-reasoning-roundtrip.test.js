@@ -4,15 +4,17 @@
 //
 //  - fromApiResponse captures `thinking` + `redacted_thinking` verbatim
 //    into reasoningBlocks (signature byte-exact, raw wire payload)
-//  - toApiMessages emits thinking blocks FIRST in content[] on tool-use
-//    turns (Anthropic server-validates signature; order matters)
-//  - text-only assistant turns do NOT replay thinking (contract: tool-
-//    use loops only)
-//  - Other-provider blocks (custom/openrouter) are skipped — only
-//    sourceAdapter==='claude' blocks emit on this adapter
+//  - BAT-1664 (supersedes the BAT-549 "thinking FIRST, rebuilt from
+//    reasoningBlocks" emit): in-turn assistant messages (after the turn
+//    anchor) replay the content array VERBATIM from the wire snapshot —
+//    original order, signature byte-exact. reasoningBlocks is never
+//    replayed (rebuilding reorders/joins and breaks the prefix binding).
+//  - text-only / pre-anchor / no-requestOptions assistant turns do NOT
+//    replay thinking
+//  - Other-provider blocks (custom/openrouter) never emit on this adapter
 //  - Malformed blocks (missing signature, wrong types) are skipped
-//  - Legacy Claude-native content arrays pass through unchanged (no
-//    double-emit of thinking blocks)
+//  - Legacy Claude-native content arrays: thinking stripped, the rest
+//    passes through unchanged (no double-emit; stored array untouched)
 //  - Schema discriminator (Codex v3 finding 1) on every captured block
 //
 // Run:  node tests/nodejs-project/claude-reasoning-roundtrip.test.js
@@ -131,24 +133,26 @@ eq('Missing model: sourceModel = null',
     claude.fromApiResponse(noModelResp).reasoningBlocks[0].sourceModel, null);
 
 console.log();
-console.log('── toApiMessages: thinking blocks FIRST in content[] on tool-use turns ──');
+console.log('── toApiMessages: in-turn message replays the wire snapshot verbatim ──');
 
-// Build a stored neutral assistant message with reasoningBlocks (matching what
-// fromApiResponse would have stored)
+// Build a stored neutral assistant message exactly as ai.js does: neutral
+// fields + the non-enumerable wire snapshot of the received content array.
 const storedAssistant = {
     role: 'assistant',
     content: 'Let me check the weather for you.',
     toolCalls: [{ id: 'toolu_01XYZ', name: 'weather', input: { city: 'Tbilisi' } }],
     reasoningBlocks: [parsed.reasoningBlocks[0]],
 };
+claude.setWireSnapshot(storedAssistant, parsed.wireContent);
 
+const turnAnchor = { role: 'user', content: 'weather in tbilisi?' };
 const messages = [
-    { role: 'user', content: 'weather in tbilisi?' },
+    turnAnchor,
     storedAssistant,
     { role: 'tool', toolCallId: 'toolu_01XYZ', content: '{"temp":18}' },
 ];
 
-const apiMsgs = claude.toApiMessages(messages);
+const apiMsgs = claude.toApiMessages(messages, 'claude-sonnet-4-6', { turnAnchor });
 eq('toApiMessages produces 3 API messages', apiMsgs.length, 3);
 const apiAssistant = apiMsgs[1];
 eq('Assistant message role correct', apiAssistant.role, 'assistant');
@@ -166,7 +170,9 @@ const multiStored = {
     toolCalls: [{ id: 'tc1', name: 'echo', input: {} }],
     reasoningBlocks: multiParsed.reasoningBlocks,
 };
-const multiApi = claude.toApiMessages([multiStored])[0];
+claude.setWireSnapshot(multiStored, multiParsed.wireContent);
+const multiAnchor = { role: 'user', content: 'go' };
+const multiApi = claude.toApiMessages([multiAnchor, multiStored], 'claude-opus-4-7', { turnAnchor: multiAnchor })[1];
 eq('Multi-block emit: 5 blocks (3 thinking + text + tool_use)',
     multiApi.content.length, 5);
 eq('Multi-block emit: first 3 are thinking-family blocks',
@@ -203,7 +209,7 @@ ok('Undefined toolCalls: no thinking echoed',
     !noToolsApi.content.some((b) => b.type === 'thinking'));
 
 console.log();
-console.log('── toApiMessages: skips non-claude reasoningBlocks ──');
+console.log('── toApiMessages: reasoningBlocks (any provider) are never replayed ──');
 
 const customBlock = {
     schemaVersion: 1, provider: 'custom', sourceAdapter: 'custom',
@@ -225,12 +231,13 @@ const mixedStored = {
         parsed.reasoningBlocks[0], // the only claude-stamped one
     ],
 };
-const mixedApi = claude.toApiMessages([mixedStored])[0];
+const mixedAnchor = { role: 'user', content: 'q' };
+const mixedApi = claude.toApiMessages([mixedAnchor, mixedStored], 'claude-opus-4-7', { turnAnchor: mixedAnchor })[1];
 const thinkingCount = mixedApi.content.filter((b) => b.type === 'thinking' || b.type === 'redacted_thinking').length;
-eq('Mixed-provider blocks: only the 1 claude-stamped block emits',
-    thinkingCount, 1);
-eq('Mixed-provider: emitted block matches the claude one',
-    mixedApi.content.find((b) => b.type === 'thinking').signature, SIG);
+eq('Mixed-provider blocks, no wire snapshot: NOTHING emits (BAT-1664)',
+    thinkingCount, 0);
+ok('Mixed-provider: no foreign reasoning shape leaks into content',
+    !mixedApi.content.some((b) => b.type === 'reasoning.text' || 'reasoning_content' in b));
 
 console.log();
 console.log('── toApiMessages: skips malformed blocks ──');
@@ -266,7 +273,7 @@ for (const blk of malformedBlocks) {
 }
 
 console.log();
-console.log('── toApiMessages: legacy Claude-native content array passes through unchanged ──');
+console.log('── toApiMessages: legacy Claude-native content array — thinking stripped, rest unchanged ──');
 
 // A checkpoint pre-BAT-549 might have stored the assistant message in
 // Claude-native form (content as array of blocks). The pass-through path
@@ -281,11 +288,17 @@ const legacyClaudeNative = {
     reasoningBlocks: [parsed.reasoningBlocks[0]],
     toolCalls: [{ id: 'tc1', name: 'echo', input: {} }],
 };
+const legacyBefore = JSON.stringify(legacyClaudeNative);
 const legacyApi = claude.toApiMessages([legacyClaudeNative])[0];
-eq('Legacy native: content passes through unchanged (no double-emit)',
-    legacyApi.content, legacyClaudeNative.content);
-ok('Legacy native: thinking in content is the inline one (not the separate block)',
-    legacyApi.content[0].thinking === 'inline thought');
+// BAT-1664: a legacy array never has a wire snapshot, so its thinking can never
+// be replayed (pre-anchor, no anchor, or in-turn alike). Text survives.
+eq('Legacy native: thinking stripped, text kept (no double-emit)',
+    legacyApi.content, [{ type: 'text', text: 'inline answer' }]);
+eq('Legacy native: stored message is NOT mutated', JSON.stringify(legacyClaudeNative), legacyBefore);
+const legacyAnchor = { role: 'user', content: 'x' };
+const legacyInTurn = claude.toApiMessages([legacyAnchor, legacyClaudeNative], 'm', { turnAnchor: legacyAnchor })[1];
+ok('Legacy native in-turn: still no thinking (no snapshot)',
+    !legacyInTurn.content.some((b) => b.type === 'thinking'));
 
 console.log();
 console.log('── Round-trip: fromApiResponse → toApiMessages produces equivalent assistant block ──');
@@ -297,7 +310,9 @@ const rtStored = {
     toolCalls: rtParsed.toolCalls,
     reasoningBlocks: rtParsed.reasoningBlocks,
 };
-const rtApi = claude.toApiMessages([rtStored])[0];
+claude.setWireSnapshot(rtStored, rtParsed.wireContent);
+const rtAnchor = { role: 'user', content: 'weather?' };
+const rtApi = claude.toApiMessages([rtAnchor, rtStored], 'claude-sonnet-4-6', { turnAnchor: rtAnchor })[1];
 // Reconstructed content[] should match the original response content[]:
 //   thinking, text, tool_use — same shapes, same fields, same order
 eq('Round-trip content[] matches original (signature, order, fields)',

@@ -19,6 +19,10 @@
 //   1. http.js reducer assembles the FULL signature + text (would FAIL pre-fix).
 //   2. claude.js replay guard skips an empty-signature block but keeps a signed
 //      one (even with empty text) — recovers poisoned checkpoints on upgrade.
+//      BAT-1664 moved the guard: replay is now verbatim from the wire snapshot
+//      (`fromApiResponse().wireContent`, filtered by the same signature rule at
+//      capture) and only for messages after the turn anchor; `reasoningBlocks`
+//      is never replayed. Layer 2 therefore drives capture → snapshot → replay.
 //
 // Run:  node tests/nodejs-project/claude-thinking-signature.test.js
 'use strict';
@@ -108,12 +112,20 @@ ok('(5c) signed thinking (incl. empty-text) + redacted_thinking ARE captured',
     `captured=${JSON.stringify(capMixed.map((b) => b.wire))}`);
 
 // ── Layer 2: claude.js replay guard (defense-in-depth) ───────────────────────
-function replaysThinking(reasoningBlocks) {
+// BAT-1664: the block reaches the wire only through the capture-side snapshot
+// (same signature rule) of an IN-TURN message (after the anchor).
+function replaysThinking(blocks) {
+    const parsed = claude.fromApiResponse({
+        id: 'msg_g', model: 'claude-sonnet-5', stop_reason: 'tool_use', usage: {},
+        content: [...blocks.map((b) => b.wire), { type: 'text', text: 'ok' },
+            { type: 'tool_use', id: 'tc1', name: 'read', input: {} }],
+    });
+    const anchor = { role: 'user', content: 'check logs' };
+    const stored = { role: 'assistant', content: parsed.text, toolCalls: parsed.toolCalls, reasoningBlocks: parsed.reasoningBlocks };
+    claude.setWireSnapshot(stored, parsed.wireContent);
     const asst = claude.toApiMessages([
-        { role: 'user', content: 'check logs' },
-        { role: 'assistant', content: 'ok', toolCalls: [{ id: 'tc1', name: 'read', input: {} }], reasoningBlocks },
-        { role: 'tool', toolCallId: 'tc1', content: '{"ok":true}' },
-    ]).find((m) => m.role === 'assistant');
+        anchor, stored, { role: 'tool', toolCallId: 'tc1', content: '{"ok":true}' },
+    ], 'claude-sonnet-5', { turnAnchor: anchor }).find((m) => m.role === 'assistant');
     return (asst && Array.isArray(asst.content))
         ? asst.content.filter((b) => b.type === 'thinking')
         : [];
@@ -134,6 +146,17 @@ ok('(8) signed empty-TEXT thinking block IS replayed (empty text is valid)',
 const signed = replaysThinking([mkBlock({ type: 'thinking', thinking: 'real reasoning', signature: SIG })]);
 ok('(9) signed non-empty thinking block IS replayed unchanged',
     signed.length === 1 && signed[0].thinking === 'real reasoning' && signed[0].signature === SIG);
+// BAT-1664: a checkpoint-restored message (reasoningBlocks, no snapshot) never
+// replays thinking — a poisoned or prefix-stale block cannot reach the wire.
+{
+    const anchor = { role: 'user', content: 'go on' };
+    const restored = { role: 'assistant', content: 'ok', toolCalls: [{ id: 'tc1', name: 'read', input: {} }],
+        reasoningBlocks: [mkBlock({ type: 'thinking', thinking: 'old', signature: SIG })] };
+    const out = claude.toApiMessages([anchor, restored, { role: 'tool', toolCallId: 'tc1', content: '{}' }],
+        'claude-sonnet-5', { turnAnchor: anchor });
+    ok('(10) reasoningBlocks without a wire snapshot are NOT replayed (BAT-1664)',
+        !out.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'thinking')));
+}
 
 console.log();
 if (failures === 0) { console.log('ALL TESTS PASS'); process.exit(0); }
