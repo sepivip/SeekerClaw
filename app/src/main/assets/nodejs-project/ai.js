@@ -2408,8 +2408,20 @@ function estimateTokens(systemBlocks, messages, tools, cache) {
     // Use cached char counts for system/tools when available (they don't change per iteration)
     const systemChars = (cache && cache.systemChars != null) ? cache.systemChars : charCount(systemBlocks);
     let messageChars = 0;
+    // BAT-1664 (Codex 49822321): with `cache.mediaAware` (first-party Claude), an inline
+    // image counts as MEDIA_IMAGE_TOKENS, not its base64 characters — the same accounting
+    // the formatted-body gate uses. Without it a 700 KB photo read as ~240k tokens here and
+    // drove the summarize / pressure-trim pre-filter, which edit history (and so strip the
+    // turn's replayed thinking) before the gate ever saw the real size.
+    const mediaAware = !!(cache && cache.mediaAware);
     for (const m of messages) {
-        messageChars += charCount(m.content);
+        if (mediaAware && Array.isArray(m.content)) {
+            const acc = { images: 0, excludedChars: 0 };
+            _mediaAdjustment(m.content, acc, 0);
+            messageChars += Math.max(0, charCount(m.content) - acc.excludedChars) + acc.images * MEDIA_IMAGE_TOKENS * 4;
+        } else {
+            messageChars += charCount(m.content);
+        }
         if (m.toolCalls) messageChars += charCount(m.toolCalls);
         // Structural overhead per message (~30 chars for role, separators, etc.)
         messageChars += 30;
@@ -3067,7 +3079,7 @@ async function chat(chatId, userMessage, options = {}) {
             // Cache systemChars for the turn (stable). toolChars recomputed each iteration
             // because MCP tools can reconnect/change between tool rounds.
             if (!_ctxCache) {
-                _ctxCache = { systemChars: JSON.stringify(systemBlocks).length };
+                _ctxCache = { systemChars: JSON.stringify(systemBlocks).length, mediaAware: adapter.id === 'claude' };
             }
             _ctxCache.toolChars = JSON.stringify(formattedTools).length;
 

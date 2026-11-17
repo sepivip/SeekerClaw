@@ -487,6 +487,29 @@ async function main() {
         ok(`image (${model}): nothing was blocked`, ai.budgetGateStats.blocked === blockedBefore);
         eq(`image (${model}): the spy saw no oversized body`, VIOLATIONS.length, 0);
     }
+    // B1b2 (Codex 49822321, major): the photo must not drive the PRE-FILTER either.
+    // A mature Fable 5.1 chat + a 700 KB photo + one small tool result used to read
+    // ~254k estimated tokens in checkContextUsage (base64 counted as text), so it sent
+    // an extra summary request, pressure-trimmed history, and — because those are
+    // history edits — sent the tool continuation WITHOUT its valid thinking.
+    // Negative control: drop `mediaAware` from the _ctxCache in chat() → the DANGER, adaptive-trim
+    // and thinking-replay assertions fail (in this harness the summarizer does not send).
+    {
+        currentAdapter = claude; currentModel = 'claude-fable-5-1'; toolResultSize = 10;
+        const chatId = newChatId();
+        seed(chatId, 6); // 4 + 12 = 16 prior messages: enough for summarizeOldMessages to act
+        SENT.length = 0; VIOLATIONS.length = 0;
+        const mark = LOGS.length;
+        SCRIPT = [ok200(toolResp([th('ph'), tu('ph')])), ok200(textResp('photo checked'))];
+        let reply; try { reply = await ai.chat(chatId, photoMsg('check this photo with the tool')); } catch (e) { reply = `THREW: ${e.message}`; }
+        eq('mature photo + tool: the turn completes', reply, 'photo checked');
+        eq('mature photo + tool: exactly two sends (no pressure summary request)', SENT.length, 2);
+        eq('mature photo + tool: no [Context] DANGER from the base64', turnLogs(mark, /\[Context\] DANGER/).length, 0);
+        ok('mature photo + tool: no pressure summary was spliced in', !ai.getConversation(chatId).some((m) => typeof m.content === 'string' && m.content.startsWith('[Summary of earlier conversation]')));
+        eq('mature photo + tool: no pressure trim', turnLogs(mark, /\[Context\] Adaptive trim/).length, 0);
+        ok('mature photo + tool: round 2 still replays the turn\'s thinking (no sticky strip)', !!SENT[1] && anyThinking(SENT[1].body));
+        eq('mature photo + tool: the spy saw no oversized body', VIOLATIONS.length, 0);
+    }
     // B1c: real text bulk is still blocked with a photo present.
     {
         currentAdapter = claude; currentModel = 'claude-fable-5-1'; toolResultSize = 900000;
