@@ -46,7 +46,7 @@ function load() {
     // The environment alone is enough; a file value never overrides a variable already set.
     const fromProcess = {};
     for (const k of ['BURNER_PUBKEY', 'BURNER_SECRET_KEY', 'SOLANA_RPC', 'MAX_USDC_ATOMIC', 'JUPITER_API_KEY', 'PAYSH_TEST_URL']) {
-        if (process.env[k]) fromProcess[k] = process.env[k];
+        if (k in process.env) fromProcess[k] = process.env[k];
     }
     if (!envFile && fromProcess.BURNER_PUBKEY && fromProcess.SOLANA_RPC) {
         return { env: fromProcess, file: '(environment)' };

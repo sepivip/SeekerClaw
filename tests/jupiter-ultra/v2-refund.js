@@ -45,7 +45,8 @@ function loadEnv(file) {
         if (eq < 0) continue;
         out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
     }
-    for (const [k, v] of Object.entries(process.env)) if (v) out[k] = v;
+    // Presence wins (as dotenv): a variable set in the environment, even empty, beats the file.
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined) out[k] = v;
     return out;
 }
 const env = loadEnv(path.join(__dirname, '.env.test'));

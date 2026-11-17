@@ -1,7 +1,9 @@
 # Live-test credentials (1Password)
 
 Live probes and the Jupiter/burner tests read their keys from the environment. The keys
-live in the 1Password vault **SeekerClaw Dev**; nothing secret is stored in the repo or on disk.
+live in the 1Password vault **SeekerClaw Dev**, so no plaintext key file is needed. Nothing secret is
+committed to the repo. (Older local `.env` files may still hold keys until they are cleaned up, and the
+ChatGPT-login token lives in `~/.codex/auth.json`; see Rules.)
 
 Each folder that needs keys has a committed `.env.op` file. It holds only `op://` secret
 references (plus a few plain, non-secret settings), never a key value:
@@ -40,4 +42,5 @@ holds the vault (for example `OP_ACCOUNT=my.1password.com`).
 - **The ChatGPT-login (Codex OAuth) tokens are not in 1Password.** The Codex CLI rotates them
   within seconds, so a stored copy goes stale at once. For an `--mode oauth` run, read the fresh
   token from `~/.codex/auth.json` immediately before the run.
-- Probes print credentials by length only. Never echo or log a value.
+- Print credentials by length only (`present (len=N)`). Never echo, log, or print part of a value,
+  not even a prefix.
