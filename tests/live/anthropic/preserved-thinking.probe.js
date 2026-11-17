@@ -34,8 +34,9 @@
 // reasoning-heavy prompt, to make the model actually emit thinking blocks
 // (a probe with no thinking block proves nothing).
 //
-// Credentials: ANTHROPIC_API_KEY / SETUP_TOKEN read from
-//   $PRESERVED_THINKING_ENV, or .env next to this file (gitignored)
+// Credentials: ANTHROPIC_API_KEY / SETUP_TOKEN from process.env when set
+//   (e.g. `op run --env-file=<…>/tests/live/anthropic/.env.op -- node …`),
+//   else per key from $PRESERVED_THINKING_ENV, or .env next to this file (gitignored)
 // They are NEVER printed, logged or written; only their presence is reported.
 // A 401/403 stops the run immediately (no retries).
 //
@@ -75,21 +76,30 @@ const AUTHS = (process.env.PT_AUTHS || 'api_key,setup_token').split(',').map((s)
 const MAX_TOKENS = 2048;
 
 // ── credentials (never printed) ─────────────────────────────────────────────
+// process.env wins (e.g. `op run --env-file=…/.env.op`); the file is only a
+// per-key fallback for a variable the environment does not set.
+const CRED_KEYS = ['ANTHROPIC_API_KEY', 'SETUP_TOKEN'];
 function loadCreds() {
     const envPath = process.env.PRESERVED_THINKING_ENV || path.join(__dirname, '.env');
     const out = {};
-    if (!fs.existsSync(envPath)) return { out, envPath, found: false };
-    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-        const t = line.trim();
-        if (!t || t.startsWith('#')) continue;
-        const eq = t.indexOf('=');
-        if (eq === -1) continue;
-        const k = t.slice(0, eq).trim();
-        let v = t.slice(eq + 1).trim();
-        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-        if (k === 'ANTHROPIC_API_KEY' || k === 'SETUP_TOKEN') out[k] = v;
+    for (const k of CRED_KEYS) {
+        const v = (process.env[k] || '').trim();
+        if (v) out[k] = v;
     }
-    return { out, envPath, found: true };
+    const fileFound = fs.existsSync(envPath);
+    if (fileFound) {
+        for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+            const t = line.trim();
+            if (!t || t.startsWith('#')) continue;
+            const eq = t.indexOf('=');
+            if (eq === -1) continue;
+            const k = t.slice(0, eq).trim();
+            let v = t.slice(eq + 1).trim();
+            if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+            if (CRED_KEYS.includes(k) && !out[k] && v) out[k] = v;
+        }
+    }
+    return { out, envPath, found: fileFound || CRED_KEYS.some((k) => !!out[k]) };
 }
 // Scrub anything credential-shaped from text we might print (API error text).
 function scrub(s) {
@@ -572,7 +582,7 @@ async function selfCheck() {
 async function main() {
     if (SELF_CHECK) return selfCheck();
     const { out: creds, found } = loadCreds();
-    if (!found) { console.log('STOP: credentials file not found (path not printed).'); process.exit(2); }
+    if (!found) { console.log('STOP: no credentials in the environment and no credentials file (path not printed).'); process.exit(2); }
     const credFor = { api_key: creds.ANTHROPIC_API_KEY, setup_token: creds.SETUP_TOKEN };
     console.log(`credentials: api_key ${credFor.api_key ? `present (len ${credFor.api_key.length})` : 'MISSING'}, setup_token ${credFor.setup_token ? `present (len ${credFor.setup_token.length})` : 'MISSING'}`);
     console.log(`models: ${MODELS.join(', ')} | auths: ${AUTHS.join(', ')} | max_tokens=${MAX_TOKENS}`);

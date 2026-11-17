@@ -19,8 +19,9 @@
 // status. Per run: heals ([ThinkingBinding]) / gate ([ContextBudget]) log lines,
 // final answer.
 //
-// API KEY ONLY. Credentials: ANTHROPIC_API_KEY from $BAT1664_MEASURE_ENV or
-// $BAT1664_MEASURE_ENV, or the gitignored .env next to this file — never printed,
+// API KEY ONLY. Credentials: ANTHROPIC_API_KEY from process.env when set (e.g.
+// `op run --env-file=<…>/tests/live/anthropic/.env.op -- node …`), else from the
+// file at $BAT1664_MEASURE_ENV or the gitignored .env next to this file — never printed,
 // error text scrubbed, a 401/403 stops everything. Hard cap on live requests
 // (MEASURE_CAP, default 70) across the whole run.
 //
@@ -59,6 +60,9 @@ function scrub(s) {
     return String(s || '').replace(/sk-ant-[A-Za-z0-9_\-]+/g, '[redacted]').replace(/Bearer\s+\S+/g, 'Bearer [redacted]').slice(0, 200);
 }
 function readKey() {
+    // process.env wins (e.g. `op run --env-file=…/.env.op`); the file is the fallback.
+    const fromEnv = (process.env.ANTHROPIC_API_KEY || '').trim();
+    if (fromEnv) return fromEnv;
     if (!fs.existsSync(ENV_PATH)) return null;
     for (const line of fs.readFileSync(ENV_PATH, 'utf8').split(/\r?\n/)) {
         const t = line.trim();
