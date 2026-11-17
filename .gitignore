@@ -75,6 +75,8 @@ openclaw-reference/
 .env
 .env.*
 !.env.example
+# 1Password secret references (op://...), never values — safe to commit (BAT-1714)
+!.env.op
 
 # Agent/tooling configs
 .agent/
