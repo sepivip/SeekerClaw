@@ -61,6 +61,7 @@ const LOAD_TARGETS = [
     // BAT-1186: pure anchor-preserving history-trim primitives — no deps, no IO.
     'history-trim.js',
     'turn-goal.js',
+    'oauth-family.js', // BAT-1157: pure helper, no side effects
     // BAT-1247: pure log-safety helpers (flattenForLog) — no deps, no IO.
     'log-safe.js',
     'loop-detector.js',

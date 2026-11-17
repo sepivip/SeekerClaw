@@ -3,7 +3,7 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
-import com.seekerclaw.app.config.PrefsNames
+import com.seekerclaw.app.config.MainPrefs
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -129,7 +129,8 @@ object AgentPreferencesStore {
         if (!initialized.compareAndSet(false, true)) return
         val app = context.applicationContext
         appContext = app
-        val sp = app.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
+        // BAT-1157: MAIN-only (see SeekerClawApplication); the collector mirror writes prefs.
+        val sp = MainPrefs.forWrite(app, "AgentPreferencesStore.init") ?: return
         val seeded = seedFromPrefs(sp)
         _state.value = seeded
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

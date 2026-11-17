@@ -1259,6 +1259,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('2. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider. The OAuth section stays visible after a failed sign-in — they can tap "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.');
         lines.push('3. If OAuth refresh persistently fails: suggest the user sign out (clears OAuth tokens but keeps OAuth as the chosen auth type) and sign back in. As a fallback, they can switch to API Key in the auth picker if they have a platform key.');
         lines.push('4. Check `grep -iE "oauth|codex" node_debug.log` for OAuth-specific errors.');
+        lines.push('5. Sign-in storage (BAT-1157) — "sign-in changed, restart", "saving your refreshed sign-in", "could not save your ChatGPT sign-in" or "reconnect OpenAI": see DIAGNOSTICS.md → "OpenAI Codex OAuth — Sign-In Storage".');
         lines.push('');
     }
 
@@ -1490,6 +1491,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push(`You are running on OpenAI (model: ${activeModel}, auth: ${OPENAI_AUTH_TYPE}).`);
         if (OPENAI_AUTH_TYPE === 'oauth') {
             lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
+        } else if (AUTH_TYPE === 'oauth') {
+            // BAT-1157 (D9): ChatGPT sign-in is SELECTED, but no usable sign-in is stored, so the
+            // saved platform API key is being used. The selection itself is unchanged.
+            lines.push('Auth mode: **API Key (fallback)** — the user chose ChatGPT sign-in, but no usable sign-in is stored on this device (signed out, or the stored sign-in is unreadable), so requests use their saved OpenAI API key via api.openai.com. To go back to the ChatGPT subscription they sign in again: Settings > AI Provider > OpenAI > Sign in with ChatGPT. See DIAGNOSTICS.md → "OpenAI Codex OAuth — Sign-In Storage".');
         } else {
             lines.push('Auth mode: **API Key** — the user configured an OpenAI platform API key. Requests route through api.openai.com. To switch to ChatGPT OAuth (free with a Plus/Pro subscription), the user can change auth type in Settings > AI Provider > OpenAI.');
         }
@@ -1693,8 +1698,9 @@ const AUTH_FAIL_THRESHOLD = 3;
 const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
 
 // BAT-315: Error classification delegated to provider adapter
-function classifyApiError(status, data) {
-    return getAdapter(PROVIDER).classifyError(status, data);
+// [ctx] (optional, BAT-1157): { usedGen } from claudeApiCall's retry loop; adapters may ignore it.
+function classifyApiError(status, data, ctx) {
+    return getAdapter(PROVIDER).classifyError(status, data, ctx);
 }
 
 // BAT-1130: Anthropic's setup_token (Claude Code OAuth) path mislabels some
@@ -1863,6 +1869,10 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
         // retry carries the freshly-rotated bearer, not the expired one.
         let headers = _buildRequestHeaders(apiKey);
+        // BAT-1157 (D11): the credential generation these headers were built with. A 401 hands it
+        // to handleUnauthorized, so a delayed 401 from a request sent with an already-replaced
+        // bearer retries on the current one instead of spending another refresh token.
+        let usedGen = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -1876,6 +1886,19 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
+            // BAT-1157 (D15): checked immediately before EVERY attempt, including retries after a
+            // backoff — the sign-in may latch (changed elsewhere) or need a reconnect while this loop
+            // waits, and the retained headers must then never be sent. The synthetic 401 classifies
+            // through the adapter's 'reauth' class, so the caller shows its message
+            // ("Reconnect OpenAI in Settings" / "…restart the agent") like any other reply.
+            if (typeof adapter.preflightAuth === 'function') {
+                const blocked = adapter.preflightAuth();
+                if (blocked) {
+                    if (!background) updateAgentHealth('error', { type: blocked.type, status: 401, message: blocked.userMessage });
+                    res = { status: 401, data: { error: { message: blocked.userMessage } }, headers: {} };
+                    break;
+                }
+            }
             const attemptStart = Date.now();
             let timeoutSource = null;
 
@@ -1968,12 +1991,12 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 
             // Classify error and decide whether to retry (BAT-22)
             if (res.status !== 200) {
-                const errClass = classifyApiError(res.status, res.data);
+                const errClass = classifyApiError(res.status, res.data, { usedGen });
                 if (errClass.retryable && retries < MAX_RETRIES) {
                     // OAuth 401: refresh token before retry so the next attempt uses new credentials
                     if (errClass.type === 'auth' && typeof adapter.handleUnauthorized === 'function') {
                         try {
-                            await adapter.handleUnauthorized();
+                            await adapter.handleUnauthorized(usedGen);
                         } catch (e) {
                             if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
                         }
@@ -1988,6 +2011,7 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         // refresh path, so re-sending the stale bearer 401s again and burns a
                         // single-use refresh rotation on every attempt. No-op for api_key/claude.
                         headers = _buildRequestHeaders(apiKey); // BAT-1664: same beta extra as the first build
+                        usedGen = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
                         refreshedThisCall = true; // BAT-1143 D8: mark the post-refresh retry
                     }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
@@ -2159,7 +2183,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             lastRateLimitTokensReset = rl.tokensReset;
             writeApiUsageState({
                 type: 'api_key',
-                auth_mode: AUTH_TYPE,
+                // BAT-1157: OpenAI reports its transport (an oauth selection on the saved key is api_key).
+                auth_mode: PROVIDER === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE,
                 provider: PROVIDER,
                 requests: rl.requests || {},
                 tokens: rl.tokens || {},
@@ -2688,6 +2713,11 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride, anc
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         const _sumRefreshed = typeof adapter.currentRefreshGeneration === 'function'
             && adapter.currentRefreshGeneration() !== _sumGenBefore;
+        // BAT-1157 (D15): no authenticated send while the sign-in is latched or reconnect-required.
+        if (typeof adapter.preflightAuth === 'function' && adapter.preflightAuth()) {
+            log('[ContextSummary] Skipped: the AI sign-in needs attention', 'WARN');
+            return false; // Fall back to normal adaptive trim
+        }
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         const summaryPrompt = [
@@ -4374,6 +4404,8 @@ module.exports = {
     _setWalletPromptSnapshotForTests,
     // BAT-1130: exposed for the content-filter self-heal regression test.
     _isUsageFilter400,
+    // BAT-1157 (Codex #3): the real request/retry loop, for the OAuth 401 dispatch test.
+    _claudeApiCallForTests: claudeApiCall,
     // BAT-1664: test seams (claudeApiCall header/binding sites, sanitizer,
     // capability store, input_transformations logging).
     _claudeApiCallForTest: claudeApiCall,

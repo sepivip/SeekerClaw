@@ -27,7 +27,7 @@ const BRIDGE_PORTS = new Set([8765, 8766]);
 const PREWALK_MAX_ENTRIES = 2000;
 const PREWALK_MAX_DEPTH = 16;
 // Names a recursive grep never reads (over-exclusion is harmless).
-const GREP_EXCLUDES = ['config.json', 'config.yaml', 'config.js', 'seekerclaw.db*', 'agent_settings.json', 'bridge_token', 'xai_oauth.json'];
+const GREP_EXCLUDES = ['config.json', 'config.yaml', 'config.js', 'seekerclaw.db*', 'agent_settings.json', 'bridge_token', 'xai_oauth.json', 'openai_oauth.json'];
 
 /**
  * ctx: { workDir, cwd (absolute effective cwd), names: { ROOT_SECRET_NAMES, SECRETS_ANYWHERE,

@@ -131,10 +131,39 @@ object SafeFs {
     @Volatile
     var dirSync: (Path) -> Unit = { dir ->
         try {
-            FileChannel.open(dir, StandardOpenOption.READ).use { it.force(true) }
+            dirSyncChecked(dir)
         } catch (_: Exception) {
         }
     }
+
+    /**
+     * BAT-1157: the same directory fsync, but a failure PROPAGATES. For writes a later step
+     * depends on ([writeAtomicVerified]). Android replaces it in `SeekerClawApplication.onCreate`
+     * with an `Os.open` + `Os.fsync` version, because Android's `FileChannel.open` refuses a
+     * directory: without that override every verified write fails on a device.
+     */
+    @Volatile
+    var dirSyncChecked: (Path) -> Unit = { dir ->
+        // JVM default (unit tests, desktop). Windows cannot open a directory as a channel at all,
+        // and NTFS journals the rename itself, so it is a no-op there; on Linux (CI) the directory
+        // is really fsynced. Production never uses this default: Android installs Os.fsync.
+        if (!IS_WINDOWS) FileChannel.open(dir, StandardOpenOption.READ).use { it.force(true) }
+    }
+
+    private val IS_WINDOWS: Boolean = System.getProperty("os.name").orEmpty().startsWith("Windows")
+
+    /** BAT-1157: a [writeAtomicVerified] failure, typed by how far the write got. */
+    sealed class VerifiedWriteException(message: String, cause: Throwable?) : IOException(message, cause)
+
+    /** The failure happened before the rename: the target is unchanged. */
+    class WriteNotApplied(message: String, cause: Throwable? = null) : VerifiedWriteException(message, cause)
+
+    /**
+     * The rename happened but the directory fsync or the read-back failed: the new bytes may be
+     * visible without being durable. A later re-sync proves nothing (Linux reports a failed fsync
+     * once and may drop the dirty state), so the only proof is a fresh confirmed rewrite.
+     */
+    class WriteUnconfirmed(message: String, cause: Throwable? = null) : VerifiedWriteException(message, cause)
 
     /**
      * Runs in [writeAtomicFrom] after the temp file is written and forced, right before it is
@@ -188,7 +217,13 @@ object SafeFs {
         writeAtomic(root, target, text.toByteArray(Charsets.UTF_8), durable)
 
     /** Streaming form of [writeAtomic] (asset copies, ZIP extraction). */
-    fun writeAtomicFrom(root: Path, target: Path, durable: Boolean = false, write: (OutputStream) -> Unit) {
+    fun writeAtomicFrom(
+        root: Path,
+        target: Path,
+        durable: Boolean = false,
+        requireAtomicMove: Boolean = false,
+        write: (OutputStream) -> Unit,
+    ) {
         checkAncestors(root, target, createParents = true)
         if (isRealDir(target)) throw UnsafePathException("target is a directory: $target")
         val kwrite = ensureRealDir(root, root.resolve(KWRITE_DIR))
@@ -201,7 +236,7 @@ object SafeFs {
                 ch.force(true)
             }
             beforeMove(tmp, target)
-            moveReplacing(tmp, target)
+            moveReplacing(tmp, target, requireAtomic = requireAtomicMove)
             if (durable) dirSync(target.toAbsolutePath().parent)
         } finally {
             try {
@@ -211,11 +246,66 @@ object SafeFs {
         }
     }
 
+    /**
+     * BAT-1157 — a write whose durability is CHECKED, for state a later step depends on: a temp
+     * file (forced), an `ATOMIC_MOVE` that may NOT fall back to a non-atomic rename, a directory
+     * fsync that throws ([dirSyncChecked]), then a no-follow read-back compared byte for byte.
+     *
+     * Throws [WriteNotApplied] when it failed before the rename (the target is unchanged) and
+     * [WriteUnconfirmed] when it failed after it. The caller must not take the dependent step on
+     * either.
+     */
+    fun writeAtomicVerified(root: Path, target: Path, bytes: ByteArray) {
+        try {
+            writeAtomicFrom(root, target, durable = false, requireAtomicMove = true) { out -> out.write(bytes) }
+        } catch (e: Exception) {
+            throw WriteNotApplied("write not applied: $target (${e.javaClass.simpleName})", e)
+        }
+        try {
+            dirSyncChecked(target.toAbsolutePath().parent)
+            val back = readBytesNoFollow(root, target)
+            if (!back.contentEquals(bytes)) throw IOException("read-back mismatch")
+        } catch (e: Exception) {
+            throw WriteUnconfirmed("write not confirmed: $target (${e.javaClass.simpleName})", e)
+        }
+    }
+
+    /**
+     * BAT-1157 — proves [target]'s current content durable by REWRITING it, byte-identical, with
+     * [writeAtomicVerified]. Re-syncing an already-visible file is no proof (see
+     * [WriteUnconfirmed]). Returns the bytes now confirmed. A read failure is [WriteNotApplied].
+     */
+    fun rewriteVerified(root: Path, target: Path): ByteArray {
+        val bytes = try {
+            readBytesNoFollow(root, target)
+        } catch (e: Exception) {
+            throw WriteNotApplied("rewrite read failed: $target (${e.javaClass.simpleName})", e)
+        }
+        writeAtomicVerified(root, target, bytes)
+        return bytes
+    }
+
+    /**
+     * BAT-1157 — deletes [target] (a file, or a link, which is unlinked and never followed), then
+     * fsyncs its directory with [dirSyncChecked] and confirms the entry is gone. Throws on any
+     * failure. A missing [target] is not an error.
+     */
+    fun deleteChecked(root: Path, target: Path) {
+        checkAncestors(root, target)
+        if (isRealDir(target)) throw UnsafePathException("delete target is a directory: $target")
+        Files.deleteIfExists(target)
+        dirSyncChecked(target.toAbsolutePath().parent)
+        if (existsNoFollow(target)) throw IOException("still present after delete: $target")
+    }
+
     /** `rename(2)` [src] over [dst], replacing a file or link at [dst] without following it. */
-    private fun moveReplacing(src: Path, dst: Path) {
+    private fun moveReplacing(src: Path, dst: Path, requireAtomic: Boolean = false) {
         try {
             Files.move(src, dst, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        } catch (_: AtomicMoveNotSupportedException) {
+        } catch (e: AtomicMoveNotSupportedException) {
+            // A verified write never takes the non-atomic form: nothing moved, so the caller
+            // reports WriteNotApplied rather than a write that might be half-applied.
+            if (requireAtomic) throw e
             // Same filesystem in practice; the non-atomic form is still a single rename.
             Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING)
         }

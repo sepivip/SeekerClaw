@@ -343,6 +343,72 @@ class CrossProcessStore<T> private constructor(
         }
     }
 
+    /** BAT-1157: a read that keeps "no file" apart from "a file that does not decode". */
+    sealed class ReadState<out V> {
+        object Absent : ReadState<Nothing>()
+        data class Unreadable(val reason: String) : ReadState<Nothing>()
+        data class Present<V>(val value: V) : ReadState<V>()
+    }
+
+    /**
+     * BAT-1157: like [read], but a missing file is [ReadState.Absent] and a file that exists yet
+     * fails to decode is [ReadState.Unreadable]. [read] folds both into the initial snapshot, which
+     * is right for fail-closed readers but not for a migration that must never fill over a corrupt
+     * record. Reads disk every call, no-follow.
+     */
+    fun readState(): ReadState<T> {
+        // Only a CONFIRMED missing file is Absent: a failed metadata lookup (Files.exists can report
+        // false on an I/O error) must not let a fill-only migration write over a live record.
+        val text = try {
+            SafeFs.readTextNoFollow(filesDirRoot.toPath(), file.toPath())
+        } catch (_: java.nio.file.NoSuchFileException) {
+            return ReadState.Absent
+        } catch (e: Exception) {
+            return ReadState.Unreadable(e.javaClass.simpleName)
+        }
+        return try {
+            ReadState.Present(json.decodeFromString(serializer, text))
+        } catch (e: Exception) {
+            ReadState.Unreadable(e.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * BAT-1157: persist [value] with [SafeFs.writeAtomicVerified] (checked directory fsync and
+     * byte-for-byte read-back). Throws [SafeFs.WriteNotApplied] or [SafeFs.WriteUnconfirmed]
+     * instead of returning false, because the caller decides what a later step may do on each.
+     * Same-process observers and the other process are notified whenever the rename happened
+     * (success or unconfirmed), since the new bytes are visible either way.
+     */
+    fun writeVerified(value: T) {
+        val snapshot: T = cloneSafe(value)
+        val bytes = json.encodeToString(serializer, snapshot).toByteArray(Charsets.UTF_8)
+        var visible = false
+        try {
+            synchronized(writeLock) {
+                try {
+                    SafeFs.writeAtomicVerified(filesDirRoot.toPath(), file.toPath(), bytes)
+                    visible = true
+                } catch (e: SafeFs.WriteUnconfirmed) {
+                    visible = true
+                    throw e
+                } finally {
+                    if (visible) _state.value = snapshot
+                }
+            }
+        } finally {
+            if (visible) broadcastChanged()
+        }
+    }
+
+    /**
+     * BAT-1157: re-proves the current file durable by rewriting its exact bytes
+     * ([SafeFs.rewriteVerified]). Throws the same two exception types as [writeVerified].
+     */
+    fun rewriteVerified() {
+        synchronized(writeLock) { SafeFs.rewriteVerified(filesDirRoot.toPath(), file.toPath()) }
+    }
+
     /**
      * Deep-clone a T via JSON round-trip. Cheap on the small
      * `@Serializable` data classes this store deals with; safe for

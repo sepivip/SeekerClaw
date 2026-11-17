@@ -17,12 +17,17 @@ import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.state.AgentPreferences
 import com.seekerclaw.app.state.AgentPreferencesStore
 import com.seekerclaw.app.state.CustomConfigSignature
+import com.seekerclaw.app.state.OpenAIOAuthTokenStore
 import com.seekerclaw.app.state.RuntimeState
 import com.seekerclaw.app.state.RuntimeStateStore
+import com.seekerclaw.app.state.SweepGate
+import com.seekerclaw.app.state.TombstoneOutcome
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.ProcessRole
 import com.seekerclaw.app.util.SafeFs
+import com.seekerclaw.app.util.SidecarFileLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -79,6 +84,13 @@ data class AppConfig(
     val openaiOAuthRefresh: String = "",
     val openaiOAuthEmail: String = "",
     val openaiOAuthExpiresAt: String = "",
+    /**
+     * BAT-1157: the sign-in family the pair belongs to (from [OpenAIOAuthTokenStore]); `null`
+     * when the pair came from the legacy prefs keys (migration not yet confirmed).
+     */
+    val openaiOAuthFamily: String? = null,
+    /** BAT-1157: the store record's epoch; 0 for a legacy pair or no pair. */
+    val openaiOAuthEpoch: Long = 0L,
     // BAT-1124: xAI Grok. `xaiApiKey` = console.x.ai key (api_key path); the four
     // `xaiOAuth*` fields = "Sign in with Grok" OAuth. All default "" so old configs
     // are untouched and writeConfigJson only emits them when non-blank (upgrade-safe).
@@ -287,19 +299,16 @@ object ConfigManager {
     // from stale legacy prefs). Sign-out preserves the marker.
     private const val XAI_OAUTH_MIGRATED_MARKER = "xai_oauth.migrated"
 
+    /** BAT-1157: bumped by every legacy sign-in sweep so a retried commit is a real write. */
+    private const val KEY_LEGACY_SWEEP_SEQ = "legacy_oauth_sweep_seq"
+
     // Process-local latch: once this process has confirmed migration +
     // legacy-key sweep, skip the per-loadConfig FS check. Each process
     // (MAIN + :node) has its own copy and its own prefs view.
     @Volatile
     private var xaiOAuthMigrationDone = false
 
-    // Email migration is a true one-shot: legacy plaintext key is consumed exactly once
-    // and the encrypted form persists thereafter. Process flag avoids re-checking the
-    // legacy key on every loadConfig() call.
-    @Volatile
-    private var emailMigrated = false
-
-    private fun resolveAuthType(p: SharedPreferences): String {
+    private fun resolveAuthType(context: Context, p: PrefsReader): String {
         // Migrate legacy/invalid authType combinations so Node's strict validation
         // doesn't hard-crash on older installs and the UI doesn't drift from persisted
         // state. Rules:
@@ -323,31 +332,37 @@ object ConfigManager {
         }
         if (normalized != raw) {
             Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider)")
-            p.edit().putString(KEY_AUTH_TYPE, normalized).apply()
+            // BAT-1157 (D7.2): compute-only in `:node`; MAIN persists the normalisation.
+            if (!ProcessRole.isNode) {
+                prefsForWrite(context, "resolveAuthType")?.edit()?.putString(KEY_AUTH_TYPE, normalized)?.apply()
+            }
         }
         return normalized
     }
     private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
 
-    private fun prefs(context: Context): SharedPreferences =
-        context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
+    /** BAT-1157: read access to `seekerclaw_prefs`, in either process (see [MainPrefs]). */
+    private fun prefs(context: Context): PrefsReader = MainPrefs.read(context)
+
+    /** BAT-1157: write access, MAIN only; `null` (and an ERROR) in `:node` (see [MainPrefs]). */
+    private fun prefsForWrite(context: Context, site: String): SharedPreferences? = MainPrefs.forWrite(context, site)
 
     fun isSetupComplete(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SETUP_COMPLETE, false)
 
     fun markSetupSkipped(context: Context) {
-        prefs(context).edit()
-            .putBoolean(KEY_SETUP_COMPLETE, true)
-            .apply()
+        prefsForWrite(context, "markSetupSkipped")?.edit()
+            ?.putBoolean(KEY_SETUP_COMPLETE, true)
+            ?.apply()
     }
 
     fun hasUserEverDeployed(context: Context): Boolean =
         prefs(context).getBoolean(KEY_FIRST_DEPLOY_DONE, false)
 
     fun markFirstDeploymentDone(context: Context) {
-        prefs(context).edit()
-            .putBoolean(KEY_FIRST_DEPLOY_DONE, true)
-            .apply()
+        prefsForWrite(context, "markFirstDeploymentDone")?.edit()
+            ?.putBoolean(KEY_FIRST_DEPLOY_DONE, true)
+            ?.apply()
     }
 
     /**
@@ -398,7 +413,8 @@ object ConfigManager {
         // (other fields commit unconditionally — they don't cross-
         // process sync, so partial commit is the same as today's
         // pre-BAT-513 behaviour).
-        val sp = prefs(context)
+        // BAT-1157: saveConfig writes `seekerclaw_prefs`, so it is MAIN-only.
+        val sp = prefsForWrite(context, "saveConfig") ?: return false
         val oldProvider = sp.getString(KEY_PROVIDER, null)
         val oldAuthType = sp.getString(KEY_AUTH_TYPE, null)
         val oldModel = sp.getString(KEY_MODEL, null)
@@ -597,26 +613,8 @@ object ConfigManager {
         }
         editor.putString(KEY_DISCORD_OWNER_ID, config.discordOwnerId)
 
-        if (config.openaiOAuthToken.isNotBlank()) {
-            val encOAuthToken = KeystoreHelper.encrypt(config.openaiOAuthToken)
-            editor.putString(KEY_OPENAI_OAUTH_TOKEN_ENC, Base64.encodeToString(encOAuthToken, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
-        }
-        if (config.openaiOAuthRefresh.isNotBlank()) {
-            val encOAuthRefresh = KeystoreHelper.encrypt(config.openaiOAuthRefresh)
-            editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, Base64.encodeToString(encOAuthRefresh, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
-        }
-        if (config.openaiOAuthEmail.isNotBlank()) {
-            // Email is PII — encrypt at rest like other OAuth fields.
-            val encEmail = KeystoreHelper.encrypt(config.openaiOAuthEmail)
-            editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encEmail, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
-        }
-        editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, config.openaiOAuthExpiresAt)
+        // BAT-1157: the OpenAI sign-in pair lives in OpenAIOAuthTokenStore. saveConfig never writes
+        // it: a save from a form loaded before a sign-in or rotation must not put an old pair back.
 
         // BAT-1124: xAI api-key secret (api_key path). The xAI *OAuth* triple
         // is intentionally NOT written here anymore.
@@ -1169,50 +1167,10 @@ object ConfigManager {
             ""
         }
 
-        val openaiOAuthToken = try {
-            val enc = p.getString(KEY_OPENAI_OAUTH_TOKEN_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt OpenAI OAuth token", e)
-            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth token: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
-
-        val openaiOAuthRefresh = try {
-            val enc = p.getString(KEY_OPENAI_OAUTH_REFRESH_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt OpenAI OAuth refresh token", e)
-            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth refresh token: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
-
-        val openaiOAuthEmail = try {
-            val enc = p.getString(KEY_OPENAI_OAUTH_EMAIL_ENC, null)
-            if (enc != null) {
-                KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
-            } else if (!emailMigrated) {
-                // One-time per-process migration: pull any legacy plaintext value, persist
-                // it encrypted under the new key, then drop the old key. Gated by the
-                // emailMigrated flag so subsequent loadConfig() calls don't re-touch prefs.
-                val legacy = p.getString("openai_oauth_email", "") ?: ""
-                if (legacy.isNotBlank()) {
-                    val encLegacy = KeystoreHelper.encrypt(legacy)
-                    p.edit()
-                        .putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(encLegacy, Base64.NO_WRAP))
-                        .remove("openai_oauth_email")
-                        .apply()
-                }
-                emailMigrated = true
-                legacy
-            } else {
-                ""
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt OpenAI OAuth email", e)
-            LogCollector.append("[Config] Failed to decrypt OpenAI OAuth email: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
+        // BAT-1157: the OpenAI sign-in pair comes from OpenAIOAuthTokenStore — ONE read, so the
+        // pair, expiry, family and epoch always belong to the same write. Until the migration
+        // marker exists, an Absent store falls back to the legacy prefs pair (read-only).
+        val openai = readOpenAIOAuth(context, p)
 
         // BAT-1124: xAI api-key + OAuth secrets (mirror the OpenAI decrypt blocks above).
         val xaiApiKey = try {
@@ -1272,7 +1230,7 @@ object ConfigManager {
         val fromPrefs = AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
-            authType = resolveAuthType(p),
+            authType = resolveAuthType(context, p),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             // Trim at the read boundary: legacy prefs values (pre-BAT-1032
@@ -1308,10 +1266,12 @@ object ConfigManager {
             channel = p.getString(KEY_CHANNEL, "telegram") ?: "telegram",
             discordBotToken = discordBotToken,
             discordOwnerId = loadOwnerIdFromFile(context, "discord"),
-            openaiOAuthToken = openaiOAuthToken,
-            openaiOAuthRefresh = openaiOAuthRefresh,
-            openaiOAuthEmail = openaiOAuthEmail,
-            openaiOAuthExpiresAt = p.getString(KEY_OPENAI_OAUTH_EXPIRES_AT, "") ?: "",
+            openaiOAuthToken = openai.access,
+            openaiOAuthRefresh = openai.refresh,
+            openaiOAuthEmail = openai.email,
+            openaiOAuthExpiresAt = openai.expiresAt,
+            openaiOAuthFamily = openai.familyId,
+            openaiOAuthEpoch = openai.epoch,
             xaiApiKey = xaiApiKey,
             xaiOAuthToken = xaiOAuthToken,
             xaiOAuthRefresh = xaiOAuthRefresh,
@@ -1333,7 +1293,7 @@ object ConfigManager {
 
     private fun reconcileWithAgentSettings(
         context: Context,
-        prefs: android.content.SharedPreferences,
+        prefs: PrefsReader,
         fromPrefs: AppConfig,
     ): AppConfig {
         val settingsFile = File(File(context.filesDir, "workspace"), "agent_settings.json")
@@ -1456,7 +1416,16 @@ object ConfigManager {
 
         if (!providerChanged && !authChanged && !modelChanged) return fromPrefs
 
-        val editor = prefs.edit()
+        // BAT-1157 (D7.2): compute-only in `:node`. A `:node` commit writes its WHOLE cached prefs
+        // map, which can undo a newer Settings save; MAIN persists the reconcile on its own load.
+        val editor = if (ProcessRole.isNode) null else prefsForWrite(context, "reconcileWithAgentSettings")?.edit()
+        if (editor == null) {
+            return fromPrefs.copy(
+                provider = if (providerChanged) validProvider!! else fromPrefs.provider,
+                authType = if (authChanged) validAuthType!! else fromPrefs.authType,
+                model = if (modelChanged) resolvedModel else fromPrefs.model,
+            )
+        }
         if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
         if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
         if (modelChanged) editor.putString(KEY_MODEL, resolvedModel)
@@ -1725,76 +1694,248 @@ object ConfigManager {
         prefs(context).getBoolean(KEY_AUTO_START, true)
 
     fun setAutoStartOnBoot(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_AUTO_START, enabled).commit()
+        prefsForWrite(context, "setAutoStart")?.edit()?.putBoolean(KEY_AUTO_START, enabled)?.commit()
     }
 
     fun getKeepScreenOn(context: Context): Boolean =
         prefs(context).getBoolean(KEY_KEEP_SCREEN_ON, false)
 
     fun setKeepScreenOn(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_KEEP_SCREEN_ON, enabled).commit()
+        prefsForWrite(context, "setKeepScreenOn")?.edit()?.putBoolean(KEY_KEEP_SCREEN_ON, enabled)?.commit()
+    }
+
+    // ---------------------------------------------------------------- BAT-1157: OpenAI sign-in
+
+    /** The OpenAI sign-in pair as one load sees it (a single store read, or the legacy pair). */
+    private data class OpenAIOAuthRead(
+        val access: String = "",
+        val refresh: String = "",
+        val email: String = "",
+        val expiresAt: String = "",
+        val familyId: String? = null,
+        val epoch: Long = 0L,
+    )
+
+    private val openaiUnreadableLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val openaiMigrationWarned = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    @Volatile
+    private var openaiLegacySwept = false
+
+    /** Back-off for a sweep whose confirmation or commit failed (each attempt rewrites two files). */
+    @Volatile
+    private var openaiSweepNotBefore = 0L
+
+    private val OPENAI_LEGACY_KEYS = listOf(
+        KEY_OPENAI_OAUTH_TOKEN_ENC,
+        KEY_OPENAI_OAUTH_REFRESH_ENC,
+        KEY_OPENAI_OAUTH_EMAIL_ENC,
+        KEY_OPENAI_OAUTH_EXPIRES_AT,
+        "openai_oauth_email", // legacy plaintext email
+    )
+
+    /** The legacy prefs pair, as stored: ciphertext copied verbatim, never decrypted here. */
+    private fun legacyOpenAIPair(p: PrefsReader): OpenAIOAuthTokenStore.LegacyPair? {
+        val access = p.getString(KEY_OPENAI_OAUTH_TOKEN_ENC, "") ?: ""
+        val plainEmail = p.getString("openai_oauth_email", "") ?: ""
+        if (access.isBlank() && plainEmail.isBlank() && !p.contains(KEY_OPENAI_OAUTH_EMAIL_ENC)) return null
+        return OpenAIOAuthTokenStore.LegacyPair(
+            accessEnc = access,
+            refreshEnc = p.getString(KEY_OPENAI_OAUTH_REFRESH_ENC, "") ?: "",
+            emailEnc = p.getString(KEY_OPENAI_OAUTH_EMAIL_ENC, "") ?: "",
+            expiresAt = p.getString(KEY_OPENAI_OAUTH_EXPIRES_AT, "") ?: "",
+            plainEmail = plainEmail,
+        )
+    }
+
+    /** BAT-1157: the legacy pair for `/openai/oauth/confirm-family`'s legacy migration (read-only). */
+    internal fun openAILegacyPair(context: Context): OpenAIOAuthTokenStore.LegacyPair? = legacyOpenAIPair(prefs(context))
+
+    private fun logOpenAIUnreadableOnce(why: String) {
+        if (openaiUnreadableLogged.compareAndSet(false, true)) {
+            LogCollector.append("[Config] OpenAI sign-in record unreadable — sign in again ($why)", LogLevel.ERROR)
+        }
     }
 
     /**
-     * Persist OpenAI OAuth tokens directly to SharedPreferences, bypassing the
-     * full [saveConfig] path. Used by [OpenAIOAuthActivity] during the
-     * post-callback token exchange so the flow works on a fresh install — at
-     * that point [saveConfig]'s prerequisites (bot token, agent name, etc.)
-     * don't exist yet, and [loadConfig] still returns null because setup isn't
-     * marked complete.
-     *
-     * This deliberately does NOT set `KEY_SETUP_COMPLETE`: the user still needs
-     * to finish the onboarding flow normally. It only writes the four OAuth
-     * prefs (access token + refresh token + email + expiry) and bumps
-     * [configVersion] so reactive UI picks up the change.
+     * BAT-1157 (contract v2 §1–§2): the OpenAI pair for one config load.
+     * 1. Fill-only migration from the legacy keys, in either process (checked writes).
+     * 2. In MAIN only, once the store and marker are proven durable, the legacy keys are swept.
+     * 3. One store read: Present → the pair (or nothing for a tombstone / undecryptable record);
+     *    Unreadable → nothing (signed out, ERROR once); Absent with no marker → the legacy pair,
+     *    read-only, so a failed migration never looks like a sign-out; Absent with a marker → nothing.
      */
-    fun persistOpenAIOAuthTokens(
-        context: Context,
-        accessToken: String,
-        refreshToken: String,
-        email: String,
-        expiresAt: String,
-    ) {
-        val editor = prefs(context).edit()
-
-        if (accessToken.isNotBlank()) {
-            val enc = KeystoreHelper.encrypt(accessToken)
-            editor.putString(KEY_OPENAI_OAUTH_TOKEN_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
+    private fun readOpenAIOAuth(context: Context, p: PrefsReader): OpenAIOAuthRead {
+        if (!OpenAIOAuthTokenStore.isInitialized) return OpenAIOAuthRead()
+        val migrated = OpenAIOAuthTokenStore.migrateIfNeeded { legacyOpenAIPair(p) }
+        if (migrated == OpenAIOAuthTokenStore.MigrateOutcome.DONE && !ProcessRole.isNode) {
+            sweepLegacyOpenAIOAuthKeysIfConfirmed(context, p)
         }
-
-        if (refreshToken.isNotBlank()) {
-            val enc = KeystoreHelper.encrypt(refreshToken)
-            editor.putString(KEY_OPENAI_OAUTH_REFRESH_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-        } else {
-            editor.remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
+        return when (val st = OpenAIOAuthTokenStore.snapshot()) {
+            is OpenAIOAuthTokenStore.State.Present -> {
+                val r = st.record
+                if (r.tombstone) return OpenAIOAuthRead()
+                val live = OpenAIOAuthTokenStore.livePair(st)
+                if (live == null) {
+                    logOpenAIUnreadableOnce("decrypt failed")
+                    OpenAIOAuthRead()
+                } else {
+                    OpenAIOAuthRead(live.access, live.refresh, live.email, r.expiresAt, r.familyId, r.epoch)
+                }
+            }
+            is OpenAIOAuthTokenStore.State.Unreadable -> {
+                logOpenAIUnreadableOnce(st.reason)
+                OpenAIOAuthRead()
+            }
+            OpenAIOAuthTokenStore.State.Absent -> {
+                if (OpenAIOAuthTokenStore.markerExists()) return OpenAIOAuthRead()
+                val legacy = legacyOpenAIPair(p) ?: return OpenAIOAuthRead()
+                val access = OpenAIOAuthTokenStore.open(legacy.accessEnc).orEmpty()
+                if (access.isBlank()) return OpenAIOAuthRead()
+                if (openaiMigrationWarned.compareAndSet(false, true)) {
+                    LogCollector.append(
+                        "[Config] OpenAI sign-in migration failed — using the saved pair, will retry",
+                        LogLevel.WARN,
+                    )
+                }
+                OpenAIOAuthRead(
+                    access = access,
+                    refresh = OpenAIOAuthTokenStore.open(legacy.refreshEnc).orEmpty(),
+                    email = OpenAIOAuthTokenStore.open(legacy.emailEnc)?.ifBlank { null } ?: legacy.plainEmail,
+                    expiresAt = legacy.expiresAt,
+                    familyId = null,
+                    epoch = 0L,
+                )
+            }
         }
+    }
 
-        if (email.isNotBlank()) {
-            val enc = KeystoreHelper.encrypt(email)
-            editor.putString(KEY_OPENAI_OAUTH_EMAIL_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-            // If an older install still has the legacy plaintext pref hanging
-            // around (loadConfigUnchecked migrates it on read, but not every code
-            // path has triggered a read since the migration landed), drop it too
-            // to ensure the encrypted value becomes the single source of truth.
-            editor.remove("openai_oauth_email")
-        } else {
-            // Clear email in both locations — the encrypted key that we own and
-            // the legacy plaintext key from pre-migration installs. Leaving the
-            // plaintext pref behind on sign-out would be a PII regression.
-            editor.remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
-            editor.remove("openai_oauth_email")
+    /**
+     * MAIN only. Removes the legacy OpenAI keys once the store and the marker are proven durable
+     * IN THIS PROCESS (a fresh checked rewrite of each): a marker left visible by a failed sync is
+     * never permission to drop the only other copy. Checks the `commit()` result; on failure the
+     * keys stay pending and a later load retries ([commitLegacySweep]).
+     */
+    internal fun sweepLegacyOpenAIOAuthKeysIfConfirmed(context: Context, p: PrefsReader) {
+        if (openaiLegacySwept) return
+        val pending = OPENAI_LEGACY_KEYS.any { it in legacySweepPending }
+        if (!pending && OPENAI_LEGACY_KEYS.none { p.contains(it) }) {
+            openaiLegacySwept = true
+            return
         }
+        if (System.currentTimeMillis() < openaiSweepNotBefore) return
+        // A pending retry was confirmed by this process already; its cache has dropped the keys.
+        if (!pending) {
+            val legacyAccess = !(p.getString(KEY_OPENAI_OAUTH_TOKEN_ENC, "") ?: "").isBlank()
+            when (OpenAIOAuthTokenStore.confirmedForSweep(legacyAccess)) {
+                SweepGate.CONFIRMED -> Unit
+                SweepGate.NOT_CONFIRMED -> {
+                    openaiSweepNotBefore = System.currentTimeMillis() + 60_000L
+                    return
+                }
+                SweepGate.KEEP_LEGACY -> {
+                    openaiLegacySwept = true // never sweep it, never refill from it
+                    LogCollector.append(
+                        "[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again",
+                        LogLevel.WARN,
+                    )
+                    return
+                }
+            }
+        }
+        if (commitLegacySweep(context, "sweepLegacyOpenAIOAuthKeys", OPENAI_LEGACY_KEYS)) {
+            openaiLegacySwept = true
+        } else {
+            openaiSweepNotBefore = System.currentTimeMillis() + 60_000L
+            LogCollector.append("[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry", LogLevel.WARN)
+        }
+    }
 
-        editor.putString(KEY_OPENAI_OAUTH_EXPIRES_AT, expiresAt)
+    /**
+     * Keys a MAIN sweep removed whose checked `commit()` has not yet succeeded (Codex #2). Android
+     * drops removed keys from the process's cache BEFORE writing the file, so after a failed commit
+     * `contains()` already says they are gone while the file still holds them. Cleared by a
+     * successful commit; lost on a process restart, where a cold read sees the keys again.
+     */
+    private val legacySweepPending: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-        val persisted = editor.commit()
-        if (persisted) {
+    /**
+     * MAIN only: removes [keys] with a checked commit. A retry after a failed commit removes keys
+     * the cache no longer has, so it changes nothing by itself. AOSP's `SharedPreferencesImpl`
+     * still writes then (its disk generation lags after the failed write), but that is an
+     * implementation detail, not API; the counter bump makes every sweep commit a real change,
+     * so the retry writes the whole map on any implementation. Defence in depth.
+     */
+    internal fun commitLegacySweep(context: Context, site: String, keys: List<String>): Boolean {
+        val sp = prefsForWrite(context, site) ?: return false
+        val editor = sp.edit()
+        keys.forEach { editor.remove(it) }
+        editor.putLong(KEY_LEGACY_SWEEP_SEQ, sp.getLong(KEY_LEGACY_SWEEP_SEQ, 0L) + 1L)
+        return if (editor.commit()) {
+            legacySweepPending.removeAll(keys.toSet())
+            true
+        } else {
+            legacySweepPending.addAll(keys)
+            false
+        }
+    }
+
+    /** Test seam: is a sweep of [key] waiting for a successful commit? */
+    internal fun legacySweepPendingForTest(key: String): Boolean = key in legacySweepPending
+
+    /** Test seam: a fresh process's sweep state (no back-off, nothing pending, not yet swept). */
+    internal fun resetLegacySweepForTest() {
+        openaiLegacySwept = false
+        openaiSweepNotBefore = 0L
+        legacySweepPending.clear()
+    }
+
+    /** Test seam: lets a test retry within the 60 s back-off, as a later load would. */
+    internal fun skipLegacySweepBackoffForTest() {
+        openaiSweepNotBefore = 0L
+    }
+
+    /**
+     * BAT-1157: MAIN sign-in result for the OAuth flows. A new family in the store; nothing is
+     * inherited from the previous record. The caller runs it inside [ResetGate.commit].
+     */
+    fun signInOpenAI(context: Context, accessToken: String, refreshToken: String, email: String, expiresAt: String): Boolean {
+        val r = OpenAIOAuthTokenStore.signIn(accessToken, refreshToken, email, expiresAt)
+        if (r is OpenAIOAuthTokenStore.Result.Ok) {
+            rearmOpenAILegacySweep()
+            sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
             bumpConfigVersionOnMain()
-        } else {
-            LogCollector.append("[Config] Failed to persist OAuth tokens (commit=false)", LogLevel.ERROR)
+            return true
         }
+        LogCollector.append("[Config] OpenAI sign-in could not be saved (${r.javaClass.simpleName})", LogLevel.ERROR)
+        return false
+    }
+
+    /**
+     * BAT-1157: MAIN sign-out. A checked tombstone (and the marker, if it was missing), then the
+     * legacy keys are swept. Returns false when the tombstone is not confirmed: the UI must not
+     * report "signed out" over a pair that could come back.
+     */
+    fun signOutOpenAI(context: Context): Boolean {
+        val r = OpenAIOAuthTokenStore.signOut()
+        if (r !is OpenAIOAuthTokenStore.Result.Ok) {
+            LogCollector.append("[Config] OpenAI sign-out could not be saved (${r.javaClass.simpleName})", LogLevel.ERROR)
+            return false
+        }
+        rearmOpenAILegacySweep()
+        sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
+        bumpConfigVersionOnMain()
+        return true
+    }
+
+    /**
+     * A sign-in or sign-out just wrote the store, so an earlier "nothing to sweep" or KEEP_LEGACY
+     * verdict in this process is stale: the store is Present now and any legacy copy (possibly a
+     * credential the user just revoked) must go now, not at the next app start.
+     */
+    private fun rearmOpenAILegacySweep() {
+        openaiLegacySwept = false
+        openaiSweepNotBefore = 0L
     }
 
     /**
@@ -1854,11 +1995,11 @@ object ConfigManager {
         val marker = File(context.filesDir, XAI_OAUTH_MIGRATED_MARKER)
         val p = prefs(context)
 
-        if (marker.exists()) {
-            // Already adopted (possibly by the other process). Belt-and-
-            // suspenders: sweep any legacy keys still in this process's prefs.
-            sweepLegacyXaiOAuthKeys(p)
-            xaiOAuthMigrationDone = true
+        // BAT-1157: lstat-based (a link at the marker path never counts as the marker).
+        if (SafeFs.existsNoFollow(marker.toPath())) {
+            // Already adopted (possibly by the other process). Sweep any legacy keys still in
+            // prefs — MAIN only, and only once the store and marker are proven durable here.
+            if (sweepLegacyXaiOAuthKeysIfConfirmed(context, p)) xaiOAuthMigrationDone = true
             return
         }
 
@@ -1892,7 +2033,8 @@ object ConfigManager {
         // decoding the record — is what flips this install to store-only.
         val markerCreated = try {
             // BAT-1409 P1-J: staged in .kwrite, renamed into place, never through a link.
-            SafeFs.writeAtomicText(context.filesDir.toPath(), marker.toPath(), "1", durable = true)
+            // BAT-1157: checked (directory fsync + read-back), not best-effort.
+            SafeFs.writeAtomicVerified(context.filesDir.toPath(), marker.toPath(), "1".toByteArray())
             true
         } catch (e: Exception) {
             // No plain-create fallback (BAT-1409 P1-J: every write goes through SafeFs); the
@@ -1905,27 +2047,40 @@ object ConfigManager {
         }
         if (!markerCreated) return
 
-        sweepLegacyXaiOAuthKeys(p)
-        xaiOAuthMigrationDone = true
         LogCollector.append("[Config] xAI OAuth token store adopted (marker set)", LogLevel.INFO)
+        if (sweepLegacyXaiOAuthKeysIfConfirmed(context, p)) xaiOAuthMigrationDone = true
     }
 
-    /** Drop the legacy xAI OAuth prefs keys (post-adoption). Inert after the
-     *  store becomes the source of truth; removed to prevent any future
-     *  accidental read. Uses apply() — best-effort, non-blocking. */
-    private fun sweepLegacyXaiOAuthKeys(p: SharedPreferences) {
-        if (p.contains(KEY_XAI_OAUTH_TOKEN_ENC) ||
-            p.contains(KEY_XAI_OAUTH_REFRESH_ENC) ||
-            p.contains(KEY_XAI_OAUTH_EMAIL_ENC) ||
-            p.contains(KEY_XAI_OAUTH_EXPIRES_AT)
-        ) {
-            p.edit()
-                .remove(KEY_XAI_OAUTH_TOKEN_ENC)
-                .remove(KEY_XAI_OAUTH_REFRESH_ENC)
-                .remove(KEY_XAI_OAUTH_EMAIL_ENC)
-                .remove(KEY_XAI_OAUTH_EXPIRES_AT)
-                .apply()
+    /**
+     * Drop the legacy xAI OAuth prefs keys (post-adoption). BAT-1157: MAIN only — a `:node` commit
+     * would write back its whole stale prefs cache — and only after the store record and the marker
+     * are proven durable in this process ([XaiOAuthTokenStore.confirmedForSweep]); the `commit()`
+     * result is checked. Returns true when nothing is left to sweep (in `:node`, true: the keys
+     * are inert there and MAIN sweeps them).
+     */
+    private fun sweepLegacyXaiOAuthKeysIfConfirmed(context: Context, p: PrefsReader): Boolean {
+        if (ProcessRole.isNode) return true
+        val keys = listOf(KEY_XAI_OAUTH_TOKEN_ENC, KEY_XAI_OAUTH_REFRESH_ENC, KEY_XAI_OAUTH_EMAIL_ENC, KEY_XAI_OAUTH_EXPIRES_AT)
+        val pending = keys.any { it in legacySweepPending }
+        if (!pending && keys.none { p.contains(it) }) return true
+        // A pending retry was confirmed by this process already; its cache has dropped the keys.
+        if (!pending) {
+            val legacyAccess = !(p.getString(KEY_XAI_OAUTH_TOKEN_ENC, "") ?: "").isBlank()
+            when (XaiOAuthTokenStore.confirmedForSweep(File(context.filesDir, XAI_OAUTH_MIGRATED_MARKER), legacyAccess)) {
+                SweepGate.CONFIRMED -> Unit
+                SweepGate.NOT_CONFIRMED -> return false
+                SweepGate.KEEP_LEGACY -> {
+                    LogCollector.append(
+                        "[Config] xAI sign-in record missing after migration — legacy copy kept, sign in again",
+                        LogLevel.WARN,
+                    )
+                    return true // never sweep it, never refill from it
+                }
+            }
         }
+        if (commitLegacySweep(context, "sweepLegacyXaiOAuthKeys", keys)) return true
+        LogCollector.append("[Config] xAI legacy sign-in keys not removed (commit=false) — will retry", LogLevel.WARN)
+        return false
     }
 
     /**
@@ -1938,6 +2093,9 @@ object ConfigManager {
      * here does not invalidate the token already durably in the store.
      */
     fun syncXaiRuntimeAuthType(context: Context) {
+        // BAT-1157: the store was just written, so an earlier "done" / KEEP_LEGACY verdict is stale;
+        // the reload below re-runs the confirmed sweep of any legacy copy.
+        xaiOAuthMigrationDone = false
         bumpConfigVersionOnMain()
         if (!RuntimeStateStore.isInitialized) return
         try {
@@ -2012,10 +2170,8 @@ object ConfigManager {
                 saveOwnerIdToFile(context, value, "discord")
                 config.copy(discordOwnerId = value)
             }
-            "openaiOAuthToken" -> config.copy(openaiOAuthToken = value)
-            "openaiOAuthRefresh" -> config.copy(openaiOAuthRefresh = value)
-            "openaiOAuthEmail" -> config.copy(openaiOAuthEmail = value)
-            "openaiOAuthExpiresAt" -> config.copy(openaiOAuthExpiresAt = value)
+            // BAT-1157: the OpenAI sign-in pair is owned by OpenAIOAuthTokenStore (signIn/signOut/
+            // rotate), never by a config field write.
             "xaiApiKey" -> config.copy(xaiApiKey = value)
             // BAT-1155: the xAI OAuth triple is owned by XaiOAuthTokenStore
             // (sign-in / rotation / sign-out) — NOT settable via updateConfigField
@@ -2076,9 +2232,13 @@ object ConfigManager {
             // used — the temp file lives in filesDir/.kwrite).
             SafeFs.writeAtomicText(filesDir.toPath(), file.toPath(), existing.toString())
 
-            // Also update SharedPreferences for backward compatibility
-            val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
-            prefs(context).edit().putString(key, ownerId).apply()
+            // Also update SharedPreferences for backward compatibility — MAIN only (BAT-1157,
+            // D7.2). From `:node` (the first-message owner claim) a prefs write would put back
+            // `:node`'s whole stale prefs cache; MAIN takes the owner from this file on every save.
+            if (!ProcessRole.isNode) {
+                val key = if (channel == "discord") KEY_DISCORD_OWNER_ID else KEY_OWNER_ID
+                prefsForWrite(context, "saveOwnerIdToFile")?.edit()?.putString(key, ownerId)?.apply()
+            }
             bumpConfigVersionOnMain()
 
             LogCollector.append("[Config] Owner ID saved to file for channel=$channel")
@@ -2160,21 +2320,78 @@ object ConfigManager {
         return if (o.has(channel)) o.optString(channel, "") else null
     }
 
-    fun clearConfig(context: Context) {
-        prefs(context).edit().clear().apply() // Clears all prefs including MCP servers
-        KeystoreHelper.deleteKey()
-        bumpConfigVersionOnMain()
+    /** BAT-1157: the outcome of [resetConfig]. */
+    sealed class ResetResult {
+        /** Both sign-ins tombstoned (confirmed), the Keystore key deleted, prefs cleared. */
+        object Done : ResetResult()
+
+        /**
+         * Something visible changed but not everything. Nothing is rolled back: a sign-in that
+         * was tombstoned stays signed out. The key and prefs are kept whenever a tombstone is not
+         * [TombstoneOutcome.CONFIRMED]. Retrying is safe.
+         */
+        data class Partial(
+            val openai: TombstoneOutcome,
+            val xai: TombstoneOutcome,
+            val keyDeleted: Boolean,
+            val configCleared: Boolean,
+        ) : ResetResult()
+
+        /** Nothing visible changed (a lock timeout, or the first tombstone was not written). */
+        data class Failed(val reason: String) : ResetResult()
     }
 
-    fun clearOpenAIOAuth(context: Context) {
-        prefs(context).edit()
-            .remove(KEY_OPENAI_OAUTH_TOKEN_ENC)
-            .remove(KEY_OPENAI_OAUTH_REFRESH_ENC)
-            .remove(KEY_OPENAI_OAUTH_EMAIL_ENC)
-            .remove("openai_oauth_email") // legacy plaintext key — clean up on sign-out
-            .remove(KEY_OPENAI_OAUTH_EXPIRES_AT)
-            .apply()
+    /**
+     * BAT-1157 (contract v2 §3, v3 §3): Reset Config. Blocking; call off the main thread.
+     *
+     * Under [ResetGate] (no sign-in can start or commit until the result is final), and holding the
+     * OpenAI then the xAI store lock: tombstone OpenAI, then xAI (checked writes); delete the
+     * Keystore key only if BOTH are confirmed — never over a record that could still be live.
+     * Then clear prefs with a checked `commit()`. A rotation from `:node` during the reset waits
+     * on a store lock and then finds a tombstone (409).
+     */
+    fun resetConfig(context: Context): ResetResult = ResetGate.exclusive {
+        val none = TombstoneOutcome.NOT_WRITTEN
+        var openai = none
+        var xai = none
+        var keyDeleted = false
+        val outer = OpenAIOAuthTokenStore.withLockForReset {
+            openai = OpenAIOAuthTokenStore.signOutLocked()
+            if (openai == none) return@withLockForReset
+            val inner = XaiOAuthTokenStore.withLockForReset {
+                xai = XaiOAuthTokenStore.signOutLocked()
+                if (openai == TombstoneOutcome.CONFIRMED &&
+                    xai == TombstoneOutcome.CONFIRMED
+                ) {
+                    keyDeleted = try {
+                        KeystoreHelper.deleteKey()
+                        true
+                    } catch (e: Exception) {
+                        LogCollector.append("[Config] Reset: Keystore key not deleted (${e.javaClass.simpleName})", LogLevel.ERROR)
+                        false
+                    }
+                }
+            }
+            if (inner is SidecarFileLock.Outcome.NotAcquired) {
+                LogCollector.append("[Config] Reset: xAI sign-in lock not acquired (${inner.reason})", LogLevel.WARN)
+            }
+        }
+        if (outer is SidecarFileLock.Outcome.NotAcquired) {
+            return@exclusive ResetResult.Failed(outer.reason)
+        }
+        if (openai == none) return@exclusive ResetResult.Failed("OpenAI sign-in not removed")
+        val cleared = keyDeleted &&
+            (prefsForWrite(context, "resetConfig")?.edit()?.clear()?.commit() == true) // incl. MCP servers
         bumpConfigVersionOnMain()
+        if (cleared) {
+            ResetResult.Done
+        } else {
+            LogCollector.append(
+                "[Config] Reset incomplete: openai=$openai xai=$xai keyDeleted=$keyDeleted configCleared=$cleared",
+                LogLevel.WARN,
+            )
+            ResetResult.Partial(openai, xai, keyDeleted, cleared)
+        }
     }
 
     /**
@@ -2242,14 +2459,14 @@ object ConfigManager {
             // at config-load time, so the activeCredential logic lives in Node now.
             put("anthropicApiKey", config.anthropicApiKey)
             if (config.setupToken.isNotBlank()) put("setupToken", config.setupToken)
-            // For OpenAI: if user has selected oauth but hasn't completed sign-in (token
-            // is blank), write api_key to the workspace JSON so Node's strict validation
-            // doesn't crash on startup. The UI keeps the user's intended "oauth" choice
-            // in SharedPreferences so the OAuth section remains visible.
-            // BAT-1124: same oauth-blank → api_key downgrade for xAI (lets the api-key
-            // fallback engage; if there is also no xaiApiKey, Node cleanly process.exit(1)s).
+            // BAT-1157 (D9): OpenAI's SELECTED auth is written as-is. Node decides the transport
+            // from it, the token and the key (OpenAIAuth / config.js), so a missing or unreadable
+            // sign-in falls back to a saved key, or boots reconnect-required instead of exiting.
+            // (The old oauth+blank → api_key downgrade here only took effect when runtime_state
+            // was absent; otherwise Node read oauth from runtime_state and exited on the blank token.)
+            // BAT-1124: xAI keeps its oauth-blank → api_key downgrade (lets the api-key fallback
+            // engage; if there is also no xaiApiKey, Node cleanly process.exit(1)s).
             val effectiveAuthType = when {
-                config.provider == "openai" && config.authType == "oauth" && config.openaiOAuthToken.isBlank() -> "api_key"
                 // BAT-1155: a DEAD xAI-OAuth family (tombstone/reauthRequired →
                 // xaiOAuthReauthRequired=true, token blanked) stays authType=oauth
                 // so Node boots INTO reauth (shows reconnect) instead of crashing
@@ -2307,6 +2524,13 @@ object ConfigManager {
             // OpenAI proactive-refresh hook is a separate follow-up; adding the field now
             // does not change OpenAI behavior (BAT-1143 Q6).
             if (config.openaiOAuthExpiresAt.isNotBlank()) put("openaiOAuthExpiresAt", config.openaiOAuthExpiresAt)
+            // BAT-1157: the sign-in family and epoch from the same store read as the pair. A null
+            // family means the pair came from the legacy prefs keys: Node must confirm-family
+            // (which completes the migration) before it may refresh.
+            if (config.openaiOAuthToken.isNotBlank()) {
+                put("openaiOAuthFamily", config.openaiOAuthFamily ?: JSONObject.NULL)
+                put("openaiOAuthEpoch", config.openaiOAuthEpoch)
+            }
             // BAT-1124/1155: xAI. The api-key path stays prefs-backed; the OAuth
             // triple + expiry are SOURCED FROM XaiOAuthTokenStore (decrypted in
             // loadConfig, blanked for a dead/reauth family). Token/refresh/expiry
@@ -2417,14 +2641,13 @@ object ConfigManager {
         if (config.channel == "telegram" && config.telegramBotToken.isBlank()) return "missing_bot_token"
         if (config.channel == "discord" && config.discordBotToken.isBlank()) return "missing_discord_token"
         val hasCredential = when (config.provider) {
-            "openai" -> {
-                // Match writeConfigJson's effective auth type: oauth requires a token,
-                // but if the user is on oauth without a token AND has a valid API key,
-                // writeConfigJson falls back to api_key for Node — so the agent IS
-                // startable. Validation must align or it would block startup despite
-                // valid credentials.
-                config.openaiOAuthToken.isNotBlank() || config.openaiApiKey.isNotBlank()
-            }
+            // BAT-1157 (D9): the same table Node applies (OpenAIAuth). oauth with no usable
+            // sign-in and no key is STARTABLE: the agent boots and asks the user to reconnect.
+            "openai" -> OpenAIAuth.isStartable(
+                selectedAuth = config.authType,
+                hasUsableToken = config.openaiOAuthToken.isNotBlank(),
+                hasApiKey = config.openaiApiKey.isNotBlank(),
+            )
             // BAT-1124 (CodeRabbit): validate the credential for the EFFECTIVE auth mode
             // (matching writeConfigJson's oauth+blank→api_key downgrade), not "either".
             // Otherwise api_key mode with a blank key but a STALE xaiOAuthToken would report
@@ -2524,9 +2747,9 @@ object ConfigManager {
             }
         }.toString()
         val enc = KeystoreHelper.encrypt(json)
-        prefs(context).edit()
-            .putString(KEY_ENV_VARS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
-            .apply()
+        prefsForWrite(context, "saveEnvVars")?.edit()
+            ?.putString(KEY_ENV_VARS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
+            ?.apply()
         bumpConfigVersionOnMain()
     }
 
@@ -2611,19 +2834,19 @@ object ConfigManager {
         prefs(context).getString(KEY_WALLET_LABEL, "") ?: ""
 
     fun setWalletAddress(context: Context, address: String, label: String = "") {
-        prefs(context).edit()
-            .putString(KEY_WALLET_ADDRESS, address)
-            .putString(KEY_WALLET_LABEL, label)
-            .apply()
+        prefsForWrite(context, "setWalletAddress")?.edit()
+            ?.putString(KEY_WALLET_ADDRESS, address)
+            ?.putString(KEY_WALLET_LABEL, label)
+            ?.apply()
         bumpConfigVersionOnMain()
         writeWalletConfig(context)
     }
 
     fun clearWalletAddress(context: Context) {
-        prefs(context).edit()
-            .remove(KEY_WALLET_ADDRESS)
-            .remove(KEY_WALLET_LABEL)
-            .apply()
+        prefsForWrite(context, "clearWalletAddress")?.edit()
+            ?.remove(KEY_WALLET_ADDRESS)
+            ?.remove(KEY_WALLET_LABEL)
+            ?.apply()
         bumpConfigVersionOnMain()
         val walletFile = File(File(context.filesDir, "workspace"), "solana_wallet.json")
         if (walletFile.exists()) walletFile.delete()

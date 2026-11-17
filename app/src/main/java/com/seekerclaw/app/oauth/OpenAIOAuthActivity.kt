@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.ResetGate
 import com.seekerclaw.app.service.OAuthKeepAliveService
 import com.seekerclaw.app.util.SafeFs
 import fi.iki.elonen.NanoHTTPD
@@ -89,6 +90,8 @@ class OpenAIOAuthActivity : ComponentActivity() {
         private var activeServer: CallbackServer? = null
         private var activeCallbackReceived = false
         private var activeFlowId: String? = null
+        /** BAT-1157: the ResetGate generation captured when the active flow started. */
+        private var activeFlowResetGen: Long? = null
         private var activeTimeoutJob: Job? = null
 
         private enum class WriteState { IDLE, WRITING, COMPLETED }
@@ -115,6 +118,7 @@ class OpenAIOAuthActivity : ComponentActivity() {
             activeServer = null
             activeCallbackReceived = false
             activeFlowId = null
+            activeFlowResetGen = null
             activeWriteState = WriteState.IDLE
         }
 
@@ -161,17 +165,36 @@ class OpenAIOAuthActivity : ComponentActivity() {
                 }
 
                 withContext(NonCancellable + Dispatchers.IO) {
-                    val prior = ConfigManager.loadConfigOrBootstrap(appCtx)
-                    ConfigManager.persistOpenAIOAuthTokens(
-                        context = appCtx,
-                        accessToken = accessToken,
-                        refreshToken = refreshToken.ifBlank { prior.openaiOAuthRefresh },
-                        email = email ?: prior.openaiOAuthEmail,
-                        expiresAt = expiresAt,
-                    )
-                    writeResultFileStatic(appCtx, requestId, JSONObject().apply {
-                        put("status", "success")
-                    })
+                    // BAT-1157: a new family in the token store, inside ResetGate's commit section,
+                    // with the result file written inside it too — so a sign-in can never land in
+                    // the middle of Reset Config, nor report "connected" after one. The record
+                    // carries exactly what this exchange returned: no refresh token or email is
+                    // inherited from a previous sign-in (it could belong to another account).
+                    // The generation captured when THIS flow (requestId) started: a reset plus a newer
+                    // flow in between leaves activeFlowId on the newer flow, so this read is null and
+                    // the commit is refused (never another flow's generation).
+                    val flowGen = synchronized(FLOW_LOCK) { if (activeFlowId == requestId) activeFlowResetGen else null }
+                    val outcome = if (flowGen == null) {
+                        ResetGate.Commit.Cancelled
+                    } else {
+                        ResetGate.commit(flowGen) {
+                            val saved = ConfigManager.signInOpenAI(appCtx, accessToken, refreshToken, email.orEmpty(), expiresAt)
+                            writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                                if (saved) {
+                                    put("status", "success")
+                                } else {
+                                    put("status", "error")
+                                    put("message", "Couldn't save your sign-in on this device. Please try again.")
+                                }
+                            })
+                        }
+                    }
+                    if (outcome is ResetGate.Commit.Cancelled) {
+                        writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                            put("status", "error")
+                            put("message", "Sign-in cancelled: the config was reset. Please sign in again.")
+                        })
+                    }
                 }
                 Log.i(TAG, "Browser flow completed successfully")
             } catch (e: Exception) {
@@ -692,8 +715,29 @@ class OpenAIOAuthActivity : ComponentActivity() {
         // Publish flowId BEFORE server.start() so callbacks from NanoHTTPD's
         // accept thread are recognized as the active flow from the first request.
         // If start() fails, we clean up flowId in the catch block.
+        // BAT-1157: capture the ResetGate generation as the flow starts; refuse while a reset runs.
+        val resetGen = ResetGate.beginFlow()
+        if (resetGen == null) {
+            Log.w(TAG, "Sign-in refused: Reset Config in progress")
+            // This attempt never became the active flow, so it touches no shared flow state (a
+            // later retry's write claim stays intact); it only answers its own requestId.
+            EXCHANGE_SCOPE.launch {
+                try {
+                    writeResultFileStatic(appCtx, requestId, JSONObject().apply {
+                        put("status", "error")
+                        put("message", "Reset in progress. Try again when it finishes.")
+                    })
+                } catch (writeErr: Exception) {
+                    Log.w(TAG, "Failed to write reset-in-progress result", writeErr)
+                }
+            }
+            OAuthKeepAliveService.stop(appCtx)
+            finish()
+            return
+        }
         synchronized(FLOW_LOCK) {
             activeFlowId = requestId
+            activeFlowResetGen = resetGen
         }
         try {
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)

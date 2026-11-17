@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.seekerclaw.app.util.CrossProcessStore
 import com.seekerclaw.app.util.SafeFs
+import com.seekerclaw.app.util.SidecarFileLock
 import com.seekerclaw.app.util.StopToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,11 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.serialization.Serializable
 import java.io.File
-import java.nio.channels.FileChannel
-import java.nio.channels.FileLock
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Cross-process, single-domain store for the xAI OAuth ("Sign in with Grok")
@@ -56,10 +53,9 @@ import java.util.concurrent.locks.ReentrantLock
  * (`files/xai_oauth.lock`, a separate inode the atomic-rename never
  * replaces): `acquire → read current → validate expectedEpoch → write an
  * epoch-advanced record via the atomic move → release`. The Java `FileLock`
- * is per-JVM (not per-thread), so it is additionally wrapped in an in-JVM
- * [jvmMutex] to serialize same-process callers (else `OverlappingFile
- * LockException`); the mutex serializes this process, the file lock covers
- * the other process.
+ * is per-JVM (not per-thread), so [SidecarFileLock] also takes an in-JVM lock
+ * to serialize same-process callers (else `OverlappingFileLockException`); the
+ * in-JVM lock serializes this process, the file lock covers the other process.
  *
  * ## Fail-closed default
  * The store's [initial] snapshot is a reauth-required tombstone (no token),
@@ -69,11 +65,9 @@ import java.util.concurrent.locks.ReentrantLock
  */
 object XaiOAuthTokenStore {
     private const val TAG = "XaiOAuthTokenStore"
-    // CodeRabbit: bound the sidecar cross-process lock acquisition so a stuck holder in
-    // the other process can never hang a mutation indefinitely (the shutdown durability
-    // gate runs markReauth() under onDestroy's tight budget). 1000ms is far above the
-    // sub-ms real hold time while staying well inside the 2500ms stop ceiling.
-    private const val LOCK_TIMEOUT_MS = 1000L
+    // Bounded so a stuck holder in the other process can never hang a mutation (the shutdown
+    // durability gate runs markReauth() under onDestroy's tight budget); see SidecarFileLock.
+    private const val LOCK_TIMEOUT_MS = SidecarFileLock.DEFAULT_TIMEOUT_MS
     const val FILE_NAME = "xai_oauth.json"
     const val LOCK_NAME = "xai_oauth.lock"
 
@@ -95,12 +89,11 @@ object XaiOAuthTokenStore {
     @Volatile private var lockDir: File? = null
 
     /**
-     * Per-JVM serialization for the sidecar file lock (see class KDoc). A
-     * ReentrantLock (not `synchronized`) so acquisition is itself BOUNDED
-     * (Codex: `synchronized` can't time out — under the shutdown budget an
-     * unbounded monitor wait would blow the ceiling / risk a stuck thread).
+     * The sidecar lock (see class KDoc): a bounded in-JVM lock plus the cross-process file lock on
+     * [LOCK_NAME], under one monotonic deadline. BAT-1157 moved the code into [SidecarFileLock],
+     * shared with the OpenAI store.
      */
-    private val jvmLock = ReentrantLock()
+    private val sidecar = SidecarFileLock({ lockDir }, LOCK_NAME, LOCK_TIMEOUT_MS)
 
     val isInitialized: Boolean get() = store != null
 
@@ -154,17 +147,7 @@ object XaiOAuthTokenStore {
     }
 
     /**
-     * Run [transform] as a cross-process transaction under the sidecar lock.
-     * If [expectedEpoch] is non-null and differs from the on-disk epoch,
-     * returns [Result.Conflict] WITHOUT writing (the CAS gate). Otherwise
-     * persists `transform(current).copy(epoch = current.epoch + 1)` and
-     * returns [Result.Ok].
-     *
-     * [transform] must NOT itself set `epoch` — this method advances it so
-     * every mutation is monotonic. Never throws.
-     */
-    /**
-     * Acquire BOTH the in-JVM [jvmLock] and the cross-process sidecar file lock
+     * Acquire BOTH the in-JVM lock and the cross-process sidecar file lock ([sidecar])
      * under ONE monotonic end-to-end deadline ([LOCK_TIMEOUT_MS]), run [action]
      * with the store + the freshly-read current record, and always release both.
      * Returns [Result.Failed] on a lock timeout — never blocks indefinitely and
@@ -176,57 +159,48 @@ object XaiOAuthTokenStore {
         action: (CrossProcessStore<XaiOAuthTokens>, XaiOAuthTokens) -> Result,
     ): Result {
         val cps = store ?: return Result.Failed("not initialized")
-        val dir = lockDir ?: return Result.Failed("not initialized")
-        // Monotonic deadline (Codex: System.currentTimeMillis can jump on an NTP
-        // correction and break the bound). Covers BOTH lock acquisitions. Codex re-review
-        // major-1: cap the acquisition by the SMALLER of the standard allowance and the
-        // caller's remaining end-to-end budget, so a mutation started near a shutdown
-        // deadline can't overrun it by waiting the full LOCK_TIMEOUT_MS.
-        val budgetMs = minOf(LOCK_TIMEOUT_MS, lockBudgetMs).coerceAtLeast(0L)
-        val deadlineNs = System.nanoTime() + budgetMs * 1_000_000L
-        val remainingMs = { (deadlineNs - System.nanoTime()) / 1_000_000L }
-        val gotJvm = try {
-            jvmLock.tryLock(remainingMs().coerceAtLeast(0L), TimeUnit.MILLISECONDS)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-            false
-        }
-        if (!gotJvm) return Result.Failed("jvm lock timeout")
-        var chan: FileChannel? = null
-        var lock: FileLock? = null
-        try {
-            val lockFile = File(dir, LOCK_NAME)
-            // BAT-1409 P1-J: opened with NOFOLLOW_LINKS after the ancestor rule — a link at the
-            // lock path is refused, never followed (RandomAccessFile "rw" followed it).
-            chan = SafeFs.openLockChannelNoFollow(dir.toPath(), lockFile.toPath())
-            // Bounded cross-process acquisition: tryLock + brief retries instead of a
-            // blocking lock() that could hang forever on a stuck other-process holder.
-            while (lock == null) {
-                lock = try {
-                    chan.tryLock()
-                } catch (_: java.nio.channels.OverlappingFileLockException) {
-                    null // jvmLock already serializes this process; back off + retry
-                }
-                if (lock == null) {
-                    if (remainingMs() <= 0L) return Result.Failed("lock timeout")
-                    // CodeRabbit: restore the interrupt flag (mirrors the jvmLock.tryLock path)
-                    // so an interrupt during back-off isn't silently lost by the outer catch.
-                    try {
-                        Thread.sleep(15)
-                    } catch (e: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        return Result.Failed("interrupted")
-                    }
-                }
+        // BAT-1157: the bounded in-JVM + cross-process sidecar lock is the shared SidecarFileLock
+        // (one monotonic deadline, capped by the caller's remaining budget; no-follow lock file;
+        // a nested acquisition fails fast instead of spinning to the deadline).
+        return try {
+            when (val o = sidecar.withLock(lockBudgetMs) { action(cps, cps.read()) }) {
+                is SidecarFileLock.Outcome.Ran -> o.value
+                is SidecarFileLock.Outcome.NotAcquired -> Result.Failed(o.reason)
             }
-            return action(cps, cps.read())
         } catch (e: Exception) {
             Log.w(TAG, "store op failed: ${e.message}")
-            return Result.Failed(e.message ?: "unknown")
-        } finally {
-            try { lock?.release() } catch (_: Exception) {}
-            try { chan?.close() } catch (_: Exception) {}
-            jvmLock.unlock()
+            Result.Failed(e.message ?: "unknown")
+        }
+    }
+
+    // ---- BAT-1157: Reset Config (both OAuth stores under both locks) -------------------------
+
+    /**
+     * BAT-1157: run [action] holding this store's sidecar lock. For `ConfigManager.resetConfig`
+     * only (OpenAI lock, then this one); [action] must use the `*Locked` forms, never a public
+     * mutation (that would be a nested acquisition, which fails fast).
+     */
+    internal fun <R> withLockForReset(action: () -> R): SidecarFileLock.Outcome<R> = sidecar.withLock(LOCK_TIMEOUT_MS, action)
+
+    /**
+     * BAT-1157: the reset's tombstone, under an already-held [withLockForReset]. A verified write:
+     * [TombstoneOutcome.UNCONFIRMED] means the tombstone may be visible yet not durable, so the
+     * caller must keep the Keystore key and prefs.
+     */
+    internal fun signOutLocked(): TombstoneOutcome {
+        check(sidecar.isHeldByCurrentThread) { "signOutLocked requires withLockForReset" }
+        val cps = store ?: return TombstoneOutcome.NOT_WRITTEN
+        val epoch = when (val s = cps.readState()) {
+            is CrossProcessStore.ReadState.Present -> s.value.epoch
+            else -> 0L
+        }
+        return try {
+            cps.writeVerified(XaiOAuthTokens(tombstone = true, reauthRequired = false, epoch = epoch + 1L))
+            TombstoneOutcome.CONFIRMED
+        } catch (e: SafeFs.WriteUnconfirmed) {
+            TombstoneOutcome.UNCONFIRMED
+        } catch (e: Exception) {
+            TombstoneOutcome.NOT_WRITTEN
         }
     }
 
@@ -243,6 +217,7 @@ object XaiOAuthTokenStore {
         rejectIfTombstone: Boolean = false,
         advanceEpoch: Boolean = true,
         lockBudgetMs: Long = LOCK_TIMEOUT_MS,
+        verified: Boolean = false,
         transform: (XaiOAuthTokens) -> XaiOAuthTokens,
     ): Result = withStoreLock(lockBudgetMs) { cps, current ->
         if (expectedEpoch != null && current.epoch != expectedEpoch) {
@@ -255,7 +230,17 @@ object XaiOAuthTokenStore {
             return@withStoreLock Result.Conflict(current.epoch)
         }
         val next = transform(current).copy(epoch = if (advanceEpoch) current.epoch + 1 else current.epoch)
-        if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
+        if (!verified) return@withStoreLock if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
+        // BAT-1157: user-initiated writes (sign-in, sign-out) are checked, so a tombstone that a
+        // power cut could undo is never reported as a completed sign-out.
+        try {
+            cps.writeVerified(next)
+            Result.Ok(next)
+        } catch (e: SafeFs.WriteUnconfirmed) {
+            Result.Failed("write unconfirmed")
+        } catch (e: SafeFs.WriteNotApplied) {
+            Result.Failed("write failed")
+        }
     }
 
     // ---- Mutations (each advances epoch under the CAS lock) --------------
@@ -295,7 +280,7 @@ object XaiOAuthTokenStore {
      * Clears all dead/notify state atomically.
      */
     fun signIn(accessTokenEnc: String, refreshTokenEnc: String, emailEnc: String, expiresAt: String): Result =
-        mutate(null) { cur ->
+        mutate(null, verified = true) { cur ->
             cur.copy(
                 accessTokenEnc = accessTokenEnc,
                 refreshTokenEnc = refreshTokenEnc,
@@ -317,7 +302,7 @@ object XaiOAuthTokenStore {
      * the account. Deliberately keeps NO token material.
      */
     fun signOut(): Result =
-        mutate(null) {
+        mutate(null, verified = true) {
             XaiOAuthTokens(tombstone = true, reauthRequired = false, epoch = 0L /* replaced by mutate */)
         }
 
@@ -495,11 +480,21 @@ object XaiOAuthTokenStore {
         emailEnc: String,
         expiresAt: String,
     ): Result = withStoreLock { cps, current ->
-        // Fill-only guard. A real persisted tombstone is epoch >= 1; the
-        // FAIL_CLOSED default (epoch 0) is the never-written sentinel and MUST fill.
-        val realTombstone = current.tombstone && current.epoch >= 1L
-        if (current.accessTokenEnc.isNotEmpty() || realTombstone) {
-            return@withStoreLock Result.Ok(current) // no-op — epoch deliberately NOT advanced
+        // BAT-1157 (contract D3): fill ONLY an Absent store. read() folds "missing" and "corrupt"
+        // into the FAIL_CLOSED default, so it filled over a corrupt record too; readState() keeps
+        // them apart. An unreadable record is never imported over — it stays fail-closed (reauth)
+        // until a new sign-in replaces it.
+        when (cps.readState()) {
+            is CrossProcessStore.ReadState.Unreadable -> return@withStoreLock Result.Failed("store unreadable")
+            // Present: re-prove the visible record with a fresh checked rewrite before the caller
+            // writes the marker, so the marker can never outlive the only durable record (Codex #1).
+            is CrossProcessStore.ReadState.Present -> return@withStoreLock try {
+                cps.rewriteVerified()
+                Result.Ok(current) // no-op, epoch kept
+            } catch (e: Exception) {
+                Result.Failed("record not confirmed")
+            }
+            CrossProcessStore.ReadState.Absent -> Unit
         }
         val next = XaiOAuthTokens(
             accessTokenEnc = accessTokenEnc,
@@ -511,7 +506,47 @@ object XaiOAuthTokenStore {
             epoch = 1L,
             tombstone = false,
         )
-        if (cps.write(next)) Result.Ok(next) else Result.Failed("write failed")
+        // BAT-1157: checked, so the caller writes the marker (and MAIN later sweeps the legacy
+        // keys) only on a fill known durable.
+        try {
+            cps.writeVerified(next)
+            Result.Ok(next)
+        } catch (e: SafeFs.WriteUnconfirmed) {
+            Result.Failed("write unconfirmed")
+        } catch (e: SafeFs.WriteNotApplied) {
+            Result.Failed("write failed")
+        }
+    }
+
+    /**
+     * BAT-1157: before MAIN sweeps the legacy xAI prefs keys, prove — in THIS process — that the
+     * store record (when present) and [marker] are durable, by a fresh checked rewrite of each. A
+     * marker left visible by a failed sync is no permission to drop the only other copy. An
+     * unreadable record never qualifies, and an Absent store while prefs still hold a legacy
+     * access token ([legacyAccessPresent]) is [SweepGate.KEEP_LEGACY] (Codex #1). Never throws.
+     */
+    fun confirmedForSweep(marker: File, legacyAccessPresent: Boolean): SweepGate {
+        val cps = store ?: return SweepGate.NOT_CONFIRMED
+        val d = lockDir ?: return SweepGate.NOT_CONFIRMED
+        return try {
+            when (val o = sidecar.withLock {
+                if (!SafeFs.existsNoFollow(marker.toPath())) return@withLock SweepGate.NOT_CONFIRMED
+                when (cps.readState()) {
+                    is CrossProcessStore.ReadState.Unreadable -> return@withLock SweepGate.NOT_CONFIRMED
+                    is CrossProcessStore.ReadState.Present -> cps.rewriteVerified()
+                    CrossProcessStore.ReadState.Absent ->
+                        if (legacyAccessPresent) return@withLock SweepGate.KEEP_LEGACY
+                }
+                SafeFs.rewriteVerified(d.toPath(), marker.toPath())
+                SweepGate.CONFIRMED
+            }) {
+                is SidecarFileLock.Outcome.Ran -> o.value
+                is SidecarFileLock.Outcome.NotAcquired -> SweepGate.NOT_CONFIRMED
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "sweep confirmation failed: ${e.javaClass.simpleName}")
+            SweepGate.NOT_CONFIRMED
+        }
     }
 
     // ---- Test seams -----------------------------------------------------
