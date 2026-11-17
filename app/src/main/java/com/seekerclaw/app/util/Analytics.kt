@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import com.google.firebase.analytics.FirebaseAnalytics
-import com.seekerclaw.app.config.PrefsNames
+import com.seekerclaw.app.config.MainPrefs
 
 object Analytics {
     private const val TAG = "Analytics"
@@ -15,7 +15,7 @@ object Analytics {
     fun init(context: Context) {
         try {
             fb = FirebaseAnalytics.getInstance(context)
-            val prefs = context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
+            val prefs = MainPrefs.read(context)
             enabled = prefs.getBoolean(PREF_KEY, true) // default ON
             fb?.setAnalyticsCollectionEnabled(enabled)
         } catch (e: IllegalStateException) {
@@ -28,14 +28,12 @@ object Analytics {
     }
 
     fun isEnabled(context: Context): Boolean {
-        return context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
-            .getBoolean(PREF_KEY, true)
+        return MainPrefs.read(context).getBoolean(PREF_KEY, true)
     }
 
     fun setEnabled(context: Context, enable: Boolean) {
         enabled = enable
-        context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
-            .edit().putBoolean(PREF_KEY, enable).apply()
+        MainPrefs.forWrite(context, "Analytics.setEnabled")?.edit()?.putBoolean(PREF_KEY, enable)?.apply()
         fb?.setAnalyticsCollectionEnabled(enable)
     }
 

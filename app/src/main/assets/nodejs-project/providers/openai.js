@@ -4,8 +4,12 @@
 // All OpenAI models route through the Responses API — future-proof
 // as OpenAI transitions away from Chat Completions.
 
-const { log, OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE } = require('../config');
-const { androidBridgeCall } = require('../bridge');
+const {
+    log, OPENAI_OAUTH_TOKEN, OPENAI_OAUTH_REFRESH, OPENAI_AUTH_TYPE,
+    OPENAI_OAUTH_FAMILY, OPENAI_OAUTH_EPOCH, OPENAI_OAUTH_RECONNECT_REQUIRED,
+} = require('../config');
+const { androidBridgeCallWithStatus } = require('../bridge');
+const crypto = require('crypto');
 
 // Codex CLI public OAuth client id. Must stay in sync with
 // app/src/main/java/com/seekerclaw/app/oauth/OpenAIOAuthActivity.kt:CLIENT_ID
@@ -411,11 +415,57 @@ const endpoint = {
     path: isOAuth ? CODEX_API_PATH : '/v1/responses',
 };
 
-let _currentOAuthToken = OPENAI_OAUTH_TOKEN;
-let _currentRefreshToken = OPENAI_OAUTH_REFRESH;
+// ── OAuth credential state (BAT-1157) ───────────────────────────────────────
+// One object, replaced whole on adoption, so a request never mixes an access token from one
+// rotation with the refresh token, epoch or family of another. `confirmed`: this process has
+// proven, through the bridge, that the token store durably holds this family (confirm-family, or a
+// 200 to our own save). An upstream refresh is only ever sent for a confirmed credential.
+let _cred = {
+    access: OPENAI_OAUTH_TOKEN,
+    refresh: OPENAI_OAUTH_REFRESH,
+    epoch: OPENAI_OAUTH_EPOCH,
+    familyId: OPENAI_OAUTH_FAMILY,
+    confirmed: false,
+};
+// Incremented whenever a new pair is adopted. ai.js records it with each request's headers and
+// hands it back on a 401 (handleUnauthorized(usedGen)).
+let _gen = 0;
+// 'ok' | 'latched' (the sign-in changed elsewhere: restart) | 'reconnect' (no usable sign-in).
+let _authState = OPENAI_OAUTH_RECONNECT_REQUIRED ? 'reconnect' : 'ok';
+// When a recovery last failed on storage (confirm-family not confirmed). classifyError shows the
+// storage message for a 401 within STORAGE_FAILURE_WINDOW_MS of it; a new recovery clears it. A
+// time window, not a flag cleared per request, so a concurrent request cannot erase it before the
+// failing request's own message is chosen.
+let _storageFailureAt = 0;
+const STORAGE_FAILURE_WINDOW_MS = 15000;
+// When handleUnauthorized last refused a refresh because a save is unacknowledged (Codex #3).
+// classifyError reads it: within the window a 401 on the CURRENT pair shows MSG_SAVE_PENDING;
+// otherwise a 401 stays retryable, so a delayed 401 from a stale generation (ctx.usedGen) reaches
+// handleUnauthorized and retries on the current pair. A time window, for the same concurrency
+// reason as above.
+let _saveBlockedAt = 0;
+// A save the bridge has not acknowledged: { familyId, expectedEpoch, rotationId, ... }.
+let _pendingSave = null;
+let _saveRetryTimer = null;
+let _saveRetryAttempt = 0;
+// Set by shutdownOAuthTimers (SIGTERM): a save still awaiting the bridge must not re-arm a retry.
+let _shutDown = false;
+let _recoverInFlight = null;
+
+const SAVE_RETRY_DELAYS_MS = [2000, 10000, 60000];
+const SAVE_RETRY_STEADY_MS = 5 * 60 * 1000;
+
+const MSG_LATCHED = '🔐 Your ChatGPT sign-in changed. Restart the agent.';
+const MSG_RECONNECT = '🔐 Reconnect OpenAI in Settings.';
+const MSG_SAVE_PENDING = '⏳ Saving your refreshed sign-in. Try again in a moment.';
+const MSG_STORAGE = '⚠️ Couldn\'t save your ChatGPT sign-in on this device. Try again in a moment; if this keeps happening, reconnect OpenAI in Settings.';
+
+function currentRefreshGeneration() {
+    return _gen;
+}
 
 function buildHeaders(apiKey) {
-    const token = isOAuth ? _currentOAuthToken : apiKey;
+    const token = isOAuth ? _cred.access : apiKey;
     const headers = {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
@@ -438,11 +488,34 @@ const streamProtocol = 'openai-responses';
 
 // ── Error classification ────────────────────────────────────────────────────
 
-function classifyError(status, data) {
+// [ctx] (optional): { usedGen } — the credential generation the failing request was sent with;
+// ai.js passes it from its retry loop (Codex #3).
+function classifyError(status, data, ctx) {
     if (status === 401 || status === 403) {
+        // BAT-1157: a sign-in that cannot recover by a refresh says why, as a non-retryable
+        // 'reauth' — the message the user sees (ai.js classifies again after the retry loop).
+        if (isOAuth && status === 401) {
+            if (_authState === 'latched') return { type: 'reauth', retryable: false, userMessage: MSG_LATCHED };
+            if (_authState === 'reconnect') return { type: 'reauth', retryable: false, userMessage: MSG_RECONNECT };
+            // Transient states are NOT 'reauth' (that type drives ai.js's autonomous reconnect notice).
+            if (_pendingSave) {
+                // A 401 from a request sent with an OLDER pair always reaches handleUnauthorized,
+                // which retries it on the current pair — even inside the "saving" window below.
+                const stale = !!ctx && typeof ctx.usedGen === 'number' && ctx.usedGen < _gen;
+                if (!stale && _saveBlockedAt && Date.now() - _saveBlockedAt < STORAGE_FAILURE_WINDOW_MS) {
+                    return { type: 'storage', retryable: false, userMessage: MSG_SAVE_PENDING };
+                }
+                // Retryable 'auth': ai.js hands it to handleUnauthorized(usedGen), which retries a
+                // stale generation on the current pair and refuses (never refreshes) otherwise.
+                return { type: 'auth', retryable: true, userMessage: MSG_SAVE_PENDING };
+            }
+            if (_storageFailureAt && Date.now() - _storageFailureAt < STORAGE_FAILURE_WINDOW_MS) {
+                return { type: 'storage', retryable: false, userMessage: MSG_STORAGE };
+            }
+        }
         // OAuth 401s may be retryable after token refresh — caller must call handleUnauthorized()
         return {
-            type: 'auth', retryable: isOAuth && status === 401 && !!_currentRefreshToken,
+            type: 'auth', retryable: isOAuth && status === 401 && !!_cred.refresh,
             userMessage: isOAuth
                 ? '🔐 Can\'t reach the AI — your OpenAI sign-in may have expired. Please reconnect OpenAI in Settings and try again.'
                 : '🔑 Can\'t reach the AI — OpenAI API key might be wrong. Check Settings?'
@@ -484,28 +557,189 @@ function classifyError(status, data) {
 }
 
 /**
- * Handle OAuth 401: attempt token refresh and signal retryable.
- * Call this when classifyError returns { retryable: true } on a 401.
- * Throws an error with retryable=true on success (caller retries),
- * or rethrows non-retryable error on refresh failure.
+ * BAT-1157 (D15): called before every authenticated send (ai.js claudeApiCall, the context
+ * summarizer, and after a recovery). Returns the 'reauth' error class when the sign-in is latched
+ * or reconnect-required — the request is then never sent — else null.
  */
-async function handleUnauthorized() {
-    if (!(isOAuth && _currentRefreshToken)) return;
-    log('[OpenAI] OAuth 401 — attempting token refresh...', 'INFO');
-    try {
-        await refreshOAuthToken();
-        log('[OpenAI] Token refreshed — caller should retry', 'INFO');
-        const retryError = new Error('OAuth token refreshed — retry');
-        retryError.retryable = true;
-        throw retryError;
-    } catch (e) {
-        if (e.retryable) throw e;
-        // Refresh failed — make sure caller stops retrying with the dead token.
-        log('[OpenAI] OAuth refresh failed: ' + e.message, 'ERROR');
-        const fatal = new Error('OAuth token refresh failed: ' + e.message);
-        fatal.retryable = false;
-        throw fatal;
+function preflightAuth() {
+    if (!isOAuth) return null;
+    if (_authState === 'latched') return { type: 'reauth', retryable: false, userMessage: MSG_LATCHED };
+    if (_authState === 'reconnect') return { type: 'reauth', retryable: false, userMessage: MSG_RECONNECT };
+    return null;
+}
+
+function _retryable(message) {
+    const e = new Error(message);
+    e.retryable = true;
+    return e;
+}
+
+function _fatal(message) {
+    const e = new Error(message);
+    e.retryable = false;
+    return e;
+}
+
+/** Drops this session's tokens and stops all OAuth sends until restart (a 409 from the store). */
+function _latch(why) {
+    _cred = { access: '', refresh: '', epoch: _cred.epoch, familyId: _cred.familyId, confirmed: false };
+    _authState = 'latched';
+    _clearSaveRetry();
+    _pendingSave = null;
+    _saveBlockedAt = 0;
+    log(`[OpenAI] OAuth token save rejected (sign-in changed) — dropped this session's tokens (${why})`, 'WARN');
+}
+
+/**
+ * Handle an OAuth 401 (BAT-1157, contract v2–v4 + Codex sign-off).
+ * - [usedGen] is the credential generation the failing request was sent with. If a newer pair has
+ *   been adopted since (a delayed 401), retry on it — no refresh.
+ * - Otherwise ONE recovery, single-flight across concurrent 401s: confirm the family with the
+ *   bridge (a decoded familyId proves nothing), then one upstream refresh, then the save.
+ * - No refresh while a save is unacknowledged, after a 409 latch, or when reconnect is required.
+ * Signals a retry by THROWING { retryable:true } (ai.js contract), a stop with { retryable:false }.
+ */
+async function handleUnauthorized(usedGen) {
+    if (!isOAuth) return;
+    const base = (typeof usedGen === 'number') ? usedGen : _gen;
+    if (base < _gen && _authState === 'ok') throw _retryable('OAuth credential already rotated — retry');
+    if (!_recoverInFlight) {
+        if (_authState !== 'ok') throw _fatal('OAuth sign-in needs attention');
+        if (_pendingSave) {
+            _saveBlockedAt = Date.now();
+            throw _fatal('OAuth refreshed sign-in not saved yet');
+        }
+        if (!_cred.refresh) throw _fatal('No OAuth refresh token');
+        _storageFailureAt = 0; // a fresh attempt
+        _recoverInFlight = _recover().finally(() => { _recoverInFlight = null; });
     }
+    try {
+        await _recoverInFlight;
+    } catch (e) {
+        log('[OpenAI] OAuth refresh failed: ' + e.message, 'ERROR');
+        throw _fatal('OAuth token refresh failed: ' + e.message);
+    }
+    if (_authState === 'ok' && _gen > base) {
+        log('[OpenAI] Token refreshed — caller should retry', 'INFO');
+        throw _retryable('OAuth token refreshed — retry');
+    }
+    throw _fatal('OAuth refresh did not complete');
+}
+
+/** Confirm (once per process) then refresh. Sets the state; throws only on an upstream failure. */
+async function _recover() {
+    if (!_cred.confirmed) {
+        const ok = await _confirmFamily();
+        if (!ok) return;
+    }
+    log('[OpenAI] OAuth 401 — attempting token refresh...', 'INFO');
+    await refreshOAuthToken();
+}
+
+function _fingerprint(secret) {
+    // The canonical form Kotlin hashes too: normalizeSecret already applied in config.js.
+    return crypto.createHash('sha256').update(String(secret), 'utf8').digest('hex');
+}
+
+/**
+ * POST /openai/oauth/confirm-family. Only an EXACT 200 — echoing the requested family and epoch, or
+ * for a legacy (null-family) request a well-formed family and epoch ≥ 1 — confirms. A 409 latches
+ * or requires a reconnect; anything else (429, timeout, unparseable, a wrong 200) is a storage
+ * failure: no refresh this time.
+ */
+async function _confirmFamily() {
+    const req = {
+        familyId: _cred.familyId || null,
+        epoch: _cred.familyId ? _cred.epoch : 0,
+        refreshFingerprint: _fingerprint(_cred.refresh),
+    };
+    const r = await androidBridgeCallWithStatus('/openai/oauth/confirm-family', req);
+    const b = r.body;
+    if (r.status === 200 && b && b.success === true) {
+        const fam = typeof b.familyId === 'string' ? b.familyId : '';
+        const ep = b.epoch;
+        // Codex #4: a JSON number that is a SAFE integer — above 2^53 two epochs compare equal.
+        const exact = Number.isSafeInteger(ep) && (req.familyId
+            ? (fam === req.familyId && ep === req.epoch)
+            : (fam.length > 0 && ep >= 1));
+        if (exact) {
+            _cred = { ..._cred, familyId: fam, epoch: ep, confirmed: true };
+            return true;
+        }
+    } else if (r.status === 409 && b && b.code === 'OPENAI_OAUTH_RECONNECT') {
+        _cred = { access: '', refresh: '', epoch: _cred.epoch, familyId: _cred.familyId, confirmed: false };
+        _authState = 'reconnect';
+        log('[OpenAI] Sign-in no longer usable on this device — reconnect required', 'WARN');
+        return false;
+    } else if (r.status === 409 && b && b.code === 'OPENAI_OAUTH_FAMILY_CHANGED') {
+        _latch('family changed');
+        return false;
+    }
+    _storageFailureAt = Date.now();
+    log(`[OpenAI] Sign-in not confirmed on this device (status=${r.status === null ? 'none' : r.status}) — no refresh`, 'WARN');
+    return false;
+}
+
+/** Send one save; returns 'ok' | 'conflict' | 'pending'. Never sends an upstream refresh. */
+async function _sendSave(save) {
+    const r = await androidBridgeCallWithStatus('/openai/oauth/save-tokens', save);
+    const b = r.body;
+    if (r.status === 200 && b && b.success === true && Number.isSafeInteger(b.epoch)
+        && Number.isSafeInteger(save.expectedEpoch) && b.epoch === save.expectedEpoch + 1) {
+        _cred = { ..._cred, epoch: b.epoch, confirmed: true };
+        _pendingSave = null;
+        _saveBlockedAt = 0;
+        _clearSaveRetry();
+        return 'ok';
+    }
+    if (r.status === 409) {
+        _latch('epoch conflict');
+        return 'conflict';
+    }
+    return 'pending';
+}
+
+function _clearSaveRetry() {
+    if (_saveRetryTimer) clearTimeout(_saveRetryTimer);
+    _saveRetryTimer = null;
+    _saveRetryAttempt = 0;
+}
+
+/** Single-flight re-send of the SAME save (same rotationId), with backoff. */
+function _scheduleSaveRetry() {
+    if (_shutDown || _saveRetryTimer || !_pendingSave) return;
+    const delay = _saveRetryAttempt < SAVE_RETRY_DELAYS_MS.length
+        ? SAVE_RETRY_DELAYS_MS[_saveRetryAttempt]
+        : SAVE_RETRY_STEADY_MS;
+    _saveRetryAttempt++;
+    _saveRetryTimer = setTimeout(async () => {
+        _saveRetryTimer = null;
+        const save = _pendingSave;
+        if (!save) return;
+        try {
+            const outcome = await _sendSave(save);
+            if (outcome === 'pending') _scheduleSaveRetry();
+            else if (outcome === 'ok') log('[OpenAI] Refreshed sign-in saved', 'INFO');
+        } catch (e) {
+            log('[OpenAI] Save retry failed: ' + e.message, 'WARN');
+            _scheduleSaveRetry();
+        }
+    }, delay);
+    if (_saveRetryTimer && typeof _saveRetryTimer.unref === 'function') _saveRetryTimer.unref();
+}
+
+/**
+ * BAT-1157: true while a refreshed pair is only in memory (its save not yet acknowledged). ai.js
+ * reports health 'degraded' meanwhile — a restart now would leave only the spent pair on disk.
+ */
+function isPersistPending() {
+    return !!_pendingSave;
+}
+
+/** BAT-1157: stop the save-retry timer (SIGTERM). */
+function shutdownOAuthTimers() {
+    _shutDown = true; // before clearing: an in-flight save's reply must not schedule a new timer
+    _clearSaveRetry();
 }
 
 function classifyNetworkError(err) {
@@ -583,15 +817,23 @@ const testEndpoint = { hostname: 'api.openai.com', path: '/v1/models', method: '
 
 // ── OAuth token refresh ─────────────────────────────────────────────────────
 
+/**
+ * One upstream refresh for a CONFIRMED credential (BAT-1157). The new pair is adopted in memory at
+ * once — the old refresh token is now spent, so it is the only valid pair — and then saved with an
+ * exact-status check. 200: the epoch advances. 409: the pair is dropped and OAuth latches off.
+ * Anything else: the pair is kept, the save is re-sent (same rotationId) with backoff, and no other
+ * refresh is sent until it is acknowledged.
+ */
 async function refreshOAuthToken() {
+    if (!_cred.confirmed) throw new Error('refresh requested for an unconfirmed credential');
     const https = require('https');
     const body = new URLSearchParams({
         grant_type: 'refresh_token',
         client_id: OAUTH_CLIENT_ID,
-        refresh_token: _currentRefreshToken,
+        refresh_token: _cred.refresh,
     }).toString();
 
-    return new Promise((resolve, reject) => {
+    const parsed = await new Promise((resolve, reject) => {
         const req = https.request({
             hostname: 'auth.openai.com',
             path: '/oauth/token',
@@ -606,30 +848,15 @@ async function refreshOAuthToken() {
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 const status = res.statusCode || 0;
-                let parsed = null;
-                try { parsed = JSON.parse(data); } catch (_) { /* non-JSON body */ }
-
-                if (parsed && parsed.access_token) {
-                    _currentOAuthToken = parsed.access_token;
-                    if (parsed.refresh_token) _currentRefreshToken = parsed.refresh_token;
-                    // Persist via bridge. androidBridgeCall always resolves — even on
-                    // error — so check the resolved value rather than relying on .catch.
-                    androidBridgeCall('/openai/oauth/save-tokens', {
-                        accessToken: parsed.access_token,
-                        refreshToken: parsed.refresh_token || _currentRefreshToken,
-                        expiresAt: new Date(Date.now() + (parsed.expires_in || 28800) * 1000).toISOString(),
-                    }).then(result => {
-                        if (result && result.error) {
-                            log('[OpenAI] Failed to persist refreshed tokens: ' + result.error, 'WARN');
-                        }
-                    });
-                    resolve(true);
+                let json = null;
+                try { json = JSON.parse(data); } catch (_) { /* non-JSON body */ }
+                if (json && json.access_token) {
+                    resolve(json);
                     return;
                 }
-
-                if (parsed) {
+                if (json) {
                     // JSON error response — surface error_description/error verbatim.
-                    reject(new Error(`Token refresh failed (HTTP ${status}): ${parsed.error_description || parsed.error || 'unknown'}`));
+                    reject(new Error(`Token refresh failed (HTTP ${status}): ${json.error_description || json.error || 'unknown'}`));
                 } else {
                     // Non-JSON body (HTML/empty/5xx page). Truncate to avoid log spam and
                     // never include credentials — refresh request body is not echoed back.
@@ -643,6 +870,31 @@ async function refreshOAuthToken() {
         req.write(body);
         req.end();
     });
+
+    const newRefresh = typeof parsed.refresh_token === 'string' ? parsed.refresh_token : '';
+    const save = {
+        familyId: _cred.familyId,
+        expectedEpoch: _cred.epoch,
+        rotationId: crypto.randomUUID(),
+        accessToken: parsed.access_token,
+        refreshToken: newRefresh,
+        expiresAt: new Date(Date.now() + (parsed.expires_in || 28800) * 1000).toISOString(),
+    };
+    _cred = {
+        access: parsed.access_token,
+        refresh: newRefresh || _cred.refresh,
+        epoch: _cred.epoch,
+        familyId: _cred.familyId,
+        confirmed: true,
+    };
+    _gen++;
+    _pendingSave = save;
+    const outcome = await _sendSave(save);
+    if (outcome === 'pending') {
+        log('[OpenAI] Failed to persist refreshed tokens — retrying the save, no new refresh until it lands', 'WARN');
+        _scheduleSaveRetry();
+    }
+    return true;
 }
 
 // ── Export adapter ──────────────────────────────────────────────────────────
@@ -675,6 +927,10 @@ module.exports = {
     // OAuth
     refreshOAuthToken,
     isOAuth,
+    preflightAuth,
+    currentRefreshGeneration,
+    shutdownOAuthTimers,
+    isPersistPending,
 
     // Capabilities
     supportsCache: false,

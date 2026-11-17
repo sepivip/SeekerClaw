@@ -223,6 +223,41 @@ grep -iE "OAuth refresh|oauth_refresh|invalid_grant" node_debug.log
 3. Sign-out is NOT required first — re-signing-in overwrites the stored tokens
 4. If the user can't re-sign-in (e.g., lost access to ChatGPT account), suggest switching auth type to "API Key" in the picker and providing a platform API key as a fallback
 
+### OpenAI Codex OAuth — Sign-In Storage (BAT-1157)
+The ChatGPT sign-in pair lives in its own file, `files/openai_oauth.json` (outside the workspace; the agent's file tools refuse it), not in the app's settings. Every save is checked on disk. Before its first token refresh after a start, the agent confirms with the app that this sign-in is safely stored; it never refreshes otherwise.
+**Symptoms and what they mean:**
+- **"🔐 Reconnect OpenAI in Settings."** — OpenAI is set to sign-in, but there is no usable sign-in and no saved API key (signed out, or the stored sign-in is unreadable). The agent starts anyway and sends nothing to OpenAI. Fix: Settings > AI Provider > OpenAI > Sign in with ChatGPT.
+- **"🔐 Your ChatGPT sign-in changed. Restart the agent."** — a newer sign-in or a sign-out happened elsewhere, so this session dropped its old tokens. Fix: restart the agent (it then uses the current sign-in).
+- **"⏳ Saving your refreshed sign-in. Try again in a moment."** — a token refresh succeeded but its save is not yet confirmed; the agent keeps retrying the save and sends no new refresh meanwhile. A request that was already in flight with the old sign-in is retried once on the new one; only a rejection of the new sign-in itself shows this message.
+- **"⚠️ Couldn't save your ChatGPT sign-in on this device…"** — storage could not confirm the sign-in, so the agent did not refresh. Usually transient (storage busy or full); persistent → free storage or reconnect.
+- An oauth selection with no usable sign-in but a saved API key runs on the key: log `[OpenAI] Sign-in unavailable — using the saved API key` (WARN). Settings still shows "not signed in".
+**Check:**
+```
+grep -E "OAuth token save rejected|Sign-in not confirmed|persist refreshed tokens|reconnect required|Sign-in unavailable|Save retry failed|ContextSummary\] Skipped" node_debug.log
+```
+That grep finds the agent's `[OpenAI]` and `[ContextSummary]` lines. The `[Config]` lines below come from the app (Kotlin) and appear only on the **Logs screen**, never in `node_debug.log`.
+**Log lines:**
+- `[Config] OpenAI sign-in record unreadable — sign in again` (ERROR, once per process): the stored record does not decode or decrypt. It is treated as signed out; a new sign-in replaces it.
+- `[Config] OpenAI sign-in migration failed — using the saved pair, will retry` (WARN): an upgraded install could not yet move its sign-in into the new file; the old copy keeps working and the move retries on the next load.
+- `[OpenAI] OAuth token save rejected (sign-in changed) — dropped this session's tokens` (WARN): the "changed" case above.
+- `[OpenAI] Sign-in not confirmed on this device (status=…) — no refresh` (WARN): the "couldn't save" case above.
+- `[OpenAI] Failed to persist refreshed tokens — retrying the save, no new refresh until it lands` (WARN): the "saving" case above.
+- `[OpenAI] Sign-in no longer usable on this device — reconnect required` (WARN): the reconnect case, found at refresh time.
+- `[Config] blocked a settings write from the agent process (<site>)` (ERROR): a bug — only the app process may write settings. Report it.
+- `[OpenAI] Save retry failed: …` (WARN): one re-send of an unsaved refreshed sign-in failed; it retries with back-off (2 s, 10 s, 60 s, then every 5 min) until the app confirms it.
+- `[ContextSummary] Skipped: the AI sign-in needs attention` (WARN): history summarising was skipped because the sign-in is latched or needs a reconnect; the conversation is trimmed normally instead.
+- `[Config] OpenAI sign-in could not be saved (…)` / `[Config] OpenAI sign-out could not be saved (…)` (ERROR): the sign-in or sign-out was not confirmed on disk; the app shows an error and the user should try again. A sign-out that is not confirmed is never reported as done.
+- `[Config] OpenAI legacy sign-in keys not removed (commit=false) — will retry` / `[Config] xAI legacy sign-in keys not removed …` (WARN): after an upgrade, the old copy of the sign-in in the app's settings could not be deleted yet. Harmless (the new store is used); it retries on a later settings load, and on a later app start. These are app (Kotlin) lines: read them on the Logs screen, not in `node_debug.log`.
+- `[Config] OpenAI sign-in record missing after migration — legacy copy kept, sign in again` / `[Config] xAI sign-in record missing after migration — legacy copy kept, sign in again` (WARN): the sign-in file is gone although the upgrade had finished moving it (for example a power cut at the wrong moment). The old copy in the app's settings is kept, not deleted, and not copied back; the provider reads as signed out. Fix: sign in again; the new sign-in replaces both. Logs screen only (app line).
+- Bridge codes: `OPENAI_OAUTH_SAVE_FAILED` (nothing saved), `OPENAI_OAUTH_SAVE_UNCONFIRMED` (saved, not yet confirmed durable), `OPENAI_OAUTH_NOT_CONFIRMED`, `OPENAI_OAUTH_RECONNECT`, `OPENAI_OAUTH_FAMILY_CHANGED`, `OPENAI_OAUTH_EPOCH_CONFLICT`.
+**Known limits:** if the agent restarts (or the user taps Stop) after a refresh but before its save is confirmed, the stored refresh token is already spent and the user must reconnect.
+
+### Reset Config — "Reset not finished" (BAT-1157)
+**Symptoms:** after Settings > Reset Config, the app shows "Reset not finished" (which sign-ins were or weren't removed) with Retry, instead of going to setup.
+**Diagnosis:** Reset removes the OpenAI and xAI sign-ins first and deletes the encryption key and settings only once both removals are confirmed on disk, so a sign-in can never survive a "finished" reset. If a removal could not be confirmed, the key and settings are kept on purpose. A sign-in started during a reset is cancelled ("Reset in progress").
+**Log lines:** `[Config] Reset incomplete: openai=… xai=… keyDeleted=… configCleared=…` (WARN), `[Config] Reset: xAI sign-in lock not acquired (…)` (WARN), `[Config] Reset: Keystore key not deleted (…)` (ERROR).
+**Fix:** tap Retry (it is always safe to repeat). If it keeps failing, free some storage and retry; the agent keeps running on the existing settings meanwhile.
+
 ### OpenAI Codex OAuth — Sign-In Flow Failures
 **Symptoms:** User taps "Sign in with ChatGPT", browser opens, but sign-in never completes. UI shows "Sign-in canceled" or hangs.
 **Check:** the sign-in flow is Kotlin-side, so `node_debug.log` has no `OpenAIOAuth` lines. Ask the user what the app showed; a developer can read Logcat on a computer (`adb logcat`, filtered for `OpenAIOAuth`) <!-- not-shell-recipe -->
@@ -314,7 +349,7 @@ grep "\[Interim\]" node_debug.log
 | `Access denied: path outside workspace` / `… is outside the workspace` | File tools, `shell_exec` and `js_eval` only reach your workspace; links are followed to where they really point | Ask the user to send the file in chat (it lands in `media/inbound/`) |
 | `… is a link; the file tools do not write through links` | Writes never follow a link | Write to a real path in the workspace |
 | `Writing X is blocked: it is managed by the app` | `owner_ids`, `config.json`, `config.yaml`, `seekerclaw.db`, `solana_wallet.json`, `skills-manifest.json` at the workspace root belong to the app | Change these in SeekerClaw Settings |
-| `Reading X is blocked for security` / `Sending X is blocked for security` | Reading: `config.*` and `seekerclaw.db` at the root; `bridge_token`, `xai_oauth.json` anywhere. Sending: the same, except `seekerclaw.db` (it can be sent), plus `agent_settings.json` | `read` shows `agent_settings.json` with secrets masked; use memory_search / session_status for the database |
+| `Reading X is blocked for security` / `Sending X is blocked for security` | Reading: `config.*` and `seekerclaw.db` at the root; `bridge_token`, `xai_oauth.json`, `openai_oauth.json` anywhere. Sending: the same, except `seekerclaw.db` (it can be sent), plus `agent_settings.json` | `read` shows `agent_settings.json` with secrets masked; use memory_search / session_status for the database |
 | `Pipes, redirection and command chaining are not supported…` | `shell_exec` runs one command with no shell | One command per call; quote a `|` that is part of a pattern (`grep -iE "a|b" node_debug.log`); for the newest matches use the `js_eval` recipe in "Searching the logs" |
 | `Variables and command substitution are not expanded…` | `$VAR` and backticks are never expanded | Read env vars in `js_eval` with `process.env.NAME` |
 | `Wildcards and expansions are not supported…` | No globbing | Name the file, or use `find` with a quoted `-name` pattern |
