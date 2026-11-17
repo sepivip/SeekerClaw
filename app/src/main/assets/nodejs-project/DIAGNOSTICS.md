@@ -161,6 +161,7 @@ grep -iE "400|context.*length|too many tokens" node_debug.log
 1. Use `/new` to archive and clear conversation history
 2. If a specific tool result was too large, note that tool results are auto-truncated at ~50K characters (HARD_MAX_TOOL_RESULT_CHARS) but the conversation can still accumulate
 3. MAX_HISTORY (35 messages) should prevent this in normal use — if it happens, it's likely a single very large message or tool result
+4. On first-party Claude this 400 should no longer happen: the request is measured before it is sent and, if it would be over the limit, it is not sent (see "Claude: turn stopped at the context limit" below)
 
 ### Agent Loses the Task Mid-Turn / Confabulates on a Long Turn (BAT-1186)
 **Symptoms:** During a long single turn (many tool rounds), the agent suddenly acts as if it never got the request — says things like "I didn't receive any text", treats the triggering input as an "unexplained leftover file", or abandons a multi-step task partway and invents a reason. The message *was* received (it shows in the reply), and there's no crash, timeout, or 4xx.
@@ -168,9 +169,10 @@ grep -iE "400|context.*length|too many tokens" node_debug.log
 ```
 grep -E "\[History\]|\[AnchorGuard\]" node_debug.log
 ```
-**Diagnosis:** The conversation is trimmed to `MAX_HISTORY` (35) each tool round. The current turn's user instruction (the "anchor") is now **exempt** from that trim (additive-exempt — `nonAnchorLen <= 35`, so preserving it never costs a findings slot). The two log lines report on this:
+**Diagnosis:** The conversation is trimmed to `MAX_HISTORY` (35) each tool round — except on models that keep the history stable within a turn (registry `thinkingBinding`, today Fable 5.1, BAT-1664): there it is trimmed once when the turn ends (`[History]` with `"site":"turnEnd"`) and by the end-of-turn append (`"site":"addToConversation"`), never mid-turn, and the context budget check keeps each request under the limit in between. The current turn's user instruction (the "anchor") is now **exempt** from that trim (additive-exempt — `nonAnchorLen <= 35`, so preserving it never costs a findings slot). The two log lines report on this:
 - `[History] {... anchorSkipped:1, anchorExempt:1, nonAnchorLen, len ...}` — the anchor-preserving trim engaged and skipped over the instruction instead of deleting it. On a long turn this is **normal and expected** — it's the fix working. First skip per turn+site logs `WARN`, later same-turn skips `DEBUG`.
 - `[AnchorGuard] {... event:"anchor_missing_repaired" ...}` at **ERROR** — a last-resort net just before the request found the anchor missing and re-inserted it. In a healthy build this should **never** fire. If it does, some trimming path is not anchor-aware — capture the log and file a bug (it means a regression slipped past the structural fix).
+- `[History] turnEnd trim failed: …` (WARN) — the end-of-turn trim (stable-history models) hit an internal error. The conversation is simply left one turn longer; the next turn's append trims it. Repeated → report it with the log.
 **Fix:**
 1. Normal `[History]` WARN/DEBUG on long turns → nothing to do; the instruction is being preserved.
 2. Any `[AnchorGuard]` ERROR → not self-inflicted; report it (a code defect). As a stopgap, `/new` resets the conversation; keeping single turns shorter avoids it.
@@ -187,6 +189,61 @@ grep -iE "out of extra usage|SelfHeal|invalid_request_error" node_debug.log
 **Fix (only if it persists after the auto-retry):**
 1. Content vs usage: if a short message succeeds but longer turns keep failing, it's content — trim any unusual phrase from recent memory files, or use `/new` to reset the conversation.
 2. If even a short message fails with this message, the subscription's Claude-Code usage really is exhausted → add usage at claude.ai/settings/usage, wait for the reset window, or switch to a direct Anthropic API key in Settings.
+
+### Claude: turn stopped at the context limit — `context_budget_exceeded` (BAT-1664)
+**Symptoms:** On a first-party Claude model, a long tool-using turn ends with: "I stopped before sending: this conversation has reached the model's context limit (about 200k tokens), even after trimming older history (task <id>). Continuing with 'continue' or /resume may hit the same limit again or lose these latest results. Try a smaller step (fewer or smaller files), or start a fresh context with /new and restate what you need."
+**Check:**
+```
+grep -E "\[ContextBudget\]|context_budget_exceeded" node_debug.log
+```
+**Diagnosis:** Before every first-party Claude request is sent, SeekerClaw measures the exact request body (replayed reasoning, tool schemas and JSON overhead included — things the cheaper running estimate does not see) against 90% of the model's context limit (the same threshold the adaptive trim uses). An attached photo counts as a fixed ~1,600 tokens, not its file size, both here and in the earlier history-pressure check, so sending a photo never trips this, or a history summary or trim, on its own. The log lines:
+- `[ContextBudget] request ~N tokens (P% of L) is over the 90% budget — reducing once (strip thinking, age results, trim) | turnId=…` (WARN) — the request was too big. SeekerClaw stops replaying the model's earlier reasoning for the rest of the turn, shortens older large tool results (never the newest batch the model is about to read), and trims the oldest history (never the user's current request, never half a tool call/result pair), once.
+- `[ContextBudget] reduced to ~N tokens (P% of L) — sending | turnId=…` (INFO) — that was enough; the turn continues normally. Nothing for the user to do.
+- `[ContextBudget] still ~N tokens (P% of L) after reduction — not sending; ending the turn (context_budget_exceeded) | turnId=…` (WARN) — the newest material alone (typically a very large batch of recent tool results, which the reduction never shortens) is too big. The request is NOT sent, so no API error and no charge. The turn ends with the message above, a `[Trace] {… "reason":"context_budget_exceeded" …}` WARN line, and a checkpoint with reason `context_budget_exceeded`.
+- `[ContextBudget] closing-summary request is over the context budget — not sending; using the built-in summary | turnId=…` (WARN) — the optional "summarize what you did" call at the end of a tool turn was too big; the user gets the short built-in "Done — took N steps (…)" summary instead.
+**Fix:**
+1. Ask for a smaller step: fewer or smaller files per request, narrower searches, a smaller page fetched.
+2. Start a fresh context with `/new` and restate the task. `/resume` or "continue" is not guaranteed to make progress: if the oversized results are still in the history it stops at the same limit again, and if the end-of-turn history cap or the checkpoint already dropped them, they are lost and the step must be redone.
+3. Frequent on short tasks → a tool is returning very large results; report it with the log.
+
+### Claude: "Invalid `signature` in `thinking` block" (400) — auto-healed once per turn (BAT-1664)
+**Symptoms:** On a first-party Claude model (Anthropic API key or Pro/Max sign-in), a tool-using turn briefly fails and then continues on its own; or, rarely, the turn ends with `API error (400): …Invalid signature in thinking block The block is bound to a different conversation…`. Most likely on Fable 5.1 and newer models, for accounts created on or after 2026-08-31.
+**Check:**
+```
+grep -E "\[ThinkingBinding\]|API error: status=400" node_debug.log
+```
+**Diagnosis:** Anthropic binds every thinking block's signature to the exact request prefix that produced it (system prompt, tools, every earlier message) and to the model. SeekerClaw replays thinking only from the CURRENT turn, verbatim, so a mismatch means something earlier in the request changed between two rounds of the same turn. The log shows the sanitized `API error: status=400 type=invalid_request_error …` (ERROR), then:
+- `[ThinkingBinding] status=400 thinking-signature mismatch — retrying turn once with replayed thinking stripped (bindingSent=0)` (WARN; `bindingSent=1` when the drop-instead-of-fail control was on that request) — the turn retried once with every replayed thinking block removed, and keeps them removed for the rest of the turn. Stored history is not changed. The user sees nothing unless the retry also fails.
+- A second signature 400 in the same turn is NOT retried again: the user sees the `API error (400): …` text.
+**Fix:**
+1. A single WARN followed by a normal reply → nothing to do; the heal worked. The model keeps its answer quality; it only loses its earlier reasoning for that turn.
+2. Repeated on most turns → a code path is editing history mid-turn. Capture the log (the ERROR + WARN pair and the surrounding `[History]`/`[Sanitize]` lines) and report it.
+3. The user sees the 400 text → send the message again or `/new`; report it with the log.
+
+### Claude: thinking-binding control rejected (400) — fallback without it (BAT-1664)
+**Symptoms:** On a registry-flagged model (today: Fable 5.1), one request in a turn fails with a 400 and the turn then continues normally. No user-visible error.
+**Check:**
+```
+grep -E "\[ThinkingBinding\]" node_debug.log
+```
+**Diagnosis:** On flagged models SeekerClaw sends `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the `thinking-binding-controls-2026-08-01` beta header, so a stale thinking block is dropped instead of failing the request. If the route or credential does not accept that control, the API answers `Unexpected value(s) … for the anthropic-beta header` or `thinking.<type>.block_binding: Extra inputs are not permitted`. The log then shows the sanitized `API error: status=400 …` (ERROR) followed by:
+- `[ThinkingBinding] status=400 binding control rejected (host=api.anthropic.com auth=api_key) — disabled for this credential until restart; retrying once without it` (WARN; `auth=setup_token` on a Pro/Max sign-in)
+The retry goes out without the header, the field and any replayed thinking. The control stays off for that credential until the service restarts; a different credential (a new key or a re-pair) is unaffected. The credential itself is never logged.
+- `[ThinkingBinding] capability record failed: …` (WARN) — an internal error while remembering that rejection. Harmless: the retry still goes out without the control; at worst the next request tries the control again and is rejected once more. Repeated → report it with the log.
+**Fix:**
+1. One WARN per restart → nothing to do; that credential simply does not support the control yet.
+2. If later turns fail with the signature 400 above (the heal covers one per turn), report it — the account is enforcing the check without accepting the control.
+
+### Claude: `[ThinkingBinding]` reasoning dropped (INFO / DEBUG) (BAT-1664)
+**Symptoms:** Informational only — no user-visible effect. The line appears in the Logs screen once, then only in DEBUG.
+**Check:**
+```
+grep -E "\[ThinkingBinding\] thinking" node_debug.log
+```
+**Diagnosis:** When the drop-instead-of-fail control was sent, the response reports which replayed thinking blocks the API discarded. SeekerClaw logs counts only, never the blocks:
+- `[ThinkingBinding] thinking-dropped-prefix-binding-mismatch (count=N model=claude-fable-5-1)` — INFO the first time in a process, DEBUG afterwards. The request succeeded, but N blocks of the model's earlier reasoning in this turn were dropped because something before them changed mid-turn. The answer is still produced.
+- `[ThinkingBinding] thinking dropped: model_binding_mismatch count=N` — DEBUG only. Expected after `/model` switched models mid-conversation; not a defect.
+**Fix:** Occasional prefix drops → nothing to do. Frequent prefix drops (many turns) mean a history edit is happening inside turns — report with the log so the edit can be found.
 
 ### Custom Provider — Connection or Format Errors
 **Symptoms:** All API calls fail immediately. Logs show connection refused, SSL errors, or unexpected response format (e.g., "Unexpected token" JSON parse errors).
@@ -585,7 +642,7 @@ grep -iE "rate limit.*mcp|rate limit.*exceeded" node_debug.log
 
 ## Reasoning (Extended Thinking)
 
-BAT-549 introduced reasoning content preservation across all 4 providers, plus a user-facing "Extended thinking" toggle and a "Show thinking status" indicator. Reasoning content itself is never rendered in chat — the indicator is a temporary "Thinking..." Telegram bubble that appears during extended-thinking turns and is deleted when the response arrives. The reasoning subsystem has several moving pieces — this section is the playbook for diagnosing each.
+BAT-549 introduced reasoning content preservation across all 4 providers (narrowed for Claude by BAT-1664: current-turn-only, verbatim — see the "Invalid `signature` in `thinking` block" entry under LLM API), plus a user-facing "Extended thinking" toggle and a "Show thinking status" indicator. Reasoning content itself is never rendered in chat — the indicator is a temporary "Thinking..." Telegram bubble that appears during extended-thinking turns and is deleted when the response arrives. The reasoning subsystem has several moving pieces — this section is the playbook for diagnosing each.
 
 ### `/think on` Toggled But Model Doesn't Think Differently
 **Symptoms:** User toggled `/think on` (or Settings > AI Provider > Reasoning > Extended thinking ON) but responses look the same as before.
@@ -662,7 +719,7 @@ has ever been needed.
 
 ### Reasoning Content Doesn't Render in Chat (Why "Show Thinking Status" Doesn't Show Reasoning Text)
 **Symptoms:** User toggled "Show thinking status" expecting to see the model's reasoning summary in chat (like Claude.ai's expandable thinking blocks), but only sees a temporary "Thinking..." bubble.
-**Diagnosis:** This is by design per the BAT-549 v4 contract. The toggle controls a status indicator only — reasoning content (summaries, encrypted_content, raw thinking text) is NEVER displayed in chat. Reasoning IS preserved in checkpoint state for tool-loop replay (that's what BAT-549's provider-preservation work is for) but it's not surfaced to the user. PM call: reasoning content rendering has streaming/lifecycle/privacy implications that warrant a separate ticket if/when revisited.
+**Diagnosis:** This is by design per the BAT-549 v4 contract. The toggle controls a status indicator only — reasoning content (summaries, encrypted_content, raw thinking text) is NEVER displayed in chat. Reasoning is captured with each assistant message but it's not surfaced to the user. What is replayed to the model differs by provider: on Claude (BAT-1664) only the CURRENT turn's thinking is replayed, verbatim from an in-memory copy that is never written to a checkpoint — earlier turns and resumed checkpoints carry no thinking, because Anthropic binds each thinking block to the exact request that produced it. OpenAI / OpenRouter / Custom keep their BAT-549 replay behavior. PM call: reasoning content rendering has streaming/lifecycle/privacy implications that warrant a separate ticket if/when revisited.
 **Fix:** Tell the user "Reasoning details are never shown" (matches the Settings helper text). The thinking-status bubble is the visible signal that extended thinking happened.
 
 ### `customConfigSignature` Reset The Echo Override After A Spurious Edit
@@ -672,7 +729,7 @@ has ever been needed.
 
 ### Reasoning Logs Show `len=N fp=XXXXXXXX` Instead of Raw Text
 **Symptoms:** User looking at logs (or sending a bug report screenshot) doesn't see any reasoning content — just length + 8-char hex fingerprints.
-**Diagnosis:** This is BY DESIGN. `reasoning-redact.js` is the centralized redaction helper for reasoning logs. Mobile logs end up in bug-report screenshots — raw thinking text, signatures, and encrypted_content MUST never leak there. The fingerprint is enough for ops to confirm "the same reasoning block was seen / replayed across turns" without revealing content.
+**Diagnosis:** This is BY DESIGN. `reasoning-redact.js` is the centralized redaction helper for reasoning logs. Mobile logs end up in bug-report screenshots — raw thinking text, signatures, and encrypted_content MUST never leak there. The fingerprint is enough for ops to confirm "the same reasoning block was seen / replayed" without revealing content (on Claude, replay happens only within the turn that produced the block — BAT-1664).
 **Fix:** No fix needed — log redaction is intentional. The "Show thinking status" toggle (Settings > AI Provider > Reasoning) gives the user a visible indicator that thinking is happening, but it does NOT reveal reasoning content. Reasoning text is never displayed to the user in this build (v4 contract).
 
 ---

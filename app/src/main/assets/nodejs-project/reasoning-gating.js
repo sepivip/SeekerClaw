@@ -178,6 +178,13 @@ const SUPPRESSION_REASONS = Object.freeze({
     // omitting the field because some OR reasoning models reason by
     // default.
     OPENROUTER_EFFORT_NONE: 'openrouter-effort-none',
+    // BAT-1664 C4 — the API dropped replayed thinking block(s) because the
+    // prefix they were bound to changed (`input_transformations` entry
+    // {type:'thinking_dropped', reason:'prefix_binding_mismatch'}) on a
+    // request that sent `block_binding: drop_block`. Logged with the
+    // [ThinkingBinding] tag, counts only. Rare by design; frequent = an
+    // in-turn history edit to investigate.
+    THINKING_DROPPED_PREFIX_MISMATCH: 'thinking-dropped-prefix-binding-mismatch',
 });
 
 const _seenSuppressionReasons = new Set();
@@ -197,15 +204,19 @@ const _seenSuppressionReasons = new Set();
  *                            `maxTokens=1536` or `chatId=__heartbeat__`).
  *                            Concatenated into the log line; do NOT
  *                            include secrets, raw user input, or PII.
+ * @param {string} [prefix] — BAT-1664: log-line prefix. Defaults to
+ *                            `[Reasoning] suppressed:`; the thinking-binding
+ *                            drop uses `[ThinkingBinding]`. Same dedup gate.
  */
-function logSuppression(reason, detail) {
+function logSuppression(reason, detail, prefix) {
     const level = _seenSuppressionReasons.has(reason) ? 'DEBUG' : 'INFO';
     _seenSuppressionReasons.add(reason);
     const suffix = detail ? ` (${detail})` : '';
+    const head = (typeof prefix === 'string' && prefix) ? prefix : '[Reasoning] suppressed:';
     // Lazy require to keep this module side-effect-free at top-level
     // (smoke harness compatibility — see file-header note).
     const { log } = require('./config');
-    log(`[Reasoning] suppressed: ${reason}${suffix}`, level);
+    log(`${head} ${reason}${suffix}`, level);
 }
 
 /**

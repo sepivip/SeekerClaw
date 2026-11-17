@@ -30,7 +30,7 @@
       "freeform": false,
       "defaultModel": "claude-opus-5",
       "models": [
-        { "id": "claude-fable-5-1",  "displayName": "Fable 5.1",  "reasoningSupport": "yes" },
+        { "id": "claude-fable-5-1",  "displayName": "Fable 5.1",  "reasoningSupport": "yes", "thinkingBinding": true },
         { "id": "claude-fable-5",    "displayName": "Fable 5",    "reasoningSupport": "yes" },
         { "id": "claude-opus-5",     "displayName": "Opus 5",     "reasoningSupport": "yes" },
         { "id": "claude-opus-4-8",   "displayName": "Opus 4.8",   "reasoningSupport": "yes" },

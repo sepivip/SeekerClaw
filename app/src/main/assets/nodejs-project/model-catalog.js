@@ -189,6 +189,29 @@ function reasoningSupportFor(providerId, modelId, authType) {
 }
 
 /**
+ * BAT-1664 C2: does this (provider, model, authType) get the preserved-
+ * thinking block binding (`thinking.block_binding.prefix_mismatch_behavior:
+ * 'drop_block'` + the thinking-binding-controls beta)? Driven ONLY by the
+ * registry's optional `"thinkingBinding": true` on a model entry.
+ *
+ * Strict by design: only a registry-listed first-party Claude model with the
+ * flag returns true. Unlisted / custom ids, freeform providers, non-Claude
+ * providers, a missing flag, or a non-boolean flag value → false. Kotlin
+ * ignores the field (`ignoreUnknownKeys`).
+ */
+function thinkingBindingFor(providerId, modelId, authType) {
+    if (providerId !== 'claude') return false;
+    const provider = _byId[providerId];
+    if (!provider || provider.freeform) return false;
+    if (typeof modelId !== 'string' || modelId.length === 0) return false;
+    const effective = (authType && provider.modelsByAuth && provider.modelsByAuth[authType])
+        ? provider.modelsByAuth[authType]
+        : provider.models;
+    const found = (effective || []).find((m) => m && m.id === modelId);
+    return !!found && found.thinkingBinding === true;
+}
+
+/**
  * Recommended default model for provider+authType.
  * Deliberately decoupled from list order — don't put tier-gated models here.
  * Mirrors Kotlin defaultModelForProvider(...).
@@ -324,6 +347,7 @@ module.exports = {
     modelsForProvider,
     defaultModelForProvider,
     reasoningSupportFor,
+    thinkingBindingFor,
     authTypesForProvider,
     hasCredentialsFor,
     validateModelForProvider,

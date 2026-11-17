@@ -71,6 +71,11 @@ function applyClaudeStreamEvent(state, eventType, parsed) {
                 message.id = parsed.message.id;
                 message.model = parsed.message.model;
                 Object.assign(message.usage, parsed.message.usage || {});
+                // BAT-1664 C4: present only when the thinking-binding beta was
+                // sent; lists thinking blocks the API dropped / let through.
+                if (Array.isArray(parsed.message.input_transformations)) {
+                    message.input_transformations = parsed.message.input_transformations;
+                }
             }
             break;
         case 'content_block_start':
@@ -114,6 +119,14 @@ function applyClaudeStreamEvent(state, eventType, parsed) {
                 message.stop_reason = parsed.delta.stop_reason ?? message.stop_reason;
             }
             Object.assign(message.usage, parsed.usage || {});
+            // BAT-1664 C4: the final message_delta repeats input_transformations
+            // after a mid-stream server-side fallback; the later list wins.
+            // Accept it at the event top level or inside `delta`.
+            if (Array.isArray(parsed.input_transformations)) {
+                message.input_transformations = parsed.input_transformations;
+            } else if (parsed.delta && Array.isArray(parsed.delta.input_transformations)) {
+                message.input_transformations = parsed.delta.input_transformations;
+            }
             break;
         case 'message_stop':
             message.content = finalizeClaudeStreamBlocks(blocks);
