@@ -33,15 +33,19 @@ const AMOUNT_ATOMIC = BigInt(AMOUNT_UI * 10 ** USDC_DECIMALS); // 10_000_000
 const DEST_PUBKEY = new PublicKey('FnUV4FBpUHizZppx7EToGj3dtfsAYdJfa6zjgJBVjNGf');
 
 // Load env
+// BAT-1714: keys normally come from 1Password (op run --env-file=tests/jupiter-ultra/.env.op);
+// .env.test is an optional fallback and never overrides a variable already set.
 function loadEnv(file) {
     const out = {};
-    for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    for (const raw of text.split(/\r?\n/)) {
         const line = raw.trim();
         if (!line || line.startsWith('#')) continue;
         const eq = line.indexOf('=');
         if (eq < 0) continue;
         out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
     }
+    for (const [k, v] of Object.entries(process.env)) if (v) out[k] = v;
     return out;
 }
 const env = loadEnv(path.join(__dirname, '.env.test'));

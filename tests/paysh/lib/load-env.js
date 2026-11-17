@@ -42,6 +42,16 @@ function load() {
     if (fs.existsSync(PRIMARY)) envFile = PRIMARY;
     else if (fs.existsSync(FALLBACK)) envFile = FALLBACK;
 
+    // BAT-1714: keys normally come from 1Password (op run --env-file=tests/jupiter-ultra/.env.op).
+    // The environment alone is enough; a file value never overrides a variable already set.
+    const fromProcess = {};
+    for (const k of ['BURNER_PUBKEY', 'BURNER_SECRET_KEY', 'SOLANA_RPC', 'MAX_USDC_ATOMIC', 'JUPITER_API_KEY', 'PAYSH_TEST_URL']) {
+        if (process.env[k]) fromProcess[k] = process.env[k];
+    }
+    if (!envFile && fromProcess.BURNER_PUBKEY && fromProcess.SOLANA_RPC) {
+        return { env: fromProcess, file: '(environment)' };
+    }
+
     if (!envFile) {
         console.error('');
         console.error('✗ Missing test env file. Checked:');
@@ -54,7 +64,7 @@ function load() {
         process.exit(1);
     }
 
-    const env = parseEnvFile(fs.readFileSync(envFile, 'utf8'));
+    const env = Object.assign(parseEnvFile(fs.readFileSync(envFile, 'utf8')), fromProcess);
     return { env, file: envFile };
 }
 
