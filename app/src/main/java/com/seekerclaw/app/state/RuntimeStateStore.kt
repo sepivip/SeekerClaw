@@ -70,7 +70,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    Clean — no spurious prefs write or signalConfigChanged.
  *  - **Fresh-install path** (prefs absent): `prefs.getString(KEY_*,
  *    null)` returns `null`; seedFromPrefs uses defaults
- *    (`claude/api_key/claude-opus-5`) since no key is present;
+ *    (the `RuntimeState()` defaults) since no key is present;
  *    the migration write puts those defaults into the file; the
  *    first observed emission compares default strings against
  *    `null` prefs values → mismatch → ONE prefs `apply()` runs +

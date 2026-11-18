@@ -382,7 +382,7 @@ object ConfigManager {
      */
     internal fun rawPrefsModelTuple(p: PrefsReader): ModelTuple {
         val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
-        val model = (p.getString(KEY_MODEL, "claude-opus-5") ?: "claude-opus-5").trim().ifBlank { "claude-opus-5" }
+        val model = (p.getString(KEY_MODEL, "claude-opus-5-5") ?: "claude-opus-5-5").trim().ifBlank { "claude-opus-5-5" }
         return ModelTuple(provider, normalizeAuthType(p), model)
     }
 
@@ -1524,8 +1524,8 @@ object ConfigManager {
             // path uses config.model verbatim — a padded ID breaks provider
             // requests. Blank-after-trim falls back to the default.
             // BAT-1315: default tracks model-registry.json providers[claude].defaultModel.
-            model = (p.getString(KEY_MODEL, "claude-opus-5") ?: "claude-opus-5")
-                .trim().ifBlank { "claude-opus-5" },
+            model = (p.getString(KEY_MODEL, "claude-opus-5-5") ?: "claude-opus-5-5")
+                .trim().ifBlank { "claude-opus-5-5" },
             agentName = livePrefs?.agentName ?: (p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent"),
             braveApiKey = braveApiKey,
             searchProvider = livePrefs?.searchProvider ?: (p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave"),
@@ -3334,7 +3334,7 @@ object ConfigManager {
             "openai", "xai" -> if (config?.authType == "oauth") "OAuth" else "API key"
             else -> "API key"
         }
-        val aiModel = config?.model ?: "claude-opus-5" // BAT-1315
+        val aiModel = config?.model ?: "claude-opus-5-5" // BAT-1315; pinned by ModelDefaultCopiesDriftTest
 
         // Timestamp
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)

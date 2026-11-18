@@ -530,6 +530,56 @@ class ModelRepairTest {
         assertEquals(ModelRepair.IntentClass.Holds, classify(i, s))
     }
 
+    /**
+     * v2.11 D11.1 — the OpenAI default moved from gpt-6.1-sol to gpt-6.2-sol. An intent written before
+     * the update keeps its own target: `RepairIntent` persists `target`, and resume and verify use
+     * `intent.target`, never the live default. Runs the update against the SHIPPED registry, so the
+     * pin breaks if the real default or list stops matching the amendment.
+     */
+    @Test
+    fun `v2_11 - a persisted intent targeting gpt-6_1-sol finishes on it after the default moves to gpt-6_2-sol`() {
+        for (step in Step.values()) {
+            setUpFresh()
+            ModelRegistry.resetForTest()
+            ModelRegistry.initForTest(fixture()) // the release that wrote the intent: default gpt-6.1-sol
+            writeRuntime("gpt-5.4")
+            writeOverlay(overlayWithModel("gpt-5.4"))
+            bootCrashing(step)
+            assertEquals("pending after a crash after $step", ModelRepair.STATE_PENDING, intentState())
+            assertEquals("the persisted target ($step)", "gpt-6.1-sol", intent()!!.target)
+
+            ModelRegistry.resetForTest()
+            ModelRegistry.initForTest(shippedRegistry()) // the update
+            assertEquals("precondition: the shipped default moved", "gpt-6.2-sol", ModelRegistry.defaultModelForProvider("openai", "oauth"))
+            boot()
+            assertAllOn("gpt-6.1-sol")
+        }
+    }
+
+    @Test
+    fun `v2_11 - a fresh decision after the update targets gpt-6_2-sol`() {
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(shippedRegistry())
+        val i = ModelRepair.decide(snap("gpt-5.4", "gpt-5.4", AgentSettingsFile.Read.Absent))!!
+        assertEquals("gpt-6.2-sol", i.target)
+        assertEquals("gpt-6.2-sol", i.defaultAtDecision)
+        writeRuntime("gpt-5.4")
+        writeOverlay(overlayWithModel("gpt-5.4"))
+        boot()
+        assertAllOn("gpt-6.2-sol")
+    }
+
+    /** The bundled `model-registry.json`, parsed the way [ModelRegistryDefaultsTest] parses it. */
+    private fun shippedRegistry(): List<ProviderInfo> {
+        val text = listOf("src/main/assets/nodejs-project/model-registry.json", "app/src/main/assets/nodejs-project/model-registry.json")
+            .map { java.io.File(it) }.first { it.exists() }.readText()
+        val providers = Json { ignoreUnknownKeys = true }.parseToJsonElement(text).jsonObject["providers"]!!
+        return Json { ignoreUnknownKeys = true }.decodeFromJsonElement(
+            kotlinx.serialization.builtins.ListSerializer(ProviderInfo.serializer()),
+            providers,
+        )
+    }
+
     @Test
     fun `v2_9 §2 - provenTarget recomputes the decision and needs a current file for a non-default target`() {
         val i = ModelRepair.decide(snap("gpt-5.4", "gpt-5.4", present("gpt-5.6")))!!

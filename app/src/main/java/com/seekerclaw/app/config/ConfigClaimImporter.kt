@@ -174,11 +174,11 @@ object ConfigClaimImporter {
         ).trim().lowercase().ifBlank { "claude" }
 
         val defaultModel = when (provider) {
-            "openai" -> "gpt-6.1-sol" // BAT-1661: keep in sync with model-registry.json openai defaultModel
+            "openai" -> "gpt-6.2-sol" // BAT-1661: keep in sync with model-registry.json openai defaultModel
             "openrouter" -> "anthropic/claude-sonnet-4-6"
             "custom" -> ""
             "xai" -> "grok-4.6" // BAT-1124, bumped BAT-1316
-            else -> "claude-opus-5" // BAT-1315
+            else -> "claude-opus-5-5" // BAT-1315
         }
         // Trim like botToken/ownerId above: reconcile's equality gate
         // compares trimmed values, so a padded model here would miss the

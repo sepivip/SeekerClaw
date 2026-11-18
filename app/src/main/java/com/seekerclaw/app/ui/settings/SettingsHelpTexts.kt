@@ -53,8 +53,8 @@ object SettingsHelpTexts {
 
     const val MODEL =
         "Your agent's brain. Models depend on your provider.\n\n" +
-        "Anthropic examples: Fable 5 (frontier), Opus 4.8 (powerful), Sonnet 4.6 (balanced), Haiku 4.5 (fast).\n" +
-        "OpenAI examples: GPT-6 Astra (frontier), GPT-6.1 Sol (default), GPT-6 Luna (fast).\n\n" +
+        "Anthropic examples: Fable 5.1 (frontier), Opus 5.5 (powerful), Sonnet 5.5 (balanced), Haiku 5.5 (fast).\n" +
+        "OpenAI examples: GPT-6.2 Astra (frontier), GPT-6.2 Sol (balanced), GPT-6 Luna (fast).\n\n" +
         "Exact options may change over time \u2014 pick your fighter \uD83E\uDDE0"
 
     const val AGENT_NAME =

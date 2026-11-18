@@ -68,28 +68,28 @@ const tests = [];
 function t(name, fn) { tests.push([name, fn]); }
 
 for (const id of ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']) {
-    t(`oauth + stored ${id} → MODEL and resolveActiveModel are gpt-6.1-sol`, () => {
+    t(`oauth + stored ${id} → MODEL and resolveActiveModel are gpt-6.2-sol`, () => {
         const r = boot({ mode: 'oauth', model: id });
-        assert.strictEqual(r.MODEL, 'gpt-6.1-sol');
-        assert.strictEqual(r.active, 'gpt-6.1-sol');
+        assert.strictEqual(r.MODEL, 'gpt-6.2-sol');
+        assert.strictEqual(r.active, 'gpt-6.2-sol');
     });
 }
 
-t('oauth + valid startup model + RETIRED overlay still on disk (failed repair) → real resolver serves gpt-6.1-sol', () => {
+t('oauth + valid startup model + RETIRED overlay still on disk (failed repair) → real resolver serves gpt-6.2-sol', () => {
     const r = boot({ mode: 'oauth', model: 'gpt-6-astra', overlay: { provider: 'openai', model: 'gpt-5.4' } });
     assert.strictEqual(r.MODEL, 'gpt-6-astra', 'startup MODEL is the valid stored value');
-    assert.strictEqual(r.active, 'gpt-6.1-sol', 'per-turn resolver must mask the retired overlay');
+    assert.strictEqual(r.active, 'gpt-6.2-sol', 'per-turn resolver must mask the retired overlay');
 });
 
-t('oauth + retired overlay with no provider key (applicable) → gpt-6.1-sol', () => {
+t('oauth + retired overlay with no provider key (applicable) → gpt-6.2-sol', () => {
     const r = boot({ mode: 'oauth', model: 'gpt-6-sol', overlay: { model: 'gpt-5.4-mini' } });
-    assert.strictEqual(r.active, 'gpt-6.1-sol');
+    assert.strictEqual(r.active, 'gpt-6.2-sol');
 });
 
 t('oauth + valid newer overlay (Astra) → returned as-is (rule never overrides a valid choice)', () => {
     const r = boot({ mode: 'oauth', model: 'gpt-5.4', overlay: { provider: 'openai', model: 'gpt-6-astra' } });
     assert.strictEqual(r.active, 'gpt-6-astra');
-    assert.strictEqual(r.MODEL, 'gpt-6.1-sol');
+    assert.strictEqual(r.MODEL, 'gpt-6.2-sol');
 });
 
 t('oauth + dropped-but-not-retired id (gpt-5.6-sol) → unchanged', () => {
@@ -111,7 +111,7 @@ t('api_key + stored gpt-5.4 → unchanged (still served on API keys)', () => {
 
 t('oauth + corrupt overlay → falls back to rule-applied MODEL', () => {
     const r = boot({ mode: 'oauth', model: 'gpt-5.5', overlay: '{not json' });
-    assert.strictEqual(r.active, 'gpt-6.1-sol');
+    assert.strictEqual(r.active, 'gpt-6.2-sol');
 });
 
 // Dispatch wiring guard: every model the chat/cron/heartbeat turn sends comes from

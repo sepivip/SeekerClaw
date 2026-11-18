@@ -1433,7 +1433,7 @@ private fun xaiChatPing(bearer: String, isOAuth: Boolean, userAgent: String) {
     conn.connectTimeout = 15000
     conn.readTimeout = 15000
     val payload = JSONObject().apply {
-        put("model", "grok-4.3") // stable ping target, NOT the default grok-4.5 (see kdoc)
+        put("model", "grok-4.3") // stable ping target, NOT the registry default (see kdoc)
         put("max_tokens", 1)
         put(
             "messages",

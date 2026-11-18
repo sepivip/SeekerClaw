@@ -15,21 +15,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
-- **OpenAI models updated to GPT-6.1 and GPT-6.** The picker now offers GPT-6
-  Astra, GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Sol and GPT-6 Luna, on both an
-  OpenAI API key and a ChatGPT sign-in. GPT-6.1 Sol is the new OpenAI default;
-  Astra stays available but is not the default. The GPT-5.6, GPT-5.5, GPT-5.4
-  and GPT-5.4 Mini entries are removed from the picker. (BAT-1661)
+- **OpenAI models updated to GPT-6.2.** The picker now offers GPT-6.2 Astra,
+  GPT-6 Astra, GPT-6.2 Sol, GPT-6.1 Sol, GPT-6.1 Terra and GPT-6 Luna, on both
+  an OpenAI API key and a ChatGPT sign-in. GPT-6.2 Sol is the new OpenAI
+  default; Astra stays available but is not the default. GPT-6 Sol and the
+  GPT-5.6, GPT-5.5, GPT-5.4 and GPT-5.4 Mini entries are removed from the
+  picker. (BAT-1661)
+- **Anthropic models updated to the 5.5 line.** The picker now offers Fable
+  5.1, Fable 5, Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Haiku 5.5 and Haiku
+  4.5. Opus 5.5 is the new Anthropic default, and Haiku 5.5 supports Extended
+  Thinking. Opus 4.8 and Sonnet 4.6 are removed from the picker; if one of
+  them is selected, it keeps working, without Extended Thinking, until you
+  switch provider or sign-in method, which moves you to Opus 5.5. A saved
+  Opus 5 selection is not changed. (BAT-1661)
 - **ChatGPT sign-in moves off models OpenAI no longer serves there.** GPT-5.5,
   GPT-5.4 and GPT-5.4 Mini no longer work with a ChatGPT sign-in. If one of
-  them is selected, the agent uses GPT-6.1 Sol instead, and on the next start
+  them is selected, the agent uses GPT-6.2 Sol instead, and on the next start
   the app updates the saved choice so Settings, the dashboard and the agent
   all show the same model. The Logs screen notes the change. A different model
   you chose, including one no longer listed, is kept. (BAT-1661)
 - **API-key users keep removed OpenAI models.** If you use an OpenAI API key
   and selected a model that is no longer in the picker, it keeps working, but
-  without Extended Thinking. Pick a GPT-6.1 or GPT-6 model to use Extended
-  Thinking again. (BAT-1661)
+  without Extended Thinking, until you switch provider or sign-in method.
+  Pick a listed model to use Extended Thinking again. (BAT-1661)
 - **Texts and calls are drafts you send yourself.** When you ask the agent to
   text or call someone, it puts a draft in the notifications on the phone
   running SeekerClaw. Tapping it opens your SMS app or dialer with everything
