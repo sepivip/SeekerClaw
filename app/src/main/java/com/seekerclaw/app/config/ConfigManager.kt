@@ -1543,19 +1543,10 @@ object ConfigManager {
         // POTENTIALLY CONSUMED. Never hand it to the provider — treat the family as dead (blank +
         // reauthRequired) so :node boots INTO reconnect. SeekerClawService.reconcileXaiOAuthOnBoot
         // durably converts this to reauth; this belt covers a conversion that could not persist.
-        val rotationUnsafe = !xaiRec.tombstone && xaiRec.rotationInFlightEpoch == xaiRec.epoch
-        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired || rotationUnsafe
-        // Decrypt the required token fields; null = a NON-blank ciphertext failed to
-        // decrypt (Codex major-1). A decrypt failure makes the family effectively dead —
-        // fail closed to reauth (blank tokens + reauthRequired) so it boots INTO reconnect,
-        // never downgrades to api_key on a "" that merely looks like an absent token.
-        val accessDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
-        val refreshDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
-        val xaiDecryptFailed = accessDec == null || refreshDec == null
-        val xaiEffectiveReauth = xaiRec.reauthRequired || rotationUnsafe || xaiDecryptFailed
-        val xaiDead = deadByFlag || xaiDecryptFailed
-        val xaiOAuthToken = if (xaiDead) "" else (accessDec ?: "")
-        val xaiOAuthRefresh = if (xaiDead) "" else (refreshDec ?: "")
+        val xaiView = xaiSignInView(xaiRec)
+        val xaiEffectiveReauth = xaiView.effectiveReauth
+        val xaiOAuthToken = xaiView.token
+        val xaiOAuthRefresh = xaiView.refresh
         val xaiOAuthEmail = decryptXaiCiphertext(xaiRec.emailEnc) ?: "" // email non-critical → "" on failure
 
         // BAT-515 v3 §4: prefer live AgentPreferencesStore values over
@@ -1828,6 +1819,11 @@ object ConfigManager {
         if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
         if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
         if (modelChanged) editor.putString(KEY_MODEL, resolvedModel)
+        // CodeRabbit on ca06bb79: the stored values, as stored, for the rollback if runtime_state
+        // cannot be written after this commit lands.
+        val storedProvider = sp.getString(KEY_PROVIDER, null)
+        val storedAuth = sp.getString(KEY_AUTH_TYPE, null)
+        val storedModel = sp.getString(KEY_MODEL, null)
         // commit() not apply(): the broadcast below races the async disk
         // flush of apply(). Main process receives the broadcast → bumps
         // configVersion → Compose recomposes screens that re-read
@@ -1852,21 +1848,6 @@ object ConfigManager {
             )
             return reconciled
         }
-
-        // Bump same-process configVersion so any in-process UI observer
-        // recomposes. /provider Telegram → :node service-start reconcile
-        // is the canonical path here, where :node's ConfigManager.
-        // configVersion bumps but main-process UI needs the broadcast
-        // below to know.
-        bumpConfigVersionOnMain()
-        broadcastConfigChanged(context)
-
-        LogCollector.append(
-            "[Config] Reconciled from agent_settings.json: " +
-                "provider=${if (providerChanged) "$validProvider (was ${fromPrefs.provider})" else fromPrefs.provider}, " +
-                "authType=${if (authChanged) "$validAuthType (was ${fromPrefs.authType})" else fromPrefs.authType}, " +
-                "model=${if (modelChanged) "$resolvedModel (was ${fromPrefs.model})" else fromPrefs.model}"
-        )
 
         // BAT-513: keep runtime_state.json in sync with the prefs we just
         // reconciled. Without this, the legacy agent_settings.json overlay
@@ -1908,12 +1889,31 @@ object ConfigManager {
                 ),
             )
             if (!runtimeWritten) {
+                // CodeRabbit on ca06bb79: prefs landed, runtime_state did not. Left like that, prefs
+                // and the overlay agree, so no later load would reconcile (or write runtime_state)
+                // again, while Node — which reads runtime_state first — stays on the old selection.
+                // Put prefs back to what they held with a REAL commit (BAT-513's saveConfig rule:
+                // prefs and runtime_state move together). Even if that commit fails, the cache holds
+                // the old values, so the next load sees the overlay differ and retries both writes.
+                // Codex diff review #2 still holds: no broadcast for a reconcile that did not land.
                 tx.markWriteFailed()
+                // A BLIND write of the stored values, safe only because provider / auth_type / model
+                // are written solely under ModelSelectionLock, which `tx` holds: no other writer can
+                // have changed them since they were read above. If an unlocked writer of these keys
+                // is ever added, this needs commitOrRestore's per-key compare (restore a key only
+                // while the cache still holds this reconcile's value).
+                val back = sp.edit()
+                fun restore(key: String, v: String?) { if (v == null) back.remove(key) else back.putString(key, v) }
+                if (providerChanged) restore(KEY_PROVIDER, storedProvider)
+                if (authChanged) restore(KEY_AUTH_TYPE, storedAuth)
+                if (modelChanged) restore(KEY_MODEL, storedModel)
+                val rolledBack = back.commit()
                 LogCollector.append(
-                    "[Config] Reconcile: RuntimeStateStore.write returned false — " +
-                        "runtime_state.json may be stale vs prefs until next successful write",
+                    "[Config] Reconcile: runtime_state.json not saved — model selection rolled back, " +
+                        "retried on the next load (commit_ok=$rolledBack)",
                     LogLevel.WARN,
                 )
+                return fromPrefs
             }
         } catch (e: IllegalArgumentException) {
             LogCollector.append(
@@ -1922,6 +1922,21 @@ object ConfigManager {
                 LogLevel.WARN,
             )
         }
+
+        // Bump same-process configVersion so any in-process UI observer
+        // recomposes. /provider Telegram → :node service-start reconcile
+        // is the canonical path here, where :node's ConfigManager.
+        // configVersion bumps but main-process UI needs the broadcast
+        // below to know. BAT-1661: after runtime_state landed too.
+        bumpConfigVersionOnMain()
+        broadcastConfigChanged(context)
+
+        LogCollector.append(
+            "[Config] Reconciled from agent_settings.json: " +
+                "provider=${if (providerChanged) "$validProvider (was ${fromPrefs.provider})" else fromPrefs.provider}, " +
+                "authType=${if (authChanged) "$validAuthType (was ${fromPrefs.authType})" else fromPrefs.authType}, " +
+                "model=${if (modelChanged) "$resolvedModel (was ${fromPrefs.model})" else fromPrefs.model}"
+        )
         return reconciled
     }
 
@@ -2361,6 +2376,36 @@ object ConfigManager {
     private fun rearmOpenAILegacySweep() {
         openaiLegacySwept = false
         openaiSweepNotBefore = 0L
+    }
+
+    /** The xAI sign-in as a load (and the boot) sees it; see [xaiSignInView]. */
+    internal class XaiSignInView(val token: String, val refresh: String, val effectiveReauth: Boolean)
+
+    /**
+     * BAT-1155 amendment 3 / Codex major-1, shared by [loadConfigUnchecked] and the runtime_state
+     * seed ([runtimeAuthTypeForStored], BAT-1661) so both apply ONE H5 decision.
+     */
+    internal fun xaiSignInView(xaiRec: com.seekerclaw.app.state.XaiOAuthTokens): XaiSignInView {
+        // An armed rotation marker means a refresh POST for this epoch was in flight when the
+        // prior process died → the on-disk refresh token is POTENTIALLY CONSUMED. Never hand it to
+        // the provider — treat the family as dead (blank + reauthRequired) so :node boots INTO
+        // reconnect. SeekerClawService.reconcileXaiOAuthOnBoot durably converts this to reauth;
+        // this belt covers a conversion that could not persist.
+        val rotationUnsafe = !xaiRec.tombstone && xaiRec.rotationInFlightEpoch == xaiRec.epoch
+        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired || rotationUnsafe
+        // Decrypt the required token fields; null = a NON-blank ciphertext failed to
+        // decrypt (Codex major-1). A decrypt failure makes the family effectively dead —
+        // fail closed to reauth (blank tokens + reauthRequired) so it boots INTO reconnect,
+        // never downgrades to api_key on a "" that merely looks like an absent token.
+        val accessDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
+        val refreshDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
+        val decryptFailed = accessDec == null || refreshDec == null
+        val dead = deadByFlag || decryptFailed
+        return XaiSignInView(
+            token = if (dead) "" else (accessDec ?: ""),
+            refresh = if (dead) "" else (refreshDec ?: ""),
+            effectiveReauth = xaiRec.reauthRequired || rotationUnsafe || decryptFailed,
+        )
     }
 
     /**
@@ -2907,9 +2952,24 @@ object ConfigManager {
         // oauth config.json and stop the family booting INTO reauth. Only a FRESH
         // oauth-selected-but-never-signed-in family (blank token, NOT reauth) downgrades.
         // Matches the emitConfigJson effectiveAuthType guard.
-        if (config.provider == "xai" && config.authType == "oauth" &&
-            config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired)
-            "api_key" else config.authType
+        runtimeAuthType(config.provider, config.authType, config.xaiOAuthToken, config.xaiOAuthReauthRequired)
+
+    /** The H5 rule itself (one definition for [runtimeAuthTypeFor] and [runtimeAuthTypeForStored]). */
+    private fun runtimeAuthType(provider: String, authType: String, xaiToken: String, xaiReauth: Boolean): String =
+        if (provider == "xai" && authType == "oauth" && xaiToken.isBlank() && !xaiReauth) "api_key" else authType
+
+    /**
+     * BAT-1661 (CodeRabbit on ca06bb79): [runtimeAuthTypeFor] for a STORED selection, with the xAI
+     * sign-in read from XaiOAuthTokenStore — for writers that hold no loaded config (the
+     * runtime_state seed) and for recognising the guard image in the prefs mirror. The store read
+     * takes no lock, so it is safe under ModelSelectionLock. A store that is not initialised reads
+     * as dead + reauth (fail closed), which keeps oauth, as the loaded config would.
+     */
+    internal fun runtimeAuthTypeForStored(provider: String, authType: String): String {
+        if (provider != "xai" || authType != "oauth") return authType
+        val v = xaiSignInView(com.seekerclaw.app.state.XaiOAuthTokenStore.read())
+        return runtimeAuthType(provider, authType, v.token, v.effectiveReauth)
+    }
 
     /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.

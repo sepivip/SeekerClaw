@@ -227,7 +227,8 @@ class XaiOAuthActivity : ComponentActivity() {
                             // step may be followed by the restart. A restarted boot that still finds
                             // the old api_key mode there keeps it (D7.3 boot selection), so the agent
                             // would start on xAI with no key. Not synced: no restart, and the user is
-                            // told to sign in again, which re-runs the sync (a restart alone would not).
+                            // told to sign out and sign in again, which re-runs the sync (a restart
+                            // alone would not).
                             val sync = ConfigManager.syncXaiRuntimeAuthType(appCtx)
                             val synced = sync == ConfigManager.XaiAuthSync.SYNCED
                             // Locked decision 5: recovery is restart-only. Restart :node so it
@@ -251,9 +252,9 @@ class XaiOAuthActivity : ComponentActivity() {
                                 } else {
                                     com.seekerclaw.app.util.LogCollector.append(
                                         if (sync == ConfigManager.XaiAuthSync.BUSY) {
-                                            "[Config] xAI sign-in saved, agent not restarted: settings busy — sign in with Grok again to finish"
+                                            "[Config] xAI sign-in saved, agent not restarted: settings busy — sign out, then sign in with Grok again to finish"
                                         } else {
-                                            "[Config] xAI sign-in saved, agent not restarted: runtime_state.json not saved — free storage, then sign in with Grok again"
+                                            "[Config] xAI sign-in saved, agent not restarted: runtime_state.json not saved — free storage, then sign out and sign in with Grok again"
                                         },
                                         com.seekerclaw.app.util.LogLevel.WARN,
                                     )

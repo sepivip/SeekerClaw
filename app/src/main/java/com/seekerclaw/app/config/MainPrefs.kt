@@ -33,6 +33,16 @@ object MainPrefs {
     /**
      * Write access: MAIN only. In `:node` returns `null` and logs
      * `[Config] blocked a settings write from the agent process (<site>)` at ERROR.
+     *
+     * BAT-1661 (CodeRabbit on ca06bb79): every editor of the returned prefs commits and applies
+     * under [writeMonitor], the lock [commitOrRestore] holds from its snapshot through its restore.
+     * So an unlocked MAIN writer (the auto-start toggle, `lastCustomModel_*`, `lastAuthType_*`)
+     * lands either before that snapshot or after the restore — never inside the window, where a
+     * write of the same key and value could not be told apart from the failed edit's.
+     *
+     * Cost: a main-thread `apply()` (or `commit()`) can now wait for an in-flight commit on another
+     * thread — typically milliseconds; on a failing disk up to two fsyncs (the failed commit plus
+     * [commitOrRestore]'s restore commit).
      */
     fun forWrite(context: Context, site: String): SharedPreferences? {
         if (ProcessRole.isNode) {
@@ -40,7 +50,40 @@ object MainPrefs {
             LogCollector.append("[Config] blocked a settings write from the agent process ($site)", LogLevel.ERROR)
             return null
         }
-        return open(context)
+        return Guarded(open(context))
+    }
+
+    /**
+     * BAT-1661: the MAIN prefs write lock. A LEAF lock: held only around a prefs commit/apply (and
+     * [commitOrRestore]'s snapshot → commit → restore), never while taking `ModelSelectionLock`, a
+     * store lock or ResetGate, so it cannot join a lock cycle. Writers already inside
+     * `ModelSelectionLock` take it last.
+     *
+     * Nothing may be called out to while it is held: no other lock, no listener, no callback, no
+     * I/O beyond the prefs commit itself. Only `SharedPreferences` reads, `edit()` and the
+     * commit/apply run under it. Keep it that way — a call-out is how a leaf lock becomes a cycle.
+     * (A registered `OnSharedPreferenceChangeListener` is notified by Android on the main thread
+     * after the commit, not under this lock.)
+     */
+    private val writeMonitor = Any()
+
+    /** [forWrite]'s prefs: reads delegate; every editor commits under [writeMonitor]. */
+    private class Guarded(private val p: SharedPreferences) : SharedPreferences by p {
+        override fun edit(): SharedPreferences.Editor = GuardedEditor(p.edit())
+    }
+
+    /** Puts return THIS editor, so a chained `commit()`/`apply()` always takes [writeMonitor]. */
+    private class GuardedEditor(private val e: SharedPreferences.Editor) : SharedPreferences.Editor {
+        override fun putString(key: String?, value: String?) = apply { e.putString(key, value) }
+        override fun putStringSet(key: String?, values: MutableSet<String>?) = apply { e.putStringSet(key, values) }
+        override fun putInt(key: String?, value: Int) = apply { e.putInt(key, value) }
+        override fun putLong(key: String?, value: Long) = apply { e.putLong(key, value) }
+        override fun putFloat(key: String?, value: Float) = apply { e.putFloat(key, value) }
+        override fun putBoolean(key: String?, value: Boolean) = apply { e.putBoolean(key, value) }
+        override fun remove(key: String?) = apply { e.remove(key) }
+        override fun clear() = apply { e.clear() }
+        override fun commit(): Boolean = synchronized(writeMonitor) { e.commit() }
+        override fun apply() = synchronized(writeMonitor) { e.apply() }
     }
 
     /**
@@ -89,10 +132,14 @@ object MainPrefs {
      * those are the old values either way).
      *
      * Only the keys [edit] wrote are restored, and each only while the cache still holds the value
-     * [edit] wrote: an unlocked `apply()` of another key (`lastCustomModel_*`, `lastAuthType_*`,
-     * the auto-start toggle) or of the same key that lands meanwhile is kept, never reverted.
+     * [edit] wrote: another key's write is kept, never reverted. The whole snapshot → commit →
+     * restore runs under [writeMonitor], which every [forWrite] editor also takes, so no MAIN
+     * writer can land inside it (a same-key, same-value write would otherwise be indistinguishable
+     * from the failed edit's and be reverted). Pass prefs from [forWrite] (or a test fake).
      */
-    fun commitOrRestore(edit: Edit): Boolean {
+    fun commitOrRestore(edit: Edit): Boolean = synchronized(writeMonitor) { commitOrRestoreLocked(edit) }
+
+    private fun commitOrRestoreLocked(edit: Edit): Boolean {
         val prefs = edit.prefs
         val all = prefs.all
         val before = edit.written.keys.associateWith { all[it] }

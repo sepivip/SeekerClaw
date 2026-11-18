@@ -44,13 +44,17 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-/** BAT-1661: the sign-in was saved but the agent's settings were busy, so it was not restarted. */
+/**
+ * BAT-1661: the sign-in was saved but the agent's settings were busy, so it was not restarted.
+ * The token is stored, so the section shows "Connected" with only Sign Out: the way to re-run the
+ * settings update is Sign Out, then Sign in with Grok.
+ */
 internal const val XAI_RESTART_NEEDED_BUSY =
-    "Signed in, but the agent's settings were busy, so it was not restarted. Sign in with Grok again to finish."
+    "Signed in, but the agent's settings were busy, so it was not restarted. Sign out, then sign in with Grok again to finish."
 
 /** BAT-1661: the sign-in was saved but runtime_state.json could not be written (storage). */
 internal const val XAI_RESTART_NEEDED_NOT_SAVED =
-    "Signed in, but the agent's settings could not be saved, so it was not restarted. Free up storage, then sign in with Grok again."
+    "Signed in, but the agent's settings could not be saved, so it was not restarted. Free up storage, then sign out and sign in with Grok again."
 
 /** BAT-1661: the sign-out was saved but the agent's settings were busy and were not updated. */
 internal const val XAI_SIGN_OUT_BUSY =
@@ -59,6 +63,28 @@ internal const val XAI_SIGN_OUT_BUSY =
 /** BAT-1661: the sign-out was saved but the agent's settings could not be saved (storage). */
 internal const val XAI_SIGN_OUT_NOT_SAVED =
     "Signed out, but the agent's settings could not be saved. Free up storage, then sign in again or choose API Key for xAI, before restarting the agent."
+
+/**
+ * BAT-1661 (CodeRabbit on ca06bb79): what the UI does once a sign-in or sign-out is saved.
+ * [notify] false: the [onSignedIn]/[onSignedOut] callback (Settings' "Restart Now" prompt) must NOT
+ * fire — runtime_state.json may still hold the previous xAI auth mode, and a restart now would
+ * start the agent on it. [message] is the warning to keep on screen (null: none).
+ */
+internal data class XaiOAuthOutcome(val notify: Boolean, val message: String?)
+
+/** After a sign-in, from the result file's `restartNeeded` ("" when the agent was restarted). */
+internal fun xaiSignInOutcome(restartNeeded: String): XaiOAuthOutcome = when (restartNeeded) {
+    "busy" -> XaiOAuthOutcome(notify = false, message = XAI_RESTART_NEEDED_BUSY)
+    "not_saved" -> XaiOAuthOutcome(notify = false, message = XAI_RESTART_NEEDED_NOT_SAVED)
+    else -> XaiOAuthOutcome(notify = true, message = null)
+}
+
+/** After a saved sign-out, from the runtime_state sync's result. */
+internal fun xaiSignOutOutcome(sync: ConfigManager.XaiAuthSync): XaiOAuthOutcome = when (sync) {
+    ConfigManager.XaiAuthSync.SYNCED -> XaiOAuthOutcome(notify = true, message = null)
+    ConfigManager.XaiAuthSync.BUSY -> XaiOAuthOutcome(notify = false, message = XAI_SIGN_OUT_BUSY)
+    ConfigManager.XaiAuthSync.NOT_SAVED -> XaiOAuthOutcome(notify = false, message = XAI_SIGN_OUT_NOT_SAVED)
+}
 
 /** Snapshot of xAI Grok OAuth state shared between the Settings screen and onboarding. */
 data class XaiOAuthState(
@@ -136,12 +162,11 @@ fun rememberXaiOAuthController(
                 when (json.optString("status")) {
                     "success" -> {
                         isPolling = false
-                        onSignedIn()
-                        // BAT-1661: signed in, but the agent was not restarted (see XaiOAuthActivity).
-                        when (json.optString("restartNeeded")) {
-                            "busy" -> error = XAI_RESTART_NEEDED_BUSY
-                            "not_saved" -> error = XAI_RESTART_NEEDED_NOT_SAVED
-                        }
+                        // BAT-1661: the agent was not restarted (see XaiOAuthActivity) → no restart
+                        // prompt, keep the warning.
+                        val outcome = xaiSignInOutcome(json.optString("restartNeeded"))
+                        if (outcome.notify) onSignedIn()
+                        error = outcome.message
                     }
                     "error" -> {
                         error = json.optString("message", "Unknown error")
@@ -201,14 +226,12 @@ fun rememberXaiOAuthController(
                     r
                 }
                 if (result is XaiOAuthTokenStore.Result.Ok) {
-                    onSignedOut()
-                    // BAT-1661 (CodeRabbit on 444ba220): the sign-out is saved, but runtime_state may
-                    // still say oauth — the next start would boot xAI sign-in with no token. Say so.
-                    when (sync) {
-                        ConfigManager.XaiAuthSync.SYNCED -> Unit
-                        ConfigManager.XaiAuthSync.BUSY -> error = XAI_SIGN_OUT_BUSY
-                        ConfigManager.XaiAuthSync.NOT_SAVED -> error = XAI_SIGN_OUT_NOT_SAVED
-                    }
+                    // BAT-1661 (CodeRabbit on 444ba220 / ca06bb79): the sign-out is saved, but
+                    // runtime_state may still say oauth — a restart now would boot xAI sign-in with
+                    // no token. No restart prompt then; the warning stays.
+                    val outcome = xaiSignOutOutcome(sync)
+                    if (outcome.notify) onSignedOut()
+                    error = outcome.message
                 } else {
                     error = "Sign-out failed — please try again."
                 }

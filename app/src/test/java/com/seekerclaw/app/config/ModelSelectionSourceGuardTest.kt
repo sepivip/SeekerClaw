@@ -250,6 +250,31 @@ class ModelSelectionSourceGuardTest {
         assertTrue(touchedOffenders(noEdit).isNotEmpty())
     }
 
+    /** XaiOAuth.kt: the sign-in/out callbacks (Settings' restart prompt) fire only through the outcome. */
+    private fun xaiPromptOffenders(ui: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        var calls = 0
+        ui.forEachIndexed { i, l ->
+            if (isComment(l) || !Regex("""\bonSigned(In|Out)\(\)""").containsMatchIn(l)) return@forEachIndexed
+            calls++
+            if (!l.contains("if (outcome.notify) onSigned")) out += "XaiOAuth.kt:${i + 1} fires the restart prompt without the outcome"
+        }
+        if (calls != 2) out += "expected 2 callback calls, saw $calls"
+        return out
+    }
+
+    @Test
+    fun `xAI restart prompt fires only when the agent's settings were synced`() {
+        val path = "com/seekerclaw/app/ui/components/XaiOAuth.kt"
+        val ui = sources.getValue(path)
+        assertEquals(emptyList<String>(), xaiPromptOffenders(ui))
+        // Negative control: the ca06bb79 sign-in path (prompt first, warning after).
+        val at = ui.indexOfFirst { it.contains("if (outcome.notify) onSignedIn()") }
+        assertTrue(at >= 0)
+        val mutated = ui.toMutableList().apply { this[at] = "                        onSignedIn()" }
+        assertTrue(xaiPromptOffenders(mutated).isNotEmpty())
+    }
+
     // ------------------------ CodeRabbit on 444ba220 (T4): restart only after the xAI auth sync
 
     private fun xaiRestartOffenders(activity: List<String>, ui: List<String>): List<String> {

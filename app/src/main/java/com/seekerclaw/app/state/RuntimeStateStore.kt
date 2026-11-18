@@ -360,7 +360,20 @@ object RuntimeStateStore {
             Log.i(TAG, "prefs mirror held: a model repair is pending (target ${pending.target})")
             return false
         }
-        return onObserved(onDisk, sp)
+        // BAT-1661 (CodeRabbit on ca06bb79): a record whose auth is only the BAT-1124 H5 guard
+        // image of the prefs selection (xAI oauth with no usable token, stored as api_key) is the
+        // SAME selection: mirroring its auth would undo the user's oauth choice. Keep prefs' auth —
+        // the rule ConfigManager.bootSelection applies (contract v2.7 §2). (syncPrefsFromFile is
+        // stricter: any auth difference, guard image included, is a mismatch and syncs nothing.)
+        // Known narrow window, tracked with BAT-1663 (Node's /provider cannot take this lock): a
+        // chat `/provider xai api_key` that lands after an xAI sign-out — prefs still oauth, no
+        // token — writes a record identical to the guard image, so this mirror keeps prefs on
+        // oauth instead of the chat's explicit api_key choice.
+        val curProvider = sp.getString(KEY_PROVIDER, null)
+        val curAuth = sp.getString(KEY_AUTH_TYPE, null)
+        val guardImage = curProvider != null && curAuth != null && onDisk.provider == curProvider &&
+            onDisk.authType != curAuth && runtimeAuthOf(curProvider, curAuth) == onDisk.authType
+        return onObserved(if (guardImage) onDisk.copy(authType = curAuth!!) else onDisk, sp)
     }
 
     /**
@@ -658,6 +671,21 @@ object RuntimeStateStore {
      * default-model logic handles unknown IDs at startup, and the
      * UI's model picker normalizes them on next save.
      */
+    /**
+     * [com.seekerclaw.app.config.ConfigManager.runtimeAuthTypeForStored]; the stored value if it
+     * cannot be decided (logged to Logcat). `ExceptionInInitializerError` is caught too: the xAI
+     * store or ConfigManager failing to initialise must not take the seed or the mirror down.
+     */
+    private fun runtimeAuthOf(provider: String, authType: String): String = try {
+        com.seekerclaw.app.config.ConfigManager.runtimeAuthTypeForStored(provider, authType)
+    } catch (e: Exception) {
+        Log.w(TAG, "runtime auth for ($provider, $authType) not decided (${e.javaClass.simpleName}) — kept as stored")
+        authType
+    } catch (e: ExceptionInInitializerError) {
+        Log.w(TAG, "runtime auth for ($provider, $authType) not decided (${e.javaClass.simpleName}) — kept as stored")
+        authType
+    }
+
     internal fun seedFromPrefs(prefs: SharedPreferences): RuntimeState {
         // BAT-1315: these fell back to hardcoded literals — "claude-opus-4-8" written
         // twice on one line — which made this a THIRD place the shipped default lived,
@@ -668,7 +696,13 @@ object RuntimeStateStore {
         val provider = prefs.getString(KEY_PROVIDER, fallback.provider) ?: fallback.provider
         val authType = prefs.getString(KEY_AUTH_TYPE, fallback.authType) ?: fallback.authType
         val model = prefs.getString(KEY_MODEL, fallback.model) ?: fallback.model
-        val candidate = RuntimeState(provider = provider, authType = authType, model = model)
+        // BAT-1661 (CodeRabbit on ca06bb79): the same BAT-1124 H5 gate every other runtime_state
+        // writer applies — (xai, oauth) with no usable token and no reauth is stored as api_key —
+        // so the seed (first launch, a toggle's seed) never advertises an unstartable oauth pair
+        // that Node reads before config.json. Prefs keep the user's oauth selection; the mirror
+        // recognises this image as the same selection ([mirrorFromDisk]).
+        val runtimeAuth = runtimeAuthOf(provider, authType)
+        val candidate = RuntimeState(provider = provider, authType = runtimeAuth, model = model)
         return if (isValidPair(candidate.provider, candidate.authType)) candidate else RuntimeState()
     }
 
