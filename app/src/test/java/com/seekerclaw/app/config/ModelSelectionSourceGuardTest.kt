@@ -30,6 +30,8 @@ class ModelSelectionSourceGuardTest {
     private val writer = Regex(
         """putString\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|RuntimeStateStore\.(write|update)\(|""" +
             """\bstore\??\.(write|update)\(|AgentSettingsFile\.write\(|RuntimeStateFile\.writeModel\(|""" +
+            // BAT-1661 v2.8 §2: the checked tuple write (the repair's handoff, MAIN's seed).
+            """RuntimeStateFile\.writeTupleVerified\(|""" +
             """writeAgentSettingsJson\(""",
     )
 

@@ -111,6 +111,9 @@ object RuntimeStateStore {
     private const val KEY_AUTH_TYPE = "auth_type"
     private const val KEY_MODEL = "model"
 
+    /** BAT-1661: bumped by [commitModelChecked] so its commit is always a real disk write. */
+    private const val KEY_MODEL_COMMIT_SEQ = "model_commit_seq"
+
     /** BAT-1661: the collector's mirror waits this long for the model-selection lock (IO thread). */
     private const val MIRROR_LOCK_TIMEOUT_MS = 5_000L
 
@@ -227,20 +230,28 @@ object RuntimeStateStore {
      * BAT-1661 (Codex diff review #4): a runtime_state.json write, so it runs under the
      * model-selection lock and decides from what is there NOW — the file is re-checked and prefs
      * re-read inside the transaction, never a tuple captured earlier (which can predate a start-up
-     * repair in `:node`). While a repair intent is pending the repair owns the stores, so nothing is
-     * seeded. A busy lock or a pending repair defers the seed: a later launch or the first save
-     * creates the file, and until then `:node` falls back to config.json.
+     * repair in `:node`). A busy lock defers the seed: a later launch or the first save creates the
+     * file, and until then `:node` falls back to config.json.
+     *
+     * Contract v2.8 §3 / v2.9 §3: the repair intent is classified first.
+     *  - `pending` — the repair owns the stores: nothing is seeded.
+     *  - handed off (`awaiting_main` / `converged`) and still holding (Holds or EvidenceLost, so the
+     *    target is proven) — seeded from the intent's (provider, authType, target) with a checked
+     *    write, never from the retired prefs model. Not while the OpenAI transport is not the
+     *    sign-in (MAIN does not finalise then).
+     *  - Superseded, Unproven, Corrupt — nothing is seeded; the next locked load deals with it.
      */
     internal fun seedIfMissing(filesDir: File, sp: SharedPreferences, write: (RuntimeState) -> Boolean): Boolean {
-        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { _ ->
-            when {
-                File(filesDir, FILE_NAME).exists() -> true
-                com.seekerclaw.app.config.ModelRepair.readIntent(filesDir.toPath()) !is
-                    com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> {
-                    Log.i(TAG, "first-launch seed skipped: a model repair is pending")
+        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { tx ->
+            if (File(filesDir, FILE_NAME).exists()) return@transaction true
+            val dir = filesDir.toPath()
+            when (val intent = com.seekerclaw.app.config.ModelRepair.readIntent(dir)) {
+                com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> write(seedFromPrefs(sp))
+                is com.seekerclaw.app.config.ModelRepair.IntentRead.Present -> seedFromIntent(tx, dir, sp, intent.intent)
+                is com.seekerclaw.app.config.ModelRepair.IntentRead.Corrupt -> {
+                    Log.i(TAG, "first-launch seed skipped: the model repair record is unreadable")
                     true
                 }
-                else -> write(seedFromPrefs(sp))
             }
         }
         return when (r) {
@@ -249,6 +260,39 @@ object RuntimeStateStore {
                 Log.w(TAG, "first-launch seed deferred: model-selection lock busy (${r.reason})")
                 true
             }
+        }
+    }
+
+    /** [seedIfMissing] with a repair intent on disk; see its KDoc. */
+    private fun seedFromIntent(
+        tx: ModelSelectionLock.Tx,
+        dir: java.nio.file.Path,
+        sp: SharedPreferences,
+        i: com.seekerclaw.app.config.ModelRepair.RepairIntent,
+    ): Boolean {
+        tx.requireOpen()
+        if (i.state == com.seekerclaw.app.config.ModelRepair.STATE_PENDING) {
+            Log.i(TAG, "first-launch seed skipped: a model repair is pending")
+            return true
+        }
+        val s = com.seekerclaw.app.config.ConfigManager.modelSnapshotFrom(dir, MainPrefs.view(sp))
+        val c = com.seekerclaw.app.config.ModelRepair.classifyIntent(i, s, main = true)
+        val holds = c is com.seekerclaw.app.config.ModelRepair.IntentClass.Holds ||
+            c is com.seekerclaw.app.config.ModelRepair.IntentClass.EvidenceLost
+        if (!holds || s.transport != i.scope) {
+            Log.i(TAG, "first-launch seed skipped: the model repair record is left to the next load ($c)")
+            return true
+        }
+        return try {
+            com.seekerclaw.app.config.RuntimeStateFile.writeTupleVerified(
+                tx,
+                dir,
+                com.seekerclaw.app.config.ModelTuple(i.provider, i.authType, i.target),
+            )
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "first-launch seed from the model repair failed: ${e.message}")
+            false
         }
     }
 
@@ -287,17 +331,17 @@ object RuntimeStateStore {
         return onObserved(onDisk, sp)
     }
 
-    /** [com.seekerclaw.app.config.ModelRepair.pendingRepair] from the stores as they are now; null when none. */
+    /**
+     * [com.seekerclaw.app.config.ModelRepair.pendingRepair] from the stores as they are now (the
+     * intent classified first, read-only; contract v2.9 §3); null when none.
+     */
     private fun pendingRepair(sp: SharedPreferences): com.seekerclaw.app.config.ModelRepair.RepairIntent? {
         val dir = filesDir?.toPath() ?: return null
         return try {
             com.seekerclaw.app.config.ModelRepair.pendingRepair(
                 dir,
-                com.seekerclaw.app.config.ModelRepair.Snapshot(
-                    prefs = com.seekerclaw.app.config.ConfigManager.rawPrefsModelTuple(MainPrefs.view(sp)),
-                    runtime = com.seekerclaw.app.config.RuntimeStateFile.readTuple(dir),
-                    overlay = com.seekerclaw.app.config.AgentSettingsFile.read(dir),
-                ),
+                com.seekerclaw.app.config.ConfigManager.modelSnapshotFrom(dir, MainPrefs.view(sp)),
+                main = true,
             )
         } catch (_: IllegalStateException) {
             null // registry not initialised (unit tests)
@@ -372,6 +416,24 @@ object RuntimeStateStore {
             return false
         }
         return true
+    }
+
+    /**
+     * BAT-1661 (review Minor 1): a REAL, checked commit of the prefs model. After a failed
+     * `commit()` the in-memory map already holds the new value, so a later commit that changes
+     * nothing may be skipped and a read-back sees memory, not disk. The model is re-put with a
+     * bumped [KEY_MODEL_COMMIT_SEQ] (the `KEY_LEGACY_SWEEP_SEQ` pattern), so the commit always writes.
+     * Returns the commit's result; false also marks [tx].
+     */
+    fun commitModelChecked(tx: ModelSelectionLock.Tx, prefs: SharedPreferences, model: String): Boolean {
+        tx.requireOpen()
+        val seq = prefs.getLong(KEY_MODEL_COMMIT_SEQ, 0L) + 1L
+        val ok = prefs.edit().putString(KEY_MODEL, model).putLong(KEY_MODEL_COMMIT_SEQ, seq).commit()
+        if (!ok) {
+            tx.markWriteFailed()
+            Log.w(TAG, "prefs model commit before convergence failed")
+        }
+        return ok
     }
 
     /**

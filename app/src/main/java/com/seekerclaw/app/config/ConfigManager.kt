@@ -375,28 +375,42 @@ object ConfigManager {
     }
 
     /**
-     * BAT-1661: the prefs side of [ModelRepair.Snapshot], read without writing anything. The auth
-     * is the one Node would run on if runtime_state.json were absent: config.json's, which
-     * downgrades OpenAI oauth with no token to api_key ([emitConfigJson]). BAT-1157: token
-     * presence comes from [OpenAIOAuthTokenStore.hasUsableToken], not a prefs key (the legacy
-     * keys are swept once migrated).
+     * BAT-1661: the prefs side of [ModelRepair.Snapshot], read without writing anything: provider,
+     * auth and model exactly as stored (the auth normalised as [resolveAuthType] would; contract
+     * v2.9 §1). The auth is the SELECTION and is never lowered for a missing sign-in; the
+     * transport is [ModelRepair.Snapshot.transport].
      */
     internal fun rawPrefsModelTuple(p: PrefsReader): ModelTuple {
         val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
-        val auth = normalizeAuthType(p).let {
-            if (provider == "openai" && it == "oauth" && !OpenAIOAuthTokenStore.hasUsableToken()) "api_key" else it
-        }
         val model = (p.getString(KEY_MODEL, "claude-opus-5") ?: "claude-opus-5").trim().ifBlank { "claude-opus-5" }
-        return ModelTuple(provider, auth, model)
+        return ModelTuple(provider, normalizeAuthType(p), model)
     }
 
-    /** BAT-1661: the three stores' model-relevant content, for [ModelRepair]. Writes nothing. */
-    internal fun modelSnapshot(context: Context): ModelRepair.Snapshot {
-        val files = context.filesDir.toPath()
+    /**
+     * BAT-1661: the stores' model-relevant content, for [ModelRepair]. Writes no model store.
+     *
+     * [migrate] (v2.8 §4 ordering): runs the BAT-1157 fill-only OpenAI sign-in migration first, so a
+     * Node-first upgrade of a signed-in user takes the token-presence snapshot after it. The
+     * migration writes the token store only, never prefs.
+     */
+    internal fun modelSnapshot(context: Context, migrate: Boolean = true): ModelRepair.Snapshot {
+        val p = prefs(context)
+        if (migrate && OpenAIOAuthTokenStore.isInitialized) {
+            OpenAIOAuthTokenStore.migrateIfNeeded { legacyOpenAIPair(p) }
+        }
+        return modelSnapshotFrom(context.filesDir.toPath(), p)
+    }
+
+    /** [modelSnapshot] from an explicit prefs view (the collector mirror's), with no migration. */
+    internal fun modelSnapshotFrom(files: java.nio.file.Path, p: PrefsReader): ModelRepair.Snapshot {
+        val runtime = RuntimeStateFile.read(files)
         return ModelRepair.Snapshot(
-            prefs = rawPrefsModelTuple(prefs(context)),
-            runtime = RuntimeStateFile.readTuple(files),
+            prefs = rawPrefsModelTuple(p),
+            runtime = (runtime as? RuntimeStateFile.Read.Present)?.tuple,
             overlay = AgentSettingsFile.read(files),
+            runtimeRead = runtime,
+            oauthUsable = OpenAIOAuthTokenStore.hasUsableToken(),
+            apiKeySaved = !p.getString(KEY_OPENAI_API_KEY_ENC, null).isNullOrBlank(),
         )
     }
     private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
@@ -1167,8 +1181,13 @@ object ConfigManager {
     /**
      * Reconcile may commit provider/authType/model to prefs and runtime_state, so it runs under
      * the lock. A busy lock (or a load nested inside a transaction) reconciles compute-only.
+     *
+     * BAT-1661 (contract v2.7 §1): in `:node` it never opens a transaction. `:node` writes no
+     * prefs, so its load is compute-only anyway; taking the lock would only stall a Node
+     * `/provider` call (up to [LOAD_LOCK_TIMEOUT_MS]) behind a Settings save.
      */
     private fun loadConfigLocked(context: Context): AppConfig {
+        if (ProcessRole.isNode) return loadConfigUnchecked(context, null, null)
         val r = ModelSelectionLock.transaction(LOAD_LOCK_TIMEOUT_MS) { tx -> loadConfigUnchecked(context, tx, null) }
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
@@ -1179,6 +1198,9 @@ object ConfigManager {
     /**
      * BAT-1661 service start: the load inside the boot transaction, with the repair's
      * [approved] target carried into reconcile (contract v2.4 §2). Null when setup is incomplete.
+     *
+     * Contract v2.7 §2 (D7.3): the selection is resolved from the files read fresh, in Node's
+     * order ([bootSelection]), never from `:node`'s prefs cache, which can be older than a MAIN save.
      */
     internal fun loadConfigForBoot(
         context: Context,
@@ -1187,7 +1209,34 @@ object ConfigManager {
     ): AppConfig? {
         tx.requireOpen()
         if (!isSetupComplete(context)) return null
-        return loadConfigUnchecked(context, tx, approved)
+        return loadConfigUnchecked(context, tx, approved, bootFiles = true)
+    }
+
+    /**
+     * BAT-1661 contract v2.7 §2 (D7.3): the boot's selection, from the files read fresh, in Node's
+     * order (`config.js`):
+     *  - provider and auth: runtime_state.json when it is Present, else prefs;
+     *  - model: [NodeDispatch.winner] — an applicable overlay with a non-blank model, else
+     *    runtime_state's, else prefs'.
+     * Reconcile then runs against this selection, so an overlay model the files agree on equals it
+     * and is never clamped, even when unlisted.
+     *
+     * One exception keeps the user's auth: a runtime_state auth that is only the BAT-1124 boot-guard
+     * image of the prefs selection ([runtimeAuthTypeFor]: xAI oauth with no token is stored as
+     * api_key) is the SAME selection, so prefs' auth is kept. Taking it would publish api_key into
+     * the overlay, and MAIN's reconcile would then commit it over the user's OAuth choice.
+     */
+    internal fun bootSelection(files: java.nio.file.Path, fromPrefs: AppConfig): AppConfig {
+        val rt = RuntimeStateFile.read(files)
+        val w = NodeDispatch.winner(rt, AgentSettingsFile.read(files), fromPrefs.provider, fromPrefs.model)
+        val tuple = (rt as? RuntimeStateFile.Read.Present)?.tuple
+            ?: return fromPrefs.copy(model = w.model.ifBlank { fromPrefs.model })
+        val guardImage = tuple.provider == fromPrefs.provider && runtimeAuthTypeFor(fromPrefs) == tuple.authType
+        return fromPrefs.copy(
+            provider = tuple.provider,
+            authType = if (guardImage) fromPrefs.authType else tuple.authType,
+            model = w.model.ifBlank { fromPrefs.model },
+        )
     }
 
     /**
@@ -1220,6 +1269,8 @@ object ConfigManager {
         context: Context,
         tx: ModelSelectionLock.Tx?,
         approved: ModelRepair.ApprovedTarget?,
+        /** The `:node` boot transaction: the selection comes from the files ([bootSelection]). */
+        bootFiles: Boolean = false,
     ): AppConfig {
         tx?.requireOpen()
         // BAT-1155 §4: adopt the xAI OAuth record into XaiOAuthTokenStore
@@ -1233,22 +1284,39 @@ object ConfigManager {
         // valid-but-unlisted model away (contract v2.4 §2). Model only, same provider and auth
         // only — see syncPrefsFromFile (Codex diff review #3).
         //
-        // The pending repair is decided FIRST, from the stores as they are (CodeRabbit on
-        // f1607b5d): the sync would otherwise overwrite a retired prefs model — the repair's
-        // evidence — with runtime_state's, and reconcile would then find nothing pending and clamp
-        // a valid unlisted overlay model. While a repair is pending, the sync may only move prefs
-        // to the repair's own target. The boot transaction ([approved] set) decides for itself.
+        // The repair is classified FIRST, from the stores as they are (CodeRabbit on f1607b5d): the
+        // sync would otherwise overwrite a retired prefs model — the repair's evidence — with
+        // runtime_state's, and reconcile would then find nothing pending and clamp a valid unlisted
+        // overlay model. While a repair governs the stores, the sync may only move prefs to the
+        // repair's own target. Under the lock, MAIN also acts on the intent (contract v2.8 §3,
+        // v2.9 §3–§5: delete a superseded one, converge a handed-off one; ModelRepair.mainLoad).
+        // The boot transaction ([approved] set) decides for itself.
         val pending = if (approved != null) null else try {
-            ModelRepair.pendingRepair(context.filesDir.toPath(), modelSnapshot(context))
+            val files = context.filesDir.toPath()
+            // BAT-1157 (D7.1): the sync writes prefs, so MAIN only (RuntimeStateStore is MAIN-only too).
+            val w = if (tx != null && !ProcessRole.isNode && RuntimeStateStore.isInitialized) {
+                prefsForWrite(context, "syncPrefsFromFile")
+            } else {
+                null
+            }
+            // v2.8 §4 ordering: the sign-in migration runs before the token-presence snapshot.
+            val first = modelSnapshot(context)
+            if (tx != null && w != null) {
+                var next: ModelRepair.Snapshot? = first
+                val out = ModelRepair.mainLoad(
+                    tx,
+                    files,
+                    snapshot = { next?.also { next = null } ?: modelSnapshot(context, migrate = false) },
+                    sync = { onlyTo -> RuntimeStateStore.syncPrefsFromFile(tx, files, w, onlyTo = onlyTo) },
+                    commitModel = { model -> RuntimeStateStore.commitModelChecked(tx, w, model) },
+                )
+                if (out.prefsChanged) postConfigVersionBump()
+                out.pending
+            } else {
+                ModelRepair.pendingRepair(files, first, main = !ProcessRole.isNode)
+            }
         } catch (_: IllegalStateException) {
             null // registry not initialised (unit tests); production inits it in Application.onCreate
-        }
-        // BAT-1157 (D7.1): the sync writes prefs, so MAIN only (RuntimeStateStore is MAIN-only too).
-        if (tx != null && !ProcessRole.isNode && RuntimeStateStore.isInitialized) {
-            val w = prefsForWrite(context, "syncPrefsFromFile")
-            if (w != null && RuntimeStateStore.syncPrefsFromFile(tx, context.filesDir.toPath(), w, onlyTo = pending?.target)) {
-                postConfigVersionBump()
-            }
         }
 
         val apiKey = try {
@@ -1506,7 +1574,28 @@ object ConfigManager {
         // restart. Node writes provider/authType/model directly to this
         // file; we adopt them here and mirror back to SharedPreferences so
         // the next loadConfig reads a consistent state.
-        val reconciled = reconcileWithAgentSettings(context, p, fromPrefs, tx, approved, pending)
+        // BAT-1661 v2.7 §2 (D7.3): in the boot transaction, reconcile against the files' selection.
+        val base = if (bootFiles) bootSelection(context.filesDir.toPath(), fromPrefs) else fromPrefs
+        val reconciledRaw = reconcileWithAgentSettings(context, p, base, tx, approved, pending)
+        // BAT-1661 v2.7 §2 (D7.3, strict): in the boot, [bootSelection] is the authority for the
+        // selection. Reconcile must not replace provider or auth with a foreign overlay's (Node's own
+        // dispatch ignores it), and the overlay contributes only its model, and only when it applies,
+        // which bootSelection has already taken through NodeDispatch.
+        val merged = if (bootFiles) {
+            reconciledRaw.copy(provider = base.provider, authType = base.authType, model = base.model)
+        } else {
+            reconciledRaw
+        }
+        // BAT-1661 (contract v2.8 §2, D7.3): a boot that carries a repair target publishes the
+        // files' selection — the intent's (provider, authType), which the classifier proved equal to
+        // runtime_state-then-prefs, and its target. So config.json and the overlay publish never take
+        // a retired model from `:node`'s stale prefs cache, nor a foreign overlay's provider, which
+        // Node's own dispatch ignores.
+        val reconciled = if (approved != null) {
+            merged.copy(provider = approved.provider, authType = approved.authType, model = approved.model)
+        } else {
+            merged
+        }
         // BAT-1661: what the caller loaded — saveConfig compares the edited tuple to it.
         return reconciled.copy(loadedModelTuple = ModelTuple(reconciled.provider, reconciled.authType, reconciled.model))
     }
@@ -2631,8 +2720,28 @@ object ConfigManager {
      * Keystore key only if BOTH are confirmed — never over a record that could still be live.
      * Then clear prefs with a checked `commit()`. A rotation from `:node` during the reset waits
      * on a store lock and then finds a tombstone (409).
+     *
+     * BAT-1661 (contract v2.8 §4): inside the gate, the reset takes [ModelSelectionLock] FIRST,
+     * before the OpenAI and xAI store locks (the lock order everywhere), so it never interleaves
+     * with a model transaction: a `saveConfig` rollback or a collector mirror cannot write old
+     * values back over a reset. A busy lock is [ResetResult.Failed] with nothing changed.
      */
     fun resetConfig(context: Context): ResetResult = ResetGate.exclusive {
+        when (val r = ModelSelectionLock.transaction { tx -> resetLocked(context, tx) }) {
+            is ModelSelectionLock.Result.Acquired -> r.value
+            is ModelSelectionLock.Result.Busy -> {
+                LogCollector.append("[Config] Reset: model selection busy (${r.reason}) — nothing reset", LogLevel.WARN)
+                ResetResult.Failed(RESET_MODEL_BUSY)
+            }
+        }
+    }
+
+    /** [ResetResult.Failed.reason] when the model-selection lock was busy (contract v2.8 §4). */
+    const val RESET_MODEL_BUSY = "model selection busy"
+
+    /** [resetConfig]'s body, holding the model-selection lock ([tx]). */
+    private fun resetLocked(context: Context, tx: ModelSelectionLock.Tx): ResetResult {
+        tx.requireOpen()
         val none = TombstoneOutcome.NOT_WRITTEN
         var openai = none
         var xai = none
@@ -2659,13 +2768,13 @@ object ConfigManager {
             }
         }
         if (outer is SidecarFileLock.Outcome.NotAcquired) {
-            return@exclusive ResetResult.Failed(outer.reason)
+            return ResetResult.Failed(outer.reason)
         }
-        if (openai == none) return@exclusive ResetResult.Failed("OpenAI sign-in not removed")
+        if (openai == none) return ResetResult.Failed("OpenAI sign-in not removed")
         val cleared = keyDeleted &&
             (prefsForWrite(context, "resetConfig")?.edit()?.clear()?.commit() == true) // incl. MCP servers
         bumpConfigVersionOnMain()
-        if (cleared) {
+        return if (cleared) {
             ResetResult.Done
         } else {
             LogCollector.append(

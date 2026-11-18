@@ -311,10 +311,10 @@ class AndroidBridge(
      * actually needs to route requests.
      */
     private fun handleConfigCredentials(): Response {
-        // BAT-1157 (D7.2): runs in `:node`. loadConfig there writes nothing to seekerclaw_prefs —
-        // the agent-settings reconcile and the auth normaliser are compute-only in `:node`, and the
-        // OAuth migrations never touch prefs from it (ConfigSourceGuardTest pins this).
-        val config = ConfigManager.loadConfig(context)
+        // BAT-1157 (D7.2) / BAT-1661 (contract v2.7 §1): runs in `:node` on every Node `/provider`
+        // call. The read-only load writes no model store and takes no ModelSelectionLock, so it
+        // never waits behind a Settings save and never reconciles from `:node`'s stale prefs cache.
+        val config = ConfigManager.loadConfigReadOnly(context)
         if (config == null) {
             return jsonResponse(200, mapOf("ok" to true, "credentials" to emptyMap<String, String>()))
         }

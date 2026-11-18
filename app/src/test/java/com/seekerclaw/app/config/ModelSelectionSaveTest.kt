@@ -20,7 +20,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -193,18 +192,24 @@ class ModelSelectionSaveTest {
     }
 
     /**
-     * BAT-1157 / contract v2.7 §3 (pin 1): a `:node` boot writes no prefs, so prefs still hold
-     * [retired]; MAIN brings prefs to [target] on its next locked load, and the start after that
-     * clears the intent.
+     * Contract v2.8 §2–§3 (v2.7 §3 pin 1): a `:node` boot writes no prefs, so prefs still hold
+     * [retired], and it handed off (`awaiting_main`). MAIN brings prefs to [target] on its next
+     * locked load and marks `converged`; the start after that keeps the target, rewrites no intent
+     * and logs no notice.
      */
     private fun assertMainLoadConverges(retired: String, target: String) {
         assertEquals("`:node` writes no prefs (v2.7 §1)", retired, prefs.disk["model"])
+        assertEquals("handed off to MAIN", ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
         mainProcess()
         ConfigManager.loadConfig(ctx)
         assertEquals("a MAIN load brings prefs to the target", target, prefs.disk["model"])
+        assertEquals("MAIN converged", ModelRepair.STATE_CONVERGED, intent()?.state)
+        val intentBytes = Files.readAllBytes(ModelRepair.intentPath(dir))
         nodeProcess()
+        val anchor = LogCollector.logs.value.lastOrNull()
         assertEquals(target, serviceStart().model)
-        assertEquals("intent cleared", null, intent())
+        assertArrayEquals("the next start writes no intent", intentBytes, Files.readAllBytes(ModelRepair.intentPath(dir)))
+        assertFalse("no second notice", logsSince(anchor).any { it.message.contains("is not available with ChatGPT sign-in") })
     }
 
     /** A Settings form loaded on [loaded], saved with [edit] applied. */
@@ -337,7 +342,7 @@ class ModelSelectionSaveTest {
         nodeProcess()
         val anchor = LogCollector.logs.value.lastOrNull()
         serviceStart()
-        assertEquals("intent cleared", null, intent())
+        assertEquals("handed off", ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
         assertTrue(
             "the resume reports the repair",
             logsSince(anchor).any { it.message.contains("is not available with ChatGPT sign-in — now gpt-6.1-sol") },
@@ -413,32 +418,87 @@ class ModelSelectionSaveTest {
 
     // ------------------------------------------- review #2: the boot's own writes are checked
 
-    // Contract v2.7 §4: "Boot reconcile commit fails" no longer applies — `:node` never commits
-    // prefs, so the boot has no prefs commit to fail. Replaced by the D6.1 guard tests
-    // (MainPrefsProcessTest / PrefsNamesTest, from BAT-1157).
-    @Ignore("BAT-1661 v2.8-v2.10 pending")
+    // Contract v2.7 §4: "boot reconcile commit fails" no longer applies — `:node` never commits
+    // prefs. Its successor is MAIN-side (v2.8 pin 8): the commit that brings prefs to the target
+    // happens in MAIN's load, and a failure there must leave the intent `awaiting_main`.
     @Test
-    fun `boot reconcile commit fails - intent kept, the next start finishes`() {
+    fun `v2_8 pin 8 - MAIN prefs commit returns false - the intent stays awaiting_main, nothing retired is published`() {
         seedPrefs("gpt-5.4")
         writeRuntime("gpt-5.4")
         writeOverlay("gpt-5.4")
         nodeProcess()
+        serviceStart()
+        assertEquals(ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
 
+        mainProcess()
         prefs.failCommits = true
         val anchor = LogCollector.logs.value.lastOrNull()
-        serviceStart()
+        ConfigManager.loadConfig(ctx)
         prefs.failCommits = false
-        // The in-memory prefs hold the target, so a re-read would have "verified" the repair.
         assertEquals("memory took the write", "gpt-6.1-sol", prefs.memory["model"])
         assertEquals("disk did not", "gpt-5.4", prefs.disk["model"])
-        assertNotNull("intent kept", intent())
-        assertTrue(logsSince(anchor).any { it.level == LogLevel.WARN && it.message == ModelRepair.PUBLISH_FAILED_WARNING })
+        assertEquals("the intent stays awaiting_main", ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
+        assertTrue(logsSince(anchor).any { it.level == LogLevel.WARN && it.message == "[ModelRepair] app settings not yet on gpt-6.1-sol — the app retries on its next load" })
+        assertEquals("nothing retired published: runtime_state", "gpt-6.1-sol", runtimeModel())
+        assertEquals("nothing retired published: overlay", "gpt-6.1-sol", overlayModel())
 
-        nodeProcess() // a new process reads prefs from disk: still 5.4
-        serviceStart()
+        prefs.restartProcess() // MAIN restarts and reads 5.4 from disk; the next load retries
+        ConfigManager.loadConfig(ctx)
         assertEquals("gpt-6.1-sol", prefs.disk["model"])
-        assertEquals("gpt-6.1-sol", overlayModel())
-        assertEquals("intent cleared", null, intent())
+        assertEquals(ModelRepair.STATE_CONVERGED, intent()?.state)
+    }
+
+    @Test
+    fun `v2_8 pin 8 - a SAME-process retry after a failed commit does a real write before converged`() {
+        // Review Minor 1: after load N's failed commit the in-memory prefs already hold the target,
+        // so load N+1's sync sees nothing to change and a read-back sees memory. Without a forced
+        // write, `converged` would be recorded while disk prefs still hold the retired id.
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        nodeProcess()
+        serviceStart()
+        assertEquals(ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
+
+        mainProcess()
+        prefs.failCommits = true
+        ConfigManager.loadConfig(ctx) // load N
+        prefs.failCommits = false
+        assertEquals("memory holds the target", "gpt-6.1-sol", prefs.memory["model"])
+        assertEquals("disk does not", "gpt-5.4", prefs.disk["model"])
+        assertEquals(ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
+
+        // Load N+1 in the SAME process: no restartProcess().
+        ConfigManager.loadConfig(ctx)
+        assertEquals(ModelRepair.STATE_CONVERGED, intent()?.state)
+        assertEquals("a cold read shows the target on disk", "gpt-6.1-sol", prefs.disk["model"])
+    }
+
+    @Test
+    fun `v2_8 pin 8 - MAIN seed fails - the intent stays awaiting_main, nothing retired is published`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        nodeProcess()
+        serviceStart()
+        assertEquals(ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
+        Files.delete(dir.resolve(RuntimeStateFile.NAME)) // runtime_state lost after the handoff
+
+        mainProcess()
+        SafeFs.beforeMove = { _, target -> if (target.fileName.toString() == RuntimeStateFile.NAME) throw IOException("injected seed failure") }
+        val anchor = LogCollector.logs.value.lastOrNull()
+        ConfigManager.loadConfig(ctx)
+        SafeFs.beforeMove = savedBeforeMove
+        assertEquals("the intent stays awaiting_main", ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
+        assertEquals("prefs not moved without a durable runtime_state", "gpt-5.4", prefs.disk["model"])
+        assertEquals("no runtime_state with the retired id", null, runtimeModel())
+        assertEquals("the overlay keeps the target", "gpt-6.1-sol", overlayModel())
+        assertTrue(logsSince(anchor).any { it.level == LogLevel.WARN && it.message.startsWith("[ModelRepair] could not restore runtime_state (") })
+
+        ConfigManager.loadConfig(ctx) // the next load retries
+        assertEquals("seeded from the intent", "gpt-6.1-sol", runtimeModel())
+        assertEquals("gpt-6.1-sol", prefs.disk["model"])
+        assertEquals(ModelRepair.STATE_CONVERGED, intent()?.state)
     }
 
     @Test
@@ -730,6 +790,28 @@ class ModelSelectionSaveTest {
         seeder.join(10_000)
         assertEquals(true, seeded)
         assertEquals("seeded from prefs read under the lock", "gpt-6.1-sol", runtimeModel())
+    }
+
+    @Test
+    fun `v2_8 §3 - first-launch seed after the handoff seeds the proven target, never the retired prefs model`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        nodeProcess()
+        serviceStart()
+        assertEquals(ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
+        Files.delete(dir.resolve(RuntimeStateFile.NAME))
+        prefs.restartProcess() // MAIN's cache: still the retired 5.4
+        val seeded = RuntimeStateStore.seedIfMissing(dir.toFile(), prefs) { s ->
+            CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), s).write(s)
+        }
+        assertTrue(seeded)
+        assertEquals("seeded from the intent's target", "gpt-6.1-sol", runtimeModel())
+        // Negative: a corrupt record is never used for seeding.
+        Files.delete(dir.resolve(RuntimeStateFile.NAME))
+        ModelRepair.intentPath(dir).toFile().writeText("{not json")
+        assertTrue(RuntimeStateStore.seedIfMissing(dir.toFile(), prefs) { error("must not seed from prefs while a record exists") })
+        assertFalse(Files.exists(dir.resolve(RuntimeStateFile.NAME)))
     }
 
     @Test

@@ -703,9 +703,10 @@ class SeekerClawService : Service() {
         // BAT-1409 P1-D: the channel written for this boot is the one the bridge's owner claim checks.
         // BAT-1409 P1-J (R3): a refused or failed write ends the start on the error path, never in
         // a crash of this process. writeAgentSettingsJson and writePlatformMd log their own failures.
-        // BAT-1661: one model-selection transaction — repair a retired sign-in model (decide,
-        // checked intent, repair, publish config.json + agent_settings.json, verify, clear). On a
-        // busy lock it is a read-only boot: config.json only, no shared store written.
+        // BAT-1661: one model-selection transaction — repair a retired sign-in model (classify or
+        // decide, checked intent, repair, publish config.json + agent_settings.json, then hand off
+        // to the app on a confirmed file: the intent becomes `awaiting_main`). On a busy lock it is
+        // a read-only boot: config.json only, no shared store written.
         val bootChannel = try {
             ModelRepair.serviceStart(this) { config ->
                 ConfigManager.emitConfigJson(this, config, bridgeToken)

@@ -79,7 +79,43 @@ object AgentSettingsFile {
 object RuntimeStateFile {
     const val NAME = "runtime_state.json"
 
+    private val recordJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
     fun path(filesDir: Path): Path = filesDir.resolve(NAME)
+
+    /**
+     * BAT-1661 (contract v2.9 §3): the file in three states. [Unreadable] covers everything Node's
+     * `config.js` rejects and falls back to config.json for: corrupt JSON, not an object, a
+     * provider/authType/model that is not a string, or a (provider, authType) pair outside the
+     * matrix. Node checks the pair on the RAW strings (`validateMatrix`), so this does too.
+     */
+    sealed class Read {
+        object Missing : Read()
+
+        data class Unreadable(val reason: String) : Read()
+
+        data class Present(val tuple: ModelTuple) : Read()
+    }
+
+    fun read(filesDir: Path): Read {
+        val p = path(filesDir)
+        if (!SafeFs.existsNoFollow(p)) return Read.Missing
+        val o = try {
+            Json.parseToJsonElement(SafeFs.readTextNoFollow(filesDir, p)) as? JsonObject
+                ?: return Read.Unreadable("not a JSON object")
+        } catch (e: Exception) {
+            return Read.Unreadable(e.message ?: e.javaClass.simpleName)
+        }
+        fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val provider = s("provider")
+        val authType = s("authType")
+        val model = s("model")
+        if (provider == null || authType == null || model == null) return Read.Unreadable("invalid content")
+        if (!com.seekerclaw.app.state.RuntimeStateStore.isValidPair(provider, authType)) {
+            return Read.Unreadable("invalid provider/authType")
+        }
+        return Read.Present(ModelTuple(provider, authType, model))
+    }
 
     /** The stored object, or null when missing or not a JSON object. */
     fun readObject(filesDir: Path): JsonObject? {
@@ -93,23 +129,91 @@ object RuntimeStateFile {
     }
 
     /**
-     * The stored tuple, or null when missing, corrupt, or not a valid (provider, authType)
-     * pair. Node treats an invalid file the same way: it falls back to config.json.
+     * The stored tuple, or null when the file is [Read.Missing] or [Read.Unreadable]. Node treats
+     * both the same way: it falls back to config.json.
      */
-    fun readTuple(filesDir: Path): ModelTuple? {
-        val o = readObject(filesDir) ?: return null
-        fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val provider = s("provider")?.trim()?.lowercase() ?: return null
-        val authType = s("authType")?.trim()?.lowercase() ?: return null
-        val model = s("model") ?: return null
-        if (!com.seekerclaw.app.state.RuntimeStateStore.isValidPair(provider, authType)) return null
-        return ModelTuple(provider, authType, model)
-    }
+    fun readTuple(filesDir: Path): ModelTuple? = (read(filesDir) as? Read.Present)?.tuple
 
     /** Sets `model` only; every other field is kept. Throws when the file is not a JSON object. */
     fun writeModel(filesDir: Path, model: String) {
         val o = readObject(filesDir) ?: throw java.io.IOException("runtime_state.json is not readable")
         val next = AgentSettingsFile.with(o, "model", JsonPrimitive(model))
         SafeFs.writeAtomicText(filesDir, path(filesDir), Json.encodeToString(JsonObject.serializer(), next))
+    }
+
+    /**
+     * BAT-1661 (contract v2.8 §2, v2.10 §3): writes [tuple] as a complete record, CHECKED
+     * ([SafeFs.writeAtomicVerified]). The record shape is [com.seekerclaw.app.state.RuntimeState]'s,
+     * the one `RuntimeStateStore` writes: a readable object keeps its other fields (reasoning
+     * toggles, the Custom signature); a missing or corrupt file gets the record's defaults for them.
+     *
+     * Throws [SafeFs.WriteNotApplied] or [SafeFs.WriteUnconfirmed]; the caller must not take the step
+     * that depends on this write on either.
+     */
+    fun writeTupleVerified(tx: ModelSelectionLock.Tx, filesDir: Path, tuple: ModelTuple) {
+        tx.requireOpen()
+        require(com.seekerclaw.app.state.RuntimeStateStore.isValidPair(tuple.provider, tuple.authType)) {
+            "Invalid (provider=${tuple.provider}, authType=${tuple.authType})"
+        }
+        val base = readObject(filesDir)?.let {
+            try {
+                recordJson.decodeFromJsonElement(com.seekerclaw.app.state.RuntimeState.serializer(), it)
+            } catch (_: Exception) {
+                null
+            }
+        } ?: com.seekerclaw.app.state.RuntimeState()
+        val record = base.copy(provider = tuple.provider, authType = tuple.authType, model = tuple.model)
+        SafeFs.writeAtomicVerified(
+            filesDir,
+            path(filesDir),
+            recordJson.encodeToString(com.seekerclaw.app.state.RuntimeState.serializer(), record).toByteArray(Charsets.UTF_8),
+        )
+    }
+}
+
+/**
+ * BAT-1661 (contract v2.9 §3, v2.10 §3): which file Node's dispatch reads the model from, decided
+ * the way `config.js` does it. One function, pinned to Node by `ModelDispatchParityTest` and
+ * `model-dispatch-parity.test.js` over one shared table
+ * (`tests/nodejs-project/fixtures/model-dispatch-parity.json`).
+ *
+ * - **The running provider** is runtime_state's when that file is [RuntimeStateFile.Read.Present],
+ *   else config.json's (unknown or blank: `claude`), as `config.js` `PROVIDER`.
+ * - **The overlay** wins when it is a JSON object, its `provider` is missing, blank, not a string,
+ *   or equal to the running provider, and its `model` is a non-blank string (`resolveActiveModel`).
+ * - **Else runtime_state,** when Present with a non-blank model (`_runtimeModel`).
+ * - **Else config.json** (`config.model`). That is the boot payload, never a durable handoff.
+ */
+object NodeDispatch {
+    enum class Source { OVERLAY, RUNTIME, CONFIG }
+
+    data class Winner(val source: Source, val model: String)
+
+    private val SUPPORTED = setOf("claude", "openai", "openrouter", "custom", "xai")
+
+    fun runningProvider(runtime: RuntimeStateFile.Read, configProvider: String): String {
+        val raw = (runtime as? RuntimeStateFile.Read.Present)?.tuple?.provider?.trim()?.lowercase()?.ifBlank { null }
+            ?: configProvider.trim().lowercase().ifBlank { null }
+            ?: "claude"
+        return if (raw in SUPPORTED) raw else "claude"
+    }
+
+    fun winner(
+        runtime: RuntimeStateFile.Read,
+        overlay: AgentSettingsFile.Read,
+        configProvider: String,
+        configModel: String,
+    ): Winner {
+        val provider = runningProvider(runtime, configProvider)
+        if (overlay is AgentSettingsFile.Read.Present) {
+            val p = AgentSettingsFile.stringField(overlay.obj, "provider")
+            val m = AgentSettingsFile.stringField(overlay.obj, "model")
+            if ((p == null || p == provider) && m != null) return Winner(Source.OVERLAY, m)
+        }
+        if (runtime is RuntimeStateFile.Read.Present) {
+            val m = runtime.tuple.model.trim()
+            if (m.isNotEmpty()) return Winner(Source.RUNTIME, m)
+        }
+        return Winner(Source.CONFIG, configModel.trim())
     }
 }

@@ -119,6 +119,7 @@ jobs:
             claude-stable-history \
             model-catalog \
             retired-model-read-rule \
+            model-dispatch-parity \
             reasoning-request-enablement \
             xai \
             openai-oauth-store \

@@ -30,7 +30,9 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Acquisition is bounded ([LOCK_TIMEOUT_MS]) and never throws. A timeout returns
  * [Result.Busy]; each caller has a defined busy path (service start: read-only boot;
- * `saveConfig`: return false; `loadConfig`: compute-only reconcile).
+ * `saveConfig`: return false; `loadConfig`: compute-only reconcile; Reset Config:
+ * `ResetResult.Failed`). Lock order everywhere (contract v2.8 §4): this lock, then the OpenAI
+ * sign-in store's, then the xAI store's. A `:node` config load never takes it (v2.7 §1).
  *
  * Node cannot take this lock. That residual (Node `/model`, `/provider` vs a Settings save
  * while Node runs) is unchanged and tracked by BAT-1663; the repair writes only before Node
@@ -89,6 +91,15 @@ object ModelSelectionLock {
     private val nextId = AtomicLong(1)
 
     /**
+     * Test seam: how many times [transaction] was entered, whatever the outcome. Pins that a path
+     * never tries the lock at all (BAT-1661 contract v2.7 §1: a `:node` load), which no timing
+     * assertion can show reliably.
+     */
+    private val entries = AtomicLong(0)
+
+    internal fun entriesForTest(): Long = entries.get()
+
+    /**
      * Thread currently inside a transaction, for nested-call detection only (ownership is the
      * token). A nested [transaction] on the same thread would wait on its own permit until the
      * bound; it is refused at once instead, with an ERROR, because it means a writer that
@@ -108,6 +119,7 @@ object ModelSelectionLock {
      * lock is released.
      */
     fun <T> transaction(timeoutMs: Long = LOCK_TIMEOUT_MS, block: (Tx) -> T): Result<T> {
+        entries.incrementAndGet()
         val root = lockRoot ?: return Result.Busy("not initialized")
         if (holderThread === Thread.currentThread()) {
             Log.e(TAG, "nested transaction on one thread — a writer was not handed the tx")
