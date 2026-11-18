@@ -967,17 +967,52 @@ class ModelSelectionSaveTest {
     }
 
     @Test
-    fun `H5 control - a real api_key switch next to a live xAI sign-in is still mirrored`() {
+    fun `Q12 - a chat api_key choice (overlay explicitly xai-api_key) IS mirrored over stale oauth prefs`() {
         xaiUser(runtimeAuth = "api_key")
-        // A stored sign-in (it does not decrypt on the JVM, which reads as reauth): oauth stays
-        // oauth in runtime_state, so an api_key record is a different selection, mirrored as before.
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key") // Node /provider xai api_key
+        val r = ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) }
+        assertEquals(ModelSelectionLock.Result.Acquired(true), r)
+        assertEquals("api_key", prefs.disk["auth_type"])
+    }
+
+    private fun signInXai() {
+        // A stored sign-in. It does not decrypt on the JVM, which the boot reads as reauth: the H5
+        // rule then keeps oauth, as for a live token.
         CrossProcessStore(dir.toFile(), XaiOAuthTokenStore.FILE_NAME, XaiOAuthTokens.serializer(), XaiOAuthTokens())
             .write(XaiOAuthTokens(accessTokenEnc = "c2VhbGVk", refreshTokenEnc = "c2VhbGVk", epoch = 1))
         XaiOAuthTokenStore.resetForTest()
         XaiOAuthTokenStore.initForTest(dir.toFile())
+    }
+
+    @Test
+    fun `CR1 - a sign-in landing before the mirror does not turn the seeded guard into an api_key choice`() {
+        xaiUser(runtimeAuth = null)
+        assertTrue(seedNow())
+        assertEquals("the seed wrote the H5 guard", "api_key", RuntimeStateFile.readTuple(dir)?.authType)
+        signInXai() // the token is saved; the collector has not mirrored yet
         val r = ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) }
-        assertEquals(ModelSelectionLock.Result.Acquired(true), r)
-        assertEquals("api_key", prefs.disk["auth_type"])
+        assertEquals(ModelSelectionLock.Result.Acquired(false), r)
+        assertEquals("the user's oauth selection survives", "oauth", prefs.disk["auth_type"])
+        // Then the sign-in's sync lands oauth in runtime_state, and a boot runs oauth.
+        assertEquals(ConfigManager.XaiAuthSync.SYNCED, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1))
+        assertEquals("oauth", RuntimeStateFile.readTuple(dir)?.authType)
+        nodeProcess()
+        assertEquals("oauth", serviceStart().authType)
+    }
+
+    @Test
+    fun `Q12 - stale oauth prefs, both fresh files on xai-api_key - boot keeps the newer api_key choice`() {
+        xaiUser(runtimeAuth = "api_key")
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key")
+        nodeProcess()
+        assertEquals("the boot takes the newer explicit choice", "api_key", serviceStart().authType)
+    }
+
+    @Test
+    fun `Q12 - pending xAI sign-in (overlay on oauth) - boot keeps OAuth over the no-token guard`() {
+        xaiUser(runtimeAuth = "api_key")
+        nodeProcess()
+        assertEquals("oauth", serviceStart().authType)
     }
 
     private fun xaiUser(runtimeAuth: String?) {
@@ -1390,6 +1425,254 @@ class ModelSelectionSaveTest {
         failedSelection { rewriteRuntime { it.copy(customConfigSignature = "newer-gateway") } }
         assertEquals("changed signature: kept", ModelTuple("openai", "oauth", "gpt-6.1-sol"), RuntimeStateFile.readTuple(dir))
         assertEquals("newer-gateway", runtimeRecord().customConfigSignature)
+    }
+
+    // ---------------------------------- Codex Q15 (58e426b6 / dd73a0e2): metadata-only overlays
+
+    private fun corruptOverlay() = AgentSettingsFile.path(dir).toFile().writeText("{not json")
+
+    private fun planNow() {
+        nodeProcess()
+        ModelSelectionLock.transaction { tx -> ModelRepair.plan(tx, dir, ConfigManager.modelSnapshot(ctx)) }
+        assertEquals(ModelRepair.STATE_PENDING, intent()?.state)
+    }
+
+    private fun heartbeatSave() {
+        mainProcess(seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"))
+        assertTrue(save(form(ModelTuple("openai", "oauth", "gpt-5.4")) { it.copy(heartbeatIntervalMinutes = 45) }))
+        assertEquals("the save recovered the file", "45", overlayInt("heartbeatIntervalMinutes"))
+        assertEquals("with no selection keys", null, overlayModel())
+    }
+
+    @Test
+    fun `Q15 repro 1 - unreadable-at-decision overlay, unrelated save, then boot and MAIN converge`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        corruptOverlay()
+        planNow()
+        val pending = intent()!!
+        assertEquals(ModelRepair.OutsideOverlay.UNREADABLE, pending.overlayOutside?.state)
+        heartbeatSave()
+        assertEquals("intent kept", pending, intent())
+        assertTrue("still Pending, not Superseded: ${classify()}", classify() is ModelRepair.IntentClass.Pending)
+        nodeProcess()
+        serviceStart()
+        assertEquals("gpt-6.1-sol", runtimeModel())
+        assertMainLoadConverges(retired = "gpt-5.4", target = "gpt-6.1-sol")
+    }
+
+    @Test
+    fun `Q15 repro 2 - participating overlay lost, unrelated save - EvidenceLost, boot repairs, MAIN converges`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        planNow()
+        val pending = intent()!!
+        assertEquals("gpt-5.4", pending.overlay?.model)
+        corruptOverlay()
+        heartbeatSave()
+        assertEquals("intent kept", pending, intent())
+        assertTrue("EvidenceLost, not Superseded: ${classify()}", classify() is ModelRepair.IntentClass.EvidenceLost)
+        nodeProcess()
+        serviceStart()
+        assertEquals("gpt-6.1-sol", runtimeModel())
+        assertEquals("the overlay gets the target back", "gpt-6.1-sol", overlayModel())
+        assertEquals("its other keys kept", "45", overlayInt("heartbeatIntervalMinutes"))
+        assertMainLoadConverges(retired = "gpt-5.4", target = "gpt-6.1-sol")
+    }
+
+    private fun afterModelLessSave(overlayText: String): ModelRepair.IntentClass? {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        corruptOverlay()
+        planNow()
+        heartbeatSave()
+        AgentSettingsFile.path(dir).toFile().writeText(overlayText)
+        return classify()
+    }
+
+    @Test
+    fun `Q15 counterexample - a real newer model choice still supersedes`() {
+        val c = afterModelLessSave("""{"heartbeatIntervalMinutes":45,"provider":"openai","authType":"oauth","model":"gpt-6-astra"}""")
+        assertTrue("$c", c is ModelRepair.IntentClass.Superseded)
+    }
+
+    @Test
+    fun `Q15 counterexample - a real provider change still supersedes`() {
+        val c = afterModelLessSave("""{"heartbeatIntervalMinutes":45,"provider":"xai","authType":"api_key","model":"grok-4.6"}""")
+        assertTrue("$c", c is ModelRepair.IntentClass.Superseded)
+    }
+
+    @Test
+    fun `Q15 raw keys - a supplied blank model is not excused`() {
+        val c = afterModelLessSave("""{"heartbeatIntervalMinutes":45,"model":""}""")
+        assertTrue("$c", c is ModelRepair.IntentClass.Superseded)
+    }
+
+    @Test
+    fun `Q15 raw keys - a supplied auth with no provider or model is not excused`() {
+        val c = afterModelLessSave("""{"heartbeatIntervalMinutes":45,"authType":"api_key"}""")
+        assertTrue("$c", c is ModelRepair.IntentClass.Superseded)
+    }
+
+    @Test
+    fun `Q15 raw keys - a captured participating model lost to a supplied blank model still supersedes`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        planNow()
+        mainProcess()
+        AgentSettingsFile.path(dir).toFile().writeText("""{"heartbeatIntervalMinutes":45,"model":"  "}""")
+        assertTrue("${classify()}", classify() is ModelRepair.IntentClass.Superseded)
+    }
+
+    // ----------------------------- Codex Q8 (58e426b6): no intent - seed overlay, then prefs
+
+    @Test
+    fun `Q8 - runtime_state missing, off-list applicable overlay - seed, MAIN load and boot keep it`() {
+        seedPrefs("gpt-6-astra")
+        writeOverlay("gpt-6.9-preview") // a working off-list choice (Settings > Custom model)
+        mainProcess()
+        assertTrue(seedNow())
+        assertEquals("seeded from the overlay", ModelTuple("openai", "oauth", "gpt-6.9-preview"), RuntimeStateFile.readTuple(dir))
+        assertEquals("the MAIN load keeps it (not clamped)", "gpt-6.9-preview", ConfigManager.loadConfig(ctx)!!.model)
+        assertEquals("gpt-6.9-preview", prefs.disk["model"])
+        assertEquals("gpt-6.9-preview", overlayModel())
+        nodeProcess()
+        assertEquals("the boot keeps it", "gpt-6.9-preview", serviceStart().model)
+        assertEquals("gpt-6.9-preview", runtimeModel())
+    }
+
+    @Test
+    fun `Q8 - a foreign, model-less or unreadable overlay falls back to prefs`() {
+        seedPrefs("gpt-6-astra")
+        mainProcess()
+        for (text in listOf(
+            """{"provider":"xai","authType":"api_key","model":"grok-4.6"}""",
+            """{"provider":"openai","authType":"api_key","model":"gpt-6.9-preview"}""",
+            """{"heartbeatIntervalMinutes":30}""",
+            "{not json",
+        )) {
+            Files.deleteIfExists(runtimePath())
+            AgentSettingsFile.path(dir).toFile().writeText(text)
+            assertTrue(seedNow())
+            assertEquals(text, ModelTuple("openai", "oauth", "gpt-6-astra"), RuntimeStateFile.readTuple(dir))
+        }
+    }
+
+    @Test
+    fun `Q8 - a provider-only overlay falls back to prefs, a model-only overlay is applicable`() {
+        seedPrefs("gpt-6-astra")
+        mainProcess()
+        AgentSettingsFile.path(dir).toFile().writeText("""{"provider":"openai"}""")
+        assertTrue(seedNow())
+        assertEquals("provider only: prefs' model", ModelTuple("openai", "oauth", "gpt-6-astra"), RuntimeStateFile.readTuple(dir))
+        Files.delete(runtimePath())
+        AgentSettingsFile.path(dir).toFile().writeText("""{"model":"gpt-6.9-preview"}""")
+        assertTrue(seedNow())
+        assertEquals("model only: applicable", ModelTuple("openai", "oauth", "gpt-6.9-preview"), RuntimeStateFile.readTuple(dir))
+    }
+
+    @Test
+    fun `Q8 + H5 - the overlay's model with the H5 auth for xAI oauth with no token`() {
+        xaiUser(runtimeAuth = null)
+        writeOverlay("grok-4.5", provider = "xai", auth = "oauth")
+        assertTrue(seedNow())
+        assertEquals(ModelTuple("xai", "api_key", "grok-4.5"), RuntimeStateFile.readTuple(dir))
+    }
+
+    @Test
+    fun `Q12 through the real producer - a Settings OAuth selection flips the overlay, boot and mirror keep oauth`() {
+        // The user was on xAI API key everywhere; then selects xAI OAuth in Settings (not signed in yet).
+        prefs.seed("setup_complete" to true, "provider" to "xai", "auth_type" to "api_key", "model" to "grok-4.6")
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key")
+        writeRuntime("grok-4.6", provider = "xai", auth = "api_key")
+        File(dir.toFile(), "xai_oauth.migrated").createNewFile()
+        CrossProcessStore(dir.toFile(), XaiOAuthTokenStore.FILE_NAME, XaiOAuthTokens.serializer(), XaiOAuthTokens()).write(XaiOAuthTokens())
+        XaiOAuthTokenStore.initForTest(dir.toFile())
+        mainProcess()
+        assertTrue(save(form(ModelTuple("xai", "api_key", "grok-4.6")) { it.copy(authType = "oauth") }))
+        assertEquals("the producer publishes the SELECTED auth to the overlay", "oauth", overlayInt("authType"))
+        assertEquals("runtime_state holds the H5 guard image", "api_key", RuntimeStateFile.readTuple(dir)?.authType)
+        val r = ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) }
+        assertEquals(ModelSelectionLock.Result.Acquired(false), r)
+        assertEquals("the mirror keeps oauth", "oauth", prefs.disk["auth_type"])
+        nodeProcess()
+        assertEquals("the boot keeps oauth", "oauth", serviceStart().authType)
+    }
+
+    @Test
+    fun `display - AppConfig and the projection use the same saved-key signal (the stored key, even undecryptable)`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        prefs.seed("openai_api_key_enc" to "c2VhbGVk") // stored, but it does not decrypt on the JVM
+        mainProcess()
+        assertTrue(ConfigManager.signOutOpenAI(ctx)) // no usable sign-in
+        val cfg = ConfigManager.loadConfig(ctx)!!
+        assertEquals("the key does not decrypt here", "", cfg.openaiApiKey)
+        RuntimeStateStore.onObserved(RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"), prefs)
+        assertEquals("projection: api_key fallback", "gpt-5.4", RuntimeStateStore.read().model)
+        assertEquals("Settings agrees with the projection", RuntimeStateStore.read().model, cfg.displayModel)
+    }
+
+    // ------------- CodeRabbit on ab6385bd (CR2): a reconcile retry across a COLD restart — Codex question
+
+    @Test
+    fun `CR2 KNOWN GAP pending Codex - runtime write and rollback both failed, then a cold restart - not retried`() {
+        // Documents today's behaviour (decision pending with Codex: write runtime_state before the
+        // prefs commit, or a durable marker). Prefs and the overlay agree on xai on disk, so a cold
+        // load does not reconcile, and runtime_state — which Node reads first — stays on openai.
+        // When the gap is closed this test must be inverted, not deleted.
+        seedPrefs("gpt-6-astra")
+        writeRuntime("gpt-6-astra")
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key")
+        mainProcess(seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-6-astra"))
+        SafeFs.beforeMove = { _, target ->
+            if (target.fileName.toString() == RuntimeStateFile.NAME) {
+                prefs.failCommits = true
+                throw IOException("injected runtime_state write failure")
+            }
+        }
+        try {
+            ConfigManager.loadConfig(ctx)
+        } finally {
+            SafeFs.beforeMove = savedBeforeMove
+            prefs.failCommits = false
+        }
+        prefs.restartProcess() // MAIN exits; the next process reads the disk
+        mainProcess(seed = RuntimeState(provider = "xai", authType = "api_key", model = "grok-4.6"))
+        ConfigManager.loadConfig(ctx)
+        assertEquals("xai", prefs.disk["provider"])
+        assertEquals("KNOWN GAP: runtime_state not retried", "openai", RuntimeStateFile.readTuple(dir)?.provider)
+    }
+
+    // ------------------- Codex review of ca06bb79 #4: the display follows the effective transport
+
+    @Test
+    fun `display - AppConfig shows the model the transport sends`() {
+        val stored = ModelTuple("openai", "oauth", "gpt-5.4")
+        assertEquals("usable sign-in: the default", "gpt-6.1-sol", form(stored).displayModel)
+        assertEquals("no sign-in, saved key: api_key keeps 5.4", "gpt-5.4",
+            form(stored) { it.copy(openaiOAuthToken = "", openaiApiKeySaved = true) }.displayModel)
+        assertEquals("reconnect-required: oauth, the default", "gpt-6.1-sol",
+            form(stored) { it.copy(openaiOAuthToken = "", openaiApiKey = "") }.displayModel)
+        assertEquals("stored model never changes", "gpt-5.4", form(stored) { it.copy(openaiOAuthToken = "") }.model)
+    }
+
+    @Test
+    fun `display - the RuntimeState projection uses credentials and refreshes when they change`() {
+        seedPrefs("gpt-5.4")
+        mainProcess()
+        val rec = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4")
+        RuntimeStateStore.onObserved(rec, prefs)
+        assertEquals("usable sign-in", "gpt-6.1-sol", RuntimeStateStore.read().model)
+        prefs.seed("openai_api_key_enc" to "sealed:sk-test")
+        assertTrue(ConfigManager.signOutOpenAI(ctx)) // no usable sign-in now; a key is saved
+        assertEquals("api-key fallback shows 5.4 at once", "gpt-5.4", RuntimeStateStore.read().model)
+        assertEquals("the selected auth is untouched", "oauth", RuntimeStateStore.read().authType)
+        prefs.seed("openai_api_key_enc" to null)
+        RuntimeStateStore.refreshDisplay()
+        assertEquals("reconnect-required", "gpt-6.1-sol", RuntimeStateStore.read().model)
     }
 
     // ------------------------------------------------------------------------------ fakes

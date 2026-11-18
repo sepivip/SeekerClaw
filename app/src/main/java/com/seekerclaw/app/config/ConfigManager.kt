@@ -113,6 +113,11 @@ data class AppConfig(
      * built from scratch (Setup), which is always a selection.
      */
     val loadedModelTuple: ModelTuple? = null,
+    /**
+     * BAT-1661: an OpenAI API key is stored (the encrypted key's presence) — the saved-key signal
+     * ModelRepair's snapshot and the RuntimeStateStore display use. Set by the load; display only.
+     */
+    val openaiApiKeySaved: Boolean = false,
 ) {
     /**
      * BAT-1661: the model to SHOW. A model this sign-in can no longer use shows as the provider
@@ -120,7 +125,13 @@ data class AppConfig(
      */
     val displayModel: String
         get() = try {
-            ModelRegistry.applyRetiredModelRule(provider, authType, model)
+            // Codex review of ca06bb79 #4: the retirement scope is the TRANSPORT Node runs with
+            // (`_EFFECTIVE_AUTH`), from this config's own credentials — not the selected auth.
+            ModelRegistry.applyRetiredModelRule(
+                provider,
+                ConfigManager.displayAuth(provider, authType, openaiOAuthToken.isNotBlank(), openaiApiKeySaved),
+                model,
+            )
         } catch (_: IllegalStateException) {
             model // registry not initialised (unit tests): show the stored value
         }
@@ -286,7 +297,7 @@ object ConfigManager {
     private const val KEY_HEARTBEAT_INTERVAL = "heartbeat_interval"
     private const val KEY_MAX_STEPS_PER_TURN = "max_steps_per_turn"
     private const val KEY_PROVIDER = "provider"
-    private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
+    internal const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
     private const val KEY_OPENROUTER_API_KEY_ENC = "openrouter_api_key_enc"
     private const val KEY_OPENROUTER_FALLBACK_MODEL = "openrouter_fallback_model"
     private const val KEY_OPENROUTER_MODEL_CONTEXT = "openrouter_model_context"
@@ -479,6 +490,9 @@ object ConfigManager {
         sealer: SecretSealer,
     ): Boolean {
         val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx, sealer) }
+        // BAT-1661: the saved OpenAI key decides the display transport too. Re-projected AFTER the
+        // lock is released (it reads credentials), whatever the save's outcome.
+        RuntimeStateStore.refreshDisplay()
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {
@@ -1273,16 +1287,17 @@ object ConfigManager {
      * and is never clamped, even when unlisted.
      *
      * One exception keeps the user's auth: a runtime_state auth that is only the BAT-1124 boot-guard
-     * image of the prefs selection ([runtimeAuthTypeFor]: xAI oauth with no token is stored as
-     * api_key) is the SAME selection, so prefs' auth is kept. Taking it would publish api_key into
-     * the overlay, and MAIN's reconcile would then commit it over the user's OAuth choice.
+     * image of the prefs selection ([isXaiGuardImage]) is the SAME selection, so prefs' auth is
+     * kept. Taking it would publish api_key into the overlay, and MAIN's reconcile would then
+     * commit it over the user's OAuth choice. A fresh overlay explicitly on xai/api_key proves a
+     * real API-key choice, which is then taken (Codex Q12).
      */
     internal fun bootSelection(files: java.nio.file.Path, fromPrefs: AppConfig): AppConfig {
         val rt = RuntimeStateFile.read(files)
         val w = NodeDispatch.winner(rt, AgentSettingsFile.read(files), fromPrefs.provider, fromPrefs.model)
         val tuple = (rt as? RuntimeStateFile.Read.Present)?.tuple
             ?: return fromPrefs.copy(model = w.model.ifBlank { fromPrefs.model })
-        val guardImage = tuple.provider == fromPrefs.provider && runtimeAuthTypeFor(fromPrefs) == tuple.authType
+        val guardImage = isXaiGuardImage(files, fromPrefs.provider, fromPrefs.authType, tuple.provider, tuple.authType)
         return fromPrefs.copy(
             provider = tuple.provider,
             authType = if (guardImage) fromPrefs.authType else tuple.authType,
@@ -1595,6 +1610,7 @@ object ConfigManager {
             maxStepsPerTurn = p.getInt(KEY_MAX_STEPS_PER_TURN, 35),
             provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
             openaiApiKey = openaiApiKey,
+            openaiApiKeySaved = !p.getString(KEY_OPENAI_API_KEY_ENC, null).isNullOrBlank(),
             openrouterApiKey = openrouterApiKey,
             openrouterFallbackModel = p.getString(KEY_OPENROUTER_FALLBACK_MODEL, "") ?: "",
             openrouterModelContext = p.getString(KEY_OPENROUTER_MODEL_CONTEXT, "") ?: "",
@@ -2344,6 +2360,7 @@ object ConfigManager {
         if (r is OpenAIOAuthTokenStore.Result.Ok) {
             rearmOpenAILegacySweep()
             sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
+            RuntimeStateStore.refreshDisplay() // the transport, and so the shown model, may change
             bumpConfigVersionOnMain()
             return true
         }
@@ -2364,6 +2381,7 @@ object ConfigManager {
         }
         rearmOpenAILegacySweep()
         sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
+        RuntimeStateStore.refreshDisplay() // the transport, and so the shown model, may change
         bumpConfigVersionOnMain()
         return true
     }
@@ -2953,6 +2971,46 @@ object ConfigManager {
         // oauth-selected-but-never-signed-in family (blank token, NOT reauth) downgrades.
         // Matches the emitConfigJson effectiveAuthType guard.
         runtimeAuthType(config.provider, config.authType, config.xaiOAuthToken, config.xaiOAuthReauthRequired)
+
+    /**
+     * BAT-1661 (Codex Q12, 58e426b6; CodeRabbit on ab6385bd): is runtime_state's (xai, api_key) only
+     * the BAT-1124 H5 boot-guard image of an xAI OAuth selection — the SAME selection — rather than
+     * a user's API-key choice? The one rule for every reader that reasons about a guard image
+     * ([bootSelection], the prefs mirror in RuntimeStateStore).
+     *
+     * A guard image unless a fresh file PROVES an explicit API-key selection. The proof is
+     * agent_settings.json present with `provider` "xai" AND `authType` "api_key": every API-key
+     * choice writes that file — a Settings selection (it publishes the selected auth, never the
+     * guard image) and Node's `/provider xai api_key` (overlay first, then runtime_state) — while
+     * no writer ever puts the guard image there. runtime_state alone proves nothing: its api_key
+     * is exactly what the guard writes. Token state is NOT used: a sign-in between the guard write
+     * and its sync must not turn the old guard into an "explicit" API-key choice (CodeRabbit).
+     */
+    internal fun isXaiGuardImage(
+        files: java.nio.file.Path,
+        selectedProvider: String,
+        selectedAuth: String,
+        runtimeProvider: String,
+        runtimeAuth: String,
+    ): Boolean {
+        if (selectedProvider != "xai" || selectedAuth != "oauth") return false
+        if (runtimeProvider != "xai" || runtimeAuth != "api_key") return false
+        val ov = (AgentSettingsFile.read(files) as? AgentSettingsFile.Read.Present)?.obj ?: return true
+        val explicitApiKey = AgentSettingsFile.stringField(ov, "provider") == "xai" &&
+            AgentSettingsFile.stringField(ov, "authType") == "api_key"
+        return !explicitApiKey
+    }
+
+    /**
+     * BAT-1661 (Codex review of ca06bb79 #4): the auth the retired-model rule uses for DISPLAY —
+     * Node's `_EFFECTIVE_AUTH` (config.js), from the same table ([ModelRepair.transportOf] /
+     * [OpenAIAuth]). OpenAI oauth with no usable sign-in but a saved key runs on api_key; with
+     * neither (reconnect-required) Node keeps `oauth`. Never written anywhere.
+     */
+    internal fun displayAuth(provider: String, selectedAuth: String, oauthUsable: Boolean, apiKeySaved: Boolean): String {
+        val t = ModelRepair.transportOf(ModelRepair.Scope(provider, selectedAuth), oauthUsable, apiKeySaved).authType
+        return if (t == ModelRepair.TRANSPORT_RECONNECT) "oauth" else t
+    }
 
     /** The H5 rule itself (one definition for [runtimeAuthTypeFor] and [runtimeAuthTypeForStored]). */
     private fun runtimeAuthType(provider: String, authType: String, xaiToken: String, xaiReauth: Boolean): String =

@@ -28,6 +28,17 @@ class XaiOAuthOutcomeTest {
     }
 
     @Test
+    fun `applyXaiOutcome - the callback runs exactly once when allowed, never otherwise`() {
+        var calls = 0
+        assertEquals(null, applyXaiOutcome(XaiOAuthOutcome(notify = true, message = null)) { calls++ })
+        assertEquals(1, calls)
+        assertEquals(XAI_RESTART_NEEDED_BUSY, applyXaiOutcome(xaiSignInOutcome("busy")) { calls++ })
+        assertEquals(XAI_RESTART_NEEDED_NOT_SAVED, applyXaiOutcome(xaiSignInOutcome("not_saved")) { calls++ })
+        assertEquals(XAI_SIGN_OUT_BUSY, applyXaiOutcome(xaiSignOutOutcome(ConfigManager.XaiAuthSync.BUSY)) { calls++ })
+        assertEquals("no prompt for any not-synced outcome", 1, calls)
+    }
+
+    @Test
     fun `sign-out - each sync result`() {
         assertEquals(XaiOAuthOutcome(true, null), xaiSignOutOutcome(ConfigManager.XaiAuthSync.SYNCED))
         assertEquals(XaiOAuthOutcome(false, XAI_SIGN_OUT_BUSY), xaiSignOutOutcome(ConfigManager.XaiAuthSync.BUSY))

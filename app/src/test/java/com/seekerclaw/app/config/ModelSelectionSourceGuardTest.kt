@@ -1,6 +1,7 @@
 package com.seekerclaw.app.config
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -250,29 +251,80 @@ class ModelSelectionSourceGuardTest {
         assertTrue(touchedOffenders(noEdit).isNotEmpty())
     }
 
-    /** XaiOAuth.kt: the sign-in/out callbacks (Settings' restart prompt) fire only through the outcome. */
+    /**
+     * XaiOAuth.kt (CodeRabbit on ab6385bd): the sign-in/out callbacks (Settings' restart prompt) are
+     * never invoked directly — only handed to `applyXaiOutcome`, whose behaviour
+     * `XaiOAuthOutcomeTest` pins. Structural, so `if (x) onSignedIn() else onSignedIn()` or any
+     * other direct call fails, whatever its condition.
+     */
     private fun xaiPromptOffenders(ui: List<String>): List<String> {
         val out = mutableListOf<String>()
-        var calls = 0
         ui.forEachIndexed { i, l ->
-            if (isComment(l) || !Regex("""\bonSigned(In|Out)\(\)""").containsMatchIn(l)) return@forEachIndexed
-            calls++
-            if (!l.contains("if (outcome.notify) onSigned")) out += "XaiOAuth.kt:${i + 1} fires the restart prompt without the outcome"
+            if (!isComment(l) && Regex("""\bonSigned(In|Out)\s*\(""").containsMatchIn(l)) {
+                out += "XaiOAuth.kt:${i + 1} invokes the restart-prompt callback directly"
+            }
         }
-        if (calls != 2) out += "expected 2 callback calls, saw $calls"
+        val dispatch = ui.count { !isComment(it) && Regex("""applyXaiOutcome\(.*,\s*onSigned(In|Out)\)""").containsMatchIn(it) }
+        if (dispatch != 2) out += "expected the 2 callbacks dispatched through applyXaiOutcome, saw $dispatch"
         return out
     }
 
     @Test
-    fun `xAI restart prompt fires only when the agent's settings were synced`() {
+    fun `xAI restart prompt fires only through applyXaiOutcome`() {
         val path = "com/seekerclaw/app/ui/components/XaiOAuth.kt"
         val ui = sources.getValue(path)
         assertEquals(emptyList<String>(), xaiPromptOffenders(ui))
-        // Negative control: the ca06bb79 sign-in path (prompt first, warning after).
-        val at = ui.indexOfFirst { it.contains("if (outcome.notify) onSignedIn()") }
+        val at = ui.indexOfFirst { it.contains("applyXaiOutcome(xaiSignInOutcome(") }
         assertTrue(at >= 0)
-        val mutated = ui.toMutableList().apply { this[at] = "                        onSignedIn()" }
-        assertTrue(xaiPromptOffenders(mutated).isNotEmpty())
+        // Negative control 1: the else-bypass.
+        val bypass = ui.toMutableList().apply {
+            this[at] = "                        val o = xaiSignInOutcome(json.optString(\"restartNeeded\")); if (o.notify) onSignedIn() else onSignedIn()"
+        }
+        assertTrue(xaiPromptOffenders(bypass).isNotEmpty())
+        // Negative control 2: the ca06bb79 unconditional call.
+        val direct = ui.toMutableList().apply { this[at] = "                        onSignedIn()" }
+        assertTrue(xaiPromptOffenders(direct).isNotEmpty())
+    }
+
+    // --------------------------- RuntimeStateStore display projection (review of the Codex folds)
+
+    private fun rssBody(name: String): String {
+        val lines = sources.getValue("com/seekerclaw/app/state/RuntimeStateStore.kt")
+        val at = lines.indexOfFirst { Regex("""fun $name\(""").containsMatchIn(it) && !isComment(it) }
+        assertTrue("$name is in the source", at >= 0)
+        val end = (at + 1 until lines.size).first { lines[it].startsWith("    }") }
+        return lines.subList(at, end + 1).joinToString("\n")
+    }
+
+    @Test
+    fun `display projection - publish and refresh assign under displayLock, refresh never overwrites a newer publish`() {
+        val publish = rssBody("publish")
+        val refresh = rssBody("refreshDisplay")
+        assertTrue(publish, Regex("""synchronized\(displayLock\) \{\s*lastProjected = s\s*_state\.value = shown""").containsMatchIn(publish))
+        assertTrue(refresh, refresh.contains("synchronized(displayLock) { lastProjected }"))
+        assertTrue(refresh, refresh.contains("if (lastProjected === s) _state.value = shown"))
+        assertFalse("no projection under the lock", Regex("""synchronized\(displayLock\) \{[^}]*forDisplay""").containsMatchIn(publish + refresh))
+    }
+
+    @Test
+    fun `display projection - init publishes without credential I-O, the first credential projection runs on IO`() {
+        val init = rssBody("init")
+        assertTrue(init, init.contains("seedFromPrefs(sp, gateXai = false)"))
+        assertTrue(init, init.contains("publish(seeded, withCredentials = false)"))
+        val launch = init.substringAfter("scope.launch {")
+        assertTrue("refreshDisplay runs in the IO coroutine", launch.contains("refreshDisplay()"))
+    }
+
+    @Test
+    fun `saveConfig re-projects the display only after the model lock is released`() {
+        val cm = sources.getValue("com/seekerclaw/app/config/ConfigManager.kt")
+        val locked = cm.indexOfFirst { it.contains("private fun saveConfigLocked(") }
+        val lockedEnd = (locked + 1 until cm.size).first { cm[it].startsWith("    }") }
+        assertFalse("not inside saveConfigLocked", cm.subList(locked, lockedEnd).any { it.contains("RuntimeStateStore.refreshDisplay()") && !isComment(it) })
+        val with = cm.indexOfFirst { it.contains("internal fun saveConfigWith(") }
+        val withEnd = (with + 1 until cm.size).first { cm[it].startsWith("    }") }
+        val body = cm.subList(with, withEnd).joinToString("\n")
+        assertTrue(body.indexOf("RuntimeStateStore.refreshDisplay()") > body.indexOf("ModelSelectionLock.transaction("))
     }
 
     // ------------------------ CodeRabbit on 444ba220 (T4): restart only after the xAI auth sync

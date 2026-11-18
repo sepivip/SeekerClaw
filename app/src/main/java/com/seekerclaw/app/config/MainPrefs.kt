@@ -62,8 +62,11 @@ object MainPrefs {
      * Nothing may be called out to while it is held: no other lock, no listener, no callback, no
      * I/O beyond the prefs commit itself. Only `SharedPreferences` reads, `edit()` and the
      * commit/apply run under it. Keep it that way — a call-out is how a leaf lock becomes a cycle.
-     * (A registered `OnSharedPreferenceChangeListener` is notified by Android on the main thread
-     * after the commit, not under this lock.)
+     *
+     * Listeners: Android notifies `OnSharedPreferenceChangeListener`s from inside `commit()` when it
+     * runs on the main thread (synchronously, before `commit()` returns) — i.e. UNDER this lock. No
+     * listener is registered on MAIN prefs today. None may be registered without revisiting this
+     * leaf rule (the listener would run while the lock is held).
      */
     private val writeMonitor = Any()
 

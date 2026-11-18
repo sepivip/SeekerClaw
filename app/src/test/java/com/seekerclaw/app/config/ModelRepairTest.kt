@@ -477,7 +477,11 @@ class ModelRepairTest {
         assertEquals(p, classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol"))))
         assertEquals("publisher filled the provider", p, classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol", "openai"))))
         assertTrue(classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6-astra"))) is ModelRepair.IntentClass.Superseded)
-        assertTrue("created without a model", classify(i, snap("gpt-5.4", "gpt-5.4", present(null))) is ModelRepair.IntentClass.Superseded)
+        // Codex Q15 (58e426b6): an overlay with no selection keys contributes no model evidence —
+        // the same as absent (an unrelated Settings save creates exactly this file). v2.10 read it
+        // as "absent → applicable" (Superseded); Q15 narrows that to files that carry a selection.
+        assertEquals("created with no selection keys (Q15): still Pending", p, classify(i, snap("gpt-5.4", "gpt-5.4", present(null))))
+        assertTrue("created with a supplied blank model: Superseded", classify(i, snap("gpt-5.4", "gpt-5.4", present(""))) is ModelRepair.IntentClass.Superseded)
         assertTrue("participating, now unreadable", classify(i, snap("gpt-5.4", "gpt-5.4", AgentSettingsFile.Read.Unreadable("x"))) is ModelRepair.IntentClass.EvidenceLost)
     }
 
@@ -500,6 +504,8 @@ class ModelRepairTest {
         assertTrue("foreign → applicable", c(present("gpt-5.4", "openai")) is ModelRepair.IntentClass.Superseded)
         assertEquals("foreign, same {p, m}: ignored", ModelRepair.IntentClass.Pending, c(present("claude-opus-5", "claude")))
         assertTrue("foreign, another model", c(present("claude-opus-4", "claude")) is ModelRepair.IntentClass.Superseded)
+        // Codex Q15: no selection keys at all — no model evidence, ignored.
+        assertEquals("foreign → model-less: ignored", ModelRepair.IntentClass.Pending, c(present(null)))
         assertTrue("foreign, another provider", c(present("claude-opus-5", "xai")) is ModelRepair.IntentClass.Superseded)
         assertEquals("foreign → absent: ignored", ModelRepair.IntentClass.Pending, c(AgentSettingsFile.Read.Absent))
         // Not in v2.10's table; treated like "unreadable stays unreadable" (Node's dispatch skips both).

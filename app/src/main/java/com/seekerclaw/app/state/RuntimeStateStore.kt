@@ -173,8 +173,12 @@ object RuntimeStateStore {
         // BAT-1157: MAIN-only (see SeekerClawApplication); the collector mirror writes prefs.
         val sp = MainPrefs.forWrite(app, "RuntimeStateStore.init") ?: return
         prefs = sp
-        val seeded = seedFromPrefs(sp)
-        _state.value = forDisplay(seeded)
+        // BAT-1661: init runs on the main thread — no credential I/O here. The in-memory seed takes
+        // prefs as stored (no xAI H5 decision, which decrypts; the on-disk seed applies it, on IO),
+        // and its first projection uses the stored auth. The credential-aware projection follows
+        // off the main thread ([refreshDisplay] in the coroutine below, then every emission).
+        val seeded = seedFromPrefs(sp, gateXai = false)
+        publish(seeded, withCredentials = false)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         ownedScope = scope
         val cps = CrossProcessStore(
@@ -218,6 +222,7 @@ object RuntimeStateStore {
         // save (Settings UI / Telegram /provider /model) retries the
         // file write.
         scope.launch {
+            refreshDisplay() // the first credential-aware projection, on IO
             if (!seedIfMissing(app.filesDir, sp) { cps.write(it) }) {
                 Log.w(
                     TAG,
@@ -275,13 +280,37 @@ object RuntimeStateStore {
         tx.requireOpen()
         val dir = filesDir.toPath()
         return when (val intent = com.seekerclaw.app.config.ModelRepair.readIntent(dir)) {
-            com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> write(seedFromPrefs(sp))
+            com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> write(seedNoIntent(sp, dir))
             is com.seekerclaw.app.config.ModelRepair.IntentRead.Present -> seedFromIntent(tx, dir, sp, intent.intent)
             is com.seekerclaw.app.config.ModelRepair.IntentRead.Corrupt -> {
                 Log.i(TAG, "first-launch seed skipped: the model repair record is unreadable")
                 true
             }
         }
+    }
+
+    /**
+     * Contract v2.8 ("No intent: today's seed order, overlay then prefs"), Codex Q8 (58e426b6): the
+     * provider and auth from prefs, the model from an APPLICABLE overlay when it holds a non-blank
+     * string model (no registry check: an off-list custom id is kept, as Node's dispatch keeps it) —
+     * else prefs'. Applicable: its `provider` absent or equal to prefs', and its `authType` absent or
+     * equal to prefs' (the selected auth). A foreign, unreadable or model-less overlay, or prefs
+     * whose pair is invalid, fall back to [seedFromPrefs]. The H5 auth rule applies to the tuple
+     * either way ([seedFromPrefs]). Runs inside the caller's transaction.
+     */
+    internal fun seedNoIntent(sp: SharedPreferences, dir: java.nio.file.Path): RuntimeState {
+        val base = seedFromPrefs(sp)
+        val provider = sp.getString(KEY_PROVIDER, null) ?: return base
+        val auth = sp.getString(KEY_AUTH_TYPE, null) ?: return base
+        if (base.provider != provider) return base // prefs' pair was invalid: the defaults
+        val ov = (com.seekerclaw.app.config.AgentSettingsFile.read(dir) as? com.seekerclaw.app.config.AgentSettingsFile.Read.Present)?.obj
+            ?: return base
+        val p = com.seekerclaw.app.config.AgentSettingsFile.stringField(ov, "provider")
+        val a = com.seekerclaw.app.config.AgentSettingsFile.stringField(ov, "authType")
+        val m = com.seekerclaw.app.config.AgentSettingsFile.stringField(ov, "model") ?: return base
+        if (p != null && p != provider) return base
+        if (a != null && a != auth) return base
+        return base.copy(model = m)
     }
 
     /** [seedIfMissing] with a repair intent on disk; see its KDoc. */
@@ -356,23 +385,22 @@ object RuntimeStateStore {
         if (pending != null && onDisk.provider == pending.provider && onDisk.authType == pending.authType &&
             onDisk.model != pending.target
         ) {
-            if (isValidPair(onDisk.provider, onDisk.authType)) _state.value = forDisplay(onDisk)
+            if (isValidPair(onDisk.provider, onDisk.authType)) publish(onDisk)
             Log.i(TAG, "prefs mirror held: a model repair is pending (target ${pending.target})")
             return false
         }
-        // BAT-1661 (CodeRabbit on ca06bb79): a record whose auth is only the BAT-1124 H5 guard
-        // image of the prefs selection (xAI oauth with no usable token, stored as api_key) is the
-        // SAME selection: mirroring its auth would undo the user's oauth choice. Keep prefs' auth —
-        // the rule ConfigManager.bootSelection applies (contract v2.7 §2). (syncPrefsFromFile is
-        // stricter: any auth difference, guard image included, is a mismatch and syncs nothing.)
-        // Known narrow window, tracked with BAT-1663 (Node's /provider cannot take this lock): a
-        // chat `/provider xai api_key` that lands after an xAI sign-out — prefs still oauth, no
-        // token — writes a record identical to the guard image, so this mirror keeps prefs on
-        // oauth instead of the chat's explicit api_key choice.
+        // BAT-1661 (CodeRabbit on ca06bb79 / ab6385bd, Codex Q12): a record whose auth is only the
+        // BAT-1124 H5 guard image of the prefs selection is the SAME selection: mirroring its auth
+        // would undo the user's oauth choice. Keep prefs' auth. ONE rule decides it, the one
+        // ConfigManager.bootSelection uses: ConfigManager.isXaiGuardImage — a guard image unless
+        // agent_settings.json explicitly holds xai/api_key (Node's `/provider xai api_key` writes it
+        // before runtime_state, so that choice IS mirrored). Token state is not consulted, so a
+        // sign-in landing before this mirror cannot turn the old guard into an "explicit" choice.
+        // (syncPrefsFromFile is stricter: any auth difference is a mismatch and syncs nothing.)
         val curProvider = sp.getString(KEY_PROVIDER, null)
         val curAuth = sp.getString(KEY_AUTH_TYPE, null)
-        val guardImage = curProvider != null && curAuth != null && onDisk.provider == curProvider &&
-            onDisk.authType != curAuth && runtimeAuthOf(curProvider, curAuth) == onDisk.authType
+        val guardImage = curProvider != null && curAuth != null && dir != null &&
+            com.seekerclaw.app.config.ConfigManager.isXaiGuardImage(dir, curProvider, curAuth, onDisk.provider, onDisk.authType)
         return onObserved(if (guardImage) onDisk.copy(authType = curAuth!!) else onDisk, sp)
     }
 
@@ -412,7 +440,7 @@ object RuntimeStateStore {
             is ModelSelectionLock.Result.Busy -> {
                 // Display still follows the file; prefs catch up on the next emission, or on the
                 // next locked load (ConfigManager syncs prefs from the file before reconciling).
-                if (isValidPair(observed.provider, observed.authType)) _state.value = forDisplay(observed)
+                if (isValidPair(observed.provider, observed.authType)) publish(observed)
                 Log.w(TAG, "prefs mirror deferred: model-selection lock busy (${r.reason})")
                 false
             }
@@ -487,15 +515,81 @@ object RuntimeStateStore {
     }
 
     /**
-     * BAT-1661 (contract v2.4 §0): the state the UI shows. A model the current sign-in can no
-     * longer use shows as the provider default — what Node actually sends. Display only: the
-     * prefs mirror and every write use the stored value.
+     * BAT-1661 (contract v2.4 §0): the state the UI shows. A model the transport can no longer use
+     * shows as the provider default — what Node actually sends. Display only: the prefs mirror and
+     * every write use the stored value.
+     *
+     * Codex review of ca06bb79 #4: the retirement scope is the TRANSPORT (Node's `_EFFECTIVE_AUTH`),
+     * which for OpenAI oauth depends on credentials the tuple does not hold — a usable sign-in
+     * (OpenAIOAuthTokenStore) and a saved API key (MAIN prefs). Read here, not inferred from the
+     * tuple; [refreshDisplay] re-projects when they change.
      */
     internal fun forDisplay(s: RuntimeState): RuntimeState {
         val shown = try {
-            ModelRegistry.applyRetiredModelRule(s.provider, s.authType, s.model)
+            ModelRegistry.applyRetiredModelRule(s.provider, displayAuthOf(s), s.model)
         } catch (_: IllegalStateException) {
             s.model // registry not initialised (unit tests)
+        }
+        return if (shown == s.model) s else s.copy(model = shown)
+    }
+
+    /** [com.seekerclaw.app.config.ConfigManager.displayAuth] with the credentials as they are now. */
+    private fun displayAuthOf(s: RuntimeState): String {
+        if (s.provider != "openai" || s.authType != "oauth") return s.authType
+        return try {
+            val usable = OpenAIOAuthTokenStore.isInitialized && OpenAIOAuthTokenStore.hasUsableToken()
+            // The saved-key signal of ModelRepair's snapshot (modelSnapshotFrom) and AppConfig: the
+            // encrypted key's presence (AppConfig.openaiApiKeySaved).
+            val key = !prefs?.getString(com.seekerclaw.app.config.ConfigManager.KEY_OPENAI_API_KEY_ENC, null).isNullOrBlank()
+            com.seekerclaw.app.config.ConfigManager.displayAuth(s.provider, s.authType, usable, key)
+        } catch (e: Exception) {
+            Log.w(TAG, "display transport not decided (${e.javaClass.simpleName}) — selected auth used")
+            s.authType
+        }
+    }
+
+    /** The last record projected into [state] (raw, before [forDisplay]); for [refreshDisplay]. */
+    private var lastProjected: RuntimeState? = null
+
+    /**
+     * Guards ONLY the read/assignment of [lastProjected] and [_state] in [publish] and
+     * [refreshDisplay]. The projection itself (credential reads) runs outside it, and it is never
+     * held across a ModelSelectionLock transaction or any other call.
+     */
+    private val displayLock = Any()
+
+    /**
+     * Projects [s] into [state] and remembers it for [refreshDisplay]. [withCredentials] false: the
+     * stored auth decides the display — no credential I/O (the main-thread first publish in [init]).
+     */
+    private fun publish(s: RuntimeState, withCredentials: Boolean = true) {
+        val shown = if (withCredentials) forDisplay(s) else forDisplayStoredAuth(s)
+        synchronized(displayLock) {
+            lastProjected = s
+            _state.value = shown
+        }
+    }
+
+    /**
+     * BAT-1661 (Codex review of ca06bb79 #4): re-project the last record after the credentials the
+     * display transport depends on changed (an OpenAI sign-in or sign-out, a saved API key). No-op
+     * before anything was projected. Never overwrites a newer [publish]: the result is stored only
+     * while the record it was computed from is still the last one projected.
+     */
+    fun refreshDisplay() {
+        val s = synchronized(displayLock) { lastProjected } ?: return
+        val shown = forDisplay(s)
+        synchronized(displayLock) {
+            if (lastProjected === s) _state.value = shown
+        }
+    }
+
+    /** [forDisplay] with the stored auth as the scope (no credential reads). */
+    private fun forDisplayStoredAuth(s: RuntimeState): RuntimeState {
+        val shown = try {
+            ModelRegistry.applyRetiredModelRule(s.provider, s.authType, s.model)
+        } catch (_: IllegalStateException) {
+            s.model
         }
         return if (shown == s.model) s else s.copy(model = shown)
     }
@@ -686,7 +780,7 @@ object RuntimeStateStore {
         authType
     }
 
-    internal fun seedFromPrefs(prefs: SharedPreferences): RuntimeState {
+    internal fun seedFromPrefs(prefs: SharedPreferences, gateXai: Boolean = true): RuntimeState {
         // BAT-1315: these fell back to hardcoded literals — "claude-opus-4-8" written
         // twice on one line — which made this a THIRD place the shipped default lived,
         // silently diverging from model-registry.json and RuntimeState. Derive them
@@ -701,7 +795,7 @@ object RuntimeStateStore {
         // so the seed (first launch, a toggle's seed) never advertises an unstartable oauth pair
         // that Node reads before config.json. Prefs keep the user's oauth selection; the mirror
         // recognises this image as the same selection ([mirrorFromDisk]).
-        val runtimeAuth = runtimeAuthOf(provider, authType)
+        val runtimeAuth = if (gateXai) runtimeAuthOf(provider, authType) else authType
         val candidate = RuntimeState(provider = provider, authType = runtimeAuth, model = model)
         return if (isValidPair(candidate.provider, candidate.authType)) candidate else RuntimeState()
     }
@@ -728,7 +822,7 @@ object RuntimeStateStore {
             )
             return false
         }
-        _state.value = forDisplay(observed)
+        publish(observed)
         return mirrorIfChanged(prefs, observed)
     }
 
@@ -768,7 +862,7 @@ object RuntimeStateStore {
      */
     internal fun initForTest(injectedSeed: RuntimeState) {
         if (!initialized.compareAndSet(false, true)) return
-        _state.value = forDisplay(injectedSeed)
+        publish(injectedSeed)
     }
 
     /**
@@ -782,7 +876,7 @@ object RuntimeStateStore {
         store = cps
         this.filesDir = filesDir
         this.prefs = prefs
-        _state.value = forDisplay(cps.read())
+        publish(cps.read())
     }
 
     /**
@@ -797,6 +891,7 @@ object RuntimeStateStore {
         appContext = null
         filesDir = null
         prefs = null
+        lastProjected = null
         _state.value = RuntimeState()
         initialized.set(false)
     }

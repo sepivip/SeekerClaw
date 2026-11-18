@@ -345,12 +345,24 @@ object ModelRepair {
         data class Foreign(val provider: String, val model: String?) : OverlayNow()
         object Unreadable : OverlayNow()
         object Absent : OverlayNow()
+
+        /**
+         * Codex Q15 (58e426b6): a readable object with NONE of the selection keys `provider`,
+         * `authType`, `model` (e.g. the file an unrelated Settings save writes over an unreadable
+         * one: heartbeat, maxSteps, apiKeys). It carries no model evidence. A key that is present
+         * — even blank, or not a string — is NOT this: it keeps the existing checks.
+         */
+        object ModelLess : OverlayNow()
     }
+
+    /** Codex Q15: none of the selection keys is present (raw keys, whatever their values). */
+    private fun hasNoSelectionKeys(obj: JsonObject) =
+        !obj.containsKey("provider") && !obj.containsKey("authType") && !obj.containsKey("model")
 
     private fun overlayNow(read: AgentSettingsFile.Read, provider: String): OverlayNow = when (read) {
         AgentSettingsFile.Read.Absent -> OverlayNow.Absent
         is AgentSettingsFile.Read.Unreadable -> OverlayNow.Unreadable
-        is AgentSettingsFile.Read.Present -> {
+        is AgentSettingsFile.Read.Present -> if (hasNoSelectionKeys(read.obj)) OverlayNow.ModelLess else {
             val p = AgentSettingsFile.stringField(read.obj, "provider")
             val m = AgentSettingsFile.stringField(read.obj, "model")
             if (p != null && p != provider) OverlayNow.Foreign(p, m) else OverlayNow.Applicable(m)
@@ -367,8 +379,10 @@ object ModelRepair {
      *    unreadable one became foreign); or, with [main], prefs hold a newer Settings choice
      *    (`:node`'s prefs cache may be stale, so `:node` never applies that check).
      * 2. **Unproven** — [provenTarget] fails.
-     * 3. **EvidenceLost** — a captured file is Missing or Unreadable; for a handed-off intent also
-     *    "no file holds the target any more" (Node would dispatch from config.json).
+     * 3. **EvidenceLost** — a captured file is Missing or Unreadable; a captured participating
+     *    overlay that held an actual model now holds no selection keys ("agent_settings.json no
+     *    longer holds a model", Codex Q15); for a handed-off intent also "no file holds the target
+     *    any more" (Node would dispatch from config.json).
      * 4. **Pending** for a `pending` intent; for a handed-off one whose files went back to their
      *    captured values.
      * 5. **Holds** — handed off, and every participating file and the dispatch file hold the target.
@@ -376,6 +390,9 @@ object ModelRepair {
      * Ignored (v2.10 §1): an unchanged foreign overlay, an unreadable one that stays unreadable, a
      * non-participating one that is deleted, and a foreign one that becomes unreadable (not in the
      * table; Node's dispatch skips both, so it is treated like "unreadable stays unreadable").
+     * Codex Q15: a non-participating (foreign or unreadable) overlay that is now model-less — no
+     * `provider`, `authType` or `model` key — is ignored too, as is a captured model-less or absent
+     * one that is model-less now; such a file carries no model evidence.
      */
     fun classifyIntent(intent: RepairIntent, s: Snapshot, main: Boolean = false): IntentClass {
         val sel = s.selected
@@ -402,6 +419,10 @@ object ModelRepair {
                 is OverlayNow.Foreign -> return IntentClass.Superseded("agent_settings.json now names another provider")
                 OverlayNow.Unreadable -> lost += "agent_settings.json unreadable"
                 OverlayNow.Absent -> if (cap.present) lost += "agent_settings.json deleted"
+                // Codex Q15: a captured ACTUAL model that is gone is lost evidence, not a newer
+                // choice; a captured model-less or absent overlay that is model-less now is unchanged.
+                OverlayNow.ModelLess ->
+                    if (cap.present && cap.model?.trim()?.ifBlank { null } != null) lost += "agent_settings.json no longer holds a model"
                 is OverlayNow.Applicable -> {
                     val captured = if (cap.present) cap.model?.trim()?.ifBlank { null } else null
                     val ok = now.model == intent.target || (cap.present && now.model == captured)
@@ -418,7 +439,8 @@ object ModelRepair {
                     now.provider != out.provider || now.model != out.model ->
                         return IntentClass.Superseded("agent_settings.json now holds another provider's newer model")
                 }
-                OverlayNow.Unreadable, OverlayNow.Absent -> Unit
+                // Codex Q15: an overlay that did not participate and is now model-less is no model evidence.
+                OverlayNow.Unreadable, OverlayNow.Absent, OverlayNow.ModelLess -> Unit
             }
         }
 

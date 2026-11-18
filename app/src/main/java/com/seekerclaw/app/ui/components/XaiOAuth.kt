@@ -79,6 +79,17 @@ internal fun xaiSignInOutcome(restartNeeded: String): XaiOAuthOutcome = when (re
     else -> XaiOAuthOutcome(notify = true, message = null)
 }
 
+/**
+ * BAT-1661 (CodeRabbit on ab6385bd): the ONE place the sign-in/out callback (Settings' restart
+ * prompt) is invoked — only when [outcome] allows it. Returns the message to keep on screen.
+ */
+internal fun applyXaiOutcome(outcome: XaiOAuthOutcome, notify: () -> Unit): String? {
+    if (outcome.notify) {
+        notify()
+    }
+    return outcome.message
+}
+
 /** After a saved sign-out, from the runtime_state sync's result. */
 internal fun xaiSignOutOutcome(sync: ConfigManager.XaiAuthSync): XaiOAuthOutcome = when (sync) {
     ConfigManager.XaiAuthSync.SYNCED -> XaiOAuthOutcome(notify = true, message = null)
@@ -164,9 +175,7 @@ fun rememberXaiOAuthController(
                         isPolling = false
                         // BAT-1661: the agent was not restarted (see XaiOAuthActivity) → no restart
                         // prompt, keep the warning.
-                        val outcome = xaiSignInOutcome(json.optString("restartNeeded"))
-                        if (outcome.notify) onSignedIn()
-                        error = outcome.message
+                        error = applyXaiOutcome(xaiSignInOutcome(json.optString("restartNeeded")), onSignedIn)
                     }
                     "error" -> {
                         error = json.optString("message", "Unknown error")
@@ -229,9 +238,7 @@ fun rememberXaiOAuthController(
                     // BAT-1661 (CodeRabbit on 444ba220 / ca06bb79): the sign-out is saved, but
                     // runtime_state may still say oauth — a restart now would boot xAI sign-in with
                     // no token. No restart prompt then; the warning stays.
-                    val outcome = xaiSignOutOutcome(sync)
-                    if (outcome.notify) onSignedOut()
-                    error = outcome.message
+                    error = applyXaiOutcome(xaiSignOutOutcome(sync), onSignedOut)
                 } else {
                     error = "Sign-out failed — please try again."
                 }
