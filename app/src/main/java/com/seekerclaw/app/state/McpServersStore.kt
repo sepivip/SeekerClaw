@@ -7,7 +7,7 @@ import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.config.McpServerConfig
-import com.seekerclaw.app.config.PrefsNames
+import com.seekerclaw.app.config.MainPrefs
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -788,8 +788,7 @@ object McpServersStore {
             // so a silent failure here would defeat that guarantee
             // for the user without any diagnostic trail. (Copilot
             // R11 PR #352 finding.)
-            val committed = context.applicationContext
-                .getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
+            val committed = (MainPrefs.forWrite(context.applicationContext, "McpServersStore.rebuildRollbackShadow") ?: return)
                 .edit()
                 .putString(KEY_MCP_SERVERS_ENC, Base64.encodeToString(enc, Base64.NO_WRAP))
                 .commit()

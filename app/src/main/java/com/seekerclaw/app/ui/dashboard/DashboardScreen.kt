@@ -142,11 +142,13 @@ fun DashboardScreen(
     }
     val hasCredential = remember(config) {
         when (config?.provider) {
-            // OpenAI is valid if EITHER credential is present — emitConfigJson falls
-            // back to api_key when oauth is selected without a token, so the agent is
-            // startable as long as one of the two is non-blank.
-            "openai" -> config?.openaiOAuthToken?.isNotBlank() == true ||
-                config?.openaiApiKey?.isNotBlank() == true
+            // BAT-1157 (D9): the same table Node applies — oauth with no usable sign-in falls back
+            // to a saved key, or starts reconnect-required (the agent asks the user to reconnect).
+            "openai" -> config != null && com.seekerclaw.app.config.OpenAIAuth.isStartable(
+                selectedAuth = config.authType,
+                hasUsableToken = config.openaiOAuthToken.isNotBlank(),
+                hasApiKey = config.openaiApiKey.isNotBlank(),
+            )
             // BAT-1124: valid on EITHER credential (else-branch uses Anthropic activeCredential
             // and would misreport a configured xai user as unconfigured).
             "xai" -> config?.xaiOAuthToken?.isNotBlank() == true ||

@@ -31,10 +31,23 @@ const { APP_BRIDGE_CONNECT } = require('./net-guard');
 // not transport-failure backoff.
 async function androidBridgeCall(endpoint, data = {}, timeoutMs = 10000) {
     const postData = JSON.stringify(data);
-    return _sendOnce(endpoint, postData, timeoutMs, /* allowRetry */ true);
+    const r = await _sendRaw(endpoint, postData, timeoutMs, /* allowRetry */ true);
+    if (r.transportError) return { error: r.transportError };
+    if (r.body === null) return { error: 'Invalid response from Android Bridge' };
+    return r.body;
 }
 
-function _sendOnce(endpoint, postData, timeoutMs, allowRetry) {
+// BAT-1157 (Codex C2): the same call, but the caller sees the HTTP status as well as the body.
+// Opt-in: existing callers keep androidBridgeCall's body-only shape. Used where a SUCCESS-SHAPED
+// body on a non-200 reply must not be taken for success (the OpenAI token save and
+// confirm-family): `{ status, body, transportError }`, where status is null and transportError
+// set when no HTTP reply arrived (connection error, timeout), and body is null when the reply
+// did not parse.
+async function androidBridgeCallWithStatus(endpoint, data = {}, timeoutMs = 10000) {
+    return _sendRaw(endpoint, JSON.stringify(data), timeoutMs, /* allowRetry */ true);
+}
+
+function _sendRaw(endpoint, postData, timeoutMs, allowRetry) {
     return new Promise((resolve) => {
         // Read the token at request-build time, not at module-load
         // time. The file read is cheap (36-byte UUID, hot OS cache)
@@ -70,25 +83,27 @@ function _sendOnce(endpoint, postData, timeoutMs, allowRetry) {
                     // gone) falls through to the second attempt
                     // returning its body — which the caller surfaces
                     // as a hard error.
-                    _sendOnce(endpoint, postData, timeoutMs, /* allowRetry */ false).then(resolve);
+                    _sendRaw(endpoint, postData, timeoutMs, /* allowRetry */ false).then(resolve);
                     return;
                 }
+                let parsed = null;
                 try {
-                    resolve(JSON.parse(body));
+                    parsed = JSON.parse(body);
                 } catch (e) {
-                    resolve({ error: 'Invalid response from Android Bridge' });
+                    parsed = null;
                 }
+                resolve({ status, body: parsed, transportError: null });
             });
         });
 
         req.on('error', (e) => {
             log(`Android Bridge error: ${e.message}`, 'ERROR');
-            resolve({ error: `Android Bridge unavailable: ${e.message}` });
+            resolve({ status: null, body: null, transportError: `Android Bridge unavailable: ${e.message}` });
         });
 
         req.on('timeout', () => {
             req.destroy();
-            resolve({ error: 'Android Bridge timeout' });
+            resolve({ status: null, body: null, transportError: 'Android Bridge timeout' });
         });
 
         req.write(postData);
@@ -118,5 +133,6 @@ async function fetchMcpToken(id) {
 
 module.exports = {
     androidBridgeCall,
+    androidBridgeCallWithStatus,
     fetchMcpToken,
 };

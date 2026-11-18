@@ -26,6 +26,7 @@ import com.seekerclaw.app.camera.CameraCaptureActivity
 import com.seekerclaw.app.config.ConfigManager
 import com.seekerclaw.app.config.KeystoreHelper
 import com.seekerclaw.app.service.SeekerClawService
+import com.seekerclaw.app.state.OpenAIOAuthTokenStore
 import com.seekerclaw.app.state.XaiOAuthTokenStore
 import com.seekerclaw.app.util.Analytics
 import com.seekerclaw.app.util.LogCollector
@@ -92,6 +93,9 @@ class AndroidBridge(
         "/contacts/add" to Pair(10, 60_000L),
         "/location" to Pair(10, 60_000L),
         "/openai/oauth/save-tokens" to Pair(5, 60_000L),
+        // BAT-1157: once per Node process lifetime (before its first refresh), plus a single-flight
+        // retry on the next 401 after a 503. 10/60s bounds a storm without throttling recovery.
+        "/openai/oauth/confirm-family" to Pair(10, 60_000L),
         "/xai/oauth/save-tokens" to Pair(5, 60_000L), // BAT-1124 (5/60s parity with OpenAI)
         // BAT-1155 blocker-1: the shutdown-critical durability persist. A generous
         // 20/60s (vs the normal 5/60s) so the once-per-stop drain — and a couple of
@@ -232,6 +236,7 @@ class AndroidBridge(
                 "/solana/send" -> handleSolanaSend(params)
                 "/config/save-owner" -> handleConfigSaveOwner(params)
                 "/openai/oauth/save-tokens" -> handleOpenAIOAuthSaveTokens(params)
+                "/openai/oauth/confirm-family" -> handleOpenAIOAuthConfirmFamily(params)
                 "/xai/oauth/save-tokens" -> handleXaiOAuthSaveTokens(params)
                 // BAT-1155 blocker-1: same handler, dedicated generous bucket. The
                 // once-per-shutdown durability drain persists the just-rotated pair via
@@ -306,6 +311,9 @@ class AndroidBridge(
      * actually needs to route requests.
      */
     private fun handleConfigCredentials(): Response {
+        // BAT-1157 (D7.2): runs in `:node`. loadConfig there writes nothing to seekerclaw_prefs —
+        // the agent-settings reconcile and the auth normaliser are compute-only in `:node`, and the
+        // OAuth migrations never touch prefs from it (ConfigSourceGuardTest pins this).
         val config = ConfigManager.loadConfig(context)
         if (config == null) {
             return jsonResponse(200, mapOf("ok" to true, "credentials" to emptyMap<String, String>()))
@@ -998,39 +1006,106 @@ class AndroidBridge(
 
     // ==================== OpenAI OAuth ====================
 
+    /**
+     * BAT-1157: Node's `providers/openai.js` POSTs a rotated pair here after a refresh. A CAS write
+     * into [OpenAIOAuthTokenStore] under its lock — never `loadConfig`/`saveConfig`, so a rotation
+     * never writes `seekerclaw_prefs` (which would put back `:node`'s whole stale prefs cache).
+     *
+     * Body: `{familyId, expectedEpoch, rotationId, accessToken, refreshToken, expiresAt}`.
+     * - 200 `{success, epoch}`; a re-send of a save whose reply was lost (same `rotationId`) also
+     *   gets 200, after a fresh checked rewrite of the identical record;
+     * - 400 when a field is missing or malformed;
+     * - 409 `OPENAI_OAUTH_EPOCH_CONFLICT`: another sign-in, a sign-out, or another epoch;
+     * - 503 `OPENAI_OAUTH_SAVE_FAILED` (not written) or `OPENAI_OAUTH_SAVE_UNCONFIRMED` (written,
+     *   durability unknown) — Node keeps the pair and re-sends the same save;
+     * - 500 on an exception.
+     */
     private fun handleOpenAIOAuthSaveTokens(params: JSONObject): Response {
+        val familyId = params.optString("familyId", "")
+        val expectedEpoch = if (params.has("expectedEpoch")) params.optLong("expectedEpoch", -1L) else -1L
+        val rotationId = params.optString("rotationId", "")
         val accessToken = params.optString("accessToken", "")
         val refreshToken = params.optString("refreshToken", "")
         val expiresAt = params.optString("expiresAt", "")
-        if (accessToken.isBlank()) {
-            return jsonResponse(400, mapOf("error" to "accessToken required"))
+        if (familyId.isBlank() || expectedEpoch < 1L || expectedEpoch >= OpenAIOAuthTokenStore.EPOCH_LIMIT || rotationId.isBlank() || accessToken.isBlank()) {
+            return jsonResponse(400, mapOf("error" to "familyId, expectedEpoch, rotationId and accessToken required"))
         }
         return try {
-            if (!ConfigManager.isSetupComplete(context)) {
-                return jsonResponse(500, mapOf("error" to "config not loaded"))
+            when (val r = OpenAIOAuthTokenStore.rotate(familyId, expectedEpoch, rotationId, accessToken, refreshToken, expiresAt)) {
+                is OpenAIOAuthTokenStore.Result.Ok ->
+                    jsonResponse(200, mapOf("success" to true, "epoch" to r.record.epoch))
+                is OpenAIOAuthTokenStore.Result.Conflict -> {
+                    Log.w(TAG, "OpenAI OAuth rotate CAS conflict (expected=$expectedEpoch current=${r.currentEpoch})")
+                    jsonResponse(409, mapOf(
+                        "error" to "epoch_conflict",
+                        "code" to "OPENAI_OAUTH_EPOCH_CONFLICT",
+                        "currentEpoch" to r.currentEpoch,
+                    ))
+                }
+                is OpenAIOAuthTokenStore.Result.Unconfirmed -> {
+                    Log.w(TAG, "OpenAI OAuth rotate not confirmed durable")
+                    jsonResponse(503, mapOf(
+                        "error" to "Saved, but not confirmed durable",
+                        "code" to "OPENAI_OAUTH_SAVE_UNCONFIRMED",
+                    ))
+                }
+                is OpenAIOAuthTokenStore.Result.Failed -> {
+                    Log.w(TAG, "OpenAI OAuth rotate failed: ${r.reason}")
+                    jsonResponse(503, mapOf(
+                        "error" to "Failed to persist OpenAI OAuth tokens",
+                        "code" to "OPENAI_OAUTH_SAVE_FAILED",
+                    ))
+                }
             }
-            // BAT-1661 (Codex diff review #5): a token-only write. It touches no model field, so it
-            // takes no model-selection lock and cannot be refused because a Settings save or the
-            // start-up repair holds it. The refresh token rotates, so a write that did not reach
-            // disk must still reach Node as an error, never as success. A durable OpenAI token
-            // store, retrying until a pair lands, is BAT-1157.
-            val saved = ConfigManager.saveOpenAIOAuthRotation(context, accessToken, refreshToken, expiresAt)
-            if (!saved) {
-                Log.w(TAG, "OpenAI OAuth token save failed (not writable)")
-                return jsonResponse(503, mapOf(
-                    "error" to "Failed to save OpenAI OAuth tokens",
-                    "code" to "OPENAI_OAUTH_SAVE_FAILED",
-                ))
-            }
-            jsonResponse(200, mapOf("success" to true))
         } catch (e: Exception) {
-            // Log full details locally; never echo internal exception messages
-            // back across the bridge boundary.
+            // Log full details locally; never echo internal exception messages across the bridge.
             Log.w(TAG, "Failed to save OpenAI OAuth tokens", e)
             jsonResponse(500, mapOf(
                 "error" to "Failed to save OpenAI OAuth tokens",
                 "code" to "OPENAI_OAUTH_SAVE_FAILED",
             ))
+        }
+    }
+
+    /**
+     * BAT-1157 (contract v4, Codex C1): Node calls this before its FIRST upstream refresh in each
+     * process. A refresh is allowed only after a 200 here — a decoded familyId proves nothing, since
+     * the record may be visible after a rename whose sync failed.
+     *
+     * Body: `{familyId | null, epoch, refreshFingerprint}` (lowercase hex SHA-256 of the refresh
+     * token Node holds; never logged, and no token crosses the bridge).
+     * - 200 `{familyId, epoch}`: the record and marker were rewritten byte-identical and confirmed;
+     * - 409 `OPENAI_OAUTH_RECONNECT`: signed out or unusable;
+     * - 409 `OPENAI_OAUTH_FAMILY_CHANGED`: another sign-in, refresh token or epoch;
+     * - 503 `OPENAI_OAUTH_NOT_CONFIRMED`: a write failed or was unconfirmed — no refresh;
+     * - 400 malformed; 500 on an exception.
+     */
+    private fun handleOpenAIOAuthConfirmFamily(params: JSONObject): Response {
+        val familyId: String? = if (params.isNull("familyId")) null else params.optString("familyId", "").ifBlank { null }
+        val epoch = if (params.has("epoch")) params.optLong("epoch", -1L) else -1L
+        val fingerprint = params.optString("refreshFingerprint", "")
+        if (epoch < 0L || fingerprint.isBlank() || (familyId != null && epoch < 1L)) {
+            return jsonResponse(400, mapOf("error" to "familyId|null, epoch and refreshFingerprint required"))
+        }
+        return try {
+            val outcome = OpenAIOAuthTokenStore.confirmFamily(familyId, epoch, fingerprint) {
+                ConfigManager.openAILegacyPair(context)
+            }
+            when (outcome) {
+                is OpenAIOAuthTokenStore.ConfirmOutcome.Confirmed ->
+                    jsonResponse(200, mapOf("success" to true, "familyId" to outcome.familyId, "epoch" to outcome.epoch))
+                OpenAIOAuthTokenStore.ConfirmOutcome.Reconnect ->
+                    jsonResponse(409, mapOf("error" to "reconnect", "code" to "OPENAI_OAUTH_RECONNECT"))
+                OpenAIOAuthTokenStore.ConfirmOutcome.FamilyChanged ->
+                    jsonResponse(409, mapOf("error" to "family_changed", "code" to "OPENAI_OAUTH_FAMILY_CHANGED"))
+                is OpenAIOAuthTokenStore.ConfirmOutcome.NotConfirmed -> {
+                    Log.w(TAG, "OpenAI OAuth confirm-family not confirmed: ${outcome.reason}")
+                    jsonResponse(503, mapOf("error" to "not_confirmed", "code" to "OPENAI_OAUTH_NOT_CONFIRMED"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "OpenAI OAuth confirm-family failed", e)
+            jsonResponse(500, mapOf("error" to "confirm failed", "code" to "OPENAI_OAUTH_NOT_CONFIRMED"))
         }
     }
 

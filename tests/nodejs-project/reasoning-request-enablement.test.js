@@ -140,6 +140,46 @@ ok('Claude headers (setup_token): anthropic-beta includes interleaved-thinking-2
 ok('Claude headers (setup_token): anthropic-beta still includes oauth-2025-04-20',
     setupHeaders['anthropic-beta'].includes('oauth-2025-04-20'));
 
+// BAT-1664 C2: buildHeaders(apiKey, authType, extra). Without `extra` the header
+// set is byte-identical to before (the binding beta is per-request, never
+// default); with it, the beta is appended and the base tags are kept.
+const BIND_BETA = 'thinking-binding-controls-2026-08-01';
+eq('Claude headers (api_key, no extra): exact historical beta set',
+    apiKeyHeaders['anthropic-beta'], 'prompt-caching-2024-07-31,interleaved-thinking-2025-05-14');
+eq('Claude headers (setup_token, no extra): exact historical beta set',
+    setupHeaders['anthropic-beta'], 'prompt-caching-2024-07-31,oauth-2025-04-20,interleaved-thinking-2025-05-14');
+for (const auth of ['api_key', 'setup_token']) {
+    const h = claude.buildHeaders('k', auth, [BIND_BETA]);
+    ok(`Claude headers (${auth}, extra): binding beta appended`,
+        h['anthropic-beta'].split(',').includes(BIND_BETA), `actual: ${h['anthropic-beta']}`);
+    ok(`Claude headers (${auth}, extra): base tags kept`,
+        h['anthropic-beta'].includes('prompt-caching-2024-07-31')
+        && h['anthropic-beta'].includes('interleaved-thinking-2025-05-14'));
+    ok(`Claude headers (${auth}, extra twice): no duplicate tag`,
+        claude.buildHeaders('k', auth, [BIND_BETA, BIND_BETA])['anthropic-beta'].split(BIND_BETA).length === 2);
+}
+eq('Claude adapter exports the binding beta tag', claude.THINKING_BINDING_BETA, BIND_BETA);
+
+// BAT-1664 C2: `bindThinking` sends adaptive + block_binding and runs BEFORE the
+// off / toggle-off / small-turn early returns (flagged models think adaptively
+// anyway — "flagged models default to adaptive when thinking is omitted",
+// Anthropic model docs, 2026-11-06 — so the binding changes nothing but how a
+// prefix mismatch is handled).
+const BOUND = { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } };
+for (const [label, mt, opts] of [
+    ['toggle on', 4096, { reasoningEnabled: true, reasoningSupport: 'yes' }],
+    ['reasoningMode off (heartbeat)', 4096, { reasoningEnabled: true, reasoningSupport: 'yes', reasoningMode: 'off' }],
+    ['toggle off', 4096, { reasoningEnabled: false, reasoningSupport: 'yes' }],
+    ['small turn (1024)', 1024, { reasoningEnabled: true, reasoningSupport: 'yes' }],
+]) {
+    const b = JSON.parse(claude.formatRequest('claude-fable-5-1', mt, [], [], [], { ...opts, bindThinking: true }));
+    eq(`Claude bindThinking (${label}): thinking = adaptive + block_binding drop_block — decision record: flagged models default to adaptive when thinking is omitted (Anthropic model docs, 2026-11-06)`, b.thinking, BOUND);
+}
+body = JSON.parse(claude.formatRequest('claude-fable-5-1', 4096, [], [], [], {
+    reasoningEnabled: true, reasoningSupport: 'yes', thinkingBinding: true,
+}));
+eq('Claude: registry flag alone (no bindThinking) does NOT add block_binding', body.thinking, { type: 'adaptive' });
+
 // ── OpenAI (Responses API) ────────────────────────────────────────
 
 console.log();

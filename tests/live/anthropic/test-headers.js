@@ -160,7 +160,7 @@ async function main() {
     }
 
     const models = getModels();
-    console.log(`   Token: ${token.slice(0, 10)}...`);
+    console.log(`   Token: present (len=${token.length})`);
     console.log(`   Models: ${models.join(', ')}`);
 
     for (const model of models) {

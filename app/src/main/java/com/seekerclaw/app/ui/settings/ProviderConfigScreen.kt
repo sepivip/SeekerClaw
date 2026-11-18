@@ -21,7 +21,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import com.seekerclaw.app.config.BuildProvenance
-import com.seekerclaw.app.config.PrefsNames
+import com.seekerclaw.app.config.MainPrefs
 import com.seekerclaw.app.ui.components.InfoDialog
 import com.seekerclaw.app.ui.components.SeekerClawScaffold
 import com.seekerclaw.app.ui.components.SeekerClawSwitch
@@ -271,11 +271,12 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // Remember per-provider last-used model and authType (similar to lastModel_*)
         // so explicit choices survive a round-trip through another provider. These are
         // cheap prefs-only writes, not full config saves.
-        val prefs = context.getSharedPreferences(PrefsNames.MAIN, android.content.Context.MODE_PRIVATE)
-        prefs.edit()
-            .putString("lastModel_$oldProviderId", currentModel)
-            .putString("lastAuthType_$oldProviderId", oldAuthType)
-            .apply()
+        // BAT-1157: MAIN-only writes go through MainPrefs.forWrite; reads through MainPrefs.read.
+        MainPrefs.forWrite(context, "ProviderConfig.rememberLastUsed")?.edit()
+            ?.putString("lastModel_$oldProviderId", currentModel)
+            ?.putString("lastAuthType_$oldProviderId", oldAuthType)
+            ?.apply()
+        val prefs = MainPrefs.read(context)
 
         // Resolve the effective authType for the new provider. OpenAI defaults to OAuth
         // (ChatGPT subscription) on first switch-in — the OAuth section shows a Sign In
@@ -854,9 +855,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // every recomposition while the picker is open (cheap, but unnecessary
         // work on the hot path). Keyed to context — stable for the Activity
         // lifetime, so the handle is effectively cached once.
-        val localPrefs = remember(context) {
-            context.getSharedPreferences(PrefsNames.MAIN, android.content.Context.MODE_PRIVATE)
-        }
+        val localPrefs = remember(context) { MainPrefs.read(context) }
         // Re-read only when the per-provider key changes, not every recomposition.
         val rememberedCustom = remember(localPrefs, customPrefsKey) {
             localPrefs.getString(customPrefsKey, null).orEmpty()
@@ -877,14 +876,14 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         // between UI and Node (Node trims on read). Blank-after-trim clears the
         // prefs key so the UI can truly reset this state.
         val persistCustomModelAndClose = {
-            val editor = localPrefs.edit()
+            val editor = MainPrefs.forWrite(context, "ProviderConfig.customModel")?.edit()
             val trimmedCustom = customModelId.trim()
             if (trimmedCustom.isNotBlank()) {
-                editor.putString(customPrefsKey, trimmedCustom)
+                editor?.putString(customPrefsKey, trimmedCustom)
             } else {
-                editor.remove(customPrefsKey)
+                editor?.remove(customPrefsKey)
             }
-            editor.apply()
+            editor?.apply()
             showModelPicker = false
         }
 
@@ -1108,10 +1107,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             // lastAuthType_* seeds future provider switches, so writing
                             // it on a failed save would drift UI defaults away from
                             // the real config state.
-                            context.getSharedPreferences(PrefsNames.MAIN, android.content.Context.MODE_PRIVATE)
-                                .edit()
-                                .putString("lastAuthType_$activeProvider", selectedAuth)
-                                .apply()
+                            MainPrefs.forWrite(context, "ProviderConfig.lastAuthType")?.edit()
+                                ?.putString("lastAuthType_$activeProvider", selectedAuth)
+                                ?.apply()
                         }
                         if (authSaved && (activeProvider == "openai" || activeProvider == "xai")) {
                             val currentModel = config?.model ?: ""

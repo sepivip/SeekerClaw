@@ -549,6 +549,7 @@ class LinkHygiene(
             "runtime_state.json", "runtime_state.json.tmp", "burner_caps.json", "burner_caps.json.tmp",
             "agent_preferences.json", "agent_preferences.json.tmp", "mcp_servers.json", "mcp_servers.json.tmp",
             "xai_oauth.json", "xai_oauth.lock", "xai_oauth.migrated",
+            "openai_oauth.json", "openai_oauth.lock", "openai_oauth.migrated", // BAT-1157
             "skill_state.json", "skill_state.init", "skill_state.floor", "skill_state.lock",
             // BAT-1661: the model-selection lock and the repair intent (written via .kwrite/;
             // the .tmp name is listed so a planted link there is also refused).

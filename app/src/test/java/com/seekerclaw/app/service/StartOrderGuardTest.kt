@@ -32,7 +32,7 @@ class StartOrderGuardTest {
 
     /** A store, status, token, prefs or config touch. Nothing of this may precede an unsafe branch. */
     private val storeTouch = Regex(
-        """\b(ServiceState|LogCollector|ConfigManager|StopToken|XaiOAuthTokenStore|RuntimeStateStore|McpServersStore|""" +
+        """\b(ServiceState|LogCollector|ConfigManager|StopToken|XaiOAuthTokenStore|OpenAIOAuthTokenStore|RuntimeStateStore|McpServersStore|""" +
             """AgentPreferencesStore|NodeBridge|SafeFs|Analytics|starter)\.|\b(getSharedPreferences|initAnalytics|deleteEphemeralConfig)\(""",
     )
 
@@ -192,10 +192,10 @@ class StartOrderGuardTest {
         val flat = SourceText.flat(code.substring(body))
         // String literals are blanked in `code`; the process check is read from the comment-free text.
         val withStrings = SourceText.flat(SourceText.withoutComments(src).substring(body))
-        if (!withStrings.contains("val isNodeProcess = getProcessName().endsWith(\":node\")")) {
-            out += "isNodeProcess must be the `:node` process check"
+        if (!withStrings.contains("val isNodeProcess = ProcessRole.isNode")) {
+            out += "isNodeProcess must be the shared `:node` process check (ProcessRole.isNode)"
         }
-        val step1First = "super.onCreate() val isNodeProcess = getProcessName().endsWith( ) if (isNodeProcess) BootHygiene.runStep1(dataDir) "
+        val step1First = "super.onCreate() val isNodeProcess = ProcessRole.isNode if (isNodeProcess) BootHygiene.runStep1(dataDir) "
         if (!flat.startsWith(step1First)) out += "step 1 must be the first statement in :node, before SafeFs and every store"
         val guard = Regex("""if \(isNodeProcess && BootHygiene\.unsafe\.isNotEmpty\(\)\) \{ Log\.e\( , \) return \}""").find(flat)
         if (guard == null) {
@@ -207,13 +207,20 @@ class StartOrderGuardTest {
             if (m.value == "SafeFs." && m.range.first < guard.range.first) continue
             if (m.range.first < guard.range.first) out += "${m.value} runs before the unsafe early return"
         }
-        for (required in listOf("XaiOAuthTokenStore.init(this)", "initAnalytics(this)")) {
+        for (required in listOf("XaiOAuthTokenStore.init(this)", "OpenAIOAuthTokenStore.init(this)", "initAnalytics(this)")) {
             val at = flat.indexOf(required)
             if (at < guard.range.last) out += "$required must come after the unsafe early return"
         }
         val safeFs = flat.indexOf("SafeFs.filesRoot =")
         val step1 = flat.indexOf("BootHygiene.runStep1(")
         if (safeFs < 0 || safeFs < step1) out += "SafeFs.filesRoot must be set after step 1"
+        // BAT-1157: the Android checked directory fsync must be installed before any store can
+        // make a verified write. The JVM default refuses a directory on Android, so a missing
+        // override fails every verified write on a device while JVM tests stay green.
+        val checkedSync = flat.indexOf("SafeFs.dirSyncChecked =")
+        val firstStore = flat.indexOf("XaiOAuthTokenStore.init(this)")
+        if (checkedSync < 0) out += "SafeFs.dirSyncChecked must be installed in onCreate"
+        else if (firstStore in 0 until checkedSync) out += "SafeFs.dirSyncChecked must be installed before any store init"
         return out
     }
 

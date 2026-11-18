@@ -86,8 +86,8 @@ function getEndpoint() {
     return CUSTOM_ENDPOINT;
 }
 
-function classifyError(status, data) {
-    const base = delegate().classifyError(status, data);
+function classifyError(status, data, ctx) {
+    const base = delegate().classifyError(status, data, ctx);
     if (!base || typeof base !== 'object') {
         return { type: 'unknown', retryable: false, userMessage: `Custom provider error (${status}).` };
     }

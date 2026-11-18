@@ -161,7 +161,7 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
 
     // Load the persisted config ONCE on first composition — stored in a non-reactive
     // remember so that OAuth token writes mid-onboarding (which bump ConfigManager's
-    // configVersion via persistOpenAIOAuthTokens) don't cascade into the form state
+    // configVersion via a store sign-in) don't cascade into the form state
     // below and wipe what the user has typed. The Settings screen still reacts to
     // configVersion for its own reload; this local snapshot is only used to seed
     // initial field values and to drive onProviderChange "preserve the other
@@ -676,8 +676,8 @@ fun SetupScreen(onSetupComplete: () -> Unit) {
                         "openai" -> {
                             // Read CURRENT persisted state, not the one-time
                             // existingConfig snapshot. The user may have completed
-                            // OAuth during this session (tokens written via
-                            // persistOpenAIOAuthTokens, configVersion bumped) and
+                            // OAuth during this session (tokens written to the
+                            // OpenAIOAuthTokenStore, configVersion bumped) and
                             // then switched providers away and back — the snapshot
                             // would still show openaiOAuthToken = "" and incorrectly
                             // default back to api_key. loadConfigOrBootstrap

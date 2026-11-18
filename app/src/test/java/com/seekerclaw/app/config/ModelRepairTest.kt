@@ -141,9 +141,9 @@ class ModelRepairTest {
 
     /**
      * One service start: [ModelRepair.serviceStart]'s steps against real files. Publish is the
-     * reconcile commit followed by the overlay
-     * publisher (provider/authType/model). In `:node` the RuntimeStateStore is never initialised,
-     * so reconcile commits prefs only; runtime_state is written by the repair alone.
+     * overlay publisher (provider/authType/model). In `:node` the RuntimeStateStore is never
+     * initialised, and since BAT-1157 (contract v2.7 §1) reconcile is compute-only there: the boot
+     * writes no prefs. runtime_state is written by the repair alone; [mainLoad] brings prefs in line.
      */
     private fun boot(crashAfter: Step? = null) {
         val r = ModelSelectionLock.transaction { tx ->
@@ -164,7 +164,7 @@ class ModelRepairTest {
                 effectiveAuth = auth,
                 approvedTarget = plan.approved,
             )
-            prefs = ModelTuple(provider, auth, reconciled)
+            // BAT-1157 (v2.7 §1): no `:node` prefs commit — prefs keep what MAIN last wrote.
             val o = (AgentSettingsFile.read(dir) as? AgentSettingsFile.Read.Present)?.obj ?: JsonObject(emptyMap())
             AgentSettingsFile.write(
                 dir,
@@ -180,6 +180,16 @@ class ModelRepairTest {
         assertTrue("boot must get the lock", r is ModelSelectionLock.Result.Acquired)
     }
 
+    /**
+     * BAT-1157 / contract v2.7 §3: a MAIN locked load. The same-scope sync
+     * ([com.seekerclaw.app.state.RuntimeStateStore.syncPrefsFromFile]) copies runtime_state's model
+     * into prefs when its provider and auth equal prefs'.
+     */
+    private fun mainLoad() {
+        val runtime = RuntimeStateFile.readTuple(dir) ?: return
+        if (runtime.provider == prefs.provider && runtime.authType == prefs.authType) prefs = prefs.copy(model = runtime.model)
+    }
+
     private fun bootCrashing(step: Step) {
         try {
             boot(step)
@@ -188,10 +198,20 @@ class ModelRepairTest {
         }
     }
 
+    /**
+     * BAT-1157 / contract v2.7 §4: the `:node` boot just run left runtime_state and the overlay on
+     * [model]; a MAIN load then brings prefs to it, and the next start clears the intent and
+     * changes no model.
+     */
     private fun assertAllOn(model: String) {
-        assertEquals("prefs", model, prefs.model)
         assertEquals("runtime_state", model, runtimeModel())
         assertEquals("overlay", model, overlayModel())
+        mainLoad()
+        assertEquals("prefs", model, prefs.model)
+        boot()
+        assertEquals("runtime_state after the next start", model, runtimeModel())
+        assertEquals("overlay after the next start", model, overlayModel())
+        assertEquals("prefs after the next start", model, prefs.model)
         assertFalse("intent cleared", intentPresent())
     }
 
@@ -364,6 +384,9 @@ class ModelRepairTest {
         writeRuntime("gpt-5.4")
         writeOverlay(overlayWithModel("gpt-5.4"))
         bootCrashing(Step.PUBLISH)
+        // BAT-1157 (v2.7 §1/§3): the `:node` boot wrote no prefs; a MAIN load brings them to the
+        // target, which restores this test's premise.
+        mainLoad()
         assertNull(ModelRepair.decide(snapshot()))
         assertTrue(intentPresent())
         // The log is a 300-entry ring shared across the JVM: anchor on the newest entry by

@@ -63,6 +63,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Claude no longer fails mid-task over its own reasoning.** Newer Anthropic
+  accounts reject a request when reasoning from an earlier step no longer
+  matches the conversation it came from, which could end a long tool-using
+  task with an "Invalid signature in thinking block" error. SeekerClaw now
+  sends back only the current task's reasoning, exactly as the model wrote it,
+  keeps that task's history steady while it runs, and recovers on its own if a
+  mismatch still slips through. Before each request it also checks the size it
+  is about to send: if even the newest results are too large, it stops with a
+  clear message and suggests a smaller step or a fresh conversation, instead
+  of sending a request that would fail. Photos count at their real cost, not
+  their file size.
 - **Safer start-up and storage.** The app verifies its agent bundle before each
   start, repairs it when needed, and never starts an agent that a Stop has
   already cancelled. Storage writes and deletes never follow links, and
@@ -79,6 +90,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   under Settings → Solana Wallet and the steps-per-turn limit under Settings →
   Configuration, and when device features stop responding it suggests Stop
   Agent, then Deploy Agent, which restarts them.
+- **ChatGPT sign-in is stored on its own and survives settings changes.** A
+  sign-in token refresh could be undone by a later settings save, or undo one,
+  because both shared one settings file. The sign-in now has its own file, every
+  save is checked, and the agent only refreshes a sign-in it has confirmed is
+  stored. Existing sign-ins move over automatically on the first start.
+- **Signed out of ChatGPT? The agent says so instead of stopping.** With
+  ChatGPT sign-in selected but no usable sign-in, the agent uses a saved OpenAI
+  API key if there is one; otherwise it starts and asks you to reconnect OpenAI
+  in Settings.
+- **Reset Config finishes or tells you what's left.** If it cannot confirm that
+  a sign-in was removed, it keeps your settings, says what was and wasn't
+  cleared, and offers Retry. A sign-in can't complete in the middle of a reset.
 
 ## [2.3.1] - 2026-09-10
 

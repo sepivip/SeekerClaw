@@ -21,7 +21,7 @@ const {
     config: _config,
     runtimeState: _runtimeState,
 } = require('./config');
-const { reasoningSupportFor, displayNameForProvider, retiredModelsFor, defaultModelForProvider } = require('./model-catalog');
+const { reasoningSupportFor, thinkingBindingFor, displayNameForProvider, retiredModelsFor, defaultModelForProvider } = require('./model-catalog');
 const { logSuppression: _logSuppression, SUPPRESSION_REASONS: _SUPPRESSION_REASONS } = require('./reasoning-gating');
 
 const { redactSecrets } = require('./security');
@@ -60,6 +60,9 @@ const loopDetector = require('./loop-detector');
 const { buildSecurityRejectBlock } = require('./security-reject-block');
 // BAT-549: adaptive 3-step quarantine recovery for reasoning-content 400s
 const _reasoningRecovery = require('./reasoning-recovery');
+// BAT-1664: verbatim thinking replay — wire-snapshot capture/invalidation and the
+// binding beta tag live with the Claude adapter (the snapshot is Claude-wire data).
+const _wireSnap = require('./providers/claude');
 // BAT-549 R3: fingerprint for sanitized error logging (no raw payloads)
 const { fingerprint: _reasoningFingerprint, byteLen: _byteLen } = require('./reasoning-redact');
 // BAT-1283: goal resolution for the checkpoint this turn writes. Pure module so the
@@ -1217,6 +1220,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('1. Use /new to archive and clear conversation history (safe — saves to memory first)');
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
     lines.push('3. Tool-use loop protection: max 35 tool-call rounds per turn by default (Settings → Configuration → Max Agent Steps Per Turn, 10–100) — if you hit this, summarize progress and ask the user to continue');
+    lines.push('3b. Context limit (Claude): if a turn ended with "I stopped before sending: this conversation has reached the model\'s context limit" (log reason `context_budget_exceeded`), the newest results alone were too big to send even after trimming. Suggest a smaller step or /new; /resume may hit the same limit. See DIAGNOSTICS.md → "turn stopped at the context limit".');
     lines.push('4. **Identical-call loop detector:** If you call the exact same tool with the same arguments 3 times in a turn, you get a warning injected. At 5 identical calls, the loop is broken and you must respond with text only. This is automatic — if you see a loop-break message, explain what you were trying to do and ask the user for guidance.');
     lines.push('');
     lines.push('**If a tool fails:**');
@@ -1255,6 +1259,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push('2. Sign-in canceled or failed mid-flow: tell the user to retry from Settings > AI Provider. The OAuth section stays visible after a failed sign-in — they can tap "Sign in with ChatGPT" again. They do NOT need to re-pick the auth type.');
         lines.push('3. If OAuth refresh persistently fails: suggest the user sign out (clears OAuth tokens but keeps OAuth as the chosen auth type) and sign back in. As a fallback, they can switch to API Key in the auth picker if they have a platform key.');
         lines.push('4. Check `grep -iE "oauth|codex" node_debug.log` for OAuth-specific errors.');
+        lines.push('5. Sign-in storage (BAT-1157) — "sign-in changed, restart", "saving your refreshed sign-in", "could not save your ChatGPT sign-in" or "reconnect OpenAI": see DIAGNOSTICS.md → "OpenAI Codex OAuth — Sign-In Storage".');
         lines.push('');
     }
 
@@ -1491,6 +1496,10 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             if (retiredOnSignIn.length) {
                 lines.push(`OpenAI no longer serves ${retiredOnSignIn.join(', ')} with ChatGPT sign-in: if one is selected, ${defaultModelForProvider('openai', 'oauth')} is used instead and the app updates the saved choice on its next start. If the user asks why their model changed after an update, that is why — see DIAGNOSTICS.md → "OpenAI Model Changed On Its Own After An Update".`);
             }
+        } else if (AUTH_TYPE === 'oauth') {
+            // BAT-1157 (D9): ChatGPT sign-in is SELECTED, but no usable sign-in is stored, so the
+            // saved platform API key is being used. The selection itself is unchanged.
+            lines.push('Auth mode: **API Key (fallback)** — the user chose ChatGPT sign-in, but no usable sign-in is stored on this device (signed out, or the stored sign-in is unreadable), so requests use their saved OpenAI API key via api.openai.com. To go back to the ChatGPT subscription they sign in again: Settings > AI Provider > OpenAI > Sign in with ChatGPT. See DIAGNOSTICS.md → "OpenAI Codex OAuth — Sign-In Storage".');
         } else {
             lines.push('Auth mode: **API Key** — the user configured an OpenAI platform API key. Requests route through api.openai.com. To switch to ChatGPT OAuth (free with a Plus/Pro subscription), the user can change auth type in Settings > AI Provider > OpenAI.');
         }
@@ -1694,8 +1703,9 @@ const AUTH_FAIL_THRESHOLD = 3;
 const SESSION_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 min cooldown probe
 
 // BAT-315: Error classification delegated to provider adapter
-function classifyApiError(status, data) {
-    return getAdapter(PROVIDER).classifyError(status, data);
+// [ctx] (optional, BAT-1157): { usedGen } from claudeApiCall's retry loop; adapters may ignore it.
+function classifyApiError(status, data, ctx) {
+    return getAdapter(PROVIDER).classifyError(status, data, ctx);
 }
 
 // BAT-1130: Anthropic's setup_token (Claude Code OAuth) path mislabels some
@@ -1717,6 +1727,52 @@ function _isUsageFilter400(status, data) {
 
 function classifyNetworkError(err) {
     return getAdapter(PROVIDER).classifyNetworkError(err);
+}
+
+// BAT-1664 C2 fallback — process-local NEGATIVE capability for the thinking
+// block-binding control (decision 8, pin P2). Keyed by route (endpoint host +
+// auth type) PLUS a credential generation: an in-memory SHA-256 of the
+// credential the REJECTED request was actually sent with. A rejection on one
+// credential never disables the control for another. The Map lives in memory
+// only — the key/hash is never logged, persisted or returned.
+const _bindingNegativeCaps = new Map();
+
+function _bindingCapKey(hostname, authType, credential) {
+    const gen = crypto.createHash('sha256')
+        .update(typeof credential === 'string' ? credential : '', 'utf8').digest('hex');
+    return `${hostname || '-'}|${authType || '-'}|${gen}`;
+}
+
+function _isBindingDenied(hostname, authType, credential) {
+    return _bindingNegativeCaps.has(_bindingCapKey(hostname, authType, credential));
+}
+
+function _recordBindingDenied(hostname, authType, credential) {
+    _bindingNegativeCaps.set(_bindingCapKey(hostname, authType, credential), true);
+}
+
+// BAT-1664 C4: report what the API did to replayed thinking (the
+// `input_transformations` array, present only when the binding beta was sent).
+// Counts only — paths/blocks are never logged. Empty/absent → nothing.
+function _logInputTransformations(list, model) {
+    if (!Array.isArray(list) || list.length === 0) return;
+    let prefixDrops = 0;
+    let modelDrops = 0;
+    for (const t of list) {
+        if (!t || t.type !== 'thinking_dropped') continue;
+        if (t.reason === 'prefix_binding_mismatch') prefixDrops++;
+        else if (t.reason === 'model_binding_mismatch') modelDrops++;
+    }
+    if (prefixDrops > 0) {
+        _logSuppression(
+            _SUPPRESSION_REASONS.THINKING_DROPPED_PREFIX_MISMATCH,
+            `count=${prefixDrops} model=${String(model).slice(0, 48)}`,
+            '[ThinkingBinding]',
+        );
+    }
+    if (modelDrops > 0) {
+        log(`[ThinkingBinding] thinking dropped: model_binding_mismatch count=${modelDrops}`, 'DEBUG');
+    }
 }
 
 async function claudeApiCall(body, chatId, traceCtx = {}) {
@@ -1802,9 +1858,26 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         let refreshedThisCall = typeof adapter.currentRefreshGeneration === 'function'
             && adapter.currentRefreshGeneration() !== _genBeforeRefresh;
+        // BAT-1664 C2: extra anthropic-beta tags for THIS request (the
+        // thinking-binding beta, sent iff the body carries block_binding — one
+        // `bind` decision in chat()). Goes to BOTH header sites below. The
+        // credential each build used is tracked so a binding rejection records
+        // the negative capability against the credential ACTUALLY sent (P2).
+        const _betaExtra = Array.isArray(traceCtx.anthropicBetaExtra) && traceCtx.anthropicBetaExtra.length > 0
+            ? traceCtx.anthropicBetaExtra : null;
+        const _sentBinding = !!(_betaExtra && _betaExtra.includes(_wireSnap.THINKING_BINDING_BETA));
+        let _sentCredential = apiKey;
+        const _buildRequestHeaders = (key) => {
+            _sentCredential = key;
+            return _betaExtra ? adapter.buildHeaders(key, AUTH_TYPE, _betaExtra) : adapter.buildHeaders(key, AUTH_TYPE);
+        };
         // `let` (not const): the OAuth 401→refresh retry rebuilds this below so the
         // retry carries the freshly-rotated bearer, not the expired one.
-        let headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+        let headers = _buildRequestHeaders(apiKey);
+        // BAT-1157 (D11): the credential generation these headers were built with. A 401 hands it
+        // to handleUnauthorized, so a delayed 401 from a request sent with an already-replaced
+        // bearer retries on the current one instead of spending another refresh token.
+        let usedGen = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
 
         // Select streaming function based on provider protocol
         const streamFn = adapter.streamProtocol === 'chat-completions'
@@ -1818,6 +1891,19 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
+            // BAT-1157 (D15): checked immediately before EVERY attempt, including retries after a
+            // backoff — the sign-in may latch (changed elsewhere) or need a reconnect while this loop
+            // waits, and the retained headers must then never be sent. The synthetic 401 classifies
+            // through the adapter's 'reauth' class, so the caller shows its message
+            // ("Reconnect OpenAI in Settings" / "…restart the agent") like any other reply.
+            if (typeof adapter.preflightAuth === 'function') {
+                const blocked = adapter.preflightAuth();
+                if (blocked) {
+                    if (!background) updateAgentHealth('error', { type: blocked.type, status: 401, message: blocked.userMessage });
+                    res = { status: 401, data: { error: { message: blocked.userMessage } }, headers: {} };
+                    break;
+                }
+            }
             const attemptStart = Date.now();
             let timeoutSource = null;
 
@@ -1910,12 +1996,12 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
 
             // Classify error and decide whether to retry (BAT-22)
             if (res.status !== 200) {
-                const errClass = classifyApiError(res.status, res.data);
+                const errClass = classifyApiError(res.status, res.data, { usedGen });
                 if (errClass.retryable && retries < MAX_RETRIES) {
                     // OAuth 401: refresh token before retry so the next attempt uses new credentials
                     if (errClass.type === 'auth' && typeof adapter.handleUnauthorized === 'function') {
                         try {
-                            await adapter.handleUnauthorized();
+                            await adapter.handleUnauthorized(usedGen);
                         } catch (e) {
                             if (!e.retryable) { log(`[Retry] OAuth refresh failed, not retrying: ${e.message}`, 'ERROR'); break; }
                         }
@@ -1929,7 +2015,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
                         // pre-loop EXPIRED token — critical because this loop is xAI's ONLY
                         // refresh path, so re-sending the stale bearer 401s again and burns a
                         // single-use refresh rotation on every attempt. No-op for api_key/claude.
-                        headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
+                        headers = _buildRequestHeaders(apiKey); // BAT-1664: same beta extra as the first build
+                        usedGen = typeof adapter.currentRefreshGeneration === 'function' ? adapter.currentRefreshGeneration() : 0;
                         refreshedThisCall = true; // BAT-1143 D8: mark the post-refresh retry
                     }
                     const retryAfterRaw = parseInt(res.headers?.['retry-after']) || 0;
@@ -1961,6 +2048,18 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
         }
 
         const durationMs = Date.now() - startTime;
+
+        // BAT-1664 C2 fallback: this request sent the binding and the route /
+        // credential rejected the control itself → remember that (process-local,
+        // keyed by the credential of the actual send). The signature-400 matcher
+        // wins: a signature mismatch is never a capability rejection. chat()
+        // performs the retry; this only records.
+        if (_sentBinding && res && res.status === 400
+            && !_reasoningRecovery.isThinkingSignature400(res.status, res.data)
+            && _reasoningRecovery.isBindingRejected400(res.status, res.data, true)) {
+            try { _recordBindingDenied(endpoint && endpoint.hostname, AUTH_TYPE, _sentCredential); }
+            catch (e) { log(`[ThinkingBinding] capability record failed: ${e && e.message ? e.message : String(e)}`, 'WARN'); }
+        }
 
         // Log to database (retry_count = number of retries performed, 0 = no retries)
         // BAT-315: Extract raw usage from provider-specific location
@@ -2089,7 +2188,8 @@ async function claudeApiCall(body, chatId, traceCtx = {}) {
             lastRateLimitTokensReset = rl.tokensReset;
             writeApiUsageState({
                 type: 'api_key',
-                auth_mode: AUTH_TYPE,
+                // BAT-1157: OpenAI reports its transport (an oauth selection on the saved key is api_key).
+                auth_mode: PROVIDER === 'openai' ? OPENAI_AUTH_TYPE : AUTH_TYPE,
                 provider: PROVIDER,
                 requests: rl.requests || {},
                 tokens: rl.tokens || {},
@@ -2150,7 +2250,10 @@ function sanitizeConversation(messages, turnId) {
                 orphanDetails.push({ type: 'tool_call', id: tc.id, tool: tc.name, msgIndex: i });
             }
         }
-        msg.toolCalls = msg.toolCalls.filter(tc => !orphanedIds.has(tc.id));
+        // BAT-1664: every edit of an assistant message's toolCalls/content goes
+        // through the wire-snapshot gate (drops the verbatim snapshot + marks the
+        // conversation so the rest of the turn strips thinking).
+        _wireSnap.invalidateWireSnapshot(msg, messages, msg.toolCalls.filter(tc => !orphanedIds.has(tc.id)));
         stripped += orphanedIds.size;
 
         if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
@@ -2185,6 +2288,7 @@ function sanitizeConversation(messages, turnId) {
                 orphanDetails.push({ type: 'tool_use', id: b.id, tool: b.name, msgIndex: i });
             }
         }
+        _wireSnap.invalidateWireSnapshot(msg, messages); // BAT-1664: assistant content edit
         msg.content = msg.content.filter(b => b.type !== 'tool_use' || !orphanedIds.has(b.id));
         stripped += orphanedIds.size;
 
@@ -2247,6 +2351,8 @@ function sanitizeConversation(messages, turnId) {
     }
 
     sanitizerStats.totalStripped += stripped;
+    // BAT-1664 C0: a repair is a history edit → the rest of the turn strips thinking.
+    if (stripped > 0) _wireSnap.noteHistoryEdit(messages);
     // BAT-246: Always log sanitizer invocation for trend monitoring (WARN when stripping, DEBUG otherwise)
     const sanitizeLog = {
         turnId: turnId || null, stripped,
@@ -2340,8 +2446,20 @@ function estimateTokens(systemBlocks, messages, tools, cache) {
     // Use cached char counts for system/tools when available (they don't change per iteration)
     const systemChars = (cache && cache.systemChars != null) ? cache.systemChars : charCount(systemBlocks);
     let messageChars = 0;
+    // BAT-1664 (Codex 49822321): with `cache.mediaAware` (first-party Claude), an inline
+    // image counts as MEDIA_IMAGE_TOKENS, not its base64 characters — the same accounting
+    // the formatted-body gate uses. Without it a 700 KB photo read as ~240k tokens here and
+    // drove the summarize / pressure-trim pre-filter, which edit history (and so strip the
+    // turn's replayed thinking) before the gate ever saw the real size.
+    const mediaAware = !!(cache && cache.mediaAware);
     for (const m of messages) {
-        messageChars += charCount(m.content);
+        if (mediaAware && Array.isArray(m.content)) {
+            const acc = { images: 0, excludedChars: 0 };
+            _mediaAdjustment(m.content, acc, 0);
+            messageChars += Math.max(0, charCount(m.content) - acc.excludedChars) + acc.images * MEDIA_IMAGE_TOKENS * 4;
+        } else {
+            messageChars += charCount(m.content);
+        }
         if (m.toolCalls) messageChars += charCount(m.toolCalls);
         // Structural overhead per message (~30 chars for role, separators, etc.)
         messageChars += 30;
@@ -2363,14 +2481,78 @@ function estimateTokens(systemBlocks, messages, tools, cache) {
  * Check context usage and log warnings. Called before each API request in the agentic loop.
  * @returns {{ usage: number, estimatedTokens: number, limit: number, breakdown: { system: number, messages: number, tools: number } }}
  */
-function checkContextUsage(systemBlocks, messages, tools, model, turnId, cache) {
-    // Priority: user-set OpenRouter context > hardcoded model limit > default 128K
-    // Match context to active model (primary vs fallback)
+// Priority: user-set OpenRouter context > hardcoded model limit > default 128K.
+// Match context to active model (primary vs fallback). Pure — no logging.
+function _resolveContextLimit(model) {
     const userLimit = PROVIDER === 'openrouter' ? (
         (model === OPENROUTER_FALLBACK_MODEL && OPENROUTER_FALLBACK_CONTEXT > 0) ? OPENROUTER_FALLBACK_CONTEXT
         : (OPENROUTER_MODEL_CONTEXT > 0 ? OPENROUTER_MODEL_CONTEXT : 0)
     ) : 0;
     const knownLimit = MODEL_CONTEXT_LIMITS[model];
+    return { userLimit, knownLimit, limit: userLimit || knownLimit || DEFAULT_CONTEXT_LIMIT };
+}
+
+// BAT-1664 budget gate: measure the FORMATTED request body (exactly what is
+// sent — replayed thinking blocks, frozen tools, JSON escaping included) with
+// the same chars/4 heuristic and context limit the estimate uses. Pure.
+//
+// Media are NOT text: a base64 image's characters say nothing about its token
+// cost (Anthropic bills an image by its pixel area, capped near ~1,600 tokens
+// after server-side downscaling). Counting a 700 KB photo's base64 at chars/4
+// (~240k "tokens") made every turn carrying a photo — the photo message is the
+// turn anchor, which no reduction may remove — look irreducibly over budget,
+// so nothing was sent. Each `image` block (base64 or URL source) is therefore
+// charged a fixed MEDIA_IMAGE_TOKENS and its base64 payload is excluded from
+// the character count. Today no producer sends base64 `document` (PDF) or other
+// media blocks (message-handler sends `image` only; the vision tool is a
+// separate request that never enters the conversation), so any other base64
+// source is still counted by characters — conservative until one exists.
+const MEDIA_IMAGE_TOKENS = 1600;
+
+function _mediaAdjustment(node, acc, depth) {
+    if (!node || typeof node !== 'object' || depth > 6) return;
+    if (Array.isArray(node)) {
+        for (const item of node) _mediaAdjustment(item, acc, depth + 1);
+        return;
+    }
+    if (node.type === 'image') {
+        acc.images++;
+        const src = node.source;
+        if (src && src.type === 'base64' && typeof src.data === 'string') {
+            // JSON.stringify(base64) === '"' + base64 + '"' (no escaping in the alphabet).
+            acc.excludedChars += src.data.length + 2;
+        }
+        return;
+    }
+    // Tool results can carry content arrays (nested media).
+    if (Array.isArray(node.content)) _mediaAdjustment(node.content, acc, depth + 1);
+}
+
+function _measureFormattedBody(body, model) {
+    const chars = typeof body === 'string' ? body.length : 0;
+    let textChars = chars;
+    let mediaTokens = 0;
+    if (chars > 0 && body.indexOf('"image"') !== -1) {
+        try {
+            const parsed = JSON.parse(body);
+            const acc = { images: 0, excludedChars: 0 };
+            _mediaAdjustment(parsed && parsed.messages, acc, 0);
+            textChars = Math.max(0, chars - acc.excludedChars);
+            mediaTokens = acc.images * MEDIA_IMAGE_TOKENS;
+        } catch (_) { /* unparseable → fall back to the raw count (conservative) */ }
+    }
+    const estimatedTokens = Math.ceil(textChars / 4) + mediaTokens;
+    const { limit } = _resolveContextLimit(model);
+    return { estimatedTokens, limit, usage: estimatedTokens / limit };
+}
+
+// BAT-1664: budget-gate health. `checks` counts every first-party Claude
+// request measured on the shared emission path (the C3 / C2 retries included);
+// `blocked` counts requests that were NOT sent.
+const budgetGateStats = { checks: 0, reductions: 0, blocked: 0 };
+
+function checkContextUsage(systemBlocks, messages, tools, model, turnId, cache) {
+    const { userLimit, knownLimit } = _resolveContextLimit(model);
     if (!userLimit && !knownLimit && model && !_unknownModelWarned) {
         if (PROVIDER !== 'openrouter') {
             log(`[Context] Unknown model "${model}" — using conservative ${DEFAULT_CONTEXT_LIMIT} token limit`, 'WARN');
@@ -2544,6 +2726,11 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride, anc
         if (typeof adapter.ensureFreshToken === 'function') await adapter.ensureFreshToken();
         const _sumRefreshed = typeof adapter.currentRefreshGeneration === 'function'
             && adapter.currentRefreshGeneration() !== _sumGenBefore;
+        // BAT-1157 (D15): no authenticated send while the sign-in is latched or reconnect-required.
+        if (typeof adapter.preflightAuth === 'function' && adapter.preflightAuth()) {
+            log('[ContextSummary] Skipped: the AI sign-in needs attention', 'WARN');
+            return false; // Fall back to normal adaptive trim
+        }
         const headers = adapter.buildHeaders(apiKey, AUTH_TYPE);
 
         const summaryPrompt = [
@@ -2625,10 +2812,22 @@ async function summarizeOldMessages(messages, chatId, turnId, modelOverride, anc
 const AGING_RECENCY_THRESHOLD = 6;  // messages within this distance from end are "recent"
 const AGING_SIZE_THRESHOLD = 800;   // chars — only age results larger than this
 
-function ageToolResults(messages, turnId) {
+// BAT-1664: index of the newest assistant message (the batch the model is about
+// to read sits after it). -1 when there is none. Used as the aging bound for the
+// budget reduction so the newest results are never placeholdered.
+function _newestAssistantIndex(messages) {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i] && messages[i].role === 'assistant') return i;
+    return -1;
+}
+
+// BAT-1664 C0: optional `endExclusive` caps the scan (stable-history models age
+// only messages BEFORE the turn anchor, once per turn).
+function ageToolResults(messages, turnId, endExclusive) {
     let aged = 0;
     let bytesSaved = 0;
-    const recentBoundary = messages.length - AGING_RECENCY_THRESHOLD;
+    const recentBoundary = (typeof endExclusive === 'number' && endExclusive >= 0)
+        ? Math.min(messages.length - AGING_RECENCY_THRESHOLD, endExclusive)
+        : messages.length - AGING_RECENCY_THRESHOLD;
 
     for (let i = 0; i < recentBoundary; i++) {
         const msg = messages[i];
@@ -2781,6 +2980,17 @@ async function chat(chatId, userMessage, options = {}) {
     // BAT-1130: at most one lean self-heal retry per turn (guards against a
     // genuine usage-exhaustion 400 looping forever).
     let _contentFilterSelfHealed = false;
+    // BAT-1664 C3: at most one signature-400 heal per turn (NOT reset per round).
+    // A second match in the same turn surfaces via classifyApiError.
+    let _thinkingSignatureHealed = false;
+    // BAT-1664: turn-sticky "replay no thinking" flag. Once set it stays set for
+    // the rest of this chat() call. Set by: the C3 signature heal, the C2
+    // binding rejection, any wire-snapshot invalidation during the turn, and
+    // (slice B) the emergency history edits — sanitize repair, quarantine, lean
+    // self-heal, anchorGuardRepair, budget reduction.
+    let _stripAllThinking = false;
+    // BAT-1664 C2: at most one binding-rejection fallback retry per turn.
+    let _bindingFallbackUsed = false;
 
     // BAT-1283: resolve the goal this turn's checkpoint will carry.
     //
@@ -2815,6 +3025,26 @@ async function chat(chatId, userMessage, options = {}) {
         const _tail = messages[messages.length - 1];
         if (_tail && _tail.role === 'user') _turnAnchor = _tail;
     }
+
+    // BAT-1664: baseline of this conversation's wire-snapshot edit epoch. Any
+    // invalidateWireSnapshot() during the turn moves it → stripAllThinking.
+    const _wireEpochAtTurnStart = _wireSnap.wireEditEpoch(messages);
+    // BAT-1664 C2: registry flag, resolved ONCE per turn (first-party Claude only).
+    const _thinkingBindingFlag = adapter.id === 'claude'
+        && thinkingBindingFor('claude', activeModel, AUTH_TYPE) === true;
+    // BAT-1664 C0: STABLE HISTORY WITHIN A TURN — flagged first-party Claude only.
+    // Every in-turn thinking signature is bound to the exact prefix it was
+    // produced on, so nothing before the newest message may change between
+    // rounds: aging runs once (before the first request, pre-anchor only), no
+    // per-round MAX_HISTORY trim (a 'turnEnd' trim instead), and the wire tools
+    // array is frozen at turn start. Every other provider/model keeps the
+    // per-round behavior byte-for-byte.
+    const _stableHistory = _thinkingBindingFlag;
+    let _frozenTools = null;
+    let _agedOnce = false;
+    // BAT-1664 budget gate: set when a formatted request stays over the context
+    // budget after the one bounded reduction → the turn ends without sending.
+    let _budgetExceeded = null;
 
     // Call Claude API with tool use loop
     let response;
@@ -2852,8 +3082,21 @@ async function chat(chatId, userMessage, options = {}) {
     try { // BAT-253: catch network errors → sanitize before user output
 
         while (stepCount < MAX_STEPS) {
-            // BAT-259: Age old tool results to reduce payload bloat
-            ageToolResults(messages, turnId);
+            // BAT-259: Age old tool results to reduce payload bloat.
+            // BAT-1664 C0: on stable-history models, ONCE per turn and only before
+            // the anchor (aging an in-turn result would change a bound prefix).
+            if (!_stableHistory) {
+                // BAT-1664 scope decision: per-round aging on UNFLAGGED models does
+                // NOT strip replayed thinking. The unflagged registry models do not
+                // run the prefix check (live --compat probe, 2026-11-16), so stripping
+                // would only cost reasoning quality; an unknown id that does check is
+                // covered by the C3 signature heal (one extra request per turn).
+                ageToolResults(messages, turnId);
+            } else if (!_agedOnce) {
+                _agedOnce = true;
+                const _anchorAt = _turnAnchor ? messages.indexOf(_turnAnchor) : -1;
+                ageToolResults(messages, turnId, _anchorAt >= 0 ? _anchorAt : undefined);
+            }
 
             // BAT-315: Provider-agnostic tool formatting + request body building
             // DeerFlow P1: Strip tools on loop-break final iteration so model can only respond with text
@@ -2862,14 +3105,24 @@ async function chat(chatId, userMessage, options = {}) {
             // DeerFlow P2: Deferred tool loading DISABLED — free/small OpenRouter models
             // can't handle tool_search discovery pattern (leak raw XML instead of proper calls).
             // Re-enable per-model when we can detect tool-use capability from OpenRouter API.
-            const rawTools = _loopFinalIteration ? [] : (_deps.getTools ? _deps.getTools() : []);
-            const formattedTools = adapter.formatTools(rawTools);
+            let formattedTools;
+            if (_stableHistory) {
+                // BAT-1664 C0: the wire `tools` array is frozen at turn start (it is
+                // part of every bound prefix). Execution-time availability checks
+                // still apply in executeTool. The loop-final round keeps it and
+                // forbids tool use via tool_choice:none (requestOptions below).
+                if (!_frozenTools) _frozenTools = adapter.formatTools(_deps.getTools ? _deps.getTools() : []);
+                formattedTools = _frozenTools;
+            } else {
+                const rawTools = _loopFinalIteration ? [] : (_deps.getTools ? _deps.getTools() : []);
+                formattedTools = adapter.formatTools(rawTools);
+            }
 
             // Context token estimation: check usage before API call, adaptively trim if needed.
             // Cache systemChars for the turn (stable). toolChars recomputed each iteration
             // because MCP tools can reconnect/change between tool rounds.
             if (!_ctxCache) {
-                _ctxCache = { systemChars: JSON.stringify(systemBlocks).length };
+                _ctxCache = { systemChars: JSON.stringify(systemBlocks).length, mediaAware: adapter.id === 'claude' };
             }
             _ctxCache.toolChars = JSON.stringify(formattedTools).length;
 
@@ -2885,6 +3138,9 @@ async function chat(chatId, userMessage, options = {}) {
                     // so no orphan reaches the payload — the trim-recheck loop below
                     // only sanitizes when it actually trims.
                     sanitizeConversation(messages, turnId);
+                    // BAT-1664: a summary splice is a history edit → strip thinking
+                    // for the rest of the turn (Claude only reads the flag).
+                    _wireSnap.noteHistoryEdit(messages);
                     // Messages changed — recompute context usage
                     ctx = checkContextUsage(systemBlocks, messages, formattedTools, activeModel, turnId, _ctxCache);
                 }
@@ -2902,6 +3158,9 @@ async function chat(chatId, userMessage, options = {}) {
             }
             // Defensive: re-sanitize after trim to fix any orphaned tool pairs
             if (trimPasses > 0) sanitizeConversation(messages, turnId);
+            // BAT-1664: a pressure trim is a history edit → strip thinking for the
+            // rest of the turn (Claude only reads the flag).
+            if (trimPasses > 0) _wireSnap.noteHistoryEdit(messages);
 
             // BAT-549 Commit 3c: build per-turn request options from the LIVE
             // RuntimeState (read fresh each turn so a Settings toggle takes
@@ -2975,7 +3234,17 @@ async function chat(chatId, userMessage, options = {}) {
                 customEchoOverride: !!(_liveRtState && _liveRtState.customEchoReasoning),
                 reasoningMode: effectiveReasoningMode,
                 synthetic: effectiveSynthetic,
+                // BAT-1664 C1: identity of THIS turn's user message — the only
+                // boundary for thinking replay. null → no replay at all.
+                turnAnchor: _turnAnchor,
+                // BAT-1664: turn-sticky strip flag (refreshed right before emission).
+                stripAllThinking: _stripAllThinking,
+                // BAT-1664 C2: registry flag; the per-request `bind` is derived below.
+                thinkingBinding: _thinkingBindingFlag,
             };
+            // BAT-1664 C0: loop-final round on a stable-history model — frozen tools
+            // + tool_choice:none (the guard below still ignores any tool call).
+            if (_stableHistory && _loopFinalIteration) requestOptions.toolChoiceNone = true;
 
             // R1.3 + R2.2 Copilot: emit the SYNTHETIC_HEARTBEAT
             // suppression log once per process — but ONLY when the
@@ -3030,17 +3299,21 @@ async function chat(chatId, userMessage, options = {}) {
                 : AUTH_TYPE;
             const _transportRequiresReasoning = _usesOpenAIResponsesTransport
                 && (_effectiveTransportAuth === 'oauth' || _modelIsCodex);
-            if (effectiveReasoningMode === 'off'
+            // BAT-1664: evaluated AFTER the body is built (below) — when the
+            // thinking binding is sent, the request carries `thinking` and
+            // claiming "suppressed" would be false.
+            const _heartbeatSuppressionApplies = effectiveReasoningMode === 'off'
                 && effectiveSynthetic === 'heartbeat'
                 && _userToggleWouldEmit
-                && !_transportRequiresReasoning) {
+                && !_transportRequiresReasoning;
+            const _emitHeartbeatSuppressionLog = () => {
                 _logSuppression(
                     _SUPPRESSION_REASONS.SYNTHETIC_HEARTBEAT,
                     `chatId=${String(chatId).slice(0, 32)} provider=${_effectiveTransportProvider} `
                     + `auth=${_effectiveTransportAuth} `
                     + `model=${String(activeModel).slice(0, 48)}`,
                 );
-            }
+            };
 
             // Convert neutral messages to provider API format for the request.
             // BAT-549 R2 thread 3: pass `activeModel` as 2nd arg so the
@@ -3060,6 +3333,7 @@ async function chat(chatId, userMessage, options = {}) {
             // repairs===0 on synthetic long turns.
             anchorGuardStats.checks++;
             if (anchorGuardRepair(messages, _turnAnchor)) {
+                _stripAllThinking = true; // BAT-1664: emergency edit
                 anchorGuardStats.repairs++;
                 log(`[AnchorGuard] ${JSON.stringify({
                     turnId, taskId, step: stepCount,
@@ -3068,8 +3342,81 @@ async function chat(chatId, userMessage, options = {}) {
                     cumulative: anchorGuardStats.repairs,
                 })}`, anchorGuardStats.repairs <= 3 ? 'ERROR' : 'DEBUG');
             }
-            const apiMessages = adapter.toApiMessages(messages, activeModel, requestOptions);
-            const body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools, requestOptions);
+            // Shared emission path — EVERY send of this loop (first try, the C3
+            // signature heal retry, the C2 binding fallback retry, the lean
+            // self-heal and quarantine retries) is formatted here and, for
+            // first-party Claude, measured by the budget gate below (pin P1).
+            let apiMessages;
+            let body;
+            let _bind = false;
+            const _emitRequest = () => {
+                // BAT-1664: an in-turn wire-snapshot invalidation or history edit
+                // (sanitize repair, loop-final clear, summary/trim, budget
+                // reduction, …) changed a prefix later signatures are bound to →
+                // strip thinking for the rest of the turn.
+                if (_wireSnap.wireEditEpoch(messages) !== _wireEpochAtTurnStart) _stripAllThinking = true;
+                requestOptions.stripAllThinking = _stripAllThinking;
+                requestOptions.turnAnchor = _turnAnchor;
+                apiMessages = adapter.toApiMessages(messages, activeModel, requestOptions);
+                // BAT-1664 C2: ONE bind decision drives both the body field and the
+                // beta header (claudeApiCall, both header sites). Bind only when the
+                // model is flagged, the emitted messages actually carry thinking, and
+                // this route+credential has not rejected the control.
+                _bind = false;
+                if (_thinkingBindingFlag && typeof adapter.messagesHaveThinking === 'function'
+                    && adapter.messagesHaveThinking(apiMessages)) {
+                    const _ep = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
+                    _bind = !_isBindingDenied(_ep && _ep.hostname, AUTH_TYPE, getProviderApiKey());
+                }
+                body = adapter.formatRequest(activeModel, 4096, systemBlocks, apiMessages, formattedTools,
+                    _bind ? Object.assign({}, requestOptions, { bindThinking: true }) : requestOptions);
+            };
+            _emitRequest();
+
+            // BAT-1664 budget gate (first-party Claude). The estimate above
+            // (_ctxCache) is only a cheap pre-filter: it does not see replayed
+            // thinking or JSON escaping. Measure the FORMATTED body against the
+            // threshold adaptiveTrim uses. Over → ONE bounded reduction (strip
+            // thinking, age results incl. this turn's, adaptiveTrim), re-format,
+            // re-measure. Still over → do NOT send; end the turn through the
+            // recoverable exit below (context_budget_exceeded). Neither step can
+            // break the anchor (adaptiveTrim skips it) or a tool call/result pair
+            // (group-atomic trim + sanitize).
+            if (adapter.id === 'claude') {
+                budgetGateStats.checks++;
+                let _gate = _measureFormattedBody(body, activeModel);
+                if (_gate.usage >= CONTEXT_DANGER_THRESHOLD) {
+                    budgetGateStats.reductions++;
+                    log(`[ContextBudget] request ~${_gate.estimatedTokens} tokens (${Math.round(_gate.usage * 100)}% of ${_gate.limit}) is over the ${Math.round(CONTEXT_DANGER_THRESHOLD * 100)}% budget — reducing once (strip thinking, age results, trim) | turnId=${turnId || 'n/a'}`, 'WARN');
+                    _stripAllThinking = true;
+                    _wireSnap.noteHistoryEdit(messages);
+                    // Age older results (this turn's included) but NEVER the newest
+                    // assistant message's batch: the model needs those fresh results
+                    // to continue, and a placeholdered batch would be a silent loss.
+                    // If that batch alone is too big, the no-send exit below runs.
+                    ageToolResults(messages, turnId, _newestAssistantIndex(messages));
+                    if (adaptiveTrim(messages, _gate.usage, turnId, _turnAnchor) > 0) sanitizeConversation(messages, turnId);
+                    if (anchorGuardRepair(messages, _turnAnchor)) {
+                        anchorGuardStats.repairs++;
+                        log(`[AnchorGuard] ${JSON.stringify({
+                            turnId, taskId, step: stepCount,
+                            adapter: (adapter && adapter.id) || activeModel,
+                            event: 'anchor_missing_repaired', len: messages.length,
+                            cumulative: anchorGuardStats.repairs,
+                        })}`, anchorGuardStats.repairs <= 3 ? 'ERROR' : 'DEBUG');
+                    }
+                    _emitRequest();
+                    _gate = _measureFormattedBody(body, activeModel);
+                    if (_gate.usage >= CONTEXT_DANGER_THRESHOLD) {
+                        budgetGateStats.blocked++;
+                        log(`[ContextBudget] still ~${_gate.estimatedTokens} tokens (${Math.round(_gate.usage * 100)}% of ${_gate.limit}) after reduction — not sending; ending the turn (context_budget_exceeded) | turnId=${turnId || 'n/a'}`, 'WARN');
+                        _budgetExceeded = _gate;
+                        break;
+                    }
+                    log(`[ContextBudget] reduced to ~${_gate.estimatedTokens} tokens (${Math.round(_gate.usage * 100)}% of ${_gate.limit}) — sending | turnId=${turnId || 'n/a'}`, 'INFO');
+                }
+            }
+            if (_heartbeatSuppressionApplies && !_bind) _emitHeartbeatSuppressionLog();
 
             // BAT-549 Commit 6: extended-thinking status indicator.
             // Per v4 contract, the bubble appears ONLY when all three
@@ -3103,7 +3450,10 @@ async function chat(chatId, userMessage, options = {}) {
 
             let res;
             try {
-                res = await claudeApiCall(body, chatId, { turnId, iteration: stepCount });
+                res = await claudeApiCall(body, chatId, {
+                    turnId, iteration: stepCount,
+                    anthropicBetaExtra: _bind ? [_wireSnap.THINKING_BINDING_BETA] : null,
+                });
             } finally {
                 // Codex v3/v4 sign-off adjustment: cleanup is
                 // fire-and-forget. Awaiting it inline would gate
@@ -3158,6 +3508,33 @@ async function chat(chatId, userMessage, options = {}) {
                 const errMsgFp = _reasoningFingerprint(errMsg);
                 log(`API error: status=${res.status} type=${errType} code=${errCode || '-'} msgLen=${errMsgLen} msgFp=${errMsgFp}`, 'ERROR');
 
+                // BAT-1664 C3: a replayed thinking block's signature no longer
+                // matches its bound prefix (first-party Claude). Evaluated FIRST
+                // (it wins over the binding-rejection matcher). Heal ONCE per
+                // turn: strip all thinking for the rest of the turn and retry.
+                // Stored history is not touched. A second match falls through to
+                // classifyApiError (it matches none of the recoveries below).
+                const _isSignature400 = adapter.id === 'claude'
+                    && _reasoningRecovery.isThinkingSignature400(res.status, res.data);
+                if (_isSignature400 && !_thinkingSignatureHealed) {
+                    _thinkingSignatureHealed = true;
+                    _stripAllThinking = true;
+                    log(`[ThinkingBinding] status=${res.status} thinking-signature mismatch — retrying turn once with replayed thinking stripped (bindingSent=${_bind ? 1 : 0})`, 'WARN');
+                    continue;
+                }
+                // BAT-1664 C2 fallback: THIS request sent the binding and the
+                // route/credential rejected the control itself. claudeApiCall has
+                // recorded the negative capability for the credential actually
+                // sent; retry once without header AND field, thinking stripped.
+                if (!_isSignature400 && !_bindingFallbackUsed
+                    && _reasoningRecovery.isBindingRejected400(res.status, res.data, _bind)) {
+                    _bindingFallbackUsed = true;
+                    _stripAllThinking = true;
+                    const _ep = adapter.getEndpoint ? adapter.getEndpoint() : adapter.endpoint;
+                    log(`[ThinkingBinding] status=${res.status} binding control rejected (host=${(_ep && _ep.hostname) || '-'} auth=${AUTH_TYPE}) — disabled for this credential until restart; retrying once without it`, 'WARN');
+                    continue;
+                }
+
                 // BAT-549: detect "reasoning_content must be passed back" 400
                 // and run adaptive 3-step quarantine recovery before bubbling
                 // up to the user. Tracks _reasoningRecoveryStep on the closure
@@ -3204,6 +3581,10 @@ async function chat(chatId, userMessage, options = {}) {
                 const _userMessageEq = (a, b) => a === b;
                 const _applyRecovery = (result) => {
                     messages.splice(0, messages.length, ...result.newMessages);
+                    // BAT-1664: the quarantine is an emergency edit — strip thinking
+                    // for the rest of the turn.
+                    _stripAllThinking = true;
+                    _wireSnap.noteHistoryEdit(messages);
                     // Re-append the current turn's user message if recovery
                     // removed it. Step 1 cuts AFTER the last user message so
                     // it's preserved; step 2 cuts at the earliest assistant
@@ -3292,6 +3673,7 @@ async function chat(chatId, userMessage, options = {}) {
                 // genuine error, not a content-filter false-positive.
                 if (!_contentFilterSelfHealed && AUTH_TYPE === 'setup_token' && _isUsageFilter400(res.status, res.data)) {
                     _contentFilterSelfHealed = true;
+                    _stripAllThinking = true; // BAT-1664: the system prompt changes → bound prefixes break
                     const lean = buildSystemBlocks(matchedSkills, chatId, activeModel, { leanMemory: true });
                     systemBlocks = adapter.formatSystemPrompt(lean.stable, lean.dynamic + resumeBlock, AUTH_TYPE);
                     _ctxCache = null; // systemBlocks shrank — force context re-measure next iteration
@@ -3322,6 +3704,9 @@ async function chat(chatId, userMessage, options = {}) {
 
             // BAT-315: Parse response through adapter into neutral format
             const parsed = adapter.fromApiResponse(res.data);
+            // BAT-1664 C4: what the API did to replayed thinking (counts only).
+            try { _logInputTransformations(parsed.inputTransformations, activeModel); }
+            catch (e) { log(`[ThinkingBinding] input_transformations log failed: ${e && e.message ? e.message : String(e)}`, 'DEBUG'); }
             // Keep raw response for fallback text extraction later
             response = res.data;
             response._parsed = parsed;
@@ -3352,25 +3737,33 @@ async function chat(chatId, userMessage, options = {}) {
             // Add assistant's response to history in neutral format
             // BAT-549: thread reasoningBlocks through so the next turn's
             // toApiMessages() can emit them back at the wire shape each
-            // adapter requires. Adapters that don't capture reasoning
+            // adapter requires (BAT-1664: except Claude, which replays only
+            // the in-turn verbatim wire snapshot below and never rebuilds
+            // from reasoningBlocks). Adapters that don't capture reasoning
             // (claude.js / openai.js pre-Commit-2) return undefined here;
             // `|| []` keeps the field stable so checkpoint serialization
             // doesn't churn the schema between turns. Empty array is the
             // documented "no reasoning preserved" sentinel.
-            messages.push({
+            const _assistantMsg = {
                 role: 'assistant',
                 content: parsed.text || '',
                 toolCalls: parsed.toolCalls,
                 reasoningBlocks: Array.isArray(parsed.reasoningBlocks) ? parsed.reasoningBlocks : [],
-            });
+            };
+            // BAT-1664: verbatim snapshot of the content array as received (deep
+            // copy, non-enumerable → never serialized). In-turn replay emits it.
+            if (adapter.id === 'claude' && Array.isArray(parsed.wireContent)) {
+                _wireSnap.setWireSnapshot(_assistantMsg, parsed.wireContent);
+            }
+            messages.push(_assistantMsg);
 
             // DeerFlow P1: If this is the final loop-break iteration, ignore any tool calls
             if (_loopFinalIteration && parsed.toolCalls.length > 0) {
                 log(`[LoopDetector] Final iteration — ignoring ${parsed.toolCalls.length} tool calls from model`, 'WARN');
                 // Clear tool calls from the already-pushed assistant message to prevent orphans
                 const lastMsg = messages[messages.length - 1];
-                if (lastMsg && lastMsg.role === 'assistant') lastMsg.toolCalls = [];
-                parsed.toolCalls = [];
+                if (lastMsg && lastMsg.role === 'assistant') _wireSnap.invalidateWireSnapshot(lastMsg, messages, []);
+                response._parsed = Object.assign({}, parsed, { toolCalls: [] });
                 _loopFinalIteration = false;
                 break; // Model didn't listen — force exit with text response
             }
@@ -3417,7 +3810,16 @@ async function chat(chatId, userMessage, options = {}) {
                 const toolUse = parsed.toolCalls[i];
                 // OpenClaw parity: normalize tool name before ALL gating checks
                 // (prevents whitespace-padded names from bypassing confirmation/rate-limit gates)
-                if (typeof toolUse.name === 'string') toolUse.name = toolUse.name.trim();
+                if (typeof toolUse.name === 'string') {
+                    const _trimmedName = toolUse.name.trim();
+                    // BAT-1664: toolUse IS an entry of the stored assistant message's
+                    // toolCalls — an actual change is an edit, so it goes through the
+                    // wire-snapshot gate first.
+                    if (_trimmedName !== toolUse.name) {
+                        _wireSnap.invalidateWireSnapshot(_assistantMsg, messages);
+                        toolUse.name = _trimmedName;
+                    }
+                }
                 log(`Tool use: ${toolUse.name}`, 'DEBUG');
                 // Status reaction: show tool-specific emoji (OpenClaw parity)
                 if (options.statusReaction) options.statusReaction.setTool(toolUse.name);
@@ -3631,7 +4033,13 @@ async function chat(chatId, userMessage, options = {}) {
             // anchor. The old role-blind shift() here evicted the user's own
             // instruction after ~6-18 rounds, making the model confabulate ("I
             // didn't receive any text") while Telegram still quoted the message.
-            _trimHistoryLogged(messages, MAX_HISTORY, _turnAnchor, turnId, 'toolRound');
+            // BAT-1664 C0: NOT on stable-history models — trimming mid-turn changes
+            // the prefix every in-turn thinking signature is bound to. They trim
+            // once at turn end ('turnEnd', below) and at addToConversation; the
+            // budget gate bounds the payload in between.
+            // Unflagged: no epoch bump on a removal — same scope decision as the
+            // per-round aging above (C3 heals an unknown checking id).
+            if (!_stableHistory) _trimHistoryLogged(messages, MAX_HISTORY, _turnAnchor, turnId, 'toolRound');
 
             // Status reaction: back to thinking before next Claude API call
             if (options.statusReaction) options.statusReaction.setThinking();
@@ -3653,6 +4061,50 @@ async function chat(chatId, userMessage, options = {}) {
             if (cpDuration >= 0) {
                 log(`[Trace] ${JSON.stringify({ turnId, taskId, checkpoint: 'saved', stepCount, durationMs: cpDuration })}`, 'DEBUG');
             }
+        }
+
+        // BAT-1664 budget gate: the request stayed over the context budget after
+        // the bounded reduction and was NOT sent. Recoverable exit, shaped like the
+        // step-limit exit: the checkpoint is kept (reason context_budget_exceeded)
+        // and the user is told it is the context limit. P3: never imply /resume
+        // will progress. The irreducible batch may still be in history (resume
+        // hits the same wall) or may be trimmed away by the end-of-turn cap /
+        // the 8-message checkpoint slice (resume loses those results) — the text
+        // states both, and offers a smaller step or a fresh context.
+        if (_budgetExceeded) {
+            const task = getActiveTask(chatId);
+            if (task) {
+                task.stepCount = stepCount;
+                task.reason = 'context_budget_exceeded';
+            }
+            log(`[Trace] ${JSON.stringify({ turnId, taskId, chatId: String(chatId || ''), stepCount, reason: 'context_budget_exceeded', estimatedTokens: _budgetExceeded.estimatedTokens, limit: _budgetExceeded.limit, userFallbackSent: true })}`, 'WARN');
+            const limitK = Math.round(_budgetExceeded.limit / 1000);
+            const fallback = `I stopped before sending: this conversation has reached the model's context limit (about ${limitK}k tokens), even after trimming older history (task ${taskId}). Continuing with 'continue' or /resume may hit the same limit again or lose these latest results. Try a smaller step (fewer or smaller files), or start a fresh context with /new and restate what you need.`;
+            addToConversation(chatId, 'assistant', fallback, null, _turnAnchor);
+            saveCheckpoint(taskId, {
+                taskId,
+                chatId: String(chatId),
+                turnId,
+                startedAt: task?.startedAt || Date.now(),
+                stepCount,
+                maxSteps: MAX_STEPS,
+                complete: false,
+                reason: 'context_budget_exceeded',
+                originalGoal,
+                goalSrc,
+                conversationSlice: buildCheckpointSlicePreservingAnchor(messages, _turnAnchor, 8),
+            });
+            {
+                const trk = getSessionTrack(chatId);
+                trk.lastMessageTime = Date.now();
+                trk.messageCount++;
+                scheduleIdleSummary(chatId);
+                const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+                if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+                    saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+                }
+            }
+            return fallback;
         }
 
         // Extract text response from parsed result
@@ -3721,10 +4173,17 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-549 R2 thread 3: same activeModel as the body.
             const summaryApiMsgs = adapter.toApiMessages(summaryNeutral, activeModel);
 
-            const summaryRes = await claudeApiCall(
-                adapter.formatRequest(activeModel, 4096, systemBlocks, summaryApiMsgs, []),
-                chatId, { turnId, iteration: stepCount + 1 }
-            );
+            // BAT-1664 budget gate: never send an over-budget closing-summary
+            // request on first-party Claude — fall through to the built-in summary.
+            const _summaryBody = adapter.formatRequest(activeModel, 4096, systemBlocks, summaryApiMsgs, []);
+            let summaryRes;
+            if (adapter.id === 'claude' && _measureFormattedBody(_summaryBody, activeModel).usage >= CONTEXT_DANGER_THRESHOLD) {
+                budgetGateStats.blocked++;
+                log(`[ContextBudget] closing-summary request is over the context budget — not sending; using the built-in summary | turnId=${turnId || 'n/a'}`, 'WARN');
+                summaryRes = { status: 0 };
+            } else {
+                summaryRes = await claudeApiCall(_summaryBody, chatId, { turnId, iteration: stepCount + 1 });
+            }
 
             if (summaryRes.status === 200) {
                 const summaryParsed = adapter.fromApiResponse(summaryRes.data);
@@ -3832,6 +4291,15 @@ async function chat(chatId, userMessage, options = {}) {
             rawError: rawTrunc, userVisibleText: netClass.userMessage
         })}`, 'WARN');
         throw new Error(netClass.userMessage);
+    } finally {
+        // BAT-1664 C0: stable-history models skip the per-round MAX_HISTORY trim, so
+        // bound the conversation once when the turn ends — on EVERY exit, including
+        // a thrown error. Anchor-preserving. A no-op after the normal exits (their
+        // addToConversation already trimmed with the same anchor).
+        if (_stableHistory) {
+            try { _trimHistoryLogged(messages, MAX_HISTORY, _turnAnchor, turnId, 'turnEnd'); }
+            catch (e) { log(`[History] turnEnd trim failed: ${e && e.message ? e.message : String(e)}`, 'WARN'); }
+        }
     }
 }
 
@@ -3935,6 +4403,8 @@ module.exports = {
     },
     // Sanitizer diagnostics (BAT-246)
     sanitizerStats,
+    // BAT-1664: budget-gate health (checks / reductions / blocked)
+    budgetGateStats,
     // BAT-1186 Layer B: anchor-guard health (repairs must stay 0 on healthy runs)
     anchorGuardStats,
     // Task tracking (P2.4)
@@ -3947,4 +4417,17 @@ module.exports = {
     _setWalletPromptSnapshotForTests,
     // BAT-1130: exposed for the content-filter self-heal regression test.
     _isUsageFilter400,
+    // BAT-1157 (Codex #3): the real request/retry loop, for the OAuth 401 dispatch test.
+    _claudeApiCallForTests: claudeApiCall,
+    // BAT-1664: test seams (claudeApiCall header/binding sites, sanitizer,
+    // capability store, input_transformations logging).
+    _claudeApiCallForTest: claudeApiCall,
+    _sanitizeConversationForTest: sanitizeConversation,
+    _bindingCapabilityForTest: {
+        isDenied: _isBindingDenied,
+        record: _recordBindingDenied,
+        reset: () => _bindingNegativeCaps.clear(),
+        size: () => _bindingNegativeCaps.size,
+    },
+    _logInputTransformations,
 };

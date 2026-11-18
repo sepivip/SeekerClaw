@@ -2,10 +2,12 @@ package com.seekerclaw.app.config
 
 import android.content.ContextWrapper
 import android.content.SharedPreferences
+import com.seekerclaw.app.state.OpenAIOAuthTokenStore
 import com.seekerclaw.app.state.RuntimeState
 import com.seekerclaw.app.util.CrossProcessStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.ProcessRole
 import com.seekerclaw.app.util.SafeFs
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -44,6 +46,8 @@ class ModelRepairBootTest {
         dir = tmp.newFolder("files").toPath()
         Files.createDirectories(dir.resolve("workspace"))
         SafeFs.dirSyncChecked = {}
+        // Every start here is a `:node` service start (BAT-1157: `:node` writes no prefs).
+        ProcessRole.setForTest(true)
         ModelSelectionLock.initForTest(dir)
         ModelRegistry.resetForTest()
         ModelRegistry.initForTest(
@@ -67,8 +71,25 @@ class ModelRepairBootTest {
     @After
     fun tearDown() {
         SafeFs.dirSyncChecked = savedDirSync
+        OpenAIOAuthTokenStore.resetForTest()
+        ProcessRole.setForTest(null)
         ModelSelectionLock.initForTest(null)
         ModelRegistry.resetForTest()
+    }
+
+    /**
+     * BAT-1157 (contract v2.7 §4): the user's ChatGPT sign-in lives in the token store, not in a
+     * prefs key. rawPrefsModelTuple downgrades oauth without a usable stored sign-in to api_key.
+     */
+    private fun signInToOpenAI() {
+        OpenAIOAuthTokenStore.initForTest(
+            dir.toFile(),
+            object : SecretCodec {
+                override fun seal(plain: String) = "sealed:$plain"
+                override fun open(sealed: String) = sealed.removePrefix("sealed:")
+            },
+        )
+        assertTrue(OpenAIOAuthTokenStore.signIn("access", "refresh", "", "") is OpenAIOAuthTokenStore.Result.Ok)
     }
 
     @Test
@@ -117,6 +138,7 @@ class ModelRepairBootTest {
         val runtime = dir.resolve(RuntimeStateFile.NAME)
         val runtimeBefore = Files.readAllBytes(runtime) to Files.getLastModifiedTime(runtime)
         val overlay = AgentSettingsFile.path(dir)
+        signInToOpenAI()
 
         val ctx = FakeContext(
             dir.toFile(),
@@ -125,8 +147,6 @@ class ModelRepairBootTest {
                 "provider" to "openai",
                 "auth_type" to "oauth",
                 "model" to "gpt-5.4",
-                // rawPrefsModelTuple downgrades oauth without a stored token to api_key.
-                "openai_oauth_token_enc" to "present",
             ),
         )
         val anchor = LogCollector.logs.value.lastOrNull()
@@ -152,8 +172,7 @@ class ModelRepairBootTest {
         val intent = ModelRepair.readIntent(dir)
         assertTrue("intent kept for resume: $intent", intent is ModelRepair.IntentRead.Present)
         assertEquals("gpt-6-astra", (intent as ModelRepair.IntentRead.Present).intent.target)
-        // The fake token makes the (compute-only) load log a decrypt line too, so find the WARN
-        // among the lines this start logged rather than taking the last one.
+        // Find the WARN among the lines this start logged rather than taking the last one.
         val all = LogCollector.logs.value
         val logged = all.drop(if (anchor == null) 0 else all.indexOfFirst { it === anchor } + 1)
         assertTrue("repair-incomplete WARN: ${logged.map { it.message }}", logged.any { it.level == LogLevel.WARN && it.message == ModelRepair.REPAIR_FAILED_BOOT_WARNING })
@@ -167,6 +186,7 @@ class ModelRepairBootTest {
         CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), seed).write(seed)
         val runtime = dir.resolve(RuntimeStateFile.NAME)
         val runtimeBefore = Files.readAllBytes(runtime) to Files.getLastModifiedTime(runtime)
+        signInToOpenAI() // before the fsync failure is injected below
         val ctx = FakeContext(
             dir.toFile(),
             mapOf(
@@ -174,7 +194,6 @@ class ModelRepairBootTest {
                 "provider" to "openai",
                 "auth_type" to "oauth",
                 "model" to "gpt-5.4",
-                "openai_oauth_token_enc" to "present",
             ),
         )
         // writeIntent's checked directory fsync fails; the read-only path calls nothing that uses it.

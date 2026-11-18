@@ -98,7 +98,7 @@ async function main() {
         // Also test WITHOUT the oauth beta header to compare
         console.log(`\n${'─'.repeat(60)}`);
         console.log(`🔑 Testing: Setup Token (WITHOUT oauth beta)`);
-        console.log(`   Key prefix: ${setupToken.slice(0, 10)}...`);
+        console.log(`   Setup token: present (len=${setupToken.length})`);
         try {
             const res = await httpRequest({
                 hostname: 'api.anthropic.com',

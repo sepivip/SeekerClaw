@@ -3,9 +3,9 @@ package com.seekerclaw.app.state
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.seekerclaw.app.config.MainPrefs
 import com.seekerclaw.app.config.ModelRegistry
 import com.seekerclaw.app.config.ModelSelectionLock
-import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.util.CrossProcessStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -161,7 +161,8 @@ object RuntimeStateStore {
         val app = context.applicationContext
         appContext = app
         filesDir = app.filesDir
-        val sp = app.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
+        // BAT-1157: MAIN-only (see SeekerClawApplication); the collector mirror writes prefs.
+        val sp = MainPrefs.forWrite(app, "RuntimeStateStore.init") ?: return
         val seeded = seedFromPrefs(sp)
         _state.value = forDisplay(seeded)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -293,7 +294,7 @@ object RuntimeStateStore {
             com.seekerclaw.app.config.ModelRepair.pendingRepair(
                 dir,
                 com.seekerclaw.app.config.ModelRepair.Snapshot(
-                    prefs = com.seekerclaw.app.config.ConfigManager.rawPrefsModelTuple(sp),
+                    prefs = com.seekerclaw.app.config.ConfigManager.rawPrefsModelTuple(MainPrefs.view(sp)),
                     runtime = com.seekerclaw.app.config.RuntimeStateFile.readTuple(dir),
                     overlay = com.seekerclaw.app.config.AgentSettingsFile.read(dir),
                 ),

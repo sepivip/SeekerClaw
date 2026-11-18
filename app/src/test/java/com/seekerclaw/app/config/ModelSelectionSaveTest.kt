@@ -3,6 +3,7 @@ package com.seekerclaw.app.config
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import com.seekerclaw.app.state.AgentPreferencesStore
+import com.seekerclaw.app.state.OpenAIOAuthTokenStore
 import com.seekerclaw.app.state.RuntimeState
 import com.seekerclaw.app.state.RuntimeStateStore
 import com.seekerclaw.app.state.XaiOAuthTokenStore
@@ -10,6 +11,7 @@ import com.seekerclaw.app.state.XaiOAuthTokens
 import com.seekerclaw.app.util.CrossProcessStore
 import com.seekerclaw.app.util.LogCollector
 import com.seekerclaw.app.util.LogLevel
+import com.seekerclaw.app.util.ProcessRole
 import com.seekerclaw.app.util.SafeFs
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -18,6 +20,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -56,6 +59,12 @@ class ModelSelectionSaveTest {
 
     /** Marks a value as sealed without holding anything secret. */
     private val sealer = SecretSealer { plain -> "sealed:$plain" }
+
+    /** The token store's codec: reversible, no Keystore on the JVM. */
+    private val testCodec = object : SecretCodec {
+        override fun seal(plain: String) = "sealed:$plain"
+        override fun open(sealed: String) = sealed.removePrefix("sealed:")
+    }
 
     private val retired = listOf("gpt-5.5", "gpt-5.4", "gpt-5.4-mini")
 
@@ -99,6 +108,11 @@ class ModelSelectionSaveTest {
         RuntimeStateStore.resetForTest()
         AgentPreferencesStore.resetForTest()
         XaiOAuthTokenStore.resetForTest()
+        // BAT-1157: the ChatGPT sign-in lives in the token store, not prefs. rawPrefsModelTuple
+        // downgrades OpenAI oauth without a usable stored sign-in to api_key, so every fixture
+        // user is signed in.
+        OpenAIOAuthTokenStore.initForTest(dir.toFile(), testCodec)
+        assertTrue(OpenAIOAuthTokenStore.signIn("old-access", "old-refresh", "", "") is OpenAIOAuthTokenStore.Result.Ok)
         prefs = FakePrefs()
         ctx = FakeContext(dir.toFile(), prefs)
     }
@@ -109,6 +123,8 @@ class ModelSelectionSaveTest {
         SafeFs.beforeMove = savedBeforeMove
         RuntimeStateStore.resetForTest()
         XaiOAuthTokenStore.resetForTest()
+        OpenAIOAuthTokenStore.resetForTest()
+        ProcessRole.setForTest(null)
         ModelSelectionLock.initForTest(null)
         ModelRegistry.resetForTest()
     }
@@ -122,8 +138,7 @@ class ModelSelectionSaveTest {
             "provider" to provider,
             "auth_type" to auth,
             "model" to model,
-            // rawPrefsModelTuple downgrades OpenAI oauth without a stored token to api_key.
-            "openai_oauth_token_enc" to "sealed:old-access",
+            // The sign-in itself is in OpenAIOAuthTokenStore (setUp), not prefs (BAT-1157).
         )
     }
 
@@ -146,24 +161,50 @@ class ModelSelectionSaveTest {
     private fun intent() = (ModelRepair.readIntent(dir) as? ModelRepair.IntentRead.Present)?.intent
 
     private fun mainProcess() {
+        ProcessRole.setForTest(false)
         RuntimeStateStore.resetForTest()
         RuntimeStateStore.initWithStoreForTest(dir.toFile())
     }
 
     private fun nodeProcess() {
+        ProcessRole.setForTest(true)
         RuntimeStateStore.resetForTest()
         prefs.restartProcess()
     }
 
-    /** One service start as `:node` runs it; returns the config handed to the config.json emit. */
+    /**
+     * One service start as `:node` runs it; returns the config handed to the config.json emit.
+     * BAT-1157 (contract v2.7 §1): it runs with the `:node` role, so it writes no prefs.
+     */
     private fun serviceStart(): AppConfig {
         var emitted: AppConfig? = null
-        val channel = ModelRepair.serviceStart(ctx) { cfg ->
-            emitted = cfg
-            "telegram"
+        val wasNode = ProcessRole.isNode
+        ProcessRole.setForTest(true)
+        val channel = try {
+            ModelRepair.serviceStart(ctx) { cfg ->
+                emitted = cfg
+                "telegram"
+            }
+        } finally {
+            ProcessRole.setForTest(wasNode)
         }
         assertEquals("the boot proceeds", "telegram", channel)
         return emitted!!
+    }
+
+    /**
+     * BAT-1157 / contract v2.7 §3 (pin 1): a `:node` boot writes no prefs, so prefs still hold
+     * [retired]; MAIN brings prefs to [target] on its next locked load, and the start after that
+     * clears the intent.
+     */
+    private fun assertMainLoadConverges(retired: String, target: String) {
+        assertEquals("`:node` writes no prefs (v2.7 §1)", retired, prefs.disk["model"])
+        mainProcess()
+        ConfigManager.loadConfig(ctx)
+        assertEquals("a MAIN load brings prefs to the target", target, prefs.disk["model"])
+        nodeProcess()
+        assertEquals(target, serviceStart().model)
+        assertEquals("intent cleared", null, intent())
     }
 
     /** A Settings form loaded on [loaded], saved with [edit] applied. */
@@ -271,10 +312,9 @@ class ModelSelectionSaveTest {
 
         nodeProcess()
         serviceStart()
-        assertEquals("gpt-6.1-sol", prefs.disk["model"])
         assertEquals("gpt-6.1-sol", runtimeModel())
         assertEquals("gpt-6.1-sol", overlayModel())
-        assertEquals("intent cleared", null, intent())
+        assertMainLoadConverges(retired = "gpt-5.4", target = "gpt-6.1-sol")
     }
 
     @Test
@@ -373,6 +413,10 @@ class ModelSelectionSaveTest {
 
     // ------------------------------------------- review #2: the boot's own writes are checked
 
+    // Contract v2.7 §4: "Boot reconcile commit fails" no longer applies — `:node` never commits
+    // prefs, so the boot has no prefs commit to fail. Replaced by the D6.1 guard tests
+    // (MainPrefsProcessTest / PrefsNamesTest, from BAT-1157).
+    @Ignore("BAT-1661 v2.8-v2.10 pending")
     @Test
     fun `boot reconcile commit fails - intent kept, the next start finishes`() {
         seedPrefs("gpt-5.4")
@@ -443,8 +487,7 @@ class ModelSelectionSaveTest {
         assertEquals("overlay (Node's first dispatch reads it)", "gpt-5.6", overlayModel())
         assertEquals("not retired, so Node serves it", "gpt-5.6", ModelRegistry.applyRetiredModelRule("openai", "oauth", overlayModel()!!))
         assertEquals("runtime_state", "gpt-5.6", runtimeModel())
-        assertEquals("prefs", "gpt-5.6", prefs.disk["model"])
-        assertEquals("intent cleared", null, intent())
+        assertMainLoadConverges(retired = "gpt-5.4", target = "gpt-5.6")
 
         nodeProcess()
         productionPreflight(ctx)
@@ -461,7 +504,7 @@ class ModelSelectionSaveTest {
         startFromInverseState { c -> ConfigManager.loadConfig(c) }
         assertEquals("gpt-5.6", overlayModel())
         assertEquals("gpt-5.6", runtimeModel())
-        assertEquals("gpt-5.6", prefs.disk["model"])
+        assertMainLoadConverges(retired = "gpt-5.4", target = "gpt-5.6")
     }
 
     @Test
@@ -492,8 +535,7 @@ class ModelSelectionSaveTest {
         assertEquals("first dispatch reads the overlay", "gpt-5.6", overlayModel())
         assertEquals("gpt-5.6", ModelRegistry.applyRetiredModelRule("openai", "oauth", overlayModel()!!))
         assertEquals("gpt-5.6", runtimeModel())
-        assertEquals("gpt-5.6", prefs.disk["model"])
-        assertEquals("intent cleared", null, intent())
+        assertMainLoadConverges(retired = "gpt-5.4", target = "gpt-5.6")
 
         nodeProcess()
         assertEquals("restart", "gpt-5.6", serviceStart().model)
@@ -522,8 +564,7 @@ class ModelSelectionSaveTest {
         assertEquals("gpt-5.6", serviceStart().model)
         assertEquals("gpt-5.6", overlayModel())
         assertEquals("gpt-5.6", runtimeModel())
-        assertEquals("gpt-5.6", prefs.disk["model"])
-        assertEquals("intent cleared", null, intent())
+        assertMainLoadConverges(retired = "gpt-5.4", target = "gpt-5.6")
     }
 
     @Test
@@ -543,9 +584,9 @@ class ModelSelectionSaveTest {
         nodeProcess()
         assertEquals("gpt-5.6", serviceStart().model)
         assertEquals("gpt-5.6", overlayModel())
-        assertEquals("gpt-5.6", prefs.disk["model"])
+        assertEquals("`:node` writes no prefs (v2.7 §1)", "gpt-5.4", prefs.disk["model"])
 
-        // Once runtime_state holds the target, the collector mirrors again.
+        // Once runtime_state holds the target, the collector mirrors again (MAIN converges prefs).
         mainProcess()
         prefs.seed("model" to "gpt-5.4") // MAIN's stale cache after the :node repair
         assertEquals(ModelSelectionLock.Result.Acquired(true), ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) })
@@ -703,53 +744,6 @@ class ModelSelectionSaveTest {
         }
         assertTrue(seeded)
         assertFalse(Files.exists(dir.resolve(RuntimeStateFile.NAME)))
-    }
-
-    // ----------------------------- review #5: a rotated OpenAI pair never waits on the lock
-
-    @Test
-    fun `rotated OpenAI pair persists while the model-selection lock is held, and survives a restart of the writing process`() {
-        // Scope: the writer and its own process. A LATER commit from the other process can still
-        // write its older cached pair back, because commit() persists a process's whole map —
-        // the known gap that BAT-1157 (a token store outside the shared prefs file) closes.
-        // FakePrefs models one process's cache, so it cannot show that case.
-        seedPrefs("gpt-6.1-sol")
-        prefs.seed("openai_oauth_refresh_enc" to "sealed:old-refresh", "openai_oauth_expires_at" to "2026-11-01")
-        val held = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val holder = thread {
-            ModelSelectionLock.transaction { _ ->
-                held.countDown()
-                release.await(10, TimeUnit.SECONDS)
-            }
-        }
-        assertTrue(held.await(5, TimeUnit.SECONDS))
-        val writes = prefs.modelKeyWrites
-        val t0 = System.nanoTime()
-        val ok = ConfigManager.saveOpenAIOAuthRotationWith(ctx, "new-access", "new-refresh", "2026-12-01", sealer)
-        val tookMs = (System.nanoTime() - t0) / 1_000_000
-        release.countDown()
-        holder.join(5_000)
-
-        assertTrue(ok)
-        assertTrue("did not wait for the lock ($tookMs ms)", tookMs < ModelSelectionLock.LOCK_TIMEOUT_MS)
-        assertEquals("no model key touched", writes, prefs.modelKeyWrites)
-        prefs.restartProcess()
-        assertEquals("sealed:new-access", prefs.memory["openai_oauth_token_enc"])
-        assertEquals("sealed:new-refresh", prefs.memory["openai_oauth_refresh_enc"])
-        assertEquals("2026-12-01", prefs.memory["openai_oauth_expires_at"])
-        assertEquals("gpt-6.1-sol", prefs.memory["model"])
-    }
-
-    @Test
-    fun `rotated OpenAI pair - blank refresh keeps the stored one, a failed commit reports false`() {
-        seedPrefs("gpt-6.1-sol")
-        prefs.seed("openai_oauth_refresh_enc" to "sealed:old-refresh")
-        assertTrue(ConfigManager.saveOpenAIOAuthRotationWith(ctx, "new-access", "", "", sealer))
-        assertEquals("sealed:old-refresh", prefs.disk["openai_oauth_refresh_enc"])
-
-        prefs.failCommits = true
-        assertFalse(ConfigManager.saveOpenAIOAuthRotationWith(ctx, "newer-access", "newer-refresh", "", sealer))
     }
 
     // ------------------------------------------------------------------------------ fakes

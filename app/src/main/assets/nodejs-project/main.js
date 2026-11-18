@@ -1082,7 +1082,12 @@ telegram('getMe')
 // the next listener (this one), whose synchronous body completes
 // while gracefulShutdown's tail (saveDatabase + process.exit(0))
 // is still pending.
-process.on('SIGTERM', () => { try { channel.stop(); } catch (_) {} cancelAllIdleSummaries(); });
+// BAT-1157: also stop the OpenAI token-save retry timer (the adapter is always registered).
+process.on('SIGTERM', () => {
+    try { channel.stop(); } catch (_) {}
+    cancelAllIdleSummaries();
+    try { require('./providers/openai').shutdownOAuthTimers(); } catch (_) {}
+});
 process.on('SIGINT', () => { try { channel.stop(); } catch (_) {} cancelAllIdleSummaries(); });
 
 // Runtime status log (uptime/memory debug, every 5 min)

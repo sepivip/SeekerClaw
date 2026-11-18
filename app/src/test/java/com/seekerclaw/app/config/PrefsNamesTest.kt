@@ -30,6 +30,67 @@ class PrefsNamesTest {
         assertTrue("prefs names outside PrefsNames:\n" + offenders.joinToString("\n"), offenders.isEmpty())
     }
 
+    /**
+     * BAT-1157 (D7.1/D12): `seekerclaw_prefs` is opened only inside [MainPrefs], so every writer goes
+     * through `forWrite` (null in `:node`) and `:node` readers get a getter-only [PrefsReader].
+     */
+    @Test
+    fun mainPrefsIsOpenedOnlyInsideMainPrefs() {
+        assertTrue(mainPrefsOpeners(File("src/main/java")).isEmpty())
+    }
+
+    private fun mainPrefsOpeners(root: File): List<String> {
+        val offenders = mutableListOf<String>()
+        root.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") && it.name != "MainPrefs.kt" && it.name != "PrefsNames.kt" }
+            .forEach { f ->
+                f.readLines().forEachIndexed { i, line ->
+                    val t = line.trimStart()
+                    if (t.startsWith("//") || t.startsWith("*")) return@forEachIndexed
+                    if (line.contains("getSharedPreferences(PrefsNames.MAIN") || line.contains("\"seekerclaw_prefs\"")) {
+                        offenders += "${f.path}:${i + 1}: ${line.trim()}"
+                    }
+                }
+            }
+        return offenders
+    }
+
+    @Test
+    fun mainPrefsOpenerGuardCatchesADirectCall() {
+        // Negative control: a direct opener outside MainPrefs (today's pre-BAT-1157 call sites).
+        val dir = File.createTempFile("prefsguard", "").apply { delete(); mkdirs() }
+        try {
+            File(dir, "Bad.kt").writeText("val p = ctx.getSharedPreferences(PrefsNames.MAIN, 0)\nval q = ctx.getSharedPreferences(\"seekerclaw_prefs\", 0)\n")
+            assertTrue(mainPrefsOpeners(dir).size == 2)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun prefsReaderCannotBeTurnedBackIntoEditablePrefs() {
+        // No getter hands back SharedPreferences or an Editor…
+        for (m in PrefsReader::class.java.methods) {
+            assertTrue("PrefsReader.${m.name} returns ${m.returnType}",
+                !android.content.SharedPreferences::class.java.isAssignableFrom(m.returnType) &&
+                    !android.content.SharedPreferences.Editor::class.java.isAssignableFrom(m.returnType))
+        }
+        // …and the implementation behind MainPrefs.read is not itself a SharedPreferences.
+        val impl = MainPrefs::class.java.declaredClasses.filter { PrefsReader::class.java.isAssignableFrom(it) }
+        assertTrue("MainPrefs has a PrefsReader implementation", impl.isNotEmpty())
+        impl.forEach { assertTrue("${it.name} must not implement SharedPreferences", !android.content.SharedPreferences::class.java.isAssignableFrom(it)) }
+    }
+
+    @Test
+    fun noPrefsReaderIsCastBackToSharedPreferences() {
+        val cast = Regex("""\b(as\??|is)\s+(android\.content\.)?SharedPreferences\b""")
+        val offenders = File("src/main/java").walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.flatMap { f ->
+            f.readLines().mapIndexedNotNull { i, line -> if (cast.containsMatchIn(line)) "${f.path}:${i + 1}" else null }
+        }.toList()
+        assertTrue("casts to SharedPreferences:\n" + offenders.joinToString("\n"), offenders.isEmpty())
+        assertTrue("guard regex sees `as SharedPreferences`", cast.containsMatchIn("val p = reader as SharedPreferences"))
+        assertTrue("guard regex sees `as?`", cast.containsMatchIn("(r as? android.content.SharedPreferences)"))
+    }
+
     @Test
     fun registryNamesAreDistinctAndCheckedAtBoot() {
         assertTrue(PrefsNames.ALL.toSet().size == PrefsNames.ALL.size)
