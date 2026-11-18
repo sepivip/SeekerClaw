@@ -6,6 +6,13 @@ package com.seekerclaw.app.ui.settings
  * Mirror changes in /docs/internal/SETTINGS_INFO.md for review tracking.
  */
 object SettingsHelpTexts {
+    /**
+     * BAT-1661: the toast for a Settings save that did not happen. It names no cause: the save
+     * can be refused with nothing written (the model-selection lock was busy) or fail on storage.
+     */
+    const val SAVE_FAILED_TOAST =
+        "Couldn't save changes. Try again in a moment — if it keeps failing, check free storage."
+
 
     // ── Configuration ──────────────────────────────────────────────
 

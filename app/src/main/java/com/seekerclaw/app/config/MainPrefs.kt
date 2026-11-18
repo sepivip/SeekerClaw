@@ -49,6 +49,76 @@ object MainPrefs {
      */
     fun view(p: SharedPreferences): PrefsReader = Reader(p)
 
+    /**
+     * BAT-1661: an edit of MAIN's prefs that records the keys it puts or removes, for
+     * [commitOrRestore]. Obtain with [edit]. `clear()` is not supported (nothing could be restored).
+     */
+    class Edit internal constructor(val prefs: SharedPreferences) : SharedPreferences.Editor {
+        private val inner = prefs.edit()
+
+        /** Each key this edit writes, with the value it writes (null: removed). */
+        val written = LinkedHashMap<String, Any?>()
+
+        private fun rec(key: String?, value: Any?): Edit = apply { written[key!!] = value }
+        override fun putString(key: String?, value: String?): Edit { inner.putString(key, value); return rec(key, value) }
+        override fun putStringSet(key: String?, values: MutableSet<String>?): Edit {
+            inner.putStringSet(key, values); return rec(key, values?.toSet())
+        }
+        override fun putInt(key: String?, value: Int): Edit { inner.putInt(key, value); return rec(key, value) }
+        override fun putLong(key: String?, value: Long): Edit { inner.putLong(key, value); return rec(key, value) }
+        override fun putFloat(key: String?, value: Float): Edit { inner.putFloat(key, value); return rec(key, value) }
+        override fun putBoolean(key: String?, value: Boolean): Edit { inner.putBoolean(key, value); return rec(key, value) }
+        override fun remove(key: String?): Edit { inner.remove(key); return rec(key, null) }
+        override fun clear(): Edit = throw UnsupportedOperationException("clear() cannot be restored")
+        override fun commit(): Boolean = inner.commit()
+        override fun apply() = inner.apply()
+    }
+
+    /** A recording edit of [prefs] (see [Edit], [commitOrRestore]). */
+    fun edit(prefs: SharedPreferences): Edit = Edit(prefs)
+
+    /**
+     * BAT-1661: commit [edit]; on failure, put back into this process's cache the values its keys
+     * held just before the commit, and return false.
+     *
+     * Android's `commit()` applies the edit to the in-memory map first and only then writes the
+     * file. When the write fails, the map keeps the new values: every later read sees them as if
+     * they were saved, a comparison against them skips the retry, and the next successful commit
+     * of ANY key writes the whole map — the failed values included — to disk. Restoring the cache
+     * makes a failed write look failed. The restore is itself committed (it may land on disk;
+     * those are the old values either way).
+     *
+     * Only the keys [edit] wrote are restored, and each only while the cache still holds the value
+     * [edit] wrote: an unlocked `apply()` of another key (`lastCustomModel_*`, `lastAuthType_*`,
+     * the auto-start toggle) or of the same key that lands meanwhile is kept, never reverted.
+     */
+    fun commitOrRestore(edit: Edit): Boolean {
+        val prefs = edit.prefs
+        val all = prefs.all
+        val before = edit.written.keys.associateWith { all[it] }
+        if (edit.commit()) return true
+        val now = prefs.all
+        val restore = prefs.edit()
+        var changed = false
+        for ((key, wrote) in edit.written) {
+            val old = before[key]
+            if (now[key] != wrote || old == wrote) continue // another writer's value, or nothing to undo
+            changed = true
+            @Suppress("UNCHECKED_CAST")
+            when (old) {
+                null -> restore.remove(key)
+                is String -> restore.putString(key, old)
+                is Boolean -> restore.putBoolean(key, old)
+                is Int -> restore.putInt(key, old)
+                is Long -> restore.putLong(key, old)
+                is Float -> restore.putFloat(key, old)
+                is Set<*> -> restore.putStringSet(key, old as Set<String>)
+            }
+        }
+        if (changed) restore.commit()
+        return false
+    }
+
     private fun open(context: Context): SharedPreferences =
         context.getSharedPreferences(PrefsNames.MAIN, Context.MODE_PRIVATE)
 

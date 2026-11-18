@@ -595,6 +595,37 @@ class CrossProcessStore<T> private constructor(
         return didWrite
     }
 
+    /** What [updateExisting] did. */
+    enum class UpdateOutcome {
+        /** The transformed record was persisted. */
+        WRITTEN,
+
+        /** [updateExisting]'s transform returned null: nothing was written. */
+        UNCHANGED,
+
+        /** No record on disk (missing, or does not decode): nothing was written. */
+        ABSENT,
+
+        /** The write failed (logged by [persistLocked]). */
+        FAILED,
+    }
+
+    /**
+     * BAT-1661: [update] over the record actually on disk ([readOrNull]), never the initial value.
+     * A missing or undecodable file is [UpdateOutcome.ABSENT] and is left alone; [transform]
+     * returning null writes nothing ([UpdateOutcome.UNCHANGED]). Same lock and broadcast rules as
+     * [update]. For field-local writers that must not create a record out of the launch seed.
+     */
+    fun updateExisting(transform: (T) -> T?): UpdateOutcome {
+        val outcome = synchronized(writeLock) {
+            val current = readOrNull() ?: return@synchronized UpdateOutcome.ABSENT
+            val next = transform(current) ?: return@synchronized UpdateOutcome.UNCHANGED
+            if (persistLocked(cloneSafe(next))) UpdateOutcome.WRITTEN else UpdateOutcome.FAILED
+        }
+        if (outcome == UpdateOutcome.WRITTEN) broadcastChanged()
+        return outcome
+    }
+
     /**
      * Re-read the file from disk and update [state]. Called from the
      * single drain coroutine (which receives signals from the

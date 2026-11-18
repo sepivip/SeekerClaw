@@ -103,7 +103,7 @@ fun ChannelConfigScreen(onBack: () -> Unit) {
         if (!saved) {
             android.widget.Toast.makeText(
                 context,
-                "Couldn't save changes. Try again or free up storage.",
+                SettingsHelpTexts.SAVE_FAILED_TOAST,
                 android.widget.Toast.LENGTH_LONG,
             ).show()
             return

@@ -1507,7 +1507,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
             // BAT-1661: read from the registry so the door never drifts from the retired list.
             const retiredOnSignIn = retiredModelsFor('openai', 'oauth');
             if (retiredOnSignIn.length) {
-                lines.push(`OpenAI no longer serves ${retiredOnSignIn.join(', ')} with ChatGPT sign-in: if one is selected, ${defaultModelForProvider('openai', 'oauth')} is used instead and the app updates the saved choice on its next start. If the user asks why their model changed after an update, that is why — see DIAGNOSTICS.md → "OpenAI Model Changed On Its Own After An Update".`);
+                lines.push(`OpenAI no longer serves ${retiredOnSignIn.join(', ')} with ChatGPT sign-in: if one is selected, ${defaultModelForProvider('openai', 'oauth')} is used instead, and the app updates the saved choice once a startup repair succeeds (until then the saved choice can still name the old model). If the user asks why their model changed after an update, that is why — see DIAGNOSTICS.md → "OpenAI Model Changed On Its Own After An Update".`);
             }
         } else if (AUTH_TYPE === 'oauth') {
             // BAT-1157 (D9): ChatGPT sign-in is SELECTED, but no usable sign-in is stored, so the
@@ -1551,7 +1551,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         } else if (_support === 'no') {
             lines.push('Your model does not support extended thinking — the toggle is a no-op for you. Respond normally.');
         } else if (_support === 'unknown') {
-            lines.push('Your model is not in the registry (a custom model ID, or a model that has left the model picker after an update): the Extended Thinking toggle has no effect on it — SeekerClaw never requests extra thinking for an unlisted model (the model may still reason at its own default level, and a ChatGPT sign-in always sends the reasoning setting that transport requires). Picking a listed model restores the toggle. See DIAGNOSTICS.md → "/think on Toggled But Model Doesn\'t Think Differently".');
+            lines.push('Your model is not in the registry (a custom model ID, or a model that has left the model picker after an update): the Extended Thinking toggle has no effect on it — SeekerClaw never requests extra thinking for an unlisted model (the model may still reason at its own default level). The adapter still sends a reasoning setting where the transport requires one, whatever the toggle: always with a ChatGPT sign-in, and for a model ID containing `codex` on an API key too. Picking a listed model whose reasoning support is `yes` restores the toggle; a listed model marked `no` (e.g. Claude Haiku 4.5) does not use it either. See DIAGNOSTICS.md → "/think on Toggled But Model Doesn\'t Think Differently".');
         }
         lines.push('Users can toggle these any time via Settings > Reasoning OR via Telegram `/think on|off|show|hide`. The active state above reflects what was persisted at the START of THIS turn — a mid-turn toggle takes effect on the next user message.');
         lines.push('');

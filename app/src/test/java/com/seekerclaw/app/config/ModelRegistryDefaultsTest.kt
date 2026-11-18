@@ -184,7 +184,8 @@ class ModelRegistryDefaultsTest {
     fun `claude thinkingBinding is set on exactly the four checking models`() {
         val claude = providers().first { it.jsonObject["id"]!!.jsonPrimitive.content == "claude" }.jsonObject
         val models = claude["models"]!!.jsonArray.map { it.jsonObject }
-        val flagged = models.filter { it["thinkingBinding"]?.jsonPrimitive?.content == "true" }
+        // A JSON boolean only: Node checks `thinkingBinding === true`, so the string "true" is off.
+        val flagged = models.filter { it["thinkingBinding"] == kotlinx.serialization.json.JsonPrimitive(true) }
             .map { it["id"]!!.jsonPrimitive.content }
         assertEquals(listOf("claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"), flagged)
         val reasoning = models.associate { it["id"]!!.jsonPrimitive.content to it["reasoningSupport"]!!.jsonPrimitive.content }

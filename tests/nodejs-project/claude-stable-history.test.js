@@ -243,11 +243,17 @@ async function main() {
         SCRIPT = [];
         for (let r = 1; r <= ROUNDS; r++) SCRIPT.push(ok200(toolResp([th(`r${r}`), { type: 'text', text: `step ${r}` }, tu(`c${r}`)])));
         SCRIPT.push(ok200(textResp('all done')));
-        execHook = (n) => { if (n === 2) toolsNow = TOOLS_B; }; // an MCP tool appears mid-turn
+        // An MCP tool appears mid-turn, after this case's SECOND tool call. EXEC_CALLS is
+        // cumulative across cases, so count from this case's start (CodeRabbit on 444ba220: an
+        // absolute `n === 2` never fired for the second model, so its frozen-tools check could
+        // not fail), and assert the switch happened.
         const execBefore = EXEC_CALLS;
+        let switched = false;
+        execHook = (n) => { if (n - execBefore === 2) { toolsNow = TOOLS_B; switched = true; } };
         const mark = LOGS.length;
         const reply = await ai.chat(chatId, 'the long question');
         execHook = null; toolsNow = TOOLS_A;
+        ok(`C0 (${C0_MODEL}): the mid-turn tool change happened`, switched);
         eq(`C0 (${C0_MODEL}): final reply`, reply, 'all done');
         eq(`C0 (${C0_MODEL}): one request per round + final`, SENT.length, ROUNDS + 1);
         eq(`C0 (${C0_MODEL}): every tool still executed (availability checks unaffected)`, EXEC_CALLS - execBefore, ROUNDS);

@@ -146,6 +146,12 @@ object RuntimeStateStore {
 
     /** `filesDir`, for the pending-repair check in [mirrorFromDisk] (BAT-1661). */
     private var filesDir: File? = null
+
+    /**
+     * BAT-1661: MAIN's prefs, for the field-local toggles' seed ([updateInOwnTransaction]) — the
+     * same handle [init] hands to the collector. Null before [init] and in `:node`.
+     */
+    private var prefs: SharedPreferences? = null
     // No `prefs` field — internal helpers (seedFromPrefs, mirrorIfChanged,
     // onObserved) take SharedPreferences as a parameter so unit tests can
     // inject a fake without instantiating the singleton's full graph. The
@@ -166,6 +172,7 @@ object RuntimeStateStore {
         filesDir = app.filesDir
         // BAT-1157: MAIN-only (see SeekerClawApplication); the collector mirror writes prefs.
         val sp = MainPrefs.forWrite(app, "RuntimeStateStore.init") ?: return
+        prefs = sp
         val seeded = seedFromPrefs(sp)
         _state.value = forDisplay(seeded)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -244,20 +251,34 @@ object RuntimeStateStore {
     internal fun seedIfMissing(filesDir: File, sp: SharedPreferences, write: (RuntimeState) -> Boolean): Boolean {
         val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { tx ->
             if (File(filesDir, FILE_NAME).exists()) return@transaction true
-            val dir = filesDir.toPath()
-            when (val intent = com.seekerclaw.app.config.ModelRepair.readIntent(dir)) {
-                com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> write(seedFromPrefs(sp))
-                is com.seekerclaw.app.config.ModelRepair.IntentRead.Present -> seedFromIntent(tx, dir, sp, intent.intent)
-                is com.seekerclaw.app.config.ModelRepair.IntentRead.Corrupt -> {
-                    Log.i(TAG, "first-launch seed skipped: the model repair record is unreadable")
-                    true
-                }
-            }
+            seedInTx(tx, filesDir, sp, write)
         }
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {
                 Log.w(TAG, "first-launch seed deferred: model-selection lock busy (${r.reason})")
+                true
+            }
+        }
+    }
+
+    /**
+     * The seed decision of [seedIfMissing] (contract v2.8 §3), inside [tx], whatever is on disk now.
+     * Returns false only when a write was attempted and failed; a skipped seed returns true.
+     */
+    private fun seedInTx(
+        tx: ModelSelectionLock.Tx,
+        filesDir: File,
+        sp: SharedPreferences,
+        write: (RuntimeState) -> Boolean,
+    ): Boolean {
+        tx.requireOpen()
+        val dir = filesDir.toPath()
+        return when (val intent = com.seekerclaw.app.config.ModelRepair.readIntent(dir)) {
+            com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> write(seedFromPrefs(sp))
+            is com.seekerclaw.app.config.ModelRepair.IntentRead.Present -> seedFromIntent(tx, dir, sp, intent.intent)
+            is com.seekerclaw.app.config.ModelRepair.IntentRead.Corrupt -> {
+                Log.i(TAG, "first-launch seed skipped: the model repair record is unreadable")
                 true
             }
         }
@@ -320,6 +341,17 @@ object RuntimeStateStore {
     internal fun mirrorFromDisk(tx: ModelSelectionLock.Tx, sp: SharedPreferences): Boolean {
         tx.requireOpen()
         val onDisk = store?.readOrNull() ?: return false
+        // CodeRabbit on 444ba220: the decoder fills a missing field with its default, so a partial
+        // record (e.g. only `reasoningEnabled`) decodes to the DEFAULT model tuple. Mirror only a
+        // tuple the file really holds — the one Node's config.js would read (RuntimeStateFile).
+        val dir = filesDir?.toPath()
+        if (dir != null) {
+            val raw = (com.seekerclaw.app.config.RuntimeStateFile.read(dir) as? com.seekerclaw.app.config.RuntimeStateFile.Read.Present)?.tuple
+            if (raw == null || raw != com.seekerclaw.app.config.ModelTuple(onDisk.provider, onDisk.authType, onDisk.model)) {
+                Log.w(TAG, "prefs mirror skipped: $FILE_NAME holds no complete model selection")
+                return false
+            }
+        }
         val pending = pendingRepair(sp)
         if (pending != null && onDisk.provider == pending.provider && onDisk.authType == pending.authType &&
             onDisk.model != pending.target
@@ -391,7 +423,10 @@ object RuntimeStateStore {
      *    load — a write and Settings-reload loop;
      *  - only from a record actually read from the file: no file, an unparsable one, or an invalid
      *    pair syncs nothing (never the in-memory fallback seed);
-     *  - committed synchronously; a failed commit flags [tx] ([ModelSelectionLock.Tx.writeFailed]);
+     *  - a blank model is never synced (Node treats it as absent);
+     *  - committed synchronously; a failed commit flags [tx] ([ModelSelectionLock.Tx.writeFailed])
+     *    and puts the old value back in the cache ([MainPrefs.commitOrRestore]), so the next load
+     *    sees the difference and retries;
      *  - [onlyTo] non-null (a model repair is pending, decided by the caller before this sync):
      *    only a sync TO that target runs. Any other value would overwrite the retired prefs model
      *    the repair decides from (CodeRabbit on PR #465).
@@ -408,9 +443,11 @@ object RuntimeStateStore {
         val file = com.seekerclaw.app.config.RuntimeStateFile.readTuple(filesDir) ?: return false
         if (file.provider != prefs.getString(KEY_PROVIDER, null)) return false
         if (file.authType != prefs.getString(KEY_AUTH_TYPE, null)) return false
+        // Node treats a blank runtime model as absent (it falls back), so it is never synced.
+        if (file.model.isBlank()) return false
         if (file.model == prefs.getString(KEY_MODEL, null)) return false
         if (onlyTo != null && file.model != onlyTo) return false
-        if (!prefs.edit().putString(KEY_MODEL, file.model).commit()) {
+        if (!MainPrefs.commitOrRestore(MainPrefs.edit(prefs).putString(KEY_MODEL, file.model))) {
             tx.markWriteFailed()
             Log.w(TAG, "prefs model sync from $FILE_NAME not committed")
             return false
@@ -428,7 +465,7 @@ object RuntimeStateStore {
     fun commitModelChecked(tx: ModelSelectionLock.Tx, prefs: SharedPreferences, model: String): Boolean {
         tx.requireOpen()
         val seq = prefs.getLong(KEY_MODEL_COMMIT_SEQ, 0L) + 1L
-        val ok = prefs.edit().putString(KEY_MODEL, model).putLong(KEY_MODEL_COMMIT_SEQ, seq).commit()
+        val ok = MainPrefs.commitOrRestore(MainPrefs.edit(prefs).putString(KEY_MODEL, model).putLong(KEY_MODEL_COMMIT_SEQ, seq))
         if (!ok) {
             tx.markWriteFailed()
             Log.w(TAG, "prefs model commit before convergence failed")
@@ -514,11 +551,72 @@ object RuntimeStateStore {
      * failed. [IllegalArgumentException] from [transform] propagates, as from [update].
      */
     fun updateInOwnTransaction(transform: (RuntimeState) -> RuntimeState): Boolean {
-        val r = ModelSelectionLock.transaction { tx ->
-            // CrossProcessStore.update never actually suspends (a synchronized block).
-            kotlinx.coroutines.runBlocking { update(tx, transform) }
-        }
+        val r = ModelSelectionLock.transaction { tx -> updateOrSeedLocked(tx, transform) }
         return r is ModelSelectionLock.Result.Acquired && r.value
+    }
+
+    /**
+     * [updateInOwnTransaction]'s body. A field-local toggle never creates a record out of the
+     * launch-time seed (CodeRabbit on 444ba220): that seed can predate a selection or a repair,
+     * and a record built from it would put an old model in front of Node. With no complete record
+     * on disk, the first-launch seed rule runs first ([seedInTx], contract v2.8 §3): no repair
+     * intent → seeded from prefs as they are now; a handed-off repair that still holds → seeded
+     * from its target; a `pending` or unreadable one → nothing is seeded and the toggle fails.
+     *
+     * The seed sets the selection only. A file that is there but is not a complete selection (e.g.
+     * `{"reasoningEnabled":true,"reasoningDisplayInChat":true}`) keeps every other field it holds:
+     * the record is decoded leniently and only provider / authType / model are replaced.
+     */
+    private fun updateOrSeedLocked(tx: ModelSelectionLock.Tx, transform: (RuntimeState) -> RuntimeState): Boolean {
+        tx.requireOpen()
+        val s = store ?: return false
+        val dir = filesDir ?: return false
+        if (com.seekerclaw.app.config.RuntimeStateFile.read(dir.toPath()) !is com.seekerclaw.app.config.RuntimeStateFile.Read.Present) {
+            val sp = prefs ?: return false
+            // The tuple from the seed rule; every other field from the file as it decodes, if it does.
+            val seedWrite = { v: RuntimeState ->
+                val base = s.readOrNull() ?: RuntimeState()
+                s.write(base.copy(provider = v.provider, authType = v.authType, model = v.model))
+            }
+            if (!seedInTx(tx, dir, sp, seedWrite)) return false
+            if (com.seekerclaw.app.config.RuntimeStateFile.read(dir.toPath()) !is com.seekerclaw.app.config.RuntimeStateFile.Read.Present) {
+                Log.w(TAG, "toggle not saved: no $FILE_NAME record, and the model repair owns the stores")
+                return false
+            }
+        }
+        return updateExisting(tx, transform) == CrossProcessStore.UpdateOutcome.WRITTEN
+    }
+
+    /**
+     * BAT-1661: [update] over the record ON DISK only — never one built from the launch-time
+     * seed that [CrossProcessStore.read] falls back to. A missing file, or one Node's config.js
+     * would not read as a complete selection ([com.seekerclaw.app.config.RuntimeStateFile.read]:
+     * a partial object decodes here with DEFAULT fields), is [CrossProcessStore.UpdateOutcome.ABSENT]
+     * and is left alone. [transform] returning null writes nothing. The resulting pair is validated
+     * inside the lock, as in [update].
+     */
+    fun updateExisting(
+        tx: ModelSelectionLock.Tx,
+        transform: (RuntimeState) -> RuntimeState?,
+    ): CrossProcessStore.UpdateOutcome {
+        tx.requireOpen()
+        val s = store ?: return CrossProcessStore.UpdateOutcome.FAILED
+        val dir = filesDir?.toPath()
+        var notARecord = false
+        val out = s.updateExisting { current ->
+            if (dir != null &&
+                com.seekerclaw.app.config.RuntimeStateFile.read(dir) !is com.seekerclaw.app.config.RuntimeStateFile.Read.Present
+            ) {
+                notARecord = true
+                return@updateExisting null
+            }
+            transform(current)?.also { next ->
+                require(isValidPair(next.provider, next.authType)) {
+                    "Invalid (provider=${next.provider}, authType=${next.authType})"
+                }
+            }
+        }
+        return if (notARecord) CrossProcessStore.UpdateOutcome.ABSENT else out
     }
 
     /**
@@ -612,13 +710,14 @@ object RuntimeStateStore {
         if (curProvider == observed.provider && curAuth == observed.authType && curModel == observed.model) {
             return false
         }
-        val editor = prefs.edit()
+        val editor = MainPrefs.edit(prefs)
         if (curProvider != observed.provider) editor.putString(KEY_PROVIDER, observed.provider)
         if (curAuth != observed.authType) editor.putString(KEY_AUTH_TYPE, observed.authType)
         if (curModel != observed.model) editor.putString(KEY_MODEL, observed.model)
         // BAT-1661 (Codex diff review #4): commit(), not apply(). The caller holds the
         // model-selection lock; apply() would queue the disk write to land after it is released.
-        if (!editor.commit()) {
+        // A failed commit puts the old values back in the cache, so the next emission retries.
+        if (!MainPrefs.commitOrRestore(editor)) {
             Log.w(TAG, "prefs mirror not committed (disk write failed)")
             return false
         }
@@ -643,11 +742,12 @@ object RuntimeStateStore {
      * broadcast), so `saveConfig` and reconcile run their production runtime-state writes in JVM
      * tests. Production MUST NOT call this.
      */
-    internal fun initWithStoreForTest(filesDir: File, seed: RuntimeState = RuntimeState()) {
+    internal fun initWithStoreForTest(filesDir: File, seed: RuntimeState = RuntimeState(), prefs: SharedPreferences? = null) {
         if (!initialized.compareAndSet(false, true)) return
         val cps = CrossProcessStore(filesDir, FILE_NAME, RuntimeState.serializer(), seed)
         store = cps
         this.filesDir = filesDir
+        this.prefs = prefs
         _state.value = forDisplay(cps.read())
     }
 
@@ -662,6 +762,7 @@ object RuntimeStateStore {
         store = null
         appContext = null
         filesDir = null
+        prefs = null
         _state.value = RuntimeState()
         initialized.set(false)
     }

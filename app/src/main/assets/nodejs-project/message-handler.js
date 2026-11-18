@@ -569,10 +569,12 @@ function resolveActiveProviderState() {
     // module-level consts in config.js, set once from config.json at
     // Node startup. The overlay in agent_settings.json carries the
     // user's INTENDED authType (what Kotlin's Settings UI saved), but
-    // Kotlin's emitConfigJson can DOWNGRADE it before Node boots:
-    // e.g. "oauth selected with a blank token" gets written to
-    // config.json as authType=api_key so Node's strict validation
-    // doesn't crash on startup. If we honored overlay.authType here,
+    // the transport Node actually runs on is decided at boot by
+    // config.js from OPENAI_AUTH_TYPE: with OAuth selected and no usable
+    // sign-in it uses a saved API key, and with neither it keeps OAuth
+    // and starts in reconnect-required mode (Kotlin's emitConfigJson
+    // passes the OpenAI selection through unchanged; it downgrades only
+    // xAI's oauth+blank). If we honored overlay.authType here,
     // /model would display + validate against the WRONG allowlist for
     // the mode Node is actually running — a user could /model an id the
     // other auth path allows, see it accepted, then have every chat

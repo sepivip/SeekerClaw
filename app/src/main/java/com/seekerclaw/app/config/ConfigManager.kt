@@ -491,6 +491,14 @@ object ConfigManager {
         }
     }
 
+    /**
+     * BAT-1661: what a failed save's runtime_state undo did. [KEPT_NEWER]: the record no longer
+     * held this save's values (a newer writer's), so it was left alone — not a failure, not an undo.
+     */
+    private enum class RuntimeUndo { UNDONE, KEPT_NEWER, FAILED }
+
+    private fun RuntimeUndo.logSuffix(): String = if (this == RuntimeUndo.KEPT_NEWER) ", runtime_kept_newer=true" else ""
+
     /** True when [config] changes the stored model selection (see [saveConfig]). */
     internal fun isModelSelection(config: AppConfig): Boolean {
         val loaded = config.loadedModelTuple ?: return true
@@ -625,7 +633,7 @@ object ConfigManager {
         val encApiKey = sealer.seal(config.anthropicApiKey)
         val encBotToken = sealer.seal(config.telegramBotToken)
 
-        val editor = sp.edit()
+        val editor = MainPrefs.edit(sp)
             .putString(KEY_API_KEY_ENC, encApiKey)
             .putString(KEY_BOT_TOKEN_ENC, encBotToken)
             .putString(KEY_OWNER_ID, config.telegramOwnerId)
@@ -760,7 +768,10 @@ object ConfigManager {
         // XaiOAuthTokenStore, written ONLY by sign-in/sign-out (MAIN) and
         // rotation (:node bridge) — no unrelated config save can clobber it.
 
-        val persisted = editor.commit()
+        // BAT-1661 (CodeRabbit on 444ba220): a failed commit leaves the new values in MAIN's prefs
+        // cache, and the next successful commit of ANY key (an auto-start toggle) would flush the
+        // rejected selection to disk. commitOrRestore puts the old values back.
+        val persisted = MainPrefs.commitOrRestore(editor)
         if (!persisted) {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
             return false
@@ -859,17 +870,44 @@ object ConfigManager {
         // a concurrent /think writer landed between the read and our
         // update's writeLock acquisition.
         var preForwardRuntime: RuntimeState? = null
+        // BAT-1661: the record this save's forward update wrote (the undo's compare-and-swap value).
+        var postForwardRuntime: RuntimeState? = null
         var loggedSigReset = false
 
-        // Undo the RuntimeStateStore forward update by restoring the captured snapshot. Skip when
-        // preForwardRuntime is null (RuntimeStateStore wasn't initialized OR an
-        // IllegalArgumentException short-circuited the lambda before assignment — in that latter
-        // case the forward update never persisted, so there's nothing to undo).
-        fun undoRuntimeWrite(): Boolean {
+        // Undo the RuntimeStateStore forward update. Skip when nothing was forwarded
+        // (RuntimeStateStore not initialized, no record for an unrelated save, OR an
+        // IllegalArgumentException short-circuited the lambda — the forward update never persisted).
+        //
+        // BAT-1661 (CodeRabbit on 444ba220): compare-and-swap. Only while the record still holds
+        // what THIS save wrote are the fields it wrote put back; a newer writer that landed in
+        // between (Node's /provider or /model, which cannot take the Kotlin lock — BAT-1663) keeps
+        // its tuple, and a concurrent /think keeps its reasoning toggles. That outcome is
+        // [RuntimeUndo.KEPT_NEWER] (logged as `runtime_kept_newer=true`), never reported as an undo.
+        fun undoRuntimeWrite(): RuntimeUndo {
             val snapshot = preForwardRuntime
-            return if (RuntimeStateStore.isInitialized && snapshot != null) try {
-                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                    RuntimeStateStore.update(tx) { _ -> snapshot }
+            val forward = postForwardRuntime
+            return if (RuntimeStateStore.isInitialized && snapshot != null && forward != null) try {
+                when (RuntimeStateStore.updateExisting(tx) { cur ->
+                    val stillOurs = cur.provider == forward.provider && cur.authType == forward.authType &&
+                        cur.model == forward.model && cur.customEchoReasoning == forward.customEchoReasoning &&
+                        cur.customConfigSignature == forward.customConfigSignature
+                    if (!stillOurs) {
+                        null
+                    } else {
+                        cur.copy(
+                            provider = snapshot.provider,
+                            authType = snapshot.authType,
+                            model = snapshot.model,
+                            customEchoReasoning = snapshot.customEchoReasoning,
+                            customConfigSignature = snapshot.customConfigSignature,
+                        )
+                    }
+                }) {
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.WRITTEN -> RuntimeUndo.UNDONE
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.FAILED -> RuntimeUndo.FAILED
+                    // The record changed (or went) since this save wrote it: a newer writer's, kept.
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.UNCHANGED,
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.ABSENT -> RuntimeUndo.KEPT_NEWER
                 }
             } catch (e: IllegalArgumentException) {
                 // Should not happen — the snapshot came out of RuntimeStateStore itself, so its
@@ -878,36 +916,47 @@ object ConfigManager {
                     "[Config] RuntimeStateStore rollback rejected snapshot (unexpected): ${e.message}",
                     LogLevel.ERROR,
                 )
-                false
-            } else true
+                RuntimeUndo.FAILED
+            } else RuntimeUndo.UNDONE
+        }
+        val forwardRecord = { current: RuntimeState ->
+            preForwardRuntime = current
+            val newCustomSig = customSignatureForSave(isSelection, config, current)
+            val customSigChanged = (if (isSelection) config.provider else current.provider) == "custom"
+                && current.customConfigSignature != newCustomSig
+            val newCustomEcho = if (customSigChanged) false else current.customEchoReasoning
+            if (customSigChanged && current.customEchoReasoning) {
+                loggedSigReset = true
+            }
+            // BAT-1661: an unrelated save keeps the stored selection (v2.5 §2).
+            current.copy(
+                provider = if (isSelection) config.provider else current.provider,
+                // BAT-1124 H5: gate (xai, oauth) with a blank token → api_key so
+                // runtime_state.json never advertises an unstartable oauth pair.
+                authType = if (isSelection) runtimeAuthTypeFor(config) else current.authType,
+                model = if (isSelection) config.model else current.model,
+                // reasoningEnabled / reasoningDisplayInChat
+                // are preserved verbatim from `current` — no
+                // change in saveConfig.
+                customEchoReasoning = newCustomEcho,
+                customConfigSignature = newCustomSig,
+            ).also { postForwardRuntime = it }
         }
         val runtimeWritten = if (RuntimeStateStore.isInitialized) try {
-            // BAT-1661: the IO hop runs on another thread; the transaction is the `tx` token, which
-            // crosses it, so nothing is re-acquired here (contract v2.4 §4).
-            kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                RuntimeStateStore.update(tx) { current ->
-                    preForwardRuntime = current
-                    val newCustomSig = customSignatureForSave(isSelection, config, current)
-                    val customSigChanged = (if (isSelection) config.provider else current.provider) == "custom"
-                        && current.customConfigSignature != newCustomSig
-                    val newCustomEcho = if (customSigChanged) false else current.customEchoReasoning
-                    if (customSigChanged && current.customEchoReasoning) {
-                        loggedSigReset = true
-                    }
-                    // BAT-1661: an unrelated save keeps the stored selection (v2.5 §2).
-                    current.copy(
-                        provider = if (isSelection) config.provider else current.provider,
-                        // BAT-1124 H5: gate (xai, oauth) with a blank token → api_key so
-                        // runtime_state.json never advertises an unstartable oauth pair.
-                        authType = if (isSelection) runtimeAuthTypeFor(config) else current.authType,
-                        model = if (isSelection) config.model else current.model,
-                        // reasoningEnabled / reasoningDisplayInChat
-                        // are preserved verbatim from `current` — no
-                        // change in saveConfig.
-                        customEchoReasoning = newCustomEcho,
-                        customConfigSignature = newCustomSig,
-                    )
+            if (isSelection) {
+                // BAT-1661: the IO hop runs on another thread; the transaction is the `tx` token, which
+                // crosses it, so nothing is re-acquired here (contract v2.4 §4).
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    RuntimeStateStore.update(tx) { current -> forwardRecord(current) }
                 }
+            } else {
+                // BAT-1661 (CodeRabbit on 444ba220): an unrelated save only carries its own fields
+                // forward on the record ON DISK. With no record, `update` would build one from the
+                // launch-time seed — a selection that can predate the user's (or a pending repair's)
+                // and that Node reads first. No record: nothing of the selection to keep in step, so
+                // nothing is written and the save goes on (Node falls back to config.json).
+                RuntimeStateStore.updateExisting(tx) { current -> forwardRecord(current) } !=
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.FAILED
             }
         } catch (e: IllegalArgumentException) {
             LogCollector.append(
@@ -1048,14 +1097,15 @@ object ConfigManager {
                     LogLevel.ERROR,
                 )
             }
-            val runtimeUndone = undoRuntimeWrite()
+            val runtimeUndo = undoRuntimeWrite()
+            val runtimeUndone = runtimeUndo != RuntimeUndo.FAILED
             bumpConfigVersionOnMain()
             LogCollector.append(
                 "[Config] AgentPreferencesStore.update failed — rolled back prefs to " +
                     "(provider=$oldProvider, authType=$oldAuthType, model=$oldModel, " +
                     "agentName=$oldAgentName, searchProvider=$oldSearchProvider) and " +
                     "KEY_SETUP_COMPLETE to $oldSetupComplete " +
-                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone)",
+                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone${runtimeUndo.logSuffix()})",
                 LogLevel.WARN,
             )
             return false
@@ -1076,7 +1126,8 @@ object ConfigManager {
         // file is still in place: undo every store this save wrote and report the failure.
         if (!writeAgentSettingsJson(context, tx, config, publishModelFields = isSelection)) {
             val rollbackOk = rollbackPrefs()
-            val runtimeUndone = undoRuntimeWrite()
+            val runtimeUndo = undoRuntimeWrite()
+            val runtimeUndone = runtimeUndo != RuntimeUndo.FAILED
             val agentPrefsUndone = if (AgentPreferencesStore.isInitialized && oldAgentPrefs != null) try {
                 kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
                     AgentPreferencesStore.update { current ->
@@ -1092,7 +1143,7 @@ object ConfigManager {
                     "(provider=$oldProvider, authType=$oldAuthType, model=$oldModel, " +
                     "agentName=$oldAgentName, searchProvider=$oldSearchProvider) and " +
                     "KEY_SETUP_COMPLETE to $oldSetupComplete " +
-                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone, agent_prefs_undone=$agentPrefsUndone)",
+                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone${runtimeUndo.logSuffix()}, agent_prefs_undone=$agentPrefsUndone)",
                 if (rollbackOk && runtimeUndone && agentPrefsUndone) LogLevel.WARN else LogLevel.ERROR,
             )
             return false
@@ -1246,6 +1297,18 @@ object ConfigManager {
     internal fun loadConfigReadOnly(context: Context): AppConfig? {
         if (!isSetupComplete(context)) return null
         return loadConfigUnchecked(context, null, null)
+    }
+
+    /**
+     * BAT-1661 (CodeRabbit on 444ba220): the service start's read-only boot (lock busy, or a plan
+     * that leaves the model stores alone). Compute-only like [loadConfigReadOnly], with the
+     * selection from the files in Node's order ([bootSelection], contract v2.7 §2 / D7.3), as the
+     * ordinary boot takes it — so a busy start emits the same provider the ordinary one would,
+     * never a foreign overlay's (Node's own dispatch ignores it). Null when setup is incomplete.
+     */
+    internal fun loadConfigReadOnlyForBoot(context: Context): AppConfig? {
+        if (!isSetupComplete(context)) return null
+        return loadConfigUnchecked(context, null, null, bootFiles = true)
     }
 
     /**
@@ -1759,8 +1822,9 @@ object ConfigManager {
 
         // BAT-1157 (D7.2): compute-only in `:node`. A `:node` commit writes its WHOLE cached prefs
         // map, which can undo a newer Settings save; MAIN persists the reconcile on its own load.
-        val editor = if (ProcessRole.isNode) null else prefsForWrite(context, "reconcileWithAgentSettings")?.edit()
-        if (editor == null) return reconciled
+        val sp = if (ProcessRole.isNode) null else prefsForWrite(context, "reconcileWithAgentSettings")
+        if (sp == null) return reconciled
+        val editor = MainPrefs.edit(sp)
         if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
         if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
         if (modelChanged) editor.putString(KEY_MODEL, resolvedModel)
@@ -1774,11 +1838,12 @@ object ConfigManager {
         // completes, so the broadcast can't outrun the data. Same
         // class of bug as 76041c1 (apply→commit before killProcess in
         // onDestroy); same fix.
-        if (!editor.commit()) {
-            // BAT-1661 (Codex diff review #2): false means not on disk, while the in-memory prefs
-            // already hold the new values, so no re-read can tell. Flag the transaction (the
+        if (!MainPrefs.commitOrRestore(editor)) {
+            // BAT-1661 (Codex diff review #2): false means not on disk. Flag the transaction (the
             // service start then keeps any repair intent), and stop here: no runtime_state write
             // and no broadcast for a reconcile that did not persist. This load still returns it.
+            // CodeRabbit on 444ba220: commitOrRestore put the old values back in the cache, so the
+            // next load sees the overlay differ again and retries the reconcile.
             tx.markWriteFailed()
             LogCollector.append(
                 "[Config] Reconcile: prefs commit failed — model selection not saved this time " +
@@ -2443,8 +2508,28 @@ object ConfigManager {
         return false
     }
 
-    /** BAT-1661: lock bound for [syncXaiRuntimeAuthType] (its callers are on Dispatchers.IO). */
-    private const val XAI_SYNC_LOCK_TIMEOUT_MS = 5_000L
+    /**
+     * BAT-1661: lock bound per attempt for [syncXaiRuntimeAuthType] (its callers are on
+     * Dispatchers.IO). The sign-in runs it inside ResetGate's read side, so the TOTAL wait
+     * ([XAI_SYNC_ATTEMPTS] × this) stays near the earlier single 5 s bound: a Reset Config that
+     * arrives meanwhile waits no longer than before.
+     */
+    internal const val XAI_SYNC_LOCK_TIMEOUT_MS = 1_700L
+
+    /** BAT-1661: lock attempts for [syncXaiRuntimeAuthType] before it reports [XaiAuthSync.BUSY]. */
+    internal const val XAI_SYNC_ATTEMPTS = 3
+
+    /** What [syncXaiRuntimeAuthType] did. */
+    enum class XaiAuthSync {
+        /** runtime_state.json is in step (written, already right, or no record to sync). */
+        SYNCED,
+
+        /** The model-selection lock stayed busy through every attempt: nothing was written. */
+        BUSY,
+
+        /** The write failed (storage) or the sync threw: runtime_state.json may be stale. */
+        NOT_SAVED,
+    }
 
     /**
      * BAT-1155 H5 — after a MAIN-process sign-in/sign-out writes the store,
@@ -2452,36 +2537,55 @@ object ConfigManager {
      * so runtime_state (which Node reads FIRST) can never disagree with
      * config.json on the xai auth mode. Preserves the exact behaviour the old
      * `persistXaiOAuthTokens` had (ConfigManager.kt H5 block). Main-process
-     * only (`:node` never inits RuntimeStateStore); best-effort — a failure
-     * here does not invalidate the token already durably in the store.
+     * only (`:node` never inits RuntimeStateStore). A failure here does not
+     * invalidate the token already durably in the store.
+     *
+     * BAT-1661 (CodeRabbit on 444ba220): [XaiAuthSync.SYNCED] when `runtime_state.json` is in step
+     * (written, already right, or there is nothing to sync). Otherwise it may still hold the old
+     * xai auth mode — [XaiAuthSync.BUSY] or [XaiAuthSync.NOT_SAVED] — and the caller must NOT
+     * restart `:node` as if it were (the restarted boot would take that auth mode). A busy lock is
+     * retried [attempts] times, [lockTimeoutMs] each.
+     * Only a record on disk is updated: with none, Node reads config.json, which [emitConfigJson]
+     * gates the same way, and a record built from the launch seed could carry an old selection.
      */
-    fun syncXaiRuntimeAuthType(context: Context) {
+    fun syncXaiRuntimeAuthType(
+        context: Context,
+        lockTimeoutMs: Long = XAI_SYNC_LOCK_TIMEOUT_MS,
+        attempts: Int = XAI_SYNC_ATTEMPTS,
+    ): XaiAuthSync {
         // BAT-1157: the store was just written, so an earlier "done" / KEEP_LEGACY verdict is stale;
         // the reload below re-runs the confirmed sweep of any legacy copy.
         xaiOAuthMigrationDone = false
         bumpConfigVersionOnMain()
-        if (!RuntimeStateStore.isInitialized) return
-        try {
-            // BAT-1661: a runtime_state write, so it runs under the model-selection lock. Both
-            // callers are on Dispatchers.IO, so it waits longer than a UI save: a skipped sync
-            // leaves runtime_state (which Node reads first) on the old xai auth mode.
-            val r = ModelSelectionLock.transaction(XAI_SYNC_LOCK_TIMEOUT_MS) { tx ->
-                val reloaded = loadConfigUnchecked(context, tx, null)
-                if (reloaded.provider == "xai") {
-                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                        RuntimeStateStore.update(tx) { current ->
-                            if (current.provider == "xai") current.copy(authType = runtimeAuthTypeFor(reloaded))
-                            else current
-                        }
-                    }
+        if (!RuntimeStateStore.isInitialized) return XaiAuthSync.SYNCED
+        var busyReason = ""
+        repeat(attempts.coerceAtLeast(1)) {
+            val r = try {
+                // BAT-1661: a runtime_state write, so it runs under the model-selection lock. Both
+                // callers are on Dispatchers.IO, so it waits longer than a UI save.
+                ModelSelectionLock.transaction(lockTimeoutMs) { tx ->
+                    val reloaded = loadConfigUnchecked(context, tx, null)
+                    if (reloaded.provider != "xai") return@transaction true
+                    val auth = runtimeAuthTypeFor(reloaded)
+                    RuntimeStateStore.updateExisting(tx) { current ->
+                        if (current.provider == "xai" && current.authType != auth) current.copy(authType = auth) else null
+                    } != com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.FAILED
                 }
+            } catch (e: Exception) {
+                LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
+                return XaiAuthSync.NOT_SAVED
             }
-            if (r is ModelSelectionLock.Result.Busy) {
-                LogCollector.append("[Config] xAI OAuth runtime_state sync skipped: lock busy (${r.reason})", LogLevel.WARN)
+            when (r) {
+                is ModelSelectionLock.Result.Acquired -> {
+                    if (r.value) return XaiAuthSync.SYNCED
+                    LogCollector.append("[Config] xAI OAuth runtime_state sync failed: runtime_state.json not written", LogLevel.WARN)
+                    return XaiAuthSync.NOT_SAVED
+                }
+                is ModelSelectionLock.Result.Busy -> busyReason = r.reason
             }
-        } catch (e: Exception) {
-            LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
         }
+        LogCollector.append("[Config] xAI OAuth runtime_state sync skipped: lock busy ($busyReason)", LogLevel.WARN)
+        return XaiAuthSync.BUSY
     }
 
     /**

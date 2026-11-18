@@ -574,7 +574,7 @@ object ModelRepair {
             /** Handed off and still holding (or rebuilt): no repair, no intent write, no notice. */
             AWAITING_MAIN,
 
-            /** Leave the model stores alone this start ([ConfigManager.loadConfigReadOnly]). */
+            /** Leave the model stores alone this start ([ConfigManager.loadConfigReadOnlyForBoot]). */
             READ_ONLY,
         }
 
@@ -851,7 +851,7 @@ object ModelRepair {
                 filesDir,
                 ConfigManager.modelSnapshot(context),
                 repair,
-                readOnly = { ConfigManager.loadConfigReadOnly(context)?.let(emit) },
+                readOnly = { ConfigManager.loadConfigReadOnlyForBoot(context)?.let(emit) },
                 publish = { approved, publishModelFields ->
                     val config = ConfigManager.loadConfigForBoot(context, tx, approved)
                     if (config == null) {
@@ -876,7 +876,7 @@ object ModelRepair {
                 // v2.5 §1: no decision, no intent, no repair, no reconcile commit, no runtime or
                 // overlay write. config.json is this boot's own file; the raw model is carried.
                 LogCollector.append(BUSY_WARNING, LogLevel.WARN)
-                ConfigManager.loadConfigReadOnly(context)?.let(emit)
+                ConfigManager.loadConfigReadOnlyForBoot(context)?.let(emit)
             }
         }
     }

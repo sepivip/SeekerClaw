@@ -226,7 +226,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             }
             android.widget.Toast.makeText(
                 context,
-                "Couldn't save $fieldLabel. Try again or free up storage.",
+                "Couldn't save $fieldLabel. Try again in a moment — if it keeps failing, check free storage.",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
             return false
@@ -280,10 +280,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         // Resolve the effective authType for the new provider. OpenAI defaults to OAuth
         // (ChatGPT subscription) on first switch-in — the OAuth section shows a Sign In
-        // button. emitConfigJson translates oauth+blank → api_key only so Node doesn't
-        // crash on an unsupported authType combination; a valid OpenAI API key is still
-        // required if the user never completes sign-in. Explicit picker choice is
-        // remembered per-provider via lastAuthType_<id>.
+        // button. Kotlin keeps the selected OpenAI auth as it is (emitConfigJson downgrades
+        // only xAI's oauth+blank); Node's config.js uses a saved API key while there is no
+        // usable sign-in, and starts in reconnect-required mode when there is neither.
+        // Don't add a Kotlin downgrade: it would bypass that reconnect handling. Explicit
+        // picker choice is remembered per-provider via lastAuthType_<id>.
         val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
         val effectiveAuthType = when (newProviderId) {
             "openai" -> when (savedNewAuthType) {
@@ -358,7 +359,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             )
             android.widget.Toast.makeText(
                 context,
-                "Couldn't save provider change. Try again or free up storage.",
+                "Couldn't save provider change. Try again in a moment — if it keeps failing, check free storage.",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
         }
@@ -841,6 +842,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             )
         }
 
+        // BAT-1661 (contract v2.4 §0): true once the user picks a row or edits the custom ID. Until
+        // then the preselected value may be the display substitute, which Save never writes.
+        var touched by remember(activeProvider, effectiveAuthType) { mutableStateOf(false) }
+
         // Custom-model state hoisted to the picker's outer composable scope so
         // persistCustomModelAndClose (wired into onDismissRequest / confirmButton /
         // dismissButton below) can read it. Kotlin captures are by reference,
@@ -907,13 +912,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { selectedModel = model.id }
+                                .clickable { selectedModel = model.id; touched = true }
                                 .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(
                                 selected = selectedModel == model.id,
-                                onClick = { selectedModel = model.id },
+                                onClick = { selectedModel = model.id; touched = true },
                                 colors = RadioButtonDefaults.colors(
                                     selectedColor = SeekerClawColors.ActionPrimary,
                                     unselectedColor = SeekerClawColors.TextDim,
@@ -939,13 +944,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } }
+                            .clickable { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL }; touched = true }
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
                             selected = isCustomSelected || selectedModel == CUSTOM_MODEL_SENTINEL,
-                            onClick = { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } },
+                            onClick = { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL }; touched = true },
                             colors = RadioButtonDefaults.colors(
                                 selectedColor = SeekerClawColors.ActionPrimary,
                                 unselectedColor = SeekerClawColors.TextDim,
@@ -962,6 +967,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 value = customModelId,
                                 onValueChange = {
                                     customModelId = it
+                                    touched = true
                                     // Update selectedModel even when blank — point at the sentinel
                                     // so canSave (which excludes the sentinel) disables Save.
                                     // The in-memory `customModelId` persists for the lifetime of
@@ -1003,8 +1009,18 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             // Node trims on read (agent_settings.json resolver), but the
                             // UI doesn't, so a raw-saved "  gpt-5.4  " would display
                             // differently in Settings than in /status / /model output.
-                            saveField("model", trimmedModel, needsRestart = false)
-                            Analytics.modelSelected(trimmedModel)
+                            // BAT-1661 (contract v2.4 §0): an untouched display substitute is not a
+                            // choice, so Save writes nothing for it (pickerSaveValue).
+                            val toSave = pickerSaveValue(
+                                stored = config?.model.orEmpty(),
+                                display = config?.displayModel.orEmpty(),
+                                selected = trimmedModel,
+                                touched = touched,
+                            )
+                            if (toSave != null) {
+                                saveField("model", toSave, needsRestart = false)
+                                Analytics.modelSelected(toSave)
+                            }
                             persistCustomModelAndClose()
                         }
                     },
@@ -1091,9 +1107,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // Persist the user's selection immediately. If they pick "oauth"
                         // without a token yet, that's fine — the OAuth section will render
                         // with a Sign In button. resolveAuthType() preserves the
-                        // "oauth selected, sign-in pending" state in SharedPreferences;
-                        // the oauth+blank → api_key fallback only happens at emitConfigJson
-                        // time so Node never sees an unstartable combination.
+                        // "oauth selected, sign-in pending" state in SharedPreferences.
+                        // OpenAI's fallback happens in Node (config.js): a saved API key
+                        // while there is no usable sign-in, else reconnect-required mode;
+                        // emitConfigJson downgrades only xAI's oauth+blank to api_key.
                         // Multi-step save: short-circuit the model
                         // fallback if the authType save failed.
                         // Otherwise we'd end up with a fallback model

@@ -28,8 +28,8 @@ class ModelSelectionSourceGuardTest {
 
     /** Store writes: prefs model keys, runtime_state, the overlay. */
     private val writer = Regex(
-        """putString\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|RuntimeStateStore\.(write|update)\(|""" +
-            """\bstore\??\.(write|update)\(|AgentSettingsFile\.write\(|RuntimeStateFile\.writeModel\(|""" +
+        """putString\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|RuntimeStateStore\.(write|update|updateExisting)\(|""" +
+            """\bstore\??\.(write|update|updateExisting)\(|AgentSettingsFile\.write\(|RuntimeStateFile\.writeModel\(|""" +
             // BAT-1661 v2.8 §2: the checked tuple write (the repair's handoff, MAIN's seed).
             """RuntimeStateFile\.writeTupleVerified\(|""" +
             """writeAgentSettingsJson\(""",
@@ -155,6 +155,128 @@ class ModelSelectionSourceGuardTest {
         // onObserved → mirrorIfChanged, and observeFromCollector → onObserved (syncPrefsFromFile
         // writes the model itself since the Codex diff review #3).
         assertTrue("guard found no helper calls — the pattern drifted", calls >= 2)
+    }
+
+    // ------------------------------- CodeRabbit on 444ba220: the Settings save boundary (v2.4 §0)
+
+    /**
+     * The model picker's Save in ProviderConfigScreen: every `saveField("model", …)` in the picker
+     * dialog saves the value [pickerSaveValue] returned, and no Settings code passes a value
+     * derived from `displayModel` into a save.
+     */
+    private fun displayWritebackOffenders(srcs: Map<String, List<String>>): List<String> {
+        val out = mutableListOf<String>()
+        val save = Regex("""saveField\(|saveConfig\(|updateConfigField\(|copy\(model\s*=""")
+        for ((path, lines) in srcs) {
+            if (!path.startsWith("com/seekerclaw/app/ui/")) continue
+            lines.forEachIndexed { i, l ->
+                if (!isComment(l) && l.contains("displayModel") && save.containsMatchIn(l)) out += "$path:${i + 1}"
+            }
+        }
+        val pcs = "com/seekerclaw/app/ui/settings/ProviderConfigScreen.kt"
+        val lines = srcs.getValue(pcs)
+        val picker = lines.indexOfFirst { it.contains("\"Select Model\"") }
+        val pickerEnd = lines.indexOfFirst { it.contains("// Auth type picker") }
+        if (picker < 0 || pickerEnd < picker) {
+            out += "$pcs: model picker not found"
+        } else {
+            for (i in picker until pickerEnd) {
+                val l = lines[i]
+                if (isComment(l) || !l.contains("saveField(\"model\"")) continue
+                val window = lines.subList(maxOf(picker, i - 10), i).joinToString("\n")
+                if (!l.contains("toSave") || !window.contains("pickerSaveValue(")) out += "$pcs:${i + 1} picker Save bypasses pickerSaveValue"
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun `the model picker's Save never writes displayModel back`() {
+        assertEquals(emptyList<String>(), displayWritebackOffenders(sources))
+        val pcs = "com/seekerclaw/app/ui/settings/ProviderConfigScreen.kt"
+        val lines = sources.getValue(pcs)
+        val at = lines.indexOfFirst { it.contains("saveField(\"model\", toSave") }
+        assertTrue("the picker Save is in the source", at >= 0)
+        // Negative control 1: the pre-fix Save of the preselected value (444ba220).
+        val preFix = lines.toMutableList().apply { this[at] = "                                saveField(\"model\", trimmedModel, needsRestart = false)" }
+        assertTrue(displayWritebackOffenders(sources + (pcs to preFix)).isNotEmpty())
+        // Negative control 2: a writeback of displayModel at the Settings boundary.
+        val writeback = lines.toMutableList().apply { this[at] = "                                saveField(\"model\", config?.displayModel.orEmpty())" }
+        assertTrue(displayWritebackOffenders(sources + (pcs to writeback)).isNotEmpty())
+    }
+
+    /**
+     * The picker's choice signals (v2.4 §0): each of the row tap, the row radio, the custom row
+     * tap, the custom radio and the custom-ID edit sets `touched = true`. A missing one would let
+     * that choice be dropped as an "untouched display substitute".
+     */
+    private fun touchedOffenders(lines: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        val picker = lines.indexOfFirst { it.contains("\"Select Model\"") }
+        val start = lines.subList(0, maxOf(picker, 0)).indexOfLast { it.contains("var touched by remember") }
+        val end = lines.indexOfFirst { it.contains("confirmButton = {") }
+        if (picker < 0 || start < 0 || end < picker) return listOf("picker not found")
+        var choices = 0
+        for (i in picker until end) {
+            val l = lines[i]
+            if (isComment(l)) continue
+            if (Regex("""(\.clickable \{|onClick = \{) selectedModel = """).containsMatchIn(l)) {
+                choices++
+                if (!l.contains("touched = true")) out += "line ${i + 1}: a choice without touched = true"
+            }
+            if (l.contains("onValueChange = {")) {
+                choices++
+                val block = lines.subList(i, minOf(end, i + 4)).joinToString("\n")
+                if (!block.contains("touched = true")) out += "line ${i + 1}: custom-ID edit without touched = true"
+            }
+        }
+        if (choices != 5) out += "expected 5 choice sites, saw $choices"
+        return out
+    }
+
+    @Test
+    fun `every model picker choice sets touched`() {
+        val pcs = "com/seekerclaw/app/ui/settings/ProviderConfigScreen.kt"
+        val lines = sources.getValue(pcs)
+        assertEquals(emptyList<String>(), touchedOffenders(lines))
+        // Negative controls: drop the flag from the row tap, then from the custom-ID edit.
+        val tap = lines.indexOfFirst { it.contains(".clickable { selectedModel = model.id; touched = true }") }
+        assertTrue(tap >= 0)
+        val noTap = lines.toMutableList().apply { this[tap] = this[tap].replace("; touched = true", "") }
+        assertTrue(touchedOffenders(noTap).isNotEmpty())
+        val edit = lines.indexOfFirst { it.trim() == "touched = true" }
+        assertTrue(edit >= 0)
+        val noEdit = lines.toMutableList().apply { removeAt(edit) }
+        assertTrue(touchedOffenders(noEdit).isNotEmpty())
+    }
+
+    // ------------------------ CodeRabbit on 444ba220 (T4): restart only after the xAI auth sync
+
+    private fun xaiRestartOffenders(activity: List<String>, ui: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        if (activity.none { it.contains("= ConfigManager.syncXaiRuntimeAuthType(") }) out += "sign-in ignores the sync result"
+        if (activity.none { it.contains("val synced = sync == ConfigManager.XaiAuthSync.SYNCED") }) out += "sign-in gate is not on SYNCED"
+        activity.forEachIndexed { i, l ->
+            if (isComment(l) || !l.contains("SeekerClawService.restart(")) return@forEachIndexed
+            val window = activity.subList(maxOf(0, i - 4), i).joinToString("\n")
+            if (!window.contains("if (synced)")) out += "XaiOAuthActivity:${i + 1} restarts without a successful sync"
+        }
+        if (ui.none { it.contains("sync = ConfigManager.syncXaiRuntimeAuthType(") }) out += "sign-out ignores the sync result"
+        return out
+    }
+
+    @Test
+    fun `xAI sign-in restarts the agent only after the runtime auth sync succeeded`() {
+        val activityPath = "com/seekerclaw/app/oauth/XaiOAuthActivity.kt"
+        val uiPath = "com/seekerclaw/app/ui/components/XaiOAuth.kt"
+        val activity = sources.getValue(activityPath)
+        val ui = sources.getValue(uiPath)
+        assertEquals(emptyList<String>(), xaiRestartOffenders(activity, ui))
+        // Negative control: the pre-fix unconditional restart.
+        val at = activity.indexOfFirst { it.contains("if (synced) {") }
+        assertTrue("the gate is in the source", at >= 0)
+        val mutated = activity.toMutableList().apply { this[at] = "                                if (true) {" }
+        assertTrue(xaiRestartOffenders(mutated, ui).isNotEmpty())
     }
 
     @Test

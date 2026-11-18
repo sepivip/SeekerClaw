@@ -49,6 +49,9 @@ object ModelSelectionLock {
 
     private const val RETRY_SLEEP_MS = 15L
 
+    /** Test seam: the file-lock attempt (production: [FileChannel.tryLock]). */
+    @Volatile internal var tryLockForTest: ((FileChannel) -> FileLock?)? = null
+
     /**
      * The transaction token. Valid only between acquisition and release; every nested writer
      * calls [requireOpen] before writing, so a token kept past its transaction fails loudly
@@ -150,9 +153,16 @@ object ModelSelectionLock {
             }
             while (lock == null) {
                 lock = try {
-                    chan.tryLock()
+                    tryLockForTest.let { hook -> if (hook != null) hook(chan) else chan.tryLock() }
                 } catch (_: OverlappingFileLockException) {
                     null
+                } catch (e: java.io.IOException) {
+                    // CodeRabbit on 444ba220: the open succeeded but the lock call failed (an I/O
+                    // error from the file system). No lock, so nothing runs: the caller's Busy path
+                    // (a read-only boot, a refused save), never an exception out of the start.
+                    // Only tryLock is caught here — an IOException from [block] reaches the caller.
+                    Log.w(TAG, "lock failed: ${e.message}")
+                    return Result.Busy("lock failed")
                 }
                 if (lock == null) {
                     if (remainingMs() <= 0L) return Result.Busy("file lock timeout")
@@ -179,6 +189,7 @@ object ModelSelectionLock {
     /** Test seam: point the lock at a temp directory and reset in-process state. */
     internal fun initForTest(filesDir: Path?) {
         lockRoot = filesDir
+        tryLockForTest = null
         holderThread = null
     }
 }

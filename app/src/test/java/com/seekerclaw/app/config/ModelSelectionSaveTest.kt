@@ -159,10 +159,11 @@ class ModelSelectionSaveTest {
         ((AgentSettingsFile.read(dir) as? AgentSettingsFile.Read.Present)?.obj?.get(key) as? kotlinx.serialization.json.JsonPrimitive)?.content
     private fun intent() = (ModelRepair.readIntent(dir) as? ModelRepair.IntentRead.Present)?.intent
 
-    private fun mainProcess() {
+    /** MAIN, with its RuntimeStateStore on [seed] — the launch-time fallback, as `init` builds it. */
+    private fun mainProcess(seed: RuntimeState = RuntimeState()) {
         ProcessRole.setForTest(false)
         RuntimeStateStore.resetForTest()
-        RuntimeStateStore.initWithStoreForTest(dir.toFile())
+        RuntimeStateStore.initWithStoreForTest(dir.toFile(), seed, prefs)
     }
 
     private fun nodeProcess() {
@@ -435,8 +436,10 @@ class ModelSelectionSaveTest {
         val anchor = LogCollector.logs.value.lastOrNull()
         ConfigManager.loadConfig(ctx)
         prefs.failCommits = false
-        assertEquals("memory took the write", "gpt-6.1-sol", prefs.memory["model"])
-        assertEquals("disk did not", "gpt-5.4", prefs.disk["model"])
+        // CodeRabbit on 444ba220: the failed commit's value is taken back out of the cache
+        // (MainPrefs.commitOrRestore), so no later commit of another key can flush it.
+        assertEquals("the cache was restored", "gpt-5.4", prefs.memory["model"])
+        assertEquals("disk did not take the write", "gpt-5.4", prefs.disk["model"])
         assertEquals("the intent stays awaiting_main", ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
         assertTrue(logsSince(anchor).any { it.level == LogLevel.WARN && it.message == "[ModelRepair] app settings not yet on gpt-6.1-sol — the app retries on its next load" })
         assertEquals("nothing retired published: runtime_state", "gpt-6.1-sol", runtimeModel())
@@ -450,9 +453,10 @@ class ModelSelectionSaveTest {
 
     @Test
     fun `v2_8 pin 8 - a SAME-process retry after a failed commit does a real write before converged`() {
-        // Review Minor 1: after load N's failed commit the in-memory prefs already hold the target,
-        // so load N+1's sync sees nothing to change and a read-back sees memory. Without a forced
-        // write, `converged` would be recorded while disk prefs still hold the retired id.
+        // Review Minor 1: on Android, after load N's failed commit the in-memory prefs hold the
+        // target, so load N+1's sync would see nothing to change and a read-back would see memory.
+        // Two guards now: commitOrRestore takes the value back out of the cache (CodeRabbit on
+        // 444ba220), and the forced commitModelChecked write before `converged` stays.
         seedPrefs("gpt-5.4")
         writeRuntime("gpt-5.4")
         writeOverlay("gpt-5.4")
@@ -464,8 +468,8 @@ class ModelSelectionSaveTest {
         prefs.failCommits = true
         ConfigManager.loadConfig(ctx) // load N
         prefs.failCommits = false
-        assertEquals("memory holds the target", "gpt-6.1-sol", prefs.memory["model"])
-        assertEquals("disk does not", "gpt-5.4", prefs.disk["model"])
+        assertEquals("the cache was restored", "gpt-5.4", prefs.memory["model"])
+        assertEquals("disk does not hold the target", "gpt-5.4", prefs.disk["model"])
         assertEquals(ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
 
         // Load N+1 in the SAME process: no restartProcess().
@@ -828,6 +832,401 @@ class ModelSelectionSaveTest {
         assertFalse(Files.exists(dir.resolve(RuntimeStateFile.NAME)))
     }
 
+
+    // ----------------------- CodeRabbit on 444ba220: no runtime_state record out of the launch seed
+
+    private fun classify() =
+        intent()?.let { ModelRepair.classifyIntent(it, ConfigManager.modelSnapshot(ctx, migrate = false), main = true) }
+
+    private fun runtimePath() = dir.resolve(RuntimeStateFile.NAME)
+
+    /** A `:node` start's decision only: the intent is written `pending`, no store is touched. */
+    private fun pendingRepairWithoutRuntime() {
+        seedPrefs("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        nodeProcess()
+        ModelSelectionLock.transaction { tx -> ModelRepair.plan(tx, dir, ConfigManager.modelSnapshot(ctx)) }
+        assertEquals(ModelRepair.STATE_PENDING, intent()?.state)
+        assertFalse(Files.exists(runtimePath()))
+    }
+
+    @Test
+    fun `T1 - unrelated save with no runtime_state record writes none - never the launch seed`() {
+        seedPrefs("gpt-6-astra")
+        writeOverlay("gpt-6-astra")
+        mainProcess() // the launch seed is RuntimeState(): Claude, as after a fresh install
+        assertTrue(save(form(ModelTuple("openai", "oauth", "gpt-6-astra")) { it.copy(heartbeatIntervalMinutes = 45) }))
+        assertEquals("the save landed", "45", overlayInt("heartbeatIntervalMinutes"))
+        assertFalse("no record built from the seed (Node would run Claude)", Files.exists(runtimePath()))
+        assertEquals("openai", prefs.disk["provider"])
+        assertEquals("gpt-6-astra", prefs.disk["model"])
+    }
+
+    @Test
+    fun `T1 - unrelated save during a pending repair with runtime_state missing keeps the repair pending`() {
+        pendingRepairWithoutRuntime()
+        val pending = intent()
+        mainProcess(seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"))
+        assertTrue("still Pending before: ${classify()}", classify() is ModelRepair.IntentClass.Pending)
+        assertTrue(save(form(ModelTuple("openai", "oauth", "gpt-5.4")) { it.copy(heartbeatIntervalMinutes = 45) }))
+        assertFalse("no record from the seed", Files.exists(runtimePath()))
+        assertEquals("intent kept", pending, intent())
+        assertTrue("an unrelated save never cancels the repair (v2.5 §2): ${classify()}", classify() is ModelRepair.IntentClass.Pending)
+    }
+
+    @Test
+    fun `T1 - unrelated save over a record on disk still carries its own fields and keeps the selection`() {
+        seedPrefs("gpt-6-astra")
+        writeRuntime("gpt-6-astra") // reasoningEnabled = true
+        writeOverlay("gpt-6-astra")
+        mainProcess()
+        assertTrue(save(form(ModelTuple("openai", "oauth", "gpt-6-astra")) { it.copy(heartbeatIntervalMinutes = 45) }))
+        val rec = CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), RuntimeState()).read()
+        assertEquals(ModelTuple("openai", "oauth", "gpt-6-astra"), ModelTuple(rec.provider, rec.authType, rec.model))
+        assertTrue("reasoning toggle preserved", rec.reasoningEnabled)
+    }
+
+    @Test
+    fun `T1 sibling - a reasoning toggle during a pending repair with runtime_state missing is refused`() {
+        pendingRepairWithoutRuntime()
+        mainProcess(seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"))
+        assertFalse(RuntimeStateStore.updateInOwnTransaction { it.copy(reasoningEnabled = true) })
+        assertFalse("no record from the seed", Files.exists(runtimePath()))
+        assertTrue("the repair is still pending: ${classify()}", classify() is ModelRepair.IntentClass.Pending)
+    }
+
+    @Test
+    fun `T1 sibling - a reasoning toggle with no record and no repair seeds from prefs as they are now`() {
+        seedPrefs("gpt-6-astra")
+        mainProcess() // the launch seed is Claude; prefs say OpenAI
+        assertTrue(RuntimeStateStore.updateInOwnTransaction { it.copy(reasoningEnabled = true) })
+        assertEquals(ModelTuple("openai", "oauth", "gpt-6-astra"), RuntimeStateFile.readTuple(dir))
+        val rec = CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), RuntimeState()).read()
+        assertTrue("the toggle landed on the seeded record", rec.reasoningEnabled)
+    }
+
+    @Test
+    fun `T1 sibling - a toggle over a partial record seeds only the selection, other fields kept`() {
+        seedPrefs("gpt-6-astra")
+        runtimePath().toFile().writeText("""{"reasoningEnabled":true,"reasoningDisplayInChat":true}""")
+        mainProcess() // the launch seed is Claude; prefs say OpenAI
+        assertTrue(RuntimeStateStore.updateInOwnTransaction { it.copy(reasoningEnabled = false) })
+        assertEquals(ModelTuple("openai", "oauth", "gpt-6-astra"), RuntimeStateFile.readTuple(dir))
+        val rec = CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), RuntimeState()).read()
+        assertTrue("reasoningDisplayInChat kept from the partial record", rec.reasoningDisplayInChat)
+        assertFalse("the toggle landed", rec.reasoningEnabled)
+    }
+
+    private fun xaiUser(runtimeAuth: String?) {
+        prefs.seed("setup_complete" to true, "provider" to "xai", "auth_type" to "oauth", "model" to "grok-4.6")
+        writeOverlay("grok-4.6", provider = "xai", auth = "oauth")
+        if (runtimeAuth != null) writeRuntime("grok-4.6", provider = "xai", auth = runtimeAuth)
+        File(dir.toFile(), "xai_oauth.migrated").createNewFile()
+        CrossProcessStore(dir.toFile(), XaiOAuthTokenStore.FILE_NAME, XaiOAuthTokens.serializer(), XaiOAuthTokens()).write(XaiOAuthTokens())
+        XaiOAuthTokenStore.initForTest(dir.toFile())
+        mainProcess()
+    }
+
+    @Test
+    fun `T1 sibling - xAI auth sync with no runtime_state record writes none and reports success`() {
+        xaiUser(runtimeAuth = null)
+        assertEquals(ConfigManager.XaiAuthSync.SYNCED, ConfigManager.syncXaiRuntimeAuthType(ctx))
+        assertFalse("no record from the seed", Files.exists(runtimePath()))
+    }
+
+    @Test
+    fun `T4 - xAI auth sync with the lock busy reports failure after its bounded retries`() {
+        xaiUser(runtimeAuth = "oauth")
+        val before = Files.readAllBytes(runtimePath())
+        val held = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holder = thread {
+            ModelSelectionLock.transaction { _ ->
+                held.countDown()
+                release.await(10, TimeUnit.SECONDS)
+            }
+        }
+        assertTrue(held.await(5, TimeUnit.SECONDS))
+        val anchor = LogCollector.logs.value.lastOrNull()
+        val ok = ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 2)
+        release.countDown()
+        holder.join(5_000)
+        assertEquals("a skipped sync is BUSY: the caller must not restart :node", ConfigManager.XaiAuthSync.BUSY, ok)
+        assertTrue(logsSince(anchor).any { it.message.startsWith("[Config] xAI OAuth runtime_state sync skipped: lock busy (") })
+        assertArrayEquals("runtime_state untouched", before, Files.readAllBytes(runtimePath()))
+        // Once the lock is free it syncs: no token, so the H5 guard image api_key is written.
+        assertEquals(ConfigManager.XaiAuthSync.SYNCED, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 2))
+        assertEquals("api_key", RuntimeStateFile.readTuple(dir)?.authType)
+    }
+
+    @Test
+    fun `T4 - a storage failure in the xAI auth sync is NOT_SAVED, never reported as busy`() {
+        xaiUser(runtimeAuth = "oauth")
+        SafeFs.beforeMove = { _, target ->
+            if (target.fileName.toString() == RuntimeStateFile.NAME) throw IOException("injected runtime_state write failure")
+        }
+        val anchor = LogCollector.logs.value.lastOrNull()
+        val r = try {
+            ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 2)
+        } finally {
+            SafeFs.beforeMove = savedBeforeMove
+        }
+        assertEquals(ConfigManager.XaiAuthSync.NOT_SAVED, r)
+        val lines = logsSince(anchor).map { it.message }
+        assertTrue(lines.toString(), lines.any { it == "[Config] xAI OAuth runtime_state sync failed: runtime_state.json not written" })
+        assertFalse("not called busy", lines.any { it.contains("lock busy") })
+    }
+
+    @Test
+    fun `T4 - the xAI sync waits about 5 s in all - a Reset behind its ResetGate read waits no longer`() {
+        // The sign-in runs the sync inside ResetGate.commit (the read side); Reset Config takes the
+        // write side. Three attempts must stay near the earlier single 5 s bound.
+        val total = ConfigManager.XAI_SYNC_LOCK_TIMEOUT_MS * ConfigManager.XAI_SYNC_ATTEMPTS
+        assertTrue("total xAI sync wait $total ms", total in 4_500L..5_100L)
+    }
+
+    // ------------------- CodeRabbit on 444ba220 (overflow ModelRepair:879): the busy start uses D7.3
+
+    @Test
+    fun `busy start emits the D7_3 boot selection - never a foreign overlay's provider`() {
+        // Prefs on Claude, no runtime_state, an OpenAI overlay left by an interrupted /provider.
+        seedPrefs("claude-opus-5-5", provider = "claude", auth = "api_key")
+        writeOverlay("gpt-6-astra", provider = "openai", auth = "oauth")
+        val held = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holder = thread {
+            ModelSelectionLock.transaction { _ ->
+                held.countDown()
+                release.await(10, TimeUnit.SECONDS)
+            }
+        }
+        assertTrue(held.await(5, TimeUnit.SECONDS))
+        nodeProcess()
+        val anchor = LogCollector.logs.value.lastOrNull()
+        val busy = try {
+            serviceStart()
+        } finally {
+            release.countDown()
+            holder.join(5_000)
+        }
+        assertTrue(logsSince(anchor).any { it.message == ModelRepair.BUSY_WARNING })
+        assertEquals("the busy start runs the provider Node's dispatch runs", "claude", busy.provider)
+        assertEquals("claude-opus-5-5", busy.model)
+        // Control: the ordinary start, same files, emits the same selection.
+        val ordinary = serviceStart()
+        assertEquals(busy.provider, ordinary.provider)
+        assertEquals(busy.model, ordinary.model)
+    }
+
+    // ----------------------- CodeRabbit on 444ba220: a failed commit must not stay in the prefs cache
+
+    @Test
+    fun `T8 - a failed selection then an unrelated commit - the rejected model never reaches disk`() {
+        seedPrefs("gpt-6-astra")
+        writeRuntime("gpt-6-astra")
+        writeOverlay("gpt-6-astra")
+        mainProcess()
+        prefs.failCommits = true
+        assertFalse(save(form(ModelTuple("openai", "oauth", "gpt-6-astra")) { it.copy(model = "gpt-6.1-sol") }))
+        prefs.failCommits = false
+        assertEquals("the cache is back on the stored model", "gpt-6-astra", prefs.memory["model"])
+        // Any later successful commit writes the whole cached map (e.g. an Auto-start toggle).
+        assertTrue(prefs.edit().putBoolean("auto_start", true).commit())
+        assertEquals("gpt-6-astra", prefs.disk["model"])
+        assertEquals(true, prefs.disk["auto_start"])
+        assertEquals("runtime_state untouched", "gpt-6-astra", runtimeModel())
+        assertEquals("overlay untouched", "gpt-6-astra", overlayModel())
+    }
+
+    @Test
+    fun `T3 - a reconcile whose prefs commit failed is retried by the next load`() {
+        seedPrefs("gpt-6-astra")
+        writeRuntime("gpt-6-astra")
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key") // Node /provider xai
+        mainProcess(seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-6-astra"))
+        prefs.failCommits = true
+        ConfigManager.loadConfig(ctx)
+        prefs.failCommits = false
+        assertEquals("the cache is back on the stored provider", "openai", prefs.memory["provider"])
+        assertEquals("xai", ConfigManager.loadConfig(ctx)!!.provider)
+        assertEquals("the retry reached disk", "xai", prefs.disk["provider"])
+        assertEquals("and runtime_state", "xai", RuntimeStateFile.readTuple(dir)?.provider)
+    }
+
+    @Test
+    fun `prefs sync whose commit failed is retried by the next sync`() {
+        seedPrefs("gpt-6-astra")
+        writeRuntime("gpt-6.1-sol")
+        mainProcess()
+        val synced = { ModelSelectionLock.transaction { tx -> RuntimeStateStore.syncPrefsFromFile(tx, dir, prefs) } }
+        prefs.failCommits = true
+        assertEquals(ModelSelectionLock.Result.Acquired(false), synced())
+        prefs.failCommits = false
+        assertEquals("gpt-6-astra", prefs.memory["model"])
+        assertEquals(ModelSelectionLock.Result.Acquired(true), synced())
+        assertEquals("gpt-6.1-sol", prefs.disk["model"])
+    }
+
+    @Test
+    fun `collector mirror whose commit failed is retried by the next emission`() {
+        seedPrefs("gpt-6-astra")
+        mainProcess()
+        writeRuntime("gpt-6.1-sol")
+        val mirror = { ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) } }
+        prefs.failCommits = true
+        assertEquals(ModelSelectionLock.Result.Acquired(false), mirror())
+        prefs.failCommits = false
+        assertEquals("gpt-6-astra", prefs.memory["model"])
+        assertEquals(ModelSelectionLock.Result.Acquired(true), mirror())
+        assertEquals("gpt-6.1-sol", prefs.disk["model"])
+    }
+
+    @Test
+    fun `commitOrRestore - a failed commit puts every changed key back, of every type`() {
+        prefs.seed("s" to "old", "b" to false, "i" to 1, "l" to 2L, "f" to 1.5f, "set" to setOf("a"), "gone" to "keep")
+        val e = MainPrefs.edit(prefs).putString("s", "new").putBoolean("b", true).putInt("i", 9).putLong("l", 9L)
+            .putFloat("f", 9.5f).putStringSet("set", mutableSetOf("b", "c")).putString("added", "x").remove("gone")
+        prefs.failCommits = true
+        assertFalse(MainPrefs.commitOrRestore(e))
+        prefs.failCommits = false
+        assertEquals(
+            mapOf("s" to "old", "b" to false, "i" to 1, "l" to 2L, "f" to 1.5f, "set" to setOf("a"), "gone" to "keep"),
+            prefs.memory.toMap(),
+        )
+        assertTrue(MainPrefs.commitOrRestore(MainPrefs.edit(prefs).putString("s", "new")))
+        assertEquals("new", prefs.disk["s"])
+    }
+
+    @Test
+    fun `commitOrRestore - another writer's key that lands meanwhile survives a failed commit`() {
+        // An unlocked apply() in MAIN (lastCustomModel_*, lastAuthType_*, the auto-start toggle)
+        // lands after the restore's snapshot and before the failure. It is not this edit's key, so
+        // it must not be "restored" away.
+        seedPrefs("gpt-6-astra")
+        prefs.seed("lastCustomModel_openai" to "old-custom", "auto_start" to false)
+        prefs.beforeNextCommit = {
+            prefs.externalWrite("lastCustomModel_openai", "new-custom")
+            prefs.externalWrite("auto_start", true)
+        }
+        prefs.failCommits = true
+        assertFalse(MainPrefs.commitOrRestore(MainPrefs.edit(prefs).putString("model", "gpt-6.1-sol")))
+        prefs.failCommits = false
+        assertEquals("this edit's key is restored", "gpt-6-astra", prefs.memory["model"])
+        assertEquals("the other writer's key is kept", "new-custom", prefs.memory["lastCustomModel_openai"])
+        assertEquals(true, prefs.memory["auto_start"])
+        // The same key, rewritten by another writer meanwhile: theirs is kept too.
+        prefs.beforeNextCommit = { prefs.externalWrite("lastCustomModel_openai", "theirs") }
+        prefs.failCommits = true
+        // (the hook runs inside commit, after this edit was recorded, before it lands)
+        assertFalse(MainPrefs.commitOrRestore(MainPrefs.edit(prefs).putString("agent_name", "Mine")))
+        prefs.failCommits = false
+        assertEquals("theirs", prefs.memory["lastCustomModel_openai"])
+        assertEquals(null, prefs.memory["agent_name"])
+    }
+
+    // ---------------------------------------------------------- CodeRabbit on 444ba220: hardening
+
+    @Test
+    fun `T6a - the collector never mirrors a partial record decoded with default fields`() {
+        seedPrefs("gpt-6-astra")
+        mainProcess()
+        runtimePath().toFile().writeText("""{"reasoningEnabled":true}""")
+        val r = ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, prefs) }
+        assertEquals(ModelSelectionLock.Result.Acquired(false), r)
+        assertEquals("openai", prefs.disk["provider"])
+        assertEquals("oauth", prefs.disk["auth_type"])
+        assertEquals("gpt-6-astra", prefs.disk["model"])
+    }
+
+    @Test
+    fun `RSS 411 - a blank runtime model is never synced into prefs`() {
+        seedPrefs("gpt-6-astra")
+        writeRuntime("   ")
+        mainProcess()
+        val r = ModelSelectionLock.transaction { tx -> RuntimeStateStore.syncPrefsFromFile(tx, dir, prefs) }
+        assertEquals(ModelSelectionLock.Result.Acquired(false), r)
+        assertEquals("gpt-6-astra", prefs.disk["model"])
+    }
+
+    @Test
+    fun `T2 - a failed selection's undo leaves a newer runtime_state selection in place`() {
+        seedPrefs("gpt-6-astra")
+        writeRuntime("gpt-6-astra")
+        writeOverlay("gpt-6-astra")
+        mainProcess()
+        // Node's /provider xai lands after this save's runtime write and before its overlay write,
+        // and that overlay write then fails.
+        SafeFs.beforeMove = { _, target ->
+            if (target.fileName.toString() == AgentSettingsFile.NAME) {
+                SafeFs.beforeMove = savedBeforeMove
+                writeRuntime("grok-4.6", provider = "xai", auth = "api_key")
+                throw IOException("injected overlay write failure")
+            }
+        }
+        val anchor = LogCollector.logs.value.lastOrNull()
+        val ok = save(form(ModelTuple("openai", "oauth", "gpt-6-astra")) { it.copy(model = "gpt-6.1-sol") })
+        SafeFs.beforeMove = savedBeforeMove
+        assertFalse(ok)
+        assertEquals("the newer selection is kept", ModelTuple("xai", "api_key", "grok-4.6"), RuntimeStateFile.readTuple(dir))
+        assertEquals("prefs rolled back", "gpt-6-astra", prefs.disk["model"])
+        val line = logsSince(anchor).single { it.message.startsWith("[Config] agent_settings.json write failed — rolled back") }
+        assertTrue("the log says the newer record was kept: ${line.message}", line.message.contains("runtime_undone=true, runtime_kept_newer=true,"))
+    }
+
+    private fun runtimeRecord() =
+        CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), RuntimeState()).read()
+
+    private fun rewriteRuntime(edit: (RuntimeState) -> RuntimeState) {
+        val cps = CrossProcessStore(dir.toFile(), RuntimeStateFile.NAME, RuntimeState.serializer(), RuntimeState())
+        cps.write(edit(cps.read()))
+    }
+
+    /** A selection whose overlay write fails, with [between] landing after its runtime_state write. */
+    private fun failedSelection(between: () -> Unit): List<com.seekerclaw.app.util.LogEntry> {
+        seedPrefs("gpt-6-astra")
+        writeRuntime("gpt-6-astra") // reasoningEnabled = true
+        writeOverlay("gpt-6-astra")
+        mainProcess()
+        SafeFs.beforeMove = { _, target ->
+            if (target.fileName.toString() == AgentSettingsFile.NAME) {
+                SafeFs.beforeMove = savedBeforeMove
+                between()
+                throw IOException("injected overlay write failure")
+            }
+        }
+        val anchor = LogCollector.logs.value.lastOrNull()
+        try {
+            assertFalse(save(form(ModelTuple("openai", "oauth", "gpt-6-astra")) { it.copy(model = "gpt-6.1-sol") }))
+        } finally {
+            SafeFs.beforeMove = savedBeforeMove
+        }
+        return logsSince(anchor)
+    }
+
+    @Test
+    fun `T2 - a concurrent reasoning toggle survives the undo, which puts back only the save's fields`() {
+        val logs = failedSelection { rewriteRuntime { it.copy(reasoningEnabled = false) } } // /think off
+        val rec = runtimeRecord()
+        assertEquals("the save's tuple is undone", ModelTuple("openai", "oauth", "gpt-6-astra"), ModelTuple(rec.provider, rec.authType, rec.model))
+        assertFalse("the concurrent /think off is kept", rec.reasoningEnabled)
+        assertTrue(logs.any { it.message.contains("runtime_undone=true, agent_prefs_undone=") })
+    }
+
+    @Test
+    fun `T2 - the undo's compare covers customEchoReasoning`() {
+        failedSelection { rewriteRuntime { it.copy(customEchoReasoning = true) } }
+        assertEquals("changed echo: the record is not this save's, so it is kept",
+            ModelTuple("openai", "oauth", "gpt-6.1-sol"), RuntimeStateFile.readTuple(dir))
+        assertTrue(runtimeRecord().customEchoReasoning)
+    }
+
+    @Test
+    fun `T2 - the undo's compare covers customConfigSignature`() {
+        failedSelection { rewriteRuntime { it.copy(customConfigSignature = "newer-gateway") } }
+        assertEquals("changed signature: kept", ModelTuple("openai", "oauth", "gpt-6.1-sol"), RuntimeStateFile.readTuple(dir))
+        assertEquals("newer-gateway", runtimeRecord().customConfigSignature)
+    }
+
     // ------------------------------------------------------------------------------ fakes
 
     /**
@@ -835,16 +1234,25 @@ class ModelSelectionSaveTest {
      * disk write may fail ([failCommits]), and then commit() returns false. [restartProcess]
      * reloads [memory] from [disk], as a new process would.
      *
-     * It models ONE process's cache, and commit() writes only the edited keys. Real Android
-     * writes the process's whole map, so two processes caching the same file can undo each
-     * other's keys; tests here switch processes only through [restartProcess] and never assert
-     * on that interleaving.
+     * It models ONE process's cache. As on Android (`SharedPreferencesImpl`), a successful
+     * commit() writes the process's WHOLE cached map, not only the edited keys: a value a failed
+     * commit left in memory reaches disk with the next successful commit of any key (CodeRabbit on
+     * 444ba220). Tests here switch processes only through [restartProcess]; two-process
+     * interleavings are modelled by `TwoProcessPrefs`.
      */
     class FakePrefs : SharedPreferences {
         val disk = LinkedHashMap<String, Any?>()
         var memory = LinkedHashMap<String, Any?>()
             private set
         @Volatile var failCommits = false
+
+        /** Runs at the start of the next commit() only: another in-process writer landing then. */
+        @Volatile var beforeNextCommit: (() -> Unit)? = null
+
+        /** Another writer's change, already committed (memory and disk), e.g. an apply() of its own key. */
+        @Synchronized fun externalWrite(key: String, value: Any?) {
+            if (value == null) { memory.remove(key); disk.remove(key) } else { memory[key] = value; disk[key] = value }
+        }
 
         /** Writes of provider / auth_type / model that reached memory. */
         @Volatile var modelKeyWrites = 0
@@ -883,12 +1291,13 @@ class ModelSelectionSaveTest {
             override fun clear() = apply { removes += memory.keys }
 
             override fun commit(): Boolean = synchronized(this@FakePrefs) {
+                beforeNextCommit?.let { hook -> beforeNextCommit = null; hook() }
                 removes.forEach { memory.remove(it) }
                 memory.putAll(puts)
                 modelKeyWrites += puts.keys.count { it == "provider" || it == "auth_type" || it == "model" }
                 if (failCommits) return false
-                removes.forEach { disk.remove(it) }
-                disk.putAll(puts)
+                disk.clear()
+                disk.putAll(memory)
                 true
             }
 

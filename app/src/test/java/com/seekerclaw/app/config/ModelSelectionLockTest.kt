@@ -57,6 +57,20 @@ class ModelSelectionLockTest {
     }
 
     @Test
+    fun `an IOException from the file-lock call is Busy - the block never runs, nothing escapes`() {
+        // CodeRabbit on 444ba220: the open succeeded, the lock call failed. Before the fix the
+        // exception escaped the transaction, so a service start failed instead of booting read-only.
+        ModelSelectionLock.tryLockForTest = { throw java.io.IOException("injected lock I/O error") }
+        val ran = AtomicBoolean(false)
+        val r = ModelSelectionLock.transaction { ran.set(true) }
+        assertEquals(ModelSelectionLock.Result.Busy("lock failed"), r)
+        assertFalse("block never runs", ran.get())
+        // The permit and channel were released: the next transaction gets the lock.
+        ModelSelectionLock.tryLockForTest = null
+        assertEquals(ModelSelectionLock.Result.Acquired(7), ModelSelectionLock.transaction { 7 })
+    }
+
+    @Test
     fun `nested transaction on the same thread is refused at once, not after the bound`() {
         val inner = acquired(
             ModelSelectionLock.transaction(timeoutMs = 5_000) {

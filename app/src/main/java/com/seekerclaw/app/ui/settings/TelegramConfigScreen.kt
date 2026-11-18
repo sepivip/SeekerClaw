@@ -56,8 +56,17 @@ fun TelegramConfigScreen(onBack: () -> Unit) {
     val shape = RoundedCornerShape(SeekerClawColors.CornerRadius)
 
     fun saveField(field: String, value: String) {
-        ConfigManager.updateConfigField(context, field, value)
+        val saved = ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
+        if (!saved) {
+            // BAT-1661 (CodeRabbit on 444ba220): a save can now be refused with nothing written
+            // (the model-selection lock was busy). Say so.
+            android.widget.Toast.makeText(
+                context,
+                SettingsHelpTexts.SAVE_FAILED_TOAST,
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     val maskedBotToken = config?.telegramBotToken?.let { token ->
