@@ -425,7 +425,11 @@ object ModelRepair {
                     if (cap.present && cap.model?.trim()?.ifBlank { null } != null) lost += "agent_settings.json no longer holds a model"
                 is OverlayNow.Applicable -> {
                     val captured = if (cap.present) cap.model?.trim()?.ifBlank { null } else null
-                    val ok = now.model == intent.target || (cap.present && now.model == captured)
+                    // Codex 7ec40d8b #2: only a captured ACTUAL model can be "unchanged". A file that
+                    // now supplies a selection key with no valid model (an auth-only object, a blank or
+                    // non-string model) next to a captured model-less one is a newer selection, never
+                    // excused by null == null. (An unchanged file with NO selection keys is ModelLess.)
+                    val ok = now.model == intent.target || (captured != null && now.model == captured)
                     if (!ok) return IntentClass.Superseded("agent_settings.json holds a newer model")
                 }
             }

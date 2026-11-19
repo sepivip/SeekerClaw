@@ -222,7 +222,10 @@ object RuntimeStateStore {
         // save (Settings UI / Telegram /provider /model) retries the
         // file write.
         scope.launch {
-            refreshDisplay() // the first credential-aware projection, on IO
+            // The first credential-aware projection, on IO: the usable-key signal (it decrypts),
+            // then the projection.
+            noteOpenAIKeyUsable(com.seekerclaw.app.config.ConfigManager.openaiKeyUsable(MainPrefs.view(sp)))
+            refreshDisplay()
             if (!seedIfMissing(app.filesDir, sp) { cps.write(it) }) {
                 Log.w(
                     TAG,
@@ -302,7 +305,10 @@ object RuntimeStateStore {
         val base = seedFromPrefs(sp)
         val provider = sp.getString(KEY_PROVIDER, null) ?: return base
         val auth = sp.getString(KEY_AUTH_TYPE, null) ?: return base
-        if (base.provider != provider) return base // prefs' pair was invalid: the defaults
+        // CodeRabbit on aefe5f82: an invalid prefs pair keeps the FULL default (seedFromPrefs), never
+        // the default provider with an overlay's model. A valid xAI OAuth pair still takes the overlay
+        // model, with the H5 auth seedFromPrefs applied.
+        if (!isValidPair(provider, auth)) return base
         val ov = (com.seekerclaw.app.config.AgentSettingsFile.read(dir) as? com.seekerclaw.app.config.AgentSettingsFile.Read.Present)?.obj
             ?: return base
         val p = com.seekerclaw.app.config.AgentSettingsFile.stringField(ov, "provider")
@@ -399,9 +405,12 @@ object RuntimeStateStore {
         // (syncPrefsFromFile is stricter: any auth difference is a mismatch and syncs nothing.)
         val curProvider = sp.getString(KEY_PROVIDER, null)
         val curAuth = sp.getString(KEY_AUTH_TYPE, null)
-        val guardImage = curProvider != null && curAuth != null && dir != null &&
+        // Only for an xAI prefs selection: another provider's pair is never mixed with the xAI guard
+        // (isXaiGuardImage may also read a fresh xai/oauth overlay as the selection). A guard image
+        // IS the OAuth selection, so `oauth` is mirrored.
+        val guardImage = curProvider == "xai" && curAuth != null && dir != null &&
             com.seekerclaw.app.config.ConfigManager.isXaiGuardImage(dir, curProvider, curAuth, onDisk.provider, onDisk.authType)
-        return onObserved(if (guardImage) onDisk.copy(authType = curAuth!!) else onDisk, sp)
+        return onObserved(if (guardImage) onDisk.copy(authType = "oauth") else onDisk, sp)
     }
 
     /**
@@ -537,16 +546,60 @@ object RuntimeStateStore {
     private fun displayAuthOf(s: RuntimeState): String {
         if (s.provider != "openai" || s.authType != "oauth") return s.authType
         return try {
-            val usable = OpenAIOAuthTokenStore.isInitialized && OpenAIOAuthTokenStore.hasUsableToken()
-            // The saved-key signal of ModelRepair's snapshot (modelSnapshotFrom) and AppConfig: the
-            // encrypted key's presence (AppConfig.openaiApiKeySaved).
-            val key = !prefs?.getString(com.seekerclaw.app.config.ConfigManager.KEY_OPENAI_API_KEY_ENC, null).isNullOrBlank()
+            // The sign-in Node can use: the load's own resolution, legacy fallback included (shared).
+            val usable = prefs?.let { com.seekerclaw.app.config.ConfigManager.openAIOAuthUsableReadOnly(MainPrefs.view(it)) } ?: false
+            // Codex 7ec40d8b #1: the key Node can USE (decrypted, normalised), as AppConfig.displayModel
+            // reads it — recorded by the load / save / the background read ([noteOpenAIKeyUsable]),
+            // never the ciphertext's presence (a key that does not decrypt is no key for Node).
+            val key = openaiKeyUsable == true
             com.seekerclaw.app.config.ConfigManager.displayAuth(s.provider, s.authType, usable, key)
         } catch (e: Exception) {
             Log.w(TAG, "display transport not decided (${e.javaClass.simpleName}) — selected auth used")
             s.authType
         }
     }
+
+    /**
+     * BAT-1661 (Codex 7ec40d8b #1): whether the stored OpenAI API key is one Node can use; null until
+     * known. Set by [noteOpenAIKeyUsable] (ConfigManager's load and save, and [init]'s background read).
+     */
+    @Volatile private var openaiKeyUsable: Boolean? = null
+
+    /**
+     * Re-derives the key flag with [compute] (it decrypts): on the store's IO scope in production,
+     * inline when there is none (tests, or before [init]). Then [noteOpenAIKeyUsable].
+     */
+    fun rederiveOpenAIKeyUsable(compute: () -> Boolean) {
+        val scope = ownedScope
+        if (scope != null) {
+            scope.launch {
+                val usable = try { compute() } catch (e: Exception) {
+                    Log.w(TAG, "OpenAI key check failed (${e.javaClass.simpleName})")
+                    false
+                }
+                noteOpenAIKeyUsable(usable)
+            }
+        } else {
+            noteOpenAIKeyUsable(try { compute() } catch (_: Exception) { false })
+        }
+    }
+
+    /** Records [usable] and re-projects the display when it changed. Cheap; any thread. */
+    fun noteOpenAIKeyUsable(usable: Boolean) {
+        if (openaiKeyUsable == usable) return
+        openaiKeyUsable = usable
+        refreshDisplay()
+    }
+
+    /**
+     * BAT-1661 (CodeRabbit on aefe5f82): bumped whenever the credentials the projection reads may
+     * have changed ([refreshDisplay] — every credential change ends in one). A projection computed
+     * under an older generation is never stored ([publish], [refreshDisplay]).
+     */
+    private val credentialGen = java.util.concurrent.atomic.AtomicLong()
+
+    /** Test seam: runs between a [publish] projection and its store. Production never sets it. */
+    @Volatile internal var beforeDisplayStoreForTest: (() -> Unit)? = null
 
     /** The last record projected into [state] (raw, before [forDisplay]); for [refreshDisplay]. */
     private var lastProjected: RuntimeState? = null
@@ -563,10 +616,19 @@ object RuntimeStateStore {
      * stored auth decides the display — no credential I/O (the main-thread first publish in [init]).
      */
     private fun publish(s: RuntimeState, withCredentials: Boolean = true) {
-        val shown = if (withCredentials) forDisplay(s) else forDisplayStoredAuth(s)
-        synchronized(displayLock) {
-            lastProjected = s
-            _state.value = shown
+        // Credential reads stay outside displayLock. A projection computed before a credential
+        // change (the generation moved) is recomputed, never stored over a newer refresh.
+        repeat(MAX_PROJECTION_TRIES) { attempt ->
+            val gen = credentialGen.get()
+            val shown = if (withCredentials) forDisplay(s) else forDisplayStoredAuth(s)
+            beforeDisplayStoreForTest?.let { hook -> beforeDisplayStoreForTest = null; hook() }
+            synchronized(displayLock) {
+                if (credentialGen.get() == gen || attempt == MAX_PROJECTION_TRIES - 1) {
+                    lastProjected = s
+                    _state.value = shown
+                    return
+                }
+            }
         }
     }
 
@@ -577,12 +639,16 @@ object RuntimeStateStore {
      * while the record it was computed from is still the last one projected.
      */
     fun refreshDisplay() {
+        val gen = credentialGen.incrementAndGet()
         val s = synchronized(displayLock) { lastProjected } ?: return
         val shown = forDisplay(s)
         synchronized(displayLock) {
-            if (lastProjected === s) _state.value = shown
+            if (lastProjected === s && credentialGen.get() == gen) _state.value = shown
         }
     }
+
+    /** Bound on [publish]'s recompute loop (credential changes while projecting are rare). */
+    private const val MAX_PROJECTION_TRIES = 3
 
     /** [forDisplay] with the stored auth as the scope (no credential reads). */
     private fun forDisplayStoredAuth(s: RuntimeState): RuntimeState {
@@ -892,6 +958,8 @@ object RuntimeStateStore {
         filesDir = null
         prefs = null
         lastProjected = null
+        openaiKeyUsable = null
+        beforeDisplayStoreForTest = null
         _state.value = RuntimeState()
         initialized.set(false)
     }

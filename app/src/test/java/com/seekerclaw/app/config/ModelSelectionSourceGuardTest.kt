@@ -264,8 +264,12 @@ class ModelSelectionSourceGuardTest {
                 out += "XaiOAuth.kt:${i + 1} invokes the restart-prompt callback directly"
             }
         }
-        val dispatch = ui.count { !isComment(it) && Regex("""applyXaiOutcome\(.*,\s*onSigned(In|Out)\)""").containsMatchIn(it) }
-        if (dispatch != 2) out += "expected the 2 callbacks dispatched through applyXaiOutcome, saw $dispatch"
+        // CodeRabbit on aefe5f82: each dispatch is fed by its REAL outcome input — the result file's
+        // restartNeeded for the sign-in, the sync result for the sign-out — never a constant.
+        val signIn = ui.count { !isComment(it) && Regex("""applyXaiOutcome\(xaiSignInOutcome\(json\.optString\("restartNeeded"\)\),\s*onSignedIn\)""").containsMatchIn(it) }
+        val signOut = ui.count { !isComment(it) && Regex("""applyXaiOutcome\(xaiSignOutOutcome\(sync\),\s*onSignedOut\)""").containsMatchIn(it) }
+        if (signIn != 1) out += "the sign-in dispatch must use the result file's restartNeeded (saw $signIn)"
+        if (signOut != 1) out += "the sign-out dispatch must use the sync result (saw $signOut)"
         return out
     }
 
@@ -284,6 +288,11 @@ class ModelSelectionSourceGuardTest {
         // Negative control 2: the ca06bb79 unconditional call.
         val direct = ui.toMutableList().apply { this[at] = "                        onSignedIn()" }
         assertTrue(xaiPromptOffenders(direct).isNotEmpty())
+        // Negative control 3 (CodeRabbit on aefe5f82): a constant outcome — a busy sync would prompt.
+        val constant = ui.toMutableList().apply {
+            this[at] = "                        error = applyXaiOutcome(xaiSignInOutcome(\"\"), onSignedIn)"
+        }
+        assertTrue(xaiPromptOffenders(constant).isNotEmpty())
     }
 
     // --------------------------- RuntimeStateStore display projection (review of the Codex folds)
@@ -300,9 +309,11 @@ class ModelSelectionSourceGuardTest {
     fun `display projection - publish and refresh assign under displayLock, refresh never overwrites a newer publish`() {
         val publish = rssBody("publish")
         val refresh = rssBody("refreshDisplay")
-        assertTrue(publish, Regex("""synchronized\(displayLock\) \{\s*lastProjected = s\s*_state\.value = shown""").containsMatchIn(publish))
+        // publish: stores only under the generation it projected with (CodeRabbit on aefe5f82).
+        assertTrue(publish, Regex("""synchronized\(displayLock\) \{\s*if \(credentialGen\.get\(\) == gen[^
+]*\{\s*lastProjected = s\s*_state\.value = shown""").containsMatchIn(publish))
         assertTrue(refresh, refresh.contains("synchronized(displayLock) { lastProjected }"))
-        assertTrue(refresh, refresh.contains("if (lastProjected === s) _state.value = shown"))
+        assertTrue(refresh, refresh.contains("if (lastProjected === s && credentialGen.get() == gen) _state.value = shown"))
         assertFalse("no projection under the lock", Regex("""synchronized\(displayLock\) \{[^}]*forDisplay""").containsMatchIn(publish + refresh))
     }
 
@@ -315,16 +326,48 @@ class ModelSelectionSourceGuardTest {
         assertTrue("refreshDisplay runs in the IO coroutine", launch.contains("refreshDisplay()"))
     }
 
-    @Test
-    fun `saveConfig re-projects the display only after the model lock is released`() {
-        val cm = sources.getValue("com/seekerclaw/app/config/ConfigManager.kt")
+    /**
+     * saveConfigWith's `RuntimeStateStore.refreshDisplay()` calls outside the lock: after the
+     * `ModelSelectionLock.transaction(...) { ... }` lambda's MATCHING closing brace, and none inside
+     * it (CodeRabbit on aefe5f82: a call placed inside the lambda still "follows" `transaction(`).
+     */
+    private fun refreshUnderLockOffenders(cm: List<String>): List<String> {
+        val out = mutableListOf<String>()
         val locked = cm.indexOfFirst { it.contains("private fun saveConfigLocked(") }
         val lockedEnd = (locked + 1 until cm.size).first { cm[it].startsWith("    }") }
-        assertFalse("not inside saveConfigLocked", cm.subList(locked, lockedEnd).any { it.contains("RuntimeStateStore.refreshDisplay()") && !isComment(it) })
+        if (cm.subList(locked, lockedEnd).any { it.contains("RuntimeStateStore.refreshDisplay()") && !isComment(it) }) {
+            out += "inside saveConfigLocked"
+        }
         val with = cm.indexOfFirst { it.contains("internal fun saveConfigWith(") }
         val withEnd = (with + 1 until cm.size).first { cm[it].startsWith("    }") }
-        val body = cm.subList(with, withEnd).joinToString("\n")
-        assertTrue(body.indexOf("RuntimeStateStore.refreshDisplay()") > body.indexOf("ModelSelectionLock.transaction("))
+        val body = cm.subList(with, withEnd).filterNot { isComment(it) }.joinToString("\n")
+        val tx = body.indexOf("ModelSelectionLock.transaction(")
+        val open = body.indexOf('{', tx)
+        if (tx < 0 || open < 0) return out + "no transaction lambda"
+        var depth = 0
+        var close = -1
+        for (i in open until body.length) {
+            if (body[i] == '{') depth++
+            if (body[i] == '}') { depth--; if (depth == 0) { close = i; break } }
+        }
+        val lambda = body.substring(open, close + 1)
+        if (lambda.contains("refreshDisplay(")) out += "refreshDisplay inside the transaction lambda"
+        if (!body.substring(close + 1).contains("RuntimeStateStore.refreshDisplay()")) out += "no refreshDisplay after the lambda"
+        return out
+    }
+
+    @Test
+    fun `saveConfig re-projects the display only after the model lock is released`() {
+        val path = "com/seekerclaw/app/config/ConfigManager.kt"
+        val cm = sources.getValue(path)
+        assertEquals(emptyList<String>(), refreshUnderLockOffenders(cm))
+        // Negative control: the refresh moved into the lambda, after saveConfigLocked.
+        val at = cm.indexOfFirst { it.contains("ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(") }
+        assertTrue(at >= 0)
+        val moved = cm.toMutableList().apply {
+            this[at] = "        val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx, sealer).also { RuntimeStateStore.refreshDisplay() } }"
+        }
+        assertTrue(refreshUnderLockOffenders(moved).isNotEmpty())
     }
 
     // ------------------------ CodeRabbit on 444ba220 (T4): restart only after the xAI auth sync

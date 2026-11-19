@@ -9,6 +9,7 @@ import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.builtins.ListSerializer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -74,6 +75,51 @@ class ModelDispatchParityTest {
             if (w.source.name != expect || w.model != marker) failures += "$name: expected $expect/$marker, got ${w.source}/${w.model}"
         }
         assertEquals(failures.joinToString("\n"), emptyList<String>(), failures)
+    }
+
+    /**
+     * Codex 7ec40d8b #1: what Settings shows ([AppConfig.displayModel]) is the model Node runs on, for
+     * the key Node can USE — the decrypted key config.json carries ("" when it did not decrypt),
+     * normalised as config.js does. Against the shipped registry, as the Node runner.
+     */
+    @Test
+    fun `display - AppConfig displayModel matches config_js resolveActiveModel on every row`() {
+        val registryText = listOf("src/main/assets/nodejs-project/model-registry.json", "app/src/main/assets/nodejs-project/model-registry.json")
+            .map { File(it) }.first { it.exists() }.readText()
+        val lenient = Json { ignoreUnknownKeys = true }
+        val providers = lenient.decodeFromJsonElement(
+            ListSerializer(ProviderInfo.serializer()),
+            lenient.parseToJsonElement(registryText).jsonObject["providers"]!!,
+        )
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(providers)
+        try {
+            val openaiDefault = providers.first { it.id == "openai" }.defaultModel
+            val rows = table["display"]!!.jsonArray
+            assertTrue(rows.size >= 6)
+            val failures = mutableListOf<String>()
+            for (r in rows) {
+                val row = r.jsonObject
+                val stored = row["stored"]!!.jsonPrimitive.content
+                val key = row["key"]?.takeIf { it !is JsonNull }?.jsonPrimitive?.content
+                val cfg = AppConfig(
+                    anthropicApiKey = "",
+                    telegramBotToken = "",
+                    telegramOwnerId = "",
+                    model = stored,
+                    agentName = "",
+                    provider = "openai",
+                    authType = row["selected"]!!.jsonPrimitive.content,
+                    openaiApiKey = key ?: "",
+                    openaiOAuthToken = if (row["token"]!!.jsonPrimitive.boolean) "oauth-PLACEHOLDER-TOKEN" else "",
+                )
+                val want = if (row["expect"]!!.jsonPrimitive.content == "DEFAULT") openaiDefault else stored
+                if (cfg.displayModel != want) failures += "${row["name"]!!.jsonPrimitive.content}: expected $want, got ${cfg.displayModel}"
+            }
+            assertEquals(failures.joinToString("\n"), emptyList<String>(), failures)
+        } finally {
+            ModelRegistry.resetForTest()
+        }
     }
 
     @Test

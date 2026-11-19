@@ -877,6 +877,41 @@ class ModelRepairHandoffTest {
     }
 
     @Test
+    fun `CR aefe5f82 #1 - a Settings xAI OAuth selection survives a boot whose node prefs cache still says api_key`() {
+        val ps = ModelRegistry.providers
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(
+            ps + ProviderInfo(
+                id = "xai", displayName = "xAI", authTypes = listOf("api_key", "oauth"), keyHint = "xai-…",
+                consoleUrl = "https://console.x.ai", keysUrl = "https://console.x.ai", freeform = false,
+                defaultModel = "grok-4.6", models = listOf(ModelInfo("grok-4.6", "Grok 4.6", "yes")),
+            ),
+        )
+        tp.disk.putAll(mapOf("setup_complete" to true, "provider" to "xai", "auth_type" to "api_key", "model" to "grok-4.6"))
+        writeOverlay("grok-4.6", provider = "xai", auth = "api_key")
+        writeRuntime("grok-4.6", provider = "xai", auth = "api_key")
+        File(dir.toFile(), "xai_oauth.migrated").createNewFile()
+        CrossProcessStore(dir.toFile(), XaiOAuthTokenStore.FILE_NAME, com.seekerclaw.app.state.XaiOAuthTokens.serializer(), com.seekerclaw.app.state.XaiOAuthTokens())
+            .write(com.seekerclaw.app.state.XaiOAuthTokens())
+        XaiOAuthTokenStore.initForTest(dir.toFile())
+        assertEquals("node caches api_key", "api_key", nodeStart().authType)
+        // Settings switches xAI to OAuth (not signed in yet): overlay xai/oauth, runtime the H5 guard.
+        assertTrue(mainSave(ModelTuple("xai", "api_key", "grok-4.6")) { it.copy(authType = "oauth") })
+        assertEquals("oauth", overlayField("authType"))
+        assertEquals("api_key", RuntimeStateFile.readTuple(dir)?.authType)
+        // The next boot, WITHOUT refreshing `:node`'s prefs cache (still api_key).
+        val c = nodeStart()
+        assertEquals("the boot keeps the newer OAuth selection", "oauth", c.authType)
+        assertEquals("and never republishes api_key into the overlay", "oauth", overlayField("authType"))
+        // MAIN's collector mirror and load keep it.
+        val mainPrefs = main.getSharedPreferences("seekerclaw_prefs", 0)
+        val r = ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, mainPrefs) }
+        assertEquals(ModelSelectionLock.Result.Acquired(false), r)
+        mainLoad()
+        assertEquals("MAIN keeps the user's OAuth choice", "oauth", tp.disk["auth_type"])
+    }
+
+    @Test
     fun `v2_7 §2 - the xAI boot-guard auth in runtime_state is the prefs selection - OAuth is kept in the overlay`() {
         // BAT-1124 H5: xAI oauth with no token is stored in runtime_state as api_key.
         tp.disk.putAll(mapOf("setup_complete" to true, "provider" to "xai", "auth_type" to "oauth", "model" to "grok-4.6"))

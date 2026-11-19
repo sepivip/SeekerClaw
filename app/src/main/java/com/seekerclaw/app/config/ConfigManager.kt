@@ -113,11 +113,6 @@ data class AppConfig(
      * built from scratch (Setup), which is always a selection.
      */
     val loadedModelTuple: ModelTuple? = null,
-    /**
-     * BAT-1661: an OpenAI API key is stored (the encrypted key's presence) — the saved-key signal
-     * ModelRepair's snapshot and the RuntimeStateStore display use. Set by the load; display only.
-     */
-    val openaiApiKeySaved: Boolean = false,
 ) {
     /**
      * BAT-1661: the model to SHOW. A model this sign-in can no longer use shows as the provider
@@ -129,7 +124,14 @@ data class AppConfig(
             // (`_EFFECTIVE_AUTH`), from this config's own credentials — not the selected auth.
             ModelRegistry.applyRetiredModelRule(
                 provider,
-                ConfigManager.displayAuth(provider, authType, openaiOAuthToken.isNotBlank(), openaiApiKeySaved),
+                // Codex 7ec40d8b #1: the key Node can USE — the decrypted value config.json carries,
+                // normalised as config.js does — never the ciphertext's mere presence.
+                ConfigManager.displayAuth(
+                    provider,
+                    authType,
+                    ConfigManager.isNodeUsableSecret(openaiOAuthToken),
+                    ConfigManager.isNodeUsableSecret(openaiApiKey),
+                ),
                 model,
             )
         } catch (_: IllegalStateException) {
@@ -491,7 +493,16 @@ object ConfigManager {
     ): Boolean {
         val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx, sealer) }
         // BAT-1661: the saved OpenAI key decides the display transport too. Re-projected AFTER the
-        // lock is released (it reads credentials), whatever the save's outcome.
+        // lock is released (it reads credentials), whatever the save's outcome; a landed save also
+        // records the key it stored (Codex 7ec40d8b #1: the usable key, as config.json will carry it).
+        if (r is ModelSelectionLock.Result.Acquired && r.value) {
+            RuntimeStateStore.noteOpenAIKeyUsable(isNodeUsableSecret(config.openaiApiKey))
+        } else {
+            // A failed save can still have changed the stored key: the whole-map prefs commit lands
+            // before the later stages, and their rollback does not restore the key. Re-derive the
+            // flag from what is stored (it decrypts: off the main thread in production).
+            RuntimeStateStore.rederiveOpenAIKeyUsable { openaiKeyUsable(prefs(context)) }
+        }
         RuntimeStateStore.refreshDisplay()
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
@@ -1300,7 +1311,7 @@ object ConfigManager {
         val guardImage = isXaiGuardImage(files, fromPrefs.provider, fromPrefs.authType, tuple.provider, tuple.authType)
         return fromPrefs.copy(
             provider = tuple.provider,
-            authType = if (guardImage) fromPrefs.authType else tuple.authType,
+            authType = if (guardImage) "oauth" else tuple.authType,
             model = w.model.ifBlank { fromPrefs.model },
         )
     }
@@ -1487,14 +1498,10 @@ object ConfigManager {
             ""
         }
 
-        val openaiApiKey = try {
-            val enc = p.getString(KEY_OPENAI_API_KEY_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt OpenAI API key", e)
-            LogCollector.append("[Config] Failed to decrypt OpenAI API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
+        val openaiApiKey = decryptOpenAIKey(p, log = true)
+        // BAT-1661 (Codex 7ec40d8b #1): the display projection's key signal, recorded where the
+        // decrypted key is already at hand (MAIN only; RuntimeStateStore is MAIN-only).
+        if (!ProcessRole.isNode) RuntimeStateStore.noteOpenAIKeyUsable(isNodeUsableSecret(openaiApiKey))
 
         val openrouterApiKey = try {
             val enc = p.getString(KEY_OPENROUTER_API_KEY_ENC, null)
@@ -1610,7 +1617,6 @@ object ConfigManager {
             maxStepsPerTurn = p.getInt(KEY_MAX_STEPS_PER_TURN, 35),
             provider = p.getString(KEY_PROVIDER, "claude") ?: "claude",
             openaiApiKey = openaiApiKey,
-            openaiApiKeySaved = !p.getString(KEY_OPENAI_API_KEY_ENC, null).isNullOrBlank(),
             openrouterApiKey = openrouterApiKey,
             openrouterFallbackModel = p.getString(KEY_OPENROUTER_FALLBACK_MODEL, "") ?: "",
             openrouterModelContext = p.getString(KEY_OPENROUTER_MODEL_CONTEXT, "") ?: "",
@@ -2227,20 +2233,38 @@ object ConfigManager {
         if (migrated == OpenAIOAuthTokenStore.MigrateOutcome.DONE && !ProcessRole.isNode) {
             sweepLegacyOpenAIOAuthKeysIfConfirmed(context, p)
         }
+        return resolveOpenAIOAuth(p, quiet = false)
+    }
+
+    /**
+     * BAT-1661 (CodeRabbit on aefe5f82): Node can use an OpenAI sign-in — the SAME resolution the
+     * load emits to config.json ([resolveOpenAIOAuth], #466's legacy-pair fallback included, and only
+     * for an absent record with no marker), read-only: no migration, no sweep, no log. For the
+     * display projection; call off the main thread (it decrypts).
+     */
+    internal fun openAIOAuthUsableReadOnly(p: PrefsReader): Boolean =
+        OpenAIOAuthTokenStore.isInitialized && isNodeUsableSecret(resolveOpenAIOAuth(p, quiet = true).access)
+
+    /**
+     * The OpenAI sign-in as config.json carries it, from the store as it is now. The legacy pair is
+     * used only while the record is Absent AND no migration marker exists, so a sign-out (tombstone)
+     * or a completed migration can never bring an old pair back. [quiet]: no logs (display reads).
+     */
+    private fun resolveOpenAIOAuth(p: PrefsReader, quiet: Boolean): OpenAIOAuthRead {
         return when (val st = OpenAIOAuthTokenStore.snapshot()) {
             is OpenAIOAuthTokenStore.State.Present -> {
                 val r = st.record
                 if (r.tombstone) return OpenAIOAuthRead()
                 val live = OpenAIOAuthTokenStore.livePair(st)
                 if (live == null) {
-                    logOpenAIUnreadableOnce("decrypt failed")
+                    if (!quiet) logOpenAIUnreadableOnce("decrypt failed")
                     OpenAIOAuthRead()
                 } else {
                     OpenAIOAuthRead(live.access, live.refresh, live.email, r.expiresAt, r.familyId, r.epoch)
                 }
             }
             is OpenAIOAuthTokenStore.State.Unreadable -> {
-                logOpenAIUnreadableOnce(st.reason)
+                if (!quiet) logOpenAIUnreadableOnce(st.reason)
                 OpenAIOAuthRead()
             }
             OpenAIOAuthTokenStore.State.Absent -> {
@@ -2248,7 +2272,7 @@ object ConfigManager {
                 val legacy = legacyOpenAIPair(p) ?: return OpenAIOAuthRead()
                 val access = OpenAIOAuthTokenStore.open(legacy.accessEnc).orEmpty()
                 if (access.isBlank()) return OpenAIOAuthRead()
-                if (openaiMigrationWarned.compareAndSet(false, true)) {
+                if (!quiet && openaiMigrationWarned.compareAndSet(false, true)) {
                     LogCollector.append(
                         "[Config] OpenAI sign-in migration failed — using the saved pair, will retry",
                         LogLevel.WARN,
@@ -2894,13 +2918,23 @@ object ConfigManager {
      * values back over a reset. A busy lock is [ResetResult.Failed] with nothing changed.
      */
     fun resetConfig(context: Context): ResetResult = ResetGate.exclusive {
-        when (val r = ModelSelectionLock.transaction { tx -> resetLocked(context, tx) }) {
+        val out = when (val r = ModelSelectionLock.transaction { tx -> resetLocked(context, tx) }) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {
                 LogCollector.append("[Config] Reset: model selection busy (${r.reason}) — nothing reset", LogLevel.WARN)
                 ResetResult.Failed(RESET_MODEL_BUSY)
             }
         }
+        // BAT-1661: the display's key flag after Reset (outside the model lock). A completed Reset
+        // removed the key (prefs cleared, Keystore key deleted); any other outcome re-derives it from
+        // what is stored. Then the projection follows.
+        if (out == ResetResult.Done) {
+            RuntimeStateStore.noteOpenAIKeyUsable(false)
+        } else {
+            RuntimeStateStore.rederiveOpenAIKeyUsable { openaiKeyUsable(prefs(context)) }
+        }
+        RuntimeStateStore.refreshDisplay()
+        out
     }
 
     /** [ResetResult.Failed.reason] when the model-selection lock was busy (contract v2.8 §4). */
@@ -2985,6 +3019,11 @@ object ConfigManager {
      * no writer ever puts the guard image there. runtime_state alone proves nothing: its api_key
      * is exactly what the guard writes. Token state is NOT used: a sign-in between the guard write
      * and its sync must not turn the old guard into an "explicit" API-key choice (CodeRabbit).
+     *
+     * The OAuth selection itself may come from the caller's prefs OR from that same fresh file
+     * explicitly on xai/oauth: `:node`'s prefs cache can still say api_key after a Settings save
+     * switched to OAuth (CodeRabbit on aefe5f82). A guard image is the OAuth selection, so callers
+     * keep `oauth` ([bootSelection] publishes it; the mirror keeps it).
      */
     internal fun isXaiGuardImage(
         files: java.nio.file.Path,
@@ -2993,12 +3032,18 @@ object ConfigManager {
         runtimeProvider: String,
         runtimeAuth: String,
     ): Boolean {
-        if (selectedProvider != "xai" || selectedAuth != "oauth") return false
         if (runtimeProvider != "xai" || runtimeAuth != "api_key") return false
-        val ov = (AgentSettingsFile.read(files) as? AgentSettingsFile.Read.Present)?.obj ?: return true
-        val explicitApiKey = AgentSettingsFile.stringField(ov, "provider") == "xai" &&
-            AgentSettingsFile.stringField(ov, "authType") == "api_key"
-        return !explicitApiKey
+        val ov = (AgentSettingsFile.read(files) as? AgentSettingsFile.Read.Present)?.obj
+        val ovProvider = ov?.let { AgentSettingsFile.stringField(it, "provider") }
+        val ovAuth = ov?.let { AgentSettingsFile.stringField(it, "authType") }
+        // A fresh file that explicitly holds the API-key choice: never a guard.
+        if (ovProvider == "xai" && ovAuth == "api_key") return false
+        // The selection is xAI OAuth: the caller's prefs say so, OR a fresh file explicitly does
+        // (CodeRabbit on aefe5f82 — `:node`'s prefs cache can predate the Settings save that
+        // published xai/oauth to the overlay and the guard to runtime_state; D7.3: fresh files win).
+        val oauthSelected = (selectedProvider == "xai" && selectedAuth == "oauth") ||
+            (ovProvider == "xai" && ovAuth == "oauth")
+        return oauthSelected
     }
 
     /**
@@ -3011,6 +3056,45 @@ object ConfigManager {
         val t = ModelRepair.transportOf(ModelRepair.Scope(provider, selectedAuth), oauthUsable, apiKeySaved).authType
         return if (t == ModelRepair.TRANSPORT_RECONNECT) "oauth" else t
     }
+
+    /**
+     * The stored OpenAI API key, decrypted; "" when there is none or it does not decrypt (then
+     * config.json carries no key, and Node has none). [log]: report a decrypt failure (the load);
+     * the display's background read stays quiet so a failure is not reported twice.
+     */
+    private fun decryptOpenAIKey(p: PrefsReader, log: Boolean): String = try {
+        val enc = p.getString(KEY_OPENAI_API_KEY_ENC, null)
+        if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+    } catch (e: Exception) {
+        if (log) {
+            Log.w(TAG, "Failed to decrypt OpenAI API key", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+        }
+        ""
+    }
+
+    /**
+     * BAT-1661 (Codex 7ec40d8b #1): Node can use this OpenAI API key — the decrypted key, normalised
+     * the way config.js `normalizeSecret` does (line breaks removed, then trimmed; JS `trim` also
+     * strips U+FEFF), is not empty. Call off the main thread (it decrypts).
+     */
+    internal fun openaiKeyUsable(p: PrefsReader): Boolean = isNodeUsableSecret(decryptOpenAIKey(p, log = false))
+
+    /**
+     * config.js `normalizeSecret(v) !== ''`, exactly: `/[\r\n\u2028\u2029]+/g` removed, then
+     * `String.prototype.trim` — whose set is ECMAScript WhiteSpace + LineTerminator ([isJsTrimSpace]),
+     * NOT Kotlin's `isWhitespace` (which also strips U+001C–U+001F, where JS keeps them).
+     */
+    internal fun isNodeUsableSecret(v: String): Boolean =
+        v.filterNot { it == '\r' || it == '\n' || it == '\u2028' || it == '\u2029' }
+            .trim { isJsTrimSpace(it) }
+            .isNotEmpty()
+
+    /** ECMAScript WhiteSpace and LineTerminator code points (what `String.prototype.trim` strips). */
+    private fun isJsTrimSpace(ch: Char): Boolean =
+        ch in '\u0009'..'\u000D' || ch == '\u0020' || ch == '\u00A0' || ch == '\u1680' ||
+            ch in '\u2000'..'\u200A' || ch == '\u2028' || ch == '\u2029' || ch == '\u202F' ||
+            ch == '\u205F' || ch == '\u3000' || ch == '\uFEFF'
 
     /** The H5 rule itself (one definition for [runtimeAuthTypeFor] and [runtimeAuthTypeForStored]). */
     private fun runtimeAuthType(provider: String, authType: String, xaiToken: String, xaiReauth: Boolean): String =

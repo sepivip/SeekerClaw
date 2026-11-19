@@ -109,6 +109,21 @@ for (const row of TABLE.transport) {
     });
 }
 
+// Codex 7ec40d8b #1: the model Node runs on, against the key it can USE (plaintext, normalised).
+const REGISTRY = JSON.parse(fs.readFileSync(path.join(BUNDLE, 'model-registry.json'), 'utf8'));
+const OPENAI_DEFAULT = REGISTRY.providers.find((p) => p.id === 'openai').defaultModel;
+for (const row of TABLE.display) {
+    t(`display: ${row.name} → ${row.expect}`, () => {
+        const authConfig = { authType: row.selected };
+        if (row.token) authConfig.openaiOAuthToken = 'oauth-PLACEHOLDER-TOKEN';
+        if (row.key !== null) authConfig.openaiApiKey = row.key;
+        const runtime = { provider: 'openai', authType: row.selected, model: row.stored };
+        const r = boot({ configProvider: 'openai', authConfig, runtime, overlay: null });
+        const want = row.expect === 'DEFAULT' ? OPENAI_DEFAULT : row.stored;
+        assert.strictEqual(r.active, want, `active=${r.active} openaiAuth=${r.openaiAuth} reconnect=${r.reconnect}`);
+    });
+}
+
 t('the table has both sections and enough rows to be a real pin', () => {
     assert.ok(TABLE.dispatch.length >= 20, 'dispatch rows');
     assert.ok(TABLE.transport.length >= 6, 'transport rows');
@@ -117,6 +132,10 @@ t('the table has both sections and enough rows to be a real pin', () => {
     }
     for (const s of ['OAUTH', 'API_KEY', 'RECONNECT']) {
         assert.ok(TABLE.transport.some((r) => r.expect === s), `a ${s} row`);
+    }
+    assert.ok(TABLE.display.length >= 6, 'display rows');
+    for (const s of ['DEFAULT', 'STORED']) {
+        assert.ok(TABLE.display.some((r) => r.expect === s), `a ${s} display row`);
     }
 });
 
