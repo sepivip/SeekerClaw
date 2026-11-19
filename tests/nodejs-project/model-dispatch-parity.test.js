@@ -124,6 +124,20 @@ for (const row of TABLE.display) {
     });
 }
 
+// CodeRabbit on 3240d3c9: PRODUCER parity. `display` rows above feed config.js a raw value (a Node
+// normalisation control). These feed it what Android's emitter actually writes (the golden file the
+// Kotlin runner recomputes from ConfigManager.openAIConfigFields / emittedAuthType), and compare the
+// model Node runs with AppConfig.displayModel.
+const EMISSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'openai-emission-parity.json'), 'utf8'));
+for (const row of EMISSION.rows) {
+    t(`producer: ${row.name} → ${row.display}`, () => {
+        const authConfig = Object.assign({}, row.emitted);
+        const runtime = { provider: 'openai', authType: row.input.authType, model: row.input.model };
+        const r = boot({ configProvider: 'openai', authConfig, runtime, overlay: null });
+        assert.strictEqual(r.active, row.display, `Node runs ${r.active}; Settings shows ${row.display} (openaiAuth=${r.openaiAuth} reconnect=${r.reconnect})`);
+    });
+}
+
 t('the table has both sections and enough rows to be a real pin', () => {
     assert.ok(TABLE.dispatch.length >= 20, 'dispatch rows');
     assert.ok(TABLE.transport.length >= 6, 'transport rows');
@@ -134,6 +148,7 @@ t('the table has both sections and enough rows to be a real pin', () => {
         assert.ok(TABLE.transport.some((r) => r.expect === s), `a ${s} row`);
     }
     assert.ok(TABLE.display.length >= 6, 'display rows');
+    assert.ok(EMISSION.rows.length >= 8, 'producer rows');
     for (const s of ['DEFAULT', 'STORED']) {
         assert.ok(TABLE.display.some((r) => r.expect === s), `a ${s} display row`);
     }

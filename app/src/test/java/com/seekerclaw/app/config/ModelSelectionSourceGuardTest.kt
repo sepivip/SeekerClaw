@@ -309,12 +309,23 @@ class ModelSelectionSourceGuardTest {
     fun `display projection - publish and refresh assign under displayLock, refresh never overwrites a newer publish`() {
         val publish = rssBody("publish")
         val refresh = rssBody("refreshDisplay")
-        // publish: stores only under the generation it projected with (CodeRabbit on aefe5f82).
-        assertTrue(publish, Regex("""synchronized\(displayLock\) \{\s*if \(credentialGen\.get\(\) == gen[^
-]*\{\s*lastProjected = s\s*_state\.value = shown""").containsMatchIn(publish))
+        // publish: stores only under the generation it projected with — the COMPLETE condition, so
+        // an `|| attempt == …` bypass fails (CodeRabbit on aefe5f82 / 3240d3c9).
+        assertEquals(emptyList<String>(), publishStoreOffenders(publish))
+        val bypass = publish.replace("if (credentialGen.get() == gen) {", "if (credentialGen.get() == gen || attempt == MAX_PROJECTION_TRIES - 1) {")
+        assertTrue("negative control: the final-attempt bypass", publishStoreOffenders(bypass).isNotEmpty())
         assertTrue(refresh, refresh.contains("synchronized(displayLock) { lastProjected }"))
         assertTrue(refresh, refresh.contains("if (lastProjected === s && credentialGen.get() == gen) _state.value = shown"))
         assertFalse("no projection under the lock", Regex("""synchronized\(displayLock\) \{[^}]*forDisplay""").containsMatchIn(publish + refresh))
+    }
+
+    private fun publishStoreOffenders(publish: String): List<String> {
+        val out = mutableListOf<String>()
+        val store = Regex("""synchronized\(displayLock\) \{\s*if \(([^)]*\)[^{]*)\{\s*lastProjected = s\s*_state\.value = shown""").find(publish)
+        if (store == null) return listOf("no guarded store")
+        val condition = store.groupValues[1].trim()
+        if (condition != "credentialGen.get() == gen)") out += "store condition is `$condition`, not exactly the generation check"
+        return out
     }
 
     @Test
@@ -335,7 +346,10 @@ class ModelSelectionSourceGuardTest {
         val out = mutableListOf<String>()
         val locked = cm.indexOfFirst { it.contains("private fun saveConfigLocked(") }
         val lockedEnd = (locked + 1 until cm.size).first { cm[it].startsWith("    }") }
-        if (cm.subList(locked, lockedEnd).any { it.contains("RuntimeStateStore.refreshDisplay()") && !isComment(it) }) {
+        // Direct, or indirect through the key flag (noteOpenAIKeyUsable / rederiveOpenAIKeyUsable call
+        // refreshDisplay): none may run under the lock (CodeRabbit on 3240d3c9).
+        val refreshing = Regex("""refreshDisplay\(|noteOpenAIKeyUsable\(|rederiveOpenAIKeyUsable\(""")
+        if (cm.subList(locked, lockedEnd).any { refreshing.containsMatchIn(it) && !isComment(it) }) {
             out += "inside saveConfigLocked"
         }
         val with = cm.indexOfFirst { it.contains("internal fun saveConfigWith(") }
@@ -351,7 +365,7 @@ class ModelSelectionSourceGuardTest {
             if (body[i] == '}') { depth--; if (depth == 0) { close = i; break } }
         }
         val lambda = body.substring(open, close + 1)
-        if (lambda.contains("refreshDisplay(")) out += "refreshDisplay inside the transaction lambda"
+        if (refreshing.containsMatchIn(lambda)) out += "a display refresh (direct or indirect) inside the transaction lambda"
         if (!body.substring(close + 1).contains("RuntimeStateStore.refreshDisplay()")) out += "no refreshDisplay after the lambda"
         return out
     }
@@ -368,6 +382,39 @@ class ModelSelectionSourceGuardTest {
             this[at] = "        val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx, sealer).also { RuntimeStateStore.refreshDisplay() } }"
         }
         assertTrue(refreshUnderLockOffenders(moved).isNotEmpty())
+        // Negative control 2: the INDIRECT refresh (the key note) moved into the lambda.
+        val indirect = cm.toMutableList().apply {
+            this[at] = "        val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx, sealer).also { RuntimeStateStore.noteOpenAIKeyUsable(true) } }"
+        }
+        assertTrue(refreshUnderLockOffenders(indirect).isNotEmpty())
+    }
+
+    /**
+     * CodeRabbit on 3240d3c9: saveConfig's store decision and emitConfigJson's emit decision for the
+     * OpenAI secrets use the ONE predicate (`keepsSecret`) the display builds on (`nodeUsesSecret`).
+     * (emitConfigJson builds org.json, a stub on the JVM, so this is a source pin; the behaviour of
+     * the save → display path is pinned in ModelSelectionSaveTest.)
+     */
+    private fun secretRuleOffenders(cm: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        val code = cm.filterNot { isComment(it) }
+        if (code.none { it.contains("if (keepsSecret(config.openaiApiKey)) {") }) out += "saveConfig: the OpenAI key's store decision"
+        if (code.none { it.contains("openAIConfigFields(config).forEach") }) out += "emitConfigJson: the OpenAI secrets via openAIConfigFields"
+        if (code.none { it.contains("if (keepsSecret(config.openaiApiKey)) m[\"openaiApiKey\"]") }) out += "openAIConfigFields: openaiApiKey"
+        if (code.none { it.contains("if (keepsSecret(config.openaiOAuthToken)) m[\"openaiOAuthToken\"]") }) out += "openAIConfigFields: openaiOAuthToken"
+        if (code.any { Regex("""put\("openai(ApiKey|OAuthToken)"""").containsMatchIn(it) }) out += "a direct put of an OpenAI secret"
+        if (code.any { Regex("""config\.openai(ApiKey|OAuthToken)\.isNotBlank\(\)\) (put|\{|m\[)""").containsMatchIn(it) }) out += "a separate isNotBlank rule"
+        return out
+    }
+
+    @Test
+    fun `save and emit decide the OpenAI secrets with the display's predicate`() {
+        val path = "com/seekerclaw/app/config/ConfigManager.kt"
+        val cm = sources.getValue(path)
+        assertEquals(emptyList<String>(), secretRuleOffenders(cm))
+        val at = cm.indexOfFirst { it.contains("if (keepsSecret(config.openaiApiKey)) m[\"openaiApiKey\"]") }
+        val mutated = cm.toMutableList().apply { this[at] = this[at].replace("keepsSecret(config.openaiApiKey)", "config.openaiApiKey.isNotBlank()") }
+        assertTrue(secretRuleOffenders(mutated).isNotEmpty())
     }
 
     // ------------------------ CodeRabbit on 444ba220 (T4): restart only after the xAI auth sync

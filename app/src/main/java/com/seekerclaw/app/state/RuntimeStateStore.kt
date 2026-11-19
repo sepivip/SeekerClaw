@@ -570,6 +570,9 @@ object RuntimeStateStore {
      * inline when there is none (tests, or before [init]). Then [noteOpenAIKeyUsable].
      */
     fun rederiveOpenAIKeyUsable(compute: () -> Boolean) {
+        // CodeRabbit on 3240d3c9: the check is tied to the key revision it started at. A newer
+        // note (a save that landed) or check supersedes it, and its result is then dropped.
+        val gen = synchronized(keyLock) { keyGen.incrementAndGet() }
         val scope = ownedScope
         if (scope != null) {
             scope.launch {
@@ -577,18 +580,30 @@ object RuntimeStateStore {
                     Log.w(TAG, "OpenAI key check failed (${e.javaClass.simpleName})")
                     false
                 }
-                noteOpenAIKeyUsable(usable)
+                storeKeyFlag(usable, gen)
             }
         } else {
-            noteOpenAIKeyUsable(try { compute() } catch (_: Exception) { false })
+            storeKeyFlag(try { compute() } catch (_: Exception) { false }, gen)
         }
     }
 
-    /** Records [usable] and re-projects the display when it changed. Cheap; any thread. */
+    /** Records [usable] (a newer revision than any check in flight) and re-projects when it changed. */
     fun noteOpenAIKeyUsable(usable: Boolean) {
-        if (openaiKeyUsable == usable) return
-        openaiKeyUsable = usable
-        refreshDisplay()
+        val gen = synchronized(keyLock) { keyGen.incrementAndGet() }
+        storeKeyFlag(usable, gen)
+    }
+
+    /** The key flag's revision ([rederiveOpenAIKeyUsable], [noteOpenAIKeyUsable]); [keyLock] guards the compare-and-set. */
+    private val keyGen = java.util.concurrent.atomic.AtomicLong()
+    private val keyLock = Any()
+
+    /** Stores [usable] only while [gen] is still the latest revision; re-projects on a change. */
+    private fun storeKeyFlag(usable: Boolean, gen: Long) {
+        val changed = synchronized(keyLock) {
+            if (keyGen.get() != gen) return // superseded by a newer note or check
+            if (openaiKeyUsable == usable) false else { openaiKeyUsable = usable; true }
+        }
+        if (changed) refreshDisplay()
     }
 
     /**
@@ -598,7 +613,7 @@ object RuntimeStateStore {
      */
     private val credentialGen = java.util.concurrent.atomic.AtomicLong()
 
-    /** Test seam: runs between a [publish] projection and its store. Production never sets it. */
+    /** Test seam: runs between each [publish] projection and its store. Production never sets it. */
     @Volatile internal var beforeDisplayStoreForTest: (() -> Unit)? = null
 
     /** The last record projected into [state] (raw, before [forDisplay]); for [refreshDisplay]. */
@@ -618,18 +633,23 @@ object RuntimeStateStore {
     private fun publish(s: RuntimeState, withCredentials: Boolean = true) {
         // Credential reads stay outside displayLock. A projection computed before a credential
         // change (the generation moved) is recomputed, never stored over a newer refresh.
-        repeat(MAX_PROJECTION_TRIES) { attempt ->
+        repeat(MAX_PROJECTION_TRIES) {
             val gen = credentialGen.get()
             val shown = if (withCredentials) forDisplay(s) else forDisplayStoredAuth(s)
-            beforeDisplayStoreForTest?.let { hook -> beforeDisplayStoreForTest = null; hook() }
+            beforeDisplayStoreForTest?.invoke()
             synchronized(displayLock) {
-                if (credentialGen.get() == gen || attempt == MAX_PROJECTION_TRIES - 1) {
+                if (credentialGen.get() == gen) {
                     lastProjected = s
                     _state.value = shown
                     return
                 }
             }
         }
+        // CodeRabbit on 3240d3c9: the credentials changed during every attempt. Never store a stale
+        // projection; remember the record and let [refreshDisplay] project it with the credentials
+        // as they are now (a further change ends in another refresh, so the latest one wins).
+        synchronized(displayLock) { lastProjected = s }
+        refreshDisplay()
     }
 
     /**

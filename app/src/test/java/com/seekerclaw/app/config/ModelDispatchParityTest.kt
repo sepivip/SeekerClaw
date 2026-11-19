@@ -113,8 +113,69 @@ class ModelDispatchParityTest {
                     openaiApiKey = key ?: "",
                     openaiOAuthToken = if (row["token"]!!.jsonPrimitive.boolean) "oauth-PLACEHOLDER-TOKEN" else "",
                 )
-                val want = if (row["expect"]!!.jsonPrimitive.content == "DEFAULT") openaiDefault else stored
-                if (cfg.displayModel != want) failures += "${row["name"]!!.jsonPrimitive.content}: expected $want, got ${cfg.displayModel}"
+                val expectStored = row["expect"]!!.jsonPrimitive.content == "STORED"
+                val name = row["name"]!!.jsonPrimitive.content
+                if (key == null || ConfigManager.keepsSecret(key)) {
+                    // Kotlin stores and emits this key: Settings must show what Node runs.
+                    val want = if (expectStored) stored else openaiDefault
+                    if (cfg.displayModel != want) failures += "$name: expected $want, got ${cfg.displayModel}"
+                } else {
+                    // Kotlin never stores or emits this key (keepsSecret), so Node never sees it: the
+                    // row pins config.js normalisation itself, and Settings shows the no-key default.
+                    if (ConfigManager.isNodeUsableSecret(key) != expectStored) failures += "$name: normalisation parity"
+                    if (cfg.displayModel != openaiDefault) failures += "$name: not emitted, so the default; got ${cfg.displayModel}"
+                }
+            }
+            assertEquals(failures.joinToString("\n"), emptyList<String>(), failures)
+        } finally {
+            ModelRegistry.resetForTest()
+        }
+    }
+
+    /**
+     * CodeRabbit on 3240d3c9: the PRODUCER half of the producer parity. For every golden row, what
+     * the emitter writes for OpenAI ([ConfigManager.emittedAuthType] + [ConfigManager.openAIConfigFields])
+     * and what Settings shows ([AppConfig.displayModel]) must equal the golden file — which the Node
+     * runner feeds to the real config.js. A drift on either side fails a runner.
+     */
+    @Test
+    fun `producer - the emitted OpenAI fields and displayModel match the golden file Node boots`() {
+        val goldenFile = listOf("../tests/nodejs-project/fixtures/openai-emission-parity.json", "tests/nodejs-project/fixtures/openai-emission-parity.json")
+            .map { File(it) }.first { it.isFile }
+        val golden = Json.parseToJsonElement(goldenFile.readText()).jsonObject
+        val registryText = listOf("src/main/assets/nodejs-project/model-registry.json", "app/src/main/assets/nodejs-project/model-registry.json")
+            .map { File(it) }.first { it.exists() }.readText()
+        val lenient = Json { ignoreUnknownKeys = true }
+        ModelRegistry.resetForTest()
+        ModelRegistry.initForTest(
+            lenient.decodeFromJsonElement(ListSerializer(ProviderInfo.serializer()), lenient.parseToJsonElement(registryText).jsonObject["providers"]!!),
+        )
+        try {
+            val rows = golden["rows"]!!.jsonArray
+            assertTrue(rows.size >= 8)
+            val failures = mutableListOf<String>()
+            for (r in rows) {
+                val row = r.jsonObject
+                val input = row["input"]!!.jsonObject
+                val cfg = AppConfig(
+                    anthropicApiKey = "",
+                    telegramBotToken = "",
+                    telegramOwnerId = "",
+                    model = input["model"]!!.jsonPrimitive.content,
+                    agentName = "",
+                    provider = "openai",
+                    authType = input["authType"]!!.jsonPrimitive.content,
+                    openaiApiKey = input["openaiApiKey"]!!.jsonPrimitive.content,
+                    openaiOAuthToken = input["openaiOAuthToken"]!!.jsonPrimitive.content,
+                )
+                val emitted = LinkedHashMap<String, String>()
+                emitted["authType"] = ConfigManager.emittedAuthType(cfg)
+                emitted.putAll(ConfigManager.openAIConfigFields(cfg))
+                val want = row["emitted"]!!.jsonObject.mapValues { it.value.jsonPrimitive.content }
+                val name = row["name"]!!.jsonPrimitive.content
+                if (emitted != want) failures += "$name: emits $emitted, golden $want"
+                val display = row["display"]!!.jsonPrimitive.content
+                if (cfg.displayModel != display) failures += "$name: shows ${cfg.displayModel}, golden $display"
             }
             assertEquals(failures.joinToString("\n"), emptyList<String>(), failures)
         } finally {

@@ -129,8 +129,8 @@ data class AppConfig(
                 ConfigManager.displayAuth(
                     provider,
                     authType,
-                    ConfigManager.isNodeUsableSecret(openaiOAuthToken),
-                    ConfigManager.isNodeUsableSecret(openaiApiKey),
+                    ConfigManager.nodeUsesSecret(openaiOAuthToken),
+                    ConfigManager.nodeUsesSecret(openaiApiKey),
                 ),
                 model,
             )
@@ -496,7 +496,7 @@ object ConfigManager {
         // lock is released (it reads credentials), whatever the save's outcome; a landed save also
         // records the key it stored (Codex 7ec40d8b #1: the usable key, as config.json will carry it).
         if (r is ModelSelectionLock.Result.Acquired && r.value) {
-            RuntimeStateStore.noteOpenAIKeyUsable(isNodeUsableSecret(config.openaiApiKey))
+            RuntimeStateStore.noteOpenAIKeyUsable(nodeUsesSecret(config.openaiApiKey))
         } else {
             // A failed save can still have changed the stored key: the whole-map prefs commit lands
             // before the later stages, and their rollback does not restore the key. Re-derive the
@@ -734,7 +734,7 @@ object ConfigManager {
             editor.remove(KEY_HELIUS_API_KEY_ENC)
         }
 
-        if (config.openaiApiKey.isNotBlank()) {
+        if (keepsSecret(config.openaiApiKey)) {
             val encOpenai = sealer.seal(config.openaiApiKey)
             editor.putString(KEY_OPENAI_API_KEY_ENC, encOpenai)
         } else {
@@ -1501,7 +1501,7 @@ object ConfigManager {
         val openaiApiKey = decryptOpenAIKey(p, log = true)
         // BAT-1661 (Codex 7ec40d8b #1): the display projection's key signal, recorded where the
         // decrypted key is already at hand (MAIN only; RuntimeStateStore is MAIN-only).
-        if (!ProcessRole.isNode) RuntimeStateStore.noteOpenAIKeyUsable(isNodeUsableSecret(openaiApiKey))
+        if (!ProcessRole.isNode) RuntimeStateStore.noteOpenAIKeyUsable(nodeUsesSecret(openaiApiKey))
 
         val openrouterApiKey = try {
             val enc = p.getString(KEY_OPENROUTER_API_KEY_ENC, null)
@@ -2243,7 +2243,7 @@ object ConfigManager {
      * display projection; call off the main thread (it decrypts).
      */
     internal fun openAIOAuthUsableReadOnly(p: PrefsReader): Boolean =
-        OpenAIOAuthTokenStore.isInitialized && isNodeUsableSecret(resolveOpenAIOAuth(p, quiet = true).access)
+        OpenAIOAuthTokenStore.isInitialized && nodeUsesSecret(resolveOpenAIOAuth(p, quiet = true).access)
 
     /**
      * The OpenAI sign-in as config.json carries it, from the store as it is now. The legacy pair is
@@ -3078,7 +3078,21 @@ object ConfigManager {
      * the way config.js `normalizeSecret` does (line breaks removed, then trimmed; JS `trim` also
      * strips U+FEFF), is not empty. Call off the main thread (it decrypts).
      */
-    internal fun openaiKeyUsable(p: PrefsReader): Boolean = isNodeUsableSecret(decryptOpenAIKey(p, log = false))
+    internal fun openaiKeyUsable(p: PrefsReader): Boolean = nodeUsesSecret(decryptOpenAIKey(p, log = false))
+
+    /**
+     * BAT-1661 (CodeRabbit on 3240d3c9): whether saveConfig STORES and emitConfigJson EMITS a secret
+     * (the OpenAI key; the sign-in token is emitted on the same rule). Kotlin `isNotBlank`, unchanged:
+     * it also treats U+001C–U+001F as blank, so such a key is dropped and never reaches config.json.
+     */
+    internal fun keepsSecret(v: String): Boolean = v.isNotBlank()
+
+    /**
+     * BAT-1661: Node can USE [v] — Kotlin stores and emits it ([keepsSecret]) AND it survives
+     * config.js `normalizeSecret` ([isNodeUsableSecret]). The ONE predicate the display uses
+     * (AppConfig.displayModel, the RuntimeStateStore key flag), so save, emit and display agree.
+     */
+    internal fun nodeUsesSecret(v: String): Boolean = keepsSecret(v) && isNodeUsableSecret(v)
 
     /**
      * config.js `normalizeSecret(v) !== ''`, exactly: `/[\r\n\u2028\u2029]+/g` removed, then
@@ -3139,6 +3153,31 @@ object ConfigManager {
      * Node; it is not one of the shared model-selection stores. The model is carried as loaded.
      * The xAI OAuth adoption (BAT-1155 §4) already ran in that load (loadConfigUnchecked).
      */
+    /**
+     * The `authType` config.json carries. BAT-1155: a DEAD xAI-OAuth family (tombstone/reauthRequired
+     * → xaiOAuthReauthRequired=true, token blanked) stays authType=oauth so Node boots INTO reauth
+     * (shows reconnect) instead of crashing "Missing required config". Only a FRESH oauth-selected-
+     * but-never-signed-in family (blank token, NOT reauth) downgrades to api_key so the api-key
+     * fallback engages or Node exits cleanly. Every other selection, OpenAI's included, as selected.
+     */
+    internal fun emittedAuthType(config: AppConfig): String = when {
+        config.provider == "xai" && config.authType == "oauth" &&
+            config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired -> "api_key"
+        else -> config.authType
+    }
+
+    /**
+     * BAT-1661 (CodeRabbit on 3240d3c9): the OpenAI secrets [emitConfigJson] writes — the key and the
+     * sign-in token, each only when [keepsSecret] (the rule saveConfig stores the key by). The
+     * producer half of the Kotlin/Node producer parity (`openai-emission-parity.json`). Pure.
+     */
+    internal fun openAIConfigFields(config: AppConfig): LinkedHashMap<String, String> {
+        val m = LinkedHashMap<String, String>()
+        if (keepsSecret(config.openaiApiKey)) m["openaiApiKey"] = config.openaiApiKey
+        if (keepsSecret(config.openaiOAuthToken)) m["openaiOAuthToken"] = config.openaiOAuthToken
+        return m
+    }
+
     fun emitConfigJson(context: Context, config: AppConfig, bridgeToken: String): String {
         val workspaceDir = ensureWorkspaceDir(context)
         val json = JSONObject().apply {
@@ -3159,18 +3198,7 @@ object ConfigManager {
             // was absent; otherwise Node read oauth from runtime_state and exited on the blank token.)
             // BAT-1124: xAI keeps its oauth-blank → api_key downgrade (lets the api-key fallback
             // engage; if there is also no xaiApiKey, Node cleanly process.exit(1)s).
-            val effectiveAuthType = when {
-                // BAT-1155: a DEAD xAI-OAuth family (tombstone/reauthRequired →
-                // xaiOAuthReauthRequired=true, token blanked) stays authType=oauth
-                // so Node boots INTO reauth (shows reconnect) instead of crashing
-                // "Missing required config". Only a FRESH oauth-selected-but-never-
-                // signed-in family (blank token, NOT reauth) downgrades to api_key
-                // so the api-key fallback engages or Node exits cleanly.
-                config.provider == "xai" && config.authType == "oauth" &&
-                    config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired -> "api_key"
-                else -> config.authType
-            }
-            put("authType", effectiveAuthType)
+            put("authType", emittedAuthType(config))
             put("provider", config.provider)
             put("model", config.model)
             put("agentName", config.agentName)
@@ -3192,7 +3220,9 @@ object ConfigManager {
             if (config.firecrawlApiKey.isNotBlank()) put("firecrawlApiKey", config.firecrawlApiKey)
             if (config.jupiterApiKey.isNotBlank()) put("jupiterApiKey", config.jupiterApiKey)
             if (config.heliusApiKey.isNotBlank()) put("heliusApiKey", config.heliusApiKey)
-            if (config.openaiApiKey.isNotBlank()) put("openaiApiKey", config.openaiApiKey)
+            // BAT-1661: the OpenAI key and sign-in token, from the one producer function the parity
+            // tests pin (openai-emission-parity.json).
+            openAIConfigFields(config).forEach { (k, v) -> put(k, v) }
             if (config.openrouterApiKey.isNotBlank()) put("openrouterApiKey", config.openrouterApiKey)
             if (config.openrouterFallbackModel.isNotBlank()) put("openrouterFallbackModel", config.openrouterFallbackModel)
             if (config.openrouterModelContext.isNotBlank()) put("openrouterModelContext", config.openrouterModelContext)
@@ -3211,7 +3241,6 @@ object ConfigManager {
             // regenerates the ephemeral config.json from SharedPreferences, so emitting the
             // expiry here is what makes `_currentExpiresAtMs` non-zero on the Node side.
             // Each field is written only when non-blank (upgrade-safe; old configs untouched).
-            if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
             if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
             // openaiOAuthExpiresAt: data-plumbing only for OpenAI symmetry/readiness — the
             // OpenAI proactive-refresh hook is a separate follow-up; adding the field now
@@ -3220,7 +3249,7 @@ object ConfigManager {
             // BAT-1157: the sign-in family and epoch from the same store read as the pair. A null
             // family means the pair came from the legacy prefs keys: Node must confirm-family
             // (which completes the migration) before it may refresh.
-            if (config.openaiOAuthToken.isNotBlank()) {
+            if (keepsSecret(config.openaiOAuthToken)) {
                 put("openaiOAuthFamily", config.openaiOAuthFamily ?: JSONObject.NULL)
                 put("openaiOAuthEpoch", config.openaiOAuthEpoch)
             }

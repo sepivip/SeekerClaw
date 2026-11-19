@@ -115,7 +115,19 @@ object ModelRepair {
         val present: Boolean,
         val provider: String? = null,
         val model: String? = null,
+        /**
+         * BAT-1661 (CodeRabbit on 3240d3c9): the RAW selection keys present at capture —
+         * `provider`, `authType`, `model` — each with its raw JSON text (`"openai"`, `""`, `7`), so an
+         * UNCHANGED overlay that holds no valid model (provider-only, a blank or malformed model) is
+         * recognised as unchanged and the repair resumes. Additive and optional (the intent decodes
+         * with ignoreUnknownKeys): null in an intent written before it, which keeps the strict rule.
+         */
+        val selection: Map<String, String>? = null,
     )
+
+    /** The raw selection keys of an overlay object and their raw JSON text ([CapturedOverlay.selection]). */
+    private fun rawSelection(obj: JsonObject): Map<String, String> =
+        listOf("provider", "authType", "model").filter { obj.containsKey(it) }.associateWith { obj.getValue(it).toString() }
 
     /**
      * v2.10 §1: the overlay as captured when it did NOT participate — another provider's
@@ -225,7 +237,12 @@ object ModelRepair {
         is AgentSettingsFile.Read.Present -> {
             val p = AgentSettingsFile.stringField(read.obj, "provider")
             if (p != null && p != scope.provider) null
-            else CapturedOverlay(present = true, provider = p, model = AgentSettingsFile.stringField(read.obj, "model"))
+            else CapturedOverlay(
+                present = true,
+                provider = p,
+                model = AgentSettingsFile.stringField(read.obj, "model"),
+                selection = rawSelection(read.obj),
+            )
         }
     }
 
@@ -341,7 +358,7 @@ object ModelRepair {
 
     /** How the overlay looks now, relative to the intent's provider. */
     private sealed class OverlayNow {
-        data class Applicable(val model: String?) : OverlayNow()
+        data class Applicable(val model: String?, val selection: Map<String, String>) : OverlayNow()
         data class Foreign(val provider: String, val model: String?) : OverlayNow()
         object Unreadable : OverlayNow()
         object Absent : OverlayNow()
@@ -365,7 +382,7 @@ object ModelRepair {
         is AgentSettingsFile.Read.Present -> if (hasNoSelectionKeys(read.obj)) OverlayNow.ModelLess else {
             val p = AgentSettingsFile.stringField(read.obj, "provider")
             val m = AgentSettingsFile.stringField(read.obj, "model")
-            if (p != null && p != provider) OverlayNow.Foreign(p, m) else OverlayNow.Applicable(m)
+            if (p != null && p != provider) OverlayNow.Foreign(p, m) else OverlayNow.Applicable(m, rawSelection(read.obj))
         }
     }
 
@@ -429,7 +446,11 @@ object ModelRepair {
                     // now supplies a selection key with no valid model (an auth-only object, a blank or
                     // non-string model) next to a captured model-less one is a newer selection, never
                     // excused by null == null. (An unchanged file with NO selection keys is ModelLess.)
-                    val ok = now.model == intent.target || (captured != null && now.model == captured)
+                    // CodeRabbit on 3240d3c9: ...or the raw selection keys are exactly as captured — an
+                    // unchanged provider-only or blank-model overlay is not a newer choice (a failed
+                    // overlay write must not cancel the repair). An added or changed key is.
+                    val unchanged = cap.present && cap.selection != null && now.selection == cap.selection
+                    val ok = now.model == intent.target || (captured != null && now.model == captured) || unchanged
                     if (!ok) return IntentClass.Superseded("agent_settings.json holds a newer model")
                 }
             }

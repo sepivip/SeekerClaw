@@ -1731,9 +1731,77 @@ class ModelSelectionSaveTest {
         mainProcess()
         RuntimeStateStore.noteOpenAIKeyUsable(true)
         // The collector projects with the sign-in usable (the default); before it stores, a sign-out lands.
-        RuntimeStateStore.beforeDisplayStoreForTest = { assertTrue(ConfigManager.signOutOpenAI(ctx)) }
+        RuntimeStateStore.beforeDisplayStoreForTest = {
+            RuntimeStateStore.beforeDisplayStoreForTest = null // once
+            assertTrue(ConfigManager.signOutOpenAI(ctx))
+        }
         RuntimeStateStore.onObserved(RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"), prefs)
         assertEquals("the post-sign-out projection wins (api_key fallback)", "gpt-5.4", RuntimeStateStore.read().model)
+    }
+
+    // ---------------------------------------------------------------- CodeRabbit on 3240d3c9
+
+    @Test
+    fun `projection - credentials change during every attempt - nothing stale is stored, the latest record and credentials win`() {
+        seedPrefs("gpt-5.4")
+        mainProcess()
+        assertTrue(ConfigManager.signOutOpenAI(ctx)) // the key flag decides the transport now
+        RuntimeStateStore.noteOpenAIKeyUsable(true)
+        RuntimeStateStore.onObserved(RuntimeState(provider = "openai", authType = "oauth", model = "gpt-6-astra"), prefs)
+        var changes = 0
+        RuntimeStateStore.beforeDisplayStoreForTest = {
+            changes++
+            RuntimeStateStore.noteOpenAIKeyUsable(changes % 2 == 0) // a credential change on EVERY attempt
+        }
+        try {
+            RuntimeStateStore.onObserved(RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"), prefs)
+        } finally {
+            RuntimeStateStore.beforeDisplayStoreForTest = null
+        }
+        assertEquals("all three attempts were invalidated", 3, changes)
+        // After three changes the key is unusable: reconnect-required, so the read rule's default —
+        // for the NEW record (5.4 stored), not a stale attempt's api_key projection of it.
+        assertEquals("gpt-6.1-sol", RuntimeStateStore.read().model)
+        RuntimeStateStore.noteOpenAIKeyUsable(true)
+        assertEquals("the remembered record is the newest one", "gpt-5.4", RuntimeStateStore.read().model)
+    }
+
+    @Test
+    fun `save, emit and display agree - a key Kotlin drops as blank (U+001C) is no key on the display either`() {
+        seedPrefs("gpt-5.4")
+        writeRuntime("gpt-5.4")
+        writeOverlay("gpt-5.4")
+        prefs.seed("openai_api_key_enc" to "sealed:sk-old")
+        mainProcess()
+        RuntimeStateStore.noteOpenAIKeyUsable(true)
+        assertTrue(ConfigManager.signOutOpenAI(ctx))
+        RuntimeStateStore.onObserved(RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"), prefs)
+        assertEquals("api-key fallback", "gpt-5.4", RuntimeStateStore.read().model)
+        val key = "\u001C  "
+        assertTrue(save(form(ModelTuple("openai", "oauth", "gpt-5.4")) { it.copy(openaiApiKey = key) }))
+        // The real save dropped it (keepsSecret), so emitConfigJson omits it (the same predicate) and
+        // Node has no key: reconnect-required, the default.
+        assertEquals("the save removed the key", null, prefs.disk["openai_api_key_enc"])
+        assertFalse("emitConfigJson's rule omits it", ConfigManager.keepsSecret(key))
+        assertTrue("though config.js alone would keep it", ConfigManager.isNodeUsableSecret(key))
+        assertEquals("the projection agrees with Node", "gpt-6.1-sol", RuntimeStateStore.read().model)
+        assertEquals("and so does Settings", "gpt-6.1-sol",
+            form(ModelTuple("openai", "oauth", "gpt-5.4")) { it.copy(openaiOAuthToken = "", openaiApiKey = key) }.displayModel)
+    }
+
+    @Test
+    fun `key flag - a check superseded by a newer note is dropped`() {
+        seedPrefs("gpt-5.4")
+        mainProcess()
+        assertTrue(ConfigManager.signOutOpenAI(ctx))
+        RuntimeStateStore.noteOpenAIKeyUsable(false)
+        RuntimeStateStore.onObserved(RuntimeState(provider = "openai", authType = "oauth", model = "gpt-5.4"), prefs)
+        // A check reads "no key"; before it publishes, a save that installed a usable key notes it.
+        RuntimeStateStore.rederiveOpenAIKeyUsable {
+            RuntimeStateStore.noteOpenAIKeyUsable(true)
+            false
+        }
+        assertEquals("the newer note wins: the api_key fallback", "gpt-5.4", RuntimeStateStore.read().model)
     }
 
     // ---------------------------------------------------------------- review of round 8
@@ -1789,18 +1857,44 @@ class ModelSelectionSaveTest {
     }
 
     @Test
-    fun `decision record (Codex 7ec40d8b fold 2, accepted side effect) - an unchanged captured provider-only overlay supersedes`() {
+    fun `decision record (Codex 7ec40d8b fold 2, superseded by CodeRabbit on 3240d3c9) - an unchanged captured provider-only overlay stays Pending`() {
+        // Round 9 pinned the accepted side effect (Superseded). The intent now captures the raw
+        // selection keys, so an UNCHANGED provider-only overlay is recognised as unchanged.
         seedPrefs("gpt-5.4")
         writeRuntime("gpt-5.4")
         AgentSettingsFile.path(dir).toFile().writeText("""{"heartbeatIntervalMinutes":30,"provider":"openai","authType":"oauth"}""")
         planNow()
-        assertEquals("captured with no model", null, intent()!!.overlay!!.model)
+        val cap = intent()!!.overlay!!
+        assertEquals("captured with no model", null, cap.model)
+        assertEquals(mapOf("provider" to "\"openai\"", "authType" to "\"oauth\""), cap.selection)
         mainProcess()
+        assertTrue("${classify()}", classify() is ModelRepair.IntentClass.Pending)
+        // A newly added or changed raw key is still a newer selection.
+        AgentSettingsFile.path(dir).toFile().writeText("""{"heartbeatIntervalMinutes":30,"provider":"openai","authType":"api_key"}""")
         assertTrue("${classify()}", classify() is ModelRepair.IntentClass.Superseded)
-        // The same boot re-decides and still repairs: the target lands.
+        AgentSettingsFile.path(dir).toFile().writeText("""{"heartbeatIntervalMinutes":30,"provider":"openai","authType":"oauth","model":""}""")
+        assertTrue("${classify()}", classify() is ModelRepair.IntentClass.Superseded)
+    }
+
+    @Test
+    fun `CR 3240d3c9 #1 - repair, then the overlay write fails - the next boot resumes and confirms the handoff`() {
+        seedPrefs("gpt-6-astra") // the retired id is only in runtime_state
+        writeRuntime("gpt-5.4")
+        AgentSettingsFile.path(dir).toFile().writeText("""{"heartbeatIntervalMinutes":30,"provider":"openai","authType":"oauth"}""")
         nodeProcess()
+        SafeFs.beforeMove = { _, target -> if (target.fileName.toString() == AgentSettingsFile.NAME) throw IOException("injected overlay write failure") }
+        try {
+            serviceStart()
+        } finally {
+            SafeFs.beforeMove = savedBeforeMove
+        }
+        assertEquals("runtime_state took the target", "gpt-6.1-sol", runtimeModel())
+        assertEquals("the repair stays pending", ModelRepair.STATE_PENDING, intent()?.state)
+        val anchor = LogCollector.logs.value.lastOrNull()
         serviceStart()
-        assertEquals("gpt-6.1-sol", runtimeModel())
+        assertEquals("the next boot resumed and handed off", ModelRepair.STATE_AWAITING_MAIN, intent()?.state)
+        assertEquals("gpt-6.1-sol", overlayModel())
+        assertTrue(logsSince(anchor).any { it.message.contains("is not available with ChatGPT sign-in — now gpt-6.1-sol") })
     }
 
     // ------------- CodeRabbit on ab6385bd (CR2): a reconcile retry across a COLD restart — Codex question

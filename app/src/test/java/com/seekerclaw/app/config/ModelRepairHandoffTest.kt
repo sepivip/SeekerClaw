@@ -903,10 +903,16 @@ class ModelRepairHandoffTest {
         val c = nodeStart()
         assertEquals("the boot keeps the newer OAuth selection", "oauth", c.authType)
         assertEquals("and never republishes api_key into the overlay", "oauth", overlayField("authType"))
-        // MAIN's collector mirror and load keep it.
+        // MAIN's collector mirror (MAIN's store wired: nodeStart reset it) and load keep it.
+        ProcessRole.setForTest(false)
+        RuntimeStateStore.resetForTest()
         val mainPrefs = main.getSharedPreferences("seekerclaw_prefs", 0)
+        RuntimeStateStore.initWithStoreForTest(dir.toFile(), prefs = mainPrefs)
         val r = ModelSelectionLock.transaction { tx -> RuntimeStateStore.mirrorFromDisk(tx, mainPrefs) }
-        assertEquals(ModelSelectionLock.Result.Acquired(false), r)
+        assertEquals("nothing to change", ModelSelectionLock.Result.Acquired(false), r)
+        assertEquals("the mirror read the record", "xai", RuntimeStateStore.read().provider)
+        assertEquals("and kept the OAuth selection", "oauth", RuntimeStateStore.read().authType)
+        assertEquals("prefs still oauth before any reconcile", "oauth", tp.disk["auth_type"])
         mainLoad()
         assertEquals("MAIN keeps the user's OAuth choice", "oauth", tp.disk["auth_type"])
     }
