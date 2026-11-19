@@ -1283,7 +1283,25 @@ class SeekerClawService : Service() {
             // A restart of a live oauth family is just as capable of stranding a rotation
             // as a plain Stop, so it goes through the same gate.
             stopWithDurability(appCtx, attempt = 0) {
-                restartHandler.postDelayed({ start(appCtx) }, delayMs)
+                restartHandler.postDelayed({ startFromRestart(appCtx) }, delayMs)
+            }
+        }
+
+        /**
+         * BAT-1661 (review M2 of v2.12): the restart's start, guarded. On Android 12+ a
+         * `startForegroundService` from an app that is no longer in the foreground throws
+         * (`ForegroundServiceStartNotAllowedException`); posted on the main looper, that would crash
+         * MAIN after the agent was already stopped. Callers check first (ReconcileRecord.AgentRestart
+         * restarts only while MAIN is in the foreground); this guard makes a failure a logged one.
+         */
+        private fun startFromRestart(appCtx: Context) {
+            try {
+                start(appCtx)
+            } catch (e: Exception) {
+                LogCollector.append(
+                    "[Service] restart: the agent was stopped but could not be started again (${e.javaClass.simpleName}) — start it from the dashboard",
+                    LogLevel.ERROR,
+                )
             }
         }
 

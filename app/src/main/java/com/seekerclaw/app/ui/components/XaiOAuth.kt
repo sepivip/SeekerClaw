@@ -56,6 +56,17 @@ internal const val XAI_RESTART_NEEDED_BUSY =
 internal const val XAI_RESTART_NEEDED_NOT_SAVED =
     "Signed in, but the agent's settings could not be saved, so it was not restarted. Free up storage, then sign out and sign in with Grok again."
 
+/**
+ * BAT-1661 v2.12 (review m3): the sign-in was saved, but an interrupted model selection change is not
+ * finished yet, so the agent's settings were not updated and it was not restarted.
+ */
+internal const val XAI_RESTART_NEEDED_HELD =
+    "Signed in, but a model or provider change is still being finished, so the agent was not restarted. Close and reopen the app, then sign out and sign in with Grok again to finish."
+
+/** BAT-1661 v2.12 (review m3): the sign-out was saved, but an interrupted model selection change is not finished yet. */
+internal const val XAI_SIGN_OUT_HELD =
+    "Signed out, but a model or provider change is still being finished, so the agent's settings were not updated. Close and reopen the app, then sign in again or choose API Key for xAI, before restarting the agent."
+
 /** BAT-1661: the sign-out was saved but the agent's settings were busy and were not updated. */
 internal const val XAI_SIGN_OUT_BUSY =
     "Signed out, but the agent's settings were busy and were not updated. Sign in again, or choose API Key for xAI, before restarting the agent."
@@ -76,6 +87,7 @@ internal data class XaiOAuthOutcome(val notify: Boolean, val message: String?)
 internal fun xaiSignInOutcome(restartNeeded: String): XaiOAuthOutcome = when (restartNeeded) {
     "busy" -> XaiOAuthOutcome(notify = false, message = XAI_RESTART_NEEDED_BUSY)
     "not_saved" -> XaiOAuthOutcome(notify = false, message = XAI_RESTART_NEEDED_NOT_SAVED)
+    "held" -> XaiOAuthOutcome(notify = false, message = XAI_RESTART_NEEDED_HELD)
     else -> XaiOAuthOutcome(notify = true, message = null)
 }
 
@@ -95,6 +107,7 @@ internal fun xaiSignOutOutcome(sync: ConfigManager.XaiAuthSync): XaiOAuthOutcome
     ConfigManager.XaiAuthSync.SYNCED -> XaiOAuthOutcome(notify = true, message = null)
     ConfigManager.XaiAuthSync.BUSY -> XaiOAuthOutcome(notify = false, message = XAI_SIGN_OUT_BUSY)
     ConfigManager.XaiAuthSync.NOT_SAVED -> XaiOAuthOutcome(notify = false, message = XAI_SIGN_OUT_NOT_SAVED)
+    ConfigManager.XaiAuthSync.HELD -> XaiOAuthOutcome(notify = false, message = XAI_SIGN_OUT_HELD)
 }
 
 /** Snapshot of xAI Grok OAuth state shared between the Settings screen and onboarding. */

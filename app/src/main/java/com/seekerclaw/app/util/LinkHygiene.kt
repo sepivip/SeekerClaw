@@ -554,6 +554,8 @@ class LinkHygiene(
             // BAT-1661: the model-selection lock and the repair intent (written via .kwrite/;
             // the .tmp name is listed so a planted link there is also refused).
             "model_selection.lock", "model_repair_intent.json", "model_repair_intent.json.tmp",
+            // BAT-1661 v2.12 (Q16): the reconcile retry record (written via .kwrite/, same rule).
+            "model_reconcile_record.json", "model_reconcile_record.json.tmp",
         )
 
         /** Directories Node core reads; walked first and completely in step 2. */

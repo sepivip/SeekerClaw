@@ -114,6 +114,8 @@ class ModelSelectionSaveTest {
         assertTrue(OpenAIOAuthTokenStore.signIn("old-access", "old-refresh", "", "") is OpenAIOAuthTokenStore.Result.Ok)
         prefs = FakePrefs()
         ctx = FakeContext(dir.toFile(), prefs)
+        MainPrefs.resetProcessStateForTest()
+        ReconcileRecord.resetForTest()
     }
 
     @After
@@ -126,6 +128,8 @@ class ModelSelectionSaveTest {
         ProcessRole.setForTest(null)
         ModelSelectionLock.initForTest(null)
         ModelRegistry.resetForTest()
+        MainPrefs.resetProcessStateForTest()
+        ReconcileRecord.resetForTest()
     }
 
     // ------------------------------------------------------------------------------ fixtures
@@ -1146,9 +1150,19 @@ class ModelSelectionSaveTest {
         ConfigManager.loadConfig(ctx)
         prefs.failCommits = false
         assertEquals("the cache is back on the stored provider", "openai", prefs.memory["provider"])
+        // v2.12 (D12.2 + fold 1): a failed commit taints this process, so its cache proves nothing
+        // and the retry record holds the selection work here — the same-process load is compute-only.
+        assertTrue(MainPrefs.commitFailedThisProcess)
+        assertEquals("xai", ConfigManager.loadConfig(ctx)!!.provider)
+        assertEquals("held in the tainted process", "openai", prefs.disk["provider"])
+        assertTrue("the record is kept", ReconcileRecord.read(dir) is ReconcileRecord.Read.Present)
+        // The next process proves the commit never landed (NotCommitted) and reconciles afresh.
+        prefs.restartProcess()
+        mainProcess(seed = RuntimeState(provider = "openai", authType = "oauth", model = "gpt-6-astra"))
         assertEquals("xai", ConfigManager.loadConfig(ctx)!!.provider)
         assertEquals("the retry reached disk", "xai", prefs.disk["provider"])
         assertEquals("and runtime_state", "xai", RuntimeStateFile.readTuple(dir)?.provider)
+        assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
     }
 
     @Test
@@ -1222,8 +1236,15 @@ class ModelSelectionSaveTest {
         assertEquals("no config-version bump", version0, ConfigManager.configVersion.intValue)
         assertEquals("no broadcast", 0, broadcastsSince(anchor))
 
-        // Same process, next load: the cache differs from the overlay again, so it retries and
-        // lands the overlay in both stores.
+        // v2.12 (D12.2, fold 1): the failed rollback taints this process — its cache (old tuple) no
+        // longer matches disk (new tuple) — so the same-process load is held: nothing written, the
+        // record kept. The next process proves prefs are on the change and recovers runtime_state.
+        val recordBytes = Files.readAllBytes(ReconcileRecord.path(dir))
+        assertEquals("xai", ConfigManager.loadConfig(ctx)!!.provider)
+        assertEquals("openai", RuntimeStateFile.readTuple(dir)?.provider)
+        assertArrayEquals(recordBytes, Files.readAllBytes(ReconcileRecord.path(dir)))
+        prefs.restartProcess()
+        mainProcess(seed = RuntimeState(provider = "xai", authType = "api_key", model = "grok-4.6"))
         assertEquals("xai", ConfigManager.loadConfig(ctx)!!.provider)
         assertEquals("xai", prefs.disk["provider"])
         assertEquals("api_key", prefs.disk["auth_type"])
@@ -1900,11 +1921,11 @@ class ModelSelectionSaveTest {
     // ------------- CodeRabbit on ab6385bd (CR2): a reconcile retry across a COLD restart — Codex question
 
     @Test
-    fun `CR2 KNOWN GAP pending Codex - runtime write and rollback both failed, then a cold restart - not retried`() {
-        // Documents today's behaviour (decision pending with Codex: write runtime_state before the
-        // prefs commit, or a durable marker). Prefs and the overlay agree on xai on disk, so a cold
-        // load does not reconcile, and runtime_state — which Node reads first — stays on openai.
-        // When the gap is closed this test must be inverted, not deleted.
+    fun `CR2 - runtime write and rollback both failed, then a cold restart - the retry record finishes it`() {
+        // Q16-T1 (v2.12): the inverted known-gap test. Prefs and the overlay agree on xai on disk, so
+        // a cold load has nothing to reconcile; runtime_state — which Node reads first — was left on
+        // openai. The retry record written before the commit lets the cold MAIN load prove prefs hold
+        // the change (prefsAfter) and finish runtime_state (Recovered). Negative control: H1 removed.
         seedPrefs("gpt-6-astra")
         writeRuntime("gpt-6-astra")
         writeOverlay("grok-4.6", provider = "xai", auth = "api_key")
@@ -1921,11 +1942,22 @@ class ModelSelectionSaveTest {
             SafeFs.beforeMove = savedBeforeMove
             prefs.failCommits = false
         }
+        assertTrue("the record survived the double failure", ReconcileRecord.read(dir) is ReconcileRecord.Read.Present)
         prefs.restartProcess() // MAIN exits; the next process reads the disk
         mainProcess(seed = RuntimeState(provider = "xai", authType = "api_key", model = "grok-4.6"))
+        val overlayBytes = Files.readAllBytes(AgentSettingsFile.path(dir))
+        val prefsDisk = LinkedHashMap(prefs.disk)
+        val anchor = LogCollector.logs.value.lastOrNull()
         ConfigManager.loadConfig(ctx)
-        assertEquals("xai", prefs.disk["provider"])
-        assertEquals("KNOWN GAP: runtime_state not retried", "openai", RuntimeStateFile.readTuple(dir)?.provider)
+        assertEquals(ModelTuple("xai", "api_key", "grok-4.6"), RuntimeStateFile.readTuple(dir))
+        assertEquals("the record is gone", ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
+        assertArrayEquals("the overlay bytes are unchanged", overlayBytes, Files.readAllBytes(AgentSettingsFile.path(dir)))
+        assertEquals("prefs on disk are unchanged", prefsDisk, prefs.disk)
+        assertEquals(
+            "one RECOVERED line",
+            1,
+            logsSince(anchor).count { it.message == ReconcileRecord.recovered("xai", "api_key", "grok-4.6") },
+        )
     }
 
     // ------------------- Codex review of ca06bb79 #4: the display follows the effective transport
@@ -1997,8 +2029,14 @@ class ModelSelectionSaveTest {
             kv.forEach { (k, v) -> disk[k] = v; memory[k] = v }
         }
 
+        /**
+         * A new process reads the disk. BAT-1661 v2.12: it also starts with no failed commit
+         * ([MainPrefs.commitFailedThisProcess]) — besides `@Before`/`@After` the only place the
+         * sticky flag is reset in a test (`mainProcess()` keeps the same process and its cache).
+         */
         @Synchronized fun restartProcess() {
             memory = LinkedHashMap(disk)
+            MainPrefs.resetProcessStateForTest()
         }
 
         @Synchronized override fun getAll(): MutableMap<String, *> = LinkedHashMap(memory)

@@ -70,23 +70,70 @@ object MainPrefs {
      */
     private val writeMonitor = Any()
 
+    /**
+     * BAT-1661 v2.12 (Q16, D12.2): true once a MAIN prefs `commit()` has returned false in THIS
+     * process (or a model selection was written with `apply()`), sticky until the process ends.
+     *
+     * Only MAIN writes prefs, and each successful `commit()` writes the whole cached map, so MAIN's
+     * cached provider / auth / model equal the file unless a commit failed since this process
+     * loaded it. While this is set, the cache proves nothing about disk, and the reconcile retry
+     * record ([ReconcileRecord]) is Deferred. Reopening an Activity is not a new process and does
+     * not clear it; only a new process does.
+     */
+    @Volatile
+    var commitFailedThisProcess: Boolean = false
+        private set
+
+    /** [ReconcileRecord.RECORD_DEFERRED] is logged once per process. */
+    internal val deferredLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    internal fun noteCommitFailed() {
+        commitFailedThisProcess = true
+    }
+
+    /** Test seam: a new process (the fakes' `restartProcess`) and `@Before` / `@After`. */
+    internal fun resetProcessStateForTest() {
+        commitFailedThisProcess = false
+        deferredLogged.set(false)
+        ReconcileRecord.resetProcessMemory()
+    }
+
+    /** The model-selection keys ([ConfigManager]'s KEY_PROVIDER / KEY_AUTH_TYPE / KEY_MODEL). */
+    private val MODEL_KEYS = setOf(ConfigManager.KEY_PROVIDER, ConfigManager.KEY_AUTH_TYPE, ConfigManager.KEY_MODEL)
+
     /** [forWrite]'s prefs: reads delegate; every editor commits under [writeMonitor]. */
     private class Guarded(private val p: SharedPreferences) : SharedPreferences by p {
         override fun edit(): SharedPreferences.Editor = GuardedEditor(p.edit())
     }
 
-    /** Puts return THIS editor, so a chained `commit()`/`apply()` always takes [writeMonitor]. */
+    /**
+     * Puts return THIS editor, so a chained `commit()`/`apply()` always takes [writeMonitor].
+     *
+     * BAT-1661 v2.12 (finding I2): enforced at run time too — a failed `commit()` sets
+     * [commitFailedThisProcess]; an `apply()` of an edit that touched a model key or `clear()` is a
+     * bug (its disk write is queued past the lock and can fail unseen): ERROR
+     * [ReconcileRecord.APPLY_MODEL_KEYS], and the flag is set.
+     */
     private class GuardedEditor(private val e: SharedPreferences.Editor) : SharedPreferences.Editor {
-        override fun putString(key: String?, value: String?) = apply { e.putString(key, value) }
-        override fun putStringSet(key: String?, values: MutableSet<String>?) = apply { e.putStringSet(key, values) }
-        override fun putInt(key: String?, value: Int) = apply { e.putInt(key, value) }
-        override fun putLong(key: String?, value: Long) = apply { e.putLong(key, value) }
-        override fun putFloat(key: String?, value: Float) = apply { e.putFloat(key, value) }
-        override fun putBoolean(key: String?, value: Boolean) = apply { e.putBoolean(key, value) }
-        override fun remove(key: String?) = apply { e.remove(key) }
-        override fun clear() = apply { e.clear() }
-        override fun commit(): Boolean = synchronized(writeMonitor) { e.commit() }
-        override fun apply() = synchronized(writeMonitor) { e.apply() }
+        private var touchesModel = false
+        private fun model(key: String?) { if (key in MODEL_KEYS) touchesModel = true }
+        override fun putString(key: String?, value: String?) = apply { model(key); e.putString(key, value) }
+        override fun putStringSet(key: String?, values: MutableSet<String>?) = apply { model(key); e.putStringSet(key, values) }
+        override fun putInt(key: String?, value: Int) = apply { model(key); e.putInt(key, value) }
+        override fun putLong(key: String?, value: Long) = apply { model(key); e.putLong(key, value) }
+        override fun putFloat(key: String?, value: Float) = apply { model(key); e.putFloat(key, value) }
+        override fun putBoolean(key: String?, value: Boolean) = apply { model(key); e.putBoolean(key, value) }
+        override fun remove(key: String?) = apply { model(key); e.remove(key) }
+        override fun clear() = apply { touchesModel = true; e.clear() }
+        override fun commit(): Boolean = synchronized(writeMonitor) { e.commit() }.also { if (!it) noteCommitFailed() }
+        override fun apply() {
+            if (touchesModel) {
+                Log.e(TAG, "model selection written with apply()")
+                LogCollector.append(ReconcileRecord.APPLY_MODEL_KEYS, LogLevel.ERROR)
+                noteCommitFailed()
+            }
+            synchronized(writeMonitor) { e.apply() }
+        }
     }
 
     /**
@@ -147,6 +194,8 @@ object MainPrefs {
         val all = prefs.all
         val before = edit.written.keys.associateWith { all[it] }
         if (edit.commit()) return true
+        // v2.12 D12.2: the test passes raw fakes here, so the flag is set on this path too.
+        noteCommitFailed()
         val now = prefs.all
         val restore = prefs.edit()
         var changed = false

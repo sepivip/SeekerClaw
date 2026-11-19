@@ -125,8 +125,12 @@ object ModelRepair {
         val selection: Map<String, String>? = null,
     )
 
-    /** The raw selection keys of an overlay object and their raw JSON text ([CapturedOverlay.selection]). */
-    private fun rawSelection(obj: JsonObject): Map<String, String> =
+    /**
+     * The raw selection keys of an overlay object and their raw JSON text ([CapturedOverlay.selection]).
+     * Shared with [ReconcileRecord] (Q16 fold 3): the same raw evidence, so `7` and `"7"`, `null` and
+     * an absent key, `""` and a missing model are never confused.
+     */
+    internal fun rawSelection(obj: JsonObject): Map<String, String> =
         listOf("provider", "authType", "model").filter { obj.containsKey(it) }.associateWith { obj.getValue(it).toString() }
 
     /**
@@ -441,6 +445,12 @@ object ModelRepair {
                 OverlayNow.ModelLess ->
                     if (cap.present && cap.model?.trim()?.ifBlank { null } != null) lost += "agent_settings.json no longer holds a model"
                 is OverlayNow.Applicable -> {
+                    // CodeRabbit on 7de1e77c (Major): the scope-changing keys are checked FIRST, apart
+                    // from `model` — a changed provider or authType is a newer selection even when the
+                    // overlay's model equals the target.
+                    if (!scopeKeysHeld(intent, cap, now.selection)) {
+                        return IntentClass.Superseded("agent_settings.json holds a newer provider or sign-in type")
+                    }
                     val captured = if (cap.present) cap.model?.trim()?.ifBlank { null } else null
                     // Codex 7ec40d8b #2: only a captured ACTUAL model can be "unchanged". A file that
                     // now supplies a selection key with no valid model (an auth-only object, a blank or
@@ -495,6 +505,32 @@ object ModelRepair {
     }
 
     private fun IntentClass.dropsIntent() = this is IntentClass.Superseded || this is IntentClass.Unproven
+
+    /**
+     * CodeRabbit on 7de1e77c (Major): the overlay's `provider` and `authType` keys, compared RAW and
+     * apart from `model`, still stand for the intent's scope. Each key is held when its raw JSON is
+     * the captured raw value ([CapturedOverlay.selection]; an overlay absent at capture had none), or
+     * exactly the intent's own scope value — what this repair's boot publish writes
+     * (`writeAgentSettingsJson` with the approved provider/auth). Any other added, removed or changed
+     * key is a newer selection. A legacy intent (no captured raw selection) has only the normalised
+     * scope as evidence: a present key must be exactly the scope value (a blank or non-string one
+     * cannot pass via null-equality).
+     */
+    private fun scopeKeysHeld(intent: RepairIntent, cap: CapturedOverlay, now: Map<String, String>): Boolean {
+        val own = mapOf(
+            "provider" to JsonPrimitive(intent.provider).toString(),
+            "authType" to JsonPrimitive(intent.authType).toString(),
+        )
+        val captured: Map<String, String>? = if (cap.present) cap.selection else emptyMap()
+        return listOf("provider", "authType").all { k ->
+            val v = now[k]
+            if (captured != null) {
+                v == captured[k] || (v != null && v == own[k])
+            } else {
+                v == null || v == own[k]
+            }
+        }
+    }
 
     /**
      * The repair that governs the stores as things stand now, read-only (v2.9 §3): a standing
@@ -848,6 +884,19 @@ object ModelRepair {
         publish: (approved: ApprovedTarget?, publishModelFields: Boolean) -> Published<R>?,
         rules: Rules = Rules.Registry,
     ): R? {
+        // BAT-1661 v2.12 H4 (Q16): an unfinished reconcile (its retry record Present, or one that
+        // cannot be read) holds this start read-only. `:node` cannot prove MAIN's prefs, and an
+        // ordinary boot would erase the record's evidence (it publishes runtime_state's auth into the
+        // overlay, and a repair may rewrite runtime_state). MAIN finishes the record at its next
+        // locked load, mirror or seed. A Corrupt or Absent record boots as usual; `:node` never
+        // deletes it.
+        when (ReconcileRecord.read(filesDir)) {
+            is ReconcileRecord.Read.Present, is ReconcileRecord.Read.Unavailable -> {
+                LogCollector.append(ReconcileRecord.BOOT_HELD, LogLevel.WARN)
+                return readOnly()
+            }
+            else -> Unit
+        }
         val plan = plan(tx, filesDir, s, rules)
         val repaired = when (plan.kind) {
             Plan.Kind.READ_ONLY -> false

@@ -2,6 +2,7 @@ package com.seekerclaw.app.ui.components
 
 import com.seekerclaw.app.config.ConfigManager
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -43,5 +44,17 @@ class XaiOAuthOutcomeTest {
         assertEquals(XaiOAuthOutcome(true, null), xaiSignOutOutcome(ConfigManager.XaiAuthSync.SYNCED))
         assertEquals(XaiOAuthOutcome(false, XAI_SIGN_OUT_BUSY), xaiSignOutOutcome(ConfigManager.XaiAuthSync.BUSY))
         assertEquals(XaiOAuthOutcome(false, XAI_SIGN_OUT_NOT_SAVED), xaiSignOutOutcome(ConfigManager.XaiAuthSync.NOT_SAVED))
+        assertEquals(XaiOAuthOutcome(false, XAI_SIGN_OUT_HELD), xaiSignOutOutcome(ConfigManager.XaiAuthSync.HELD))
+    }
+
+    @Test
+    fun `v2_12 m3 - a held sync is its own outcome, never the storage message, and never prompts`() {
+        assertEquals(XaiOAuthOutcome(notify = false, message = XAI_RESTART_NEEDED_HELD), xaiSignInOutcome("held"))
+        var calls = 0
+        assertEquals(XAI_RESTART_NEEDED_HELD, applyXaiOutcome(xaiSignInOutcome("held")) { calls++ })
+        assertEquals(XAI_SIGN_OUT_HELD, applyXaiOutcome(xaiSignOutOutcome(ConfigManager.XaiAuthSync.HELD)) { calls++ })
+        assertEquals("no restart prompt", 0, calls)
+        assertTrue(XAI_RESTART_NEEDED_HELD != XAI_RESTART_NEEDED_NOT_SAVED && !XAI_RESTART_NEEDED_HELD.contains("storage"))
+        assertTrue(!XAI_SIGN_OUT_HELD.contains("storage"))
     }
 }

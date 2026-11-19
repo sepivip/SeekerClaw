@@ -186,6 +186,9 @@ object ModelSelectionLock {
         }
     }
 
+    /** Test seam: is any transaction open in this process right now? */
+    internal fun heldForTest(): Boolean = holderThread != null
+
     /** Test seam: point the lock at a temp directory and reset in-process state. */
     internal fun initForTest(filesDir: Path?) {
         lockRoot = filesDir

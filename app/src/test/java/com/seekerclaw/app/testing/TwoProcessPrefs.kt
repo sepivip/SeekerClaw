@@ -33,6 +33,8 @@ class TwoProcessPrefs(val filesDir: File) {
 
     /** Forces [proc] to re-read from disk on its next open (a process restart). */
     fun restart(proc: String) {
+        // BAT-1661 v2.12: a new MAIN process starts with no failed prefs commit (D12.2).
+        if (proc == "main") com.seekerclaw.app.config.MainPrefs.resetProcessStateForTest()
         caches.remove(proc)
         memGen.remove(proc)
         diskGen.remove(proc)

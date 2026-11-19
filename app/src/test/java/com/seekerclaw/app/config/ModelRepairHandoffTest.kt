@@ -102,6 +102,8 @@ class ModelRepairHandoffTest {
         XaiOAuthTokenStore.resetForTest()
         OpenAIOAuthTokenStore.initForTest(dir.toFile(), codec)
         tp = TwoProcessPrefs(dir.toFile())
+        MainPrefs.resetProcessStateForTest()
+        ReconcileRecord.resetForTest()
     }
 
     @After
@@ -114,6 +116,8 @@ class ModelRepairHandoffTest {
         ProcessRole.setForTest(null)
         ModelSelectionLock.initForTest(null)
         ModelRegistry.resetForTest()
+        MainPrefs.resetProcessStateForTest()
+        ReconcileRecord.resetForTest()
     }
 
     // ------------------------------------------------------------------------------ fixtures

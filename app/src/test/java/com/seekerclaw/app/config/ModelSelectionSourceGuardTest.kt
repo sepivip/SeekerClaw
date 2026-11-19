@@ -29,8 +29,12 @@ class ModelSelectionSourceGuardTest {
 
     /** Store writes: prefs model keys, runtime_state, the overlay. */
     private val writer = Regex(
-        """putString\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|RuntimeStateStore\.(write|update|updateExisting)\(|""" +
-            """\bstore\??\.(write|update|updateExisting)\(|AgentSettingsFile\.write\(|RuntimeStateFile\.writeModel\(|""" +
+        """putString\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|""" +
+            // BAT-1661 v2.12 (Q16): the checked runtime_state writes (writeVerified and the fold-2 patch).
+            """RuntimeStateStore\.(write|writeVerified|writeSelectionVerified|rewriteVerified|update|updateExisting)\(|""" +
+            """\bstore\??\.(write|writeVerified|update|updateExisting)\(|AgentSettingsFile\.write\(|RuntimeStateFile\.writeModel\(|""" +
+            // v2.12: the reconcile retry record (written / deleted only inside the lock).
+            """ReconcileRecord\.(write|clear|clearLogged|clearSuperseded|resolve)\(|""" +
             // BAT-1661 v2.8 §2: the checked tuple write (the repair's handoff, MAIN's seed).
             """RuntimeStateFile\.writeTupleVerified\(|""" +
             """writeAgentSettingsJson\(""",
@@ -88,6 +92,95 @@ class ModelSelectionSourceGuardTest {
     }
 
     @Test
+    fun `writer guard reports an unlocked checked runtime_state write (v2_12)`() {
+        // Negative control: an unlocked RuntimeStateStore.writeVerified call.
+        val path = "com/seekerclaw/app/config/ConfigManager.kt"
+        val lines = sources.getValue(path)
+        val at = lines.indexOfFirst { it.contains("fun isSetupComplete(context: Context): Boolean =") }
+        assertTrue(at >= 0)
+        val mutated = lines.toMutableList().apply {
+            add(at, "    fun leak(v: RuntimeState) { RuntimeStateStore.writeVerified(tx, v) }")
+        }
+        val (_, offenders) = writerOffenders(sources + (path to mutated))
+        assertTrue("the unlocked writeVerified is reported: $offenders", offenders.any { it.startsWith("$path:${at + 1}") })
+        // ...and the store form.
+        val store = lines.toMutableList().apply { add(at, "    fun leak2(v: RuntimeState) { store?.writeVerified(v) }") }
+        assertTrue(writerOffenders(sources + (path to store)).second.any { it.startsWith("$path:${at + 1}") })
+    }
+
+    // ------------------------------------------- v2.12 (Q16): who touches the reconcile retry record
+
+    /**
+     * `model_reconcile_record.json` is written or deleted only by [ReconcileRecord]'s own `write` /
+     * `clear`: its path and file name appear nowhere else (LinkHygiene lists the name), and inside
+     * ReconcileRecord.kt the SafeFs writes and deletes sit only in those two members.
+     */
+    private fun recordWriterOffenders(srcs: Map<String, List<String>>): List<String> {
+        val out = mutableListOf<String>()
+        val rr = "com/seekerclaw/app/config/ReconcileRecord.kt"
+        for ((path, lines) in srcs) {
+            lines.forEachIndexed { i, l ->
+                if (isComment(l)) return@forEachIndexed
+                if (path != rr && l.contains("ReconcileRecord.path(")) out += "$path:${i + 1} uses the record path"
+                if (path != rr && !path.endsWith("util/LinkHygiene.kt") && l.contains("model_reconcile_record")) out += "$path:${i + 1} names the record file"
+                if (path == rr && Regex("""SafeFs\.(writeAtomic\w*|deleteChecked|rewriteVerified|moveNoFollow)\(""").containsMatchIn(l)) {
+                    val (sig, _) = enclosing(lines, i)
+                    if (!sig.contains("fun write(") && !sig.contains("fun clear(")) out += "$path:${i + 1} writes the record in $sig"
+                }
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun `the reconcile retry record is written or deleted only by ReconcileRecord`() {
+        assertEquals(emptyList<String>(), recordWriterOffenders(sources))
+        // Negative control 1: a direct delete elsewhere.
+        val cm = "com/seekerclaw/app/config/ConfigManager.kt"
+        val lines = sources.getValue(cm)
+        val at = lines.indexOfFirst { it.contains("fun isSetupComplete(context: Context): Boolean =") }
+        val mutated = lines.toMutableList().apply { add(at, "    fun leak(d: java.nio.file.Path) = SafeFs.deleteChecked(d, ReconcileRecord.path(d))") }
+        assertTrue(recordWriterOffenders(sources + (cm to mutated)).isNotEmpty())
+        // Negative control 2: a write inside ReconcileRecord outside write/clear.
+        val rr = "com/seekerclaw/app/config/ReconcileRecord.kt"
+        val rl = sources.getValue(rr)
+        val r = rl.indexOfFirst { it.contains("fun resolve(") }
+        val m2 = rl.toMutableList().apply { add(r + 2, "        SafeFs.writeAtomicVerified(filesDir, path(filesDir), ByteArray(0))") }
+        assertTrue(recordWriterOffenders(sources + (rr to m2)).isNotEmpty())
+    }
+
+    /** H4: `ModelRepair.boot` and `serviceStart` only READ the record (never resolve, write or delete it). */
+    private fun bootRecordOffenders(lines: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        for (name in listOf("boot", "serviceStart")) {
+            val at = lines.indexOfFirst { !isComment(it) && Regex("""fun (<[^>]*> )?$name\(""").containsMatchIn(it) }
+            if (at < 0) { out += "$name not found"; continue }
+            val end = (at + 1 until lines.size).first { lines[it].startsWith("    }") }
+            for (i in at..end) {
+                val l = lines[i]
+                if (isComment(l)) continue
+                Regex("""ReconcileRecord\.(\w+)""").findAll(l).forEach { m ->
+                    if (m.groupValues[1] !in setOf("read", "Read", "BOOT_HELD")) out += "ModelRepair.kt:${i + 1} $name uses ReconcileRecord.${m.groupValues[1]}"
+                }
+            }
+        }
+        if (lines.none { it.contains("when (ReconcileRecord.read(filesDir))") }) out += "boot does not read the record"
+        return out
+    }
+
+    @Test
+    fun `ModelRepair boot and serviceStart only read the reconcile retry record`() {
+        val path = "com/seekerclaw/app/config/ModelRepair.kt"
+        val lines = sources.getValue(path)
+        assertEquals(emptyList<String>(), bootRecordOffenders(lines))
+        val at = lines.indexOfFirst { it.contains("when (ReconcileRecord.read(filesDir))") }
+        val mutated = lines.toMutableList().apply { add(at, "        ReconcileRecord.clear(tx, filesDir)") }
+        assertTrue("negative control: a delete in the boot is reported", bootRecordOffenders(mutated).isNotEmpty())
+        val noRead = lines.toMutableList().apply { this[at] = this[at].replace("ReconcileRecord.read(filesDir)", "ReconcileRecord.Read.Absent") }
+        assertTrue("negative control: H4 removed is reported", bootRecordOffenders(noRead).isNotEmpty())
+    }
+
+    @Test
     fun `writer guard rejects the pre-fix first-launch seed outside the lock`() {
         // 09e0614c: `if (!file.exists() && !cps.write(seeded))` straight in init's coroutine.
         val path = "com/seekerclaw/app/state/RuntimeStateStore.kt"
@@ -109,18 +202,30 @@ class ModelSelectionSourceGuardTest {
     private fun applyOffenders(srcs: Map<String, List<String>>): List<String> {
         val out = mutableListOf<String>()
         val memberFun = Regex("""^ {4}(?:(?:private|internal|public|override|suspend|inline)\s+)*fun\s""")
+        // v2.12 (Q16, D12.2): a model key put OR removed, or a whole-prefs clear(), then apply();
+        // and the KTX `edit { }` (which applies) in a member that touches a model key or clears.
+        val modelTouch = Regex("""(putString|remove)\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|edit\(\)\??\..*\bclear\(\)""")
+        val ktxEdit = Regex("""\.edit\s*(\(\s*commit\s*=\s*false\s*\))?\s*\{""")
         for ((path, lines) in srcs) {
             var sig = "<top>"
             var putsModelKey = false
+            var ktxAt = -1
+            fun endMember() {
+                if (ktxAt >= 0 && putsModelKey) out += "$path:${ktxAt + 1}  in  $sig (KTX edit { })"
+                ktxAt = -1
+            }
             lines.forEachIndexed { i, line ->
                 if (memberFun.containsMatchIn(line)) {
+                    endMember()
                     sig = line.trim()
                     putsModelKey = false
                 }
                 if (isComment(line)) return@forEachIndexed
-                if (Regex("""putString\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b""").containsMatchIn(line)) putsModelKey = true
+                if (modelTouch.containsMatchIn(line)) putsModelKey = true
+                if (ktxEdit.containsMatchIn(line) && ktxAt < 0) ktxAt = i
                 if (putsModelKey && line.contains(".apply()")) out += "$path:${i + 1}  in  $sig"
             }
+            endMember()
         }
         return out
     }
@@ -135,6 +240,15 @@ class ModelSelectionSourceGuardTest {
         assertTrue("the normalizer is in the source", at >= 0)
         val mutated = lines.toMutableList().apply { this[at] = "            p.edit().putString(KEY_AUTH_TYPE, normalized).apply()" }
         assertTrue(applyOffenders(mapOf(path to mutated)).isNotEmpty())
+        // v2.12 negative controls: a model-key remove, a clear(), and a KTX edit { } — each with apply.
+        val remove = lines.toMutableList().apply { this[at] = "            p.edit().remove(KEY_MODEL).apply()" }
+        assertTrue("remove(KEY_…) then apply()", applyOffenders(mapOf(path to remove)).isNotEmpty())
+        val clear = lines.toMutableList().apply { this[at] = "            p.edit().clear().apply()" }
+        assertTrue("clear() then apply()", applyOffenders(mapOf(path to clear)).isNotEmpty())
+        val ktx = lines.toMutableList().apply {
+            this[at] = "            p.edit { putString(KEY_AUTH_TYPE, normalized) }"
+        }
+        assertTrue("KTX edit { } of a model key", applyOffenders(mapOf(path to ktx)).isNotEmpty())
     }
 
     @Test
@@ -444,6 +558,66 @@ class ModelSelectionSourceGuardTest {
         assertTrue("the gate is in the source", at >= 0)
         val mutated = activity.toMutableList().apply { this[at] = "                                if (true) {" }
         assertTrue(xaiRestartOffenders(mutated, ui).isNotEmpty())
+    }
+
+    /** v2.12 review M2: `SeekerClawService.restart` starts the agent again only through the guarded start. */
+    private fun restartStartOffenders(svc: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        val code = svc.filterNot { isComment(it) }
+        val restart = code.indexOfFirst { it.contains("fun restart(context: Context") }
+        if (restart < 0) return listOf("restart not found")
+        val body = code.subList(restart, code.size).takeWhile { !it.startsWith("        }") }.joinToString(" ")
+        if (!body.contains("postDelayed({ startFromRestart(appCtx) }")) out += "restart's onStopped does not use the guarded start"
+        if (Regex("""postDelayed\(\{ start\(""").containsMatchIn(body)) out += "restart posts an unguarded start()"
+        val g = code.indexOfFirst { it.contains("private fun startFromRestart(appCtx: Context)") }
+        if (g < 0) return out + "startFromRestart not found"
+        val gBody = code.subList(g, minOf(code.size, g + 12)).joinToString(" ")
+        if (!Regex("""try \{\s*start\(appCtx\)\s*\} catch \(e: Exception\)""").containsMatchIn(gBody)) out += "startFromRestart does not catch the start's failure"
+        return out
+    }
+
+    @Test
+    fun `v2_12 M2 - the restart's foreground-service start can never crash MAIN`() {
+        val path = "com/seekerclaw/app/service/SeekerClawService.kt"
+        val svc = sources.getValue(path)
+        assertEquals(emptyList<String>(), restartStartOffenders(svc))
+        val at = svc.indexOfFirst { it.contains("postDelayed({ startFromRestart(appCtx) }") }
+        assertTrue(at >= 0)
+        val unguarded = svc.toMutableList().apply { this[at] = this[at].replace("startFromRestart(appCtx)", "start(appCtx)") }
+        assertTrue("negative control: the unguarded start is reported", restartStartOffenders(unguarded).isNotEmpty())
+        val g = svc.indexOfFirst { it.contains("start(appCtx)") && !it.contains("startFromRestart") && !it.contains("fun ") }
+        val noCatch = svc.toMutableList().apply { this[g] = "                start(appCtx); return" ; this[g + 1] = "            } finally {" }
+        assertTrue("negative control: a guard without the catch is reported", restartStartOffenders(noCatch).isNotEmpty())
+    }
+
+    /** The `android:process` of [service] in AndroidManifest.xml (parsed as text), or null. */
+    private fun manifestProcess(manifest: String, service: String): String? {
+        val tag = Regex("""<service\b[^>]*>""").findAll(manifest).map { it.value }
+            .firstOrNull { Regex("""android:name="[^"]*\Q$service\E"""").containsMatchIn(it) } ?: return null
+        return Regex("""android:process="([^"]*)"""").find(tag)?.groupValues?.get(1)
+    }
+
+    /** The process suffix ReconcileRecord's liveness check looks for (`context.packageName + "<suffix>"`). */
+    private fun livenessSuffix(rr: List<String>): String? =
+        rr.filterNot { isComment(it) }.firstNotNullOfOrNull { Regex("""context\.packageName \+ "([^"]+)"""").find(it)?.groupValues?.get(1) }
+
+    private fun processOffenders(manifest: String, rr: List<String>): List<String> {
+        val declared = manifestProcess(manifest, ".service.SeekerClawService") ?: return listOf("SeekerClawService has no android:process")
+        val looked = livenessSuffix(rr) ?: return listOf("ReconcileRecord's liveness check names no process")
+        return if (declared == looked) emptyList() else listOf("manifest $declared != liveness check $looked")
+    }
+
+    @Test
+    fun `v2_12 M1 - the liveness check looks for the process the manifest gives SeekerClawService`() {
+        val manifest = listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml").map { File(it) }.first { it.isFile }.readText()
+        val rr = sources.getValue("com/seekerclaw/app/config/ReconcileRecord.kt")
+        assertEquals(":node", manifestProcess(manifest, ".service.SeekerClawService"))
+        assertEquals(emptyList<String>(), processOffenders(manifest, rr))
+        // Negative controls: the service moved to another process; the check renamed.
+        val moved = manifest.replace("android:process=\":node\"", "android:process=\":agent\"")
+        assertTrue(processOffenders(moved, rr).isNotEmpty())
+        val renamed = rr.map { it.replace("context.packageName + \":node\"", "context.packageName + \":worker\"") }
+        assertTrue(processOffenders(manifest, renamed).isNotEmpty())
     }
 
     @Test

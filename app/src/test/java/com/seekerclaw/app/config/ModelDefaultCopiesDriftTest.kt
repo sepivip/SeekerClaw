@@ -20,7 +20,7 @@ import java.io.File
  * behaviour test notices — both values are valid strings.
  *
  * [ModelRegistryDefaultsTest] already pins `RuntimeState().model`. This class pins the rest:
- *  - Kotlin: `ConfigManager` (rawPrefsModelTuple, loadConfig, the PLATFORM.md `aiModel` line),
+ *  - Kotlin: `ConfigManager` (projectPrefsTuple — rawPrefsModelTuple's default — loadConfig, the PLATFORM.md `aiModel` line),
  *    `ConfigClaimImporter` (its per-provider `when`), `RuntimeState`;
  *  - Node: `config.js` (its `_defaultModel` chain) and `runtime-state.js` (`DEFAULTS.model`).
  *
@@ -127,8 +127,9 @@ class ModelDefaultCopiesDriftTest {
                 "update this map and v2.11 §3a's list.",
             sortedMapOf(
                 "config/ConfigClaimImporter.kt" to 3, // openai, xai, else = claude
-                // rawPrefsModelTuple 3 + loadConfig 3 + the PLATFORM.md `aiModel` line 1
-                "config/ConfigManager.kt" to 7,
+                // projectPrefsTuple 2 (rawPrefsModelTuple's default since v2.12 / Q16) + loadConfig 3
+                // + the PLATFORM.md `aiModel` line 1
+                "config/ConfigManager.kt" to 6,
                 "state/RuntimeState.kt" to 1,
             ),
             counts,

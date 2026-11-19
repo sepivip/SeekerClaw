@@ -229,7 +229,9 @@ class XaiOAuthActivity : ComponentActivity() {
                             // would start on xAI with no key. Not synced: no restart, and the user is
                             // told to sign out and sign in again, which re-runs the sync (a restart
                             // alone would not).
-                            val sync = ConfigManager.syncXaiRuntimeAuthType(appCtx)
+                            // v2.12 review m2: this sign-in restarts the agent itself after SYNCED, so a
+                            // reconcile-retry restart noted by the sync's load is dropped (one restart).
+                            val sync = ConfigManager.syncXaiRuntimeAuthType(appCtx, callerRestarts = ConfigManager.isSetupComplete(appCtx))
                             val synced = sync == ConfigManager.XaiAuthSync.SYNCED
                             // Locked decision 5: recovery is restart-only. Restart :node so it
                             // re-reads config.json and clears any in-memory _refreshDead /
@@ -251,10 +253,14 @@ class XaiOAuthActivity : ComponentActivity() {
                                     }
                                 } else {
                                     com.seekerclaw.app.util.LogCollector.append(
-                                        if (sync == ConfigManager.XaiAuthSync.BUSY) {
-                                            "[Config] xAI sign-in saved, agent not restarted: settings busy — sign out, then sign in with Grok again to finish"
-                                        } else {
-                                            "[Config] xAI sign-in saved, agent not restarted: runtime_state.json not saved — free storage, then sign out and sign in with Grok again"
+                                        when (sync) {
+                                            ConfigManager.XaiAuthSync.BUSY ->
+                                                "[Config] xAI sign-in saved, agent not restarted: settings busy — sign out, then sign in with Grok again to finish"
+                                            // v2.12 review m3: an unfinished model selection change, not storage.
+                                            ConfigManager.XaiAuthSync.HELD ->
+                                                "[Config] xAI sign-in saved, agent not restarted: a model selection change is not finished yet — close and reopen the app, then sign out and sign in with Grok again"
+                                            else ->
+                                                "[Config] xAI sign-in saved, agent not restarted: runtime_state.json not saved — free storage, then sign out and sign in with Grok again"
                                         },
                                         com.seekerclaw.app.util.LogLevel.WARN,
                                     )
@@ -264,7 +270,14 @@ class XaiOAuthActivity : ComponentActivity() {
                                 put("status", "success")
                                 // "busy" or "not_saved": the UI says which (XaiOAuth.kt).
                                 if (restartNeeded) {
-                                    put("restartNeeded", if (sync == ConfigManager.XaiAuthSync.BUSY) "busy" else "not_saved")
+                                    put(
+                                        "restartNeeded",
+                                        when (sync) {
+                                            ConfigManager.XaiAuthSync.BUSY -> "busy"
+                                            ConfigManager.XaiAuthSync.HELD -> "held"
+                                            else -> "not_saved"
+                                        },
+                                    )
                                 }
                             })
                         }
