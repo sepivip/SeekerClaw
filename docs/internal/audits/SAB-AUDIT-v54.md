@@ -54,7 +54,7 @@ Delta: every percentage below is against the **audited surface only**.
 
 | Row | Pre | Post | Note |
 |---|---|---|---|
-| Service — `/model` or `/provider` switch didn't take effect (Service Lifecycle) | ⚠️ | ✅ | All 15 new or changed bullets quote the code verbatim. The section's Symptoms covered only "UI new, agent old", not "the app shows something else after a restart". The Fix steps had no path for a pending change: close the app fully, or re-select in Settings, which supersedes the record (H5, `ConfigManager.kt:1212`). |
+| Service — `/model` or `/provider` switch didn't take effect (Service Lifecycle) | ⚠️ | ✅ | All 15 new or changed bullets quote the code verbatim. The section's Symptoms covered only "UI new, agent old", not "the app shows something else after a restart". The Fix steps had no path for a pending change: close the app fully, or re-select in Settings, which supersedes the record (H5, `ConfigManager.kt:1212`). (Superseded: "close the app fully" is now force stop the app or restart the phone, and re-selecting must pick a different model first — see the Correction in the Method notes and Addendum 1.) |
 | Model selection (BAT-1661) — "Couldn't save" entry | ⚠️ | ✅ | The silent toggle flip-back listed the repair and busy-lock causes only. The new `TOGGLE_HELD_REASON` hold was missing (probe 4). |
 | OpenAI model repair (BAT-1661) — the `BOOT_HELD` cross-reference | ✅ | ✅ | "The other read-only start … no repair runs this start" matches `ModelRepair.boot`. A Present or Unavailable record returns `readOnly()` before `plan()`. |
 
@@ -99,7 +99,7 @@ No file under `tools/` is in the diff.
 
 | Probe | Door → target | Pre | Post |
 |---|---|---|---|
-| "I changed provider in chat, the app shows something else after a restart" | BAT-504 door + the Diagnostics door → "/model or /provider Switch Didn't Take Effect". The Symptoms described only "UI new, agent old after an ack", and the Fix steps had no action for a pending change, so the agent would stop at "kill and reopen". Post-fix: the Symptoms name this case and point to the `[Config] Reconcile …` lines. Fix step 5 gives the actions: free storage, close the app from recents and reopen it, or re-select in Settings. Then trust the "Model:" line. | ⚠️ | ✅ |
+| "I changed provider in chat, the app shows something else after a restart" | BAT-504 door + the Diagnostics door → "/model or /provider Switch Didn't Take Effect". The Symptoms described only "UI new, agent old after an ack", and the Fix steps had no action for a pending change, so the agent would stop at "kill and reopen". Post-fix: the Symptoms name this case and point to the `[Config] Reconcile …` lines. Fix step 5 gives the actions: free storage, force stop the app (Settings > Apps > SeekerClaw > Force stop) or restart the phone and reopen it (removing it from Recents does not guarantee a new process), or make a new selection in Settings (a different model first). Then trust the "Model:" line. | ⚠️ | ✅ |
 | "The Logs screen says a model selection change is not finished yet" | The Diagnostics door → two verbatim quotes. Pre-fix the advice was "open the app". That is wrong when the app process is still alive and tainted, and nothing explained a repeat with no other line. | ⚠️ | ✅ |
 | "The agent restarted by itself" | The Diagnostics door → the "expected on the Logs screen" list (Service Lifecycle). Pre-fix it explained only the Watchdog and crash-loop restarts. The reconcile restart line existed only inside the `/model` section, so an agent without the exact line would answer "Watchdog". Post-fix the list has the reconcile restart line, the `/model` bullet calls it the "restarted by itself" answer, and it gives the at-most-once rule. | ⚠️ | ✅ |
 | "The Extended Thinking switch flips back" | Reasoning block → "/think on Toggled…" → "Couldn't save" entry. The diagnosis covered the repair, the incomplete record and the busy lock, not an interrupted model change. Post-fix it names that cause, what the Logs screen usually shows, and the two actions. | ⚠️ | ✅ |
@@ -126,7 +126,7 @@ The record and the restart are provider-neutral (`RuntimeStateStore.isValidPair`
   - Rewrote the `commit_ok` sentence of the `rolled back` bullet.
   - `not confirmed on disk` gains the silent-confirm + restart note.
   - The restart bullet gains the Completed path, the at-most-once scope and the "restarted by itself" note.
-  - `BOOT_HELD`: close from recents when the app was already open, the no-line case, and re-select in Settings.
+  - `BOOT_HELD`: force stop the app (or restart the phone) when the app was already open — removing it from Recents does not guarantee a new process — the no-line case, and a new selection in Settings (a different model first).
   - `XAI_SYNC_HELD`: the following storage-worded lines are this hold, and the "finished" condition is restated.
   - New Fix step 5 for a change that is not finished.
 - "Couldn't save" entry: the interrupted-change cause of the silent toggle flip-back, with what the Logs screen shows and the two actions.
