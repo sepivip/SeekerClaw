@@ -61,11 +61,11 @@ internal const val XAI_RESTART_NEEDED_NOT_SAVED =
  * finished yet, so the agent's settings were not updated and it was not restarted.
  */
 internal const val XAI_RESTART_NEEDED_HELD =
-    "Signed in, but a model or provider change is still being finished, so the agent was not restarted. Close and reopen the app, then sign out and sign in with Grok again to finish."
+    "Signed in, but a model or provider change is still being finished, so the agent was not restarted. Force stop the app (Settings > Apps > SeekerClaw) or restart the phone, then sign out and sign in with Grok again."
 
 /** BAT-1661 v2.12 (review m3): the sign-out was saved, but an interrupted model selection change is not finished yet. */
 internal const val XAI_SIGN_OUT_HELD =
-    "Signed out, but a model or provider change is still being finished, so the agent's settings were not updated. Close and reopen the app, then sign in again or choose API Key for xAI, before restarting the agent."
+    "Signed out, but a model or provider change is still being finished, so the agent's settings were not updated. Force stop the app (Settings > Apps > SeekerClaw) or restart the phone, then sign in again or choose API Key for xAI."
 
 /** BAT-1661: the sign-out was saved but the agent's settings were busy and were not updated. */
 internal const val XAI_SIGN_OUT_BUSY =

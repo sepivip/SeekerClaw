@@ -514,6 +514,8 @@ object ConfigManager {
         // stages). Decrypts on the store's IO scope in production.
         RuntimeStateStore.rederiveOpenAIKeyUsable { keyUsableOf(prefs(context)) }
         RuntimeStateStore.refreshDisplay()
+        // Fold 5′: a selection may have invalidated a restart notice; the UI re-reads it after release.
+        context.filesDir?.toPath()?.let { RestartNotice.refreshAsync(it) }
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {
@@ -1210,6 +1212,8 @@ object ConfigManager {
         // best-effort; a leftover classifies Superseded or Completed at the next resolve). Unrelated
         // saves never write the selection, so they leave it alone.
         if (isSelection) ReconcileRecord.clearSuperseded(tx, context.filesDir.toPath())
+        // Fold 5′: ...and any "restart to apply" notice for an older selection (same transaction).
+        if (isSelection) RestartNotice.invalidate(tx, context.filesDir.toPath())
         // Notify the OTHER process — main-process UI relies on this
         // to refresh after :node-process writes (e.g. /provider
         // Telegram switch's service-start reconcile). Same-process
@@ -1278,12 +1282,19 @@ object ConfigManager {
      */
     private fun loadConfigLocked(context: Context): AppConfig {
         if (ProcessRole.isNode) return loadConfigUnchecked(context, null, null)
-        val r = ModelSelectionLock.transaction(LOAD_LOCK_TIMEOUT_MS) { tx -> loadConfigUnchecked(context, tx, null) }
-        // BAT-1661 v2.12 fold 5: a finished reconcile retry may restart a running agent — scheduled
-        // only now, with the transaction released.
-        ReconcileRecord.AgentRestart.flush(context.applicationContext ?: context)
+        // BAT-1661 v2.12 fold 5′: this load's own resolve outcome; a finished change may have saved a
+        // restart notice, which the UI re-reads only after THIS transaction is released. Nothing here
+        // stops or starts the agent.
+        var owned: ReconcileRecord.Outcome? = null
+        val r = try {
+            ModelSelectionLock.transaction(LOAD_LOCK_TIMEOUT_MS) { tx ->
+                loadConfigOut(context, tx, null, bootFiles = false, onResolved = { owned = it })
+            }
+        } finally {
+            RestartNotice.afterRelease(context.filesDir?.toPath(), owned)
+        }
         val config = when (r) {
-            is ModelSelectionLock.Result.Acquired -> r.value
+            is ModelSelectionLock.Result.Acquired -> r.value.config
             is ModelSelectionLock.Result.Busy -> loadConfigUnchecked(context, null, null)
         }
         // BAT-1661 (round-10 gap c): the display's key flag, derived AFTER the model transaction is
@@ -1385,14 +1396,21 @@ object ConfigManager {
         bootFiles: Boolean = false,
     ): AppConfig = loadConfigOut(context, tx, approved, bootFiles).config
 
-    /** [loadConfigUnchecked]'s result, and whether a reconcile retry record held the selection work (v2.12 fold 1). */
-    private class LoadOut(val config: AppConfig, val held: Boolean)
+    /**
+     * [loadConfigUnchecked]'s result. [held]: a reconcile retry record is unresolved after this load —
+     * it held the selection work (fold 1), or this load's own reconcile left one (its runtime_state
+     * write failed; CodeRabbit 4628273764). [outcome]: this load's resolve, whose restart request the
+     * caller owns and schedules after its transaction (CodeRabbit 4628273797).
+     */
+    private class LoadOut(val config: AppConfig, val held: Boolean, val outcome: ReconcileRecord.Outcome?)
 
     private fun loadConfigOut(
         context: Context,
         tx: ModelSelectionLock.Tx?,
         approved: ModelRepair.ApprovedTarget?,
         bootFiles: Boolean,
+        /** Called with this load's resolve outcome as soon as it is known (the caller owns its restart). */
+        onResolved: (ReconcileRecord.Outcome) -> Unit = {},
     ): LoadOut {
         tx?.requireOpen()
         // BAT-1155 §4: adopt the xAI OAuth record into XaiOAuthTokenStore
@@ -1408,10 +1426,12 @@ object ConfigManager {
         // no normaliser commit, no reconcile commit, no runtime selection write, no intent mutation,
         // and the unresolved record is never replaced: [selTx] is null from here on (compute-only).
         var held = false
-        if (approved == null && tx != null && !ProcessRole.isNode && RuntimeStateStore.isInitialized) {
+        var resolved: ReconcileRecord.Outcome? = null
+        val recordOwner = approved == null && tx != null && !ProcessRole.isNode && RuntimeStateStore.isInitialized
+        if (recordOwner) {
             val w0 = prefsForWrite(context, "ReconcileRecord.resolve")
             if (w0 != null) {
-                val out = ReconcileRecord.resolve(tx, context.filesDir.toPath(), MainPrefs.view(w0))
+                val out = ReconcileRecord.resolve(tx!!, context.filesDir.toPath(), MainPrefs.view(w0))
                 when {
                     out is ReconcileRecord.Outcome.Recovered -> {
                         postConfigVersionBump()
@@ -1419,7 +1439,8 @@ object ConfigManager {
                     }
                     out.holds -> held = true
                 }
-                ReconcileRecord.AgentRestart.note(out)
+                resolved = out
+                onResolved(out)
             }
         }
         val selTx = if (held) null else tx
@@ -1729,7 +1750,17 @@ object ConfigManager {
             merged
         }
         // BAT-1661: what the caller loaded — saveConfig compares the edited tuple to it.
-        return LoadOut(reconciled.copy(loadedModelTuple = ModelTuple(reconciled.provider, reconciled.authType, reconciled.model)), held)
+        // CodeRabbit 4628273764: a record this load's own reconcile left (written, then its runtime_state
+        // write failed) is as unresolved as a held one — the callers must not treat the stores as in step.
+        val unresolved = held || (recordOwner && ReconcileRecord.read(context.filesDir.toPath()).let {
+            it is ReconcileRecord.Read.Present || it is ReconcileRecord.Read.Unavailable
+        })
+        // Fold 5′ chokepoint + self-heal (Codex 90fed4d6 rule 3): after this load's selection work —
+        // including any reconcile commit — a "restart to apply" notice whose selection neither prefs
+        // nor runtime_state holds any more (a chat `/provider`, a repaired model) goes, in THIS
+        // transaction. Never while held (fold 1: compute-only) or with a record still unresolved.
+        if (recordOwner && !unresolved) RestartNotice.invalidateIfOrphaned(tx!!, context.filesDir.toPath(), p)
+        return LoadOut(reconciled.copy(loadedModelTuple = ModelTuple(reconciled.provider, reconciled.authType, reconciled.model)), unresolved, resolved)
     }
 
     /** Always posted, never synchronous: a load may run inside a composition that reads it. */
@@ -2547,12 +2578,13 @@ object ConfigManager {
     }
 
     /**
-     * BAT-1155: decrypt a base64 Keystore ciphertext blob from
-     * [XaiOAuthTokenStore]. Returns "" for a blank input or any decrypt
-     * failure (never throws, never logs the cleartext).
+     * Test seam: opens an xAI ciphertext without the Keystore (JVM tests). Production NEVER assigns it
+     * (ModelSelectionSourceGuardTest pins that no main source does); it stays null.
      */
+    @Volatile internal var xaiCiphertextOpenerForTest: ((String) -> String)? = null
+
     /**
-     * Decrypt a stored xAI OAuth ciphertext. Returns the plaintext, `""` for a
+     * BAT-1155: decrypt a stored xAI OAuth ciphertext (a base64 Keystore blob from [XaiOAuthTokenStore]). Returns the plaintext, `""` for a
      * BLANK ciphertext (a legitimately absent field), or `null` when a NON-blank
      * ciphertext FAILS to decrypt (corruption / Keystore key change). Codex major-1:
      * the caller MUST distinguish these — a decrypt failure of a required token is
@@ -2562,6 +2594,7 @@ object ConfigManager {
     private fun decryptXaiCiphertext(enc: String): String? {
         if (enc.isBlank()) return ""
         return try {
+            xaiCiphertextOpenerForTest?.let { return it(enc) }
             KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decrypt xAI OAuth field", e)
@@ -2741,12 +2774,6 @@ object ConfigManager {
         context: Context,
         lockTimeoutMs: Long = XAI_SYNC_LOCK_TIMEOUT_MS,
         attempts: Int = XAI_SYNC_ATTEMPTS,
-        /**
-         * v2.12 review m2: the caller restarts the agent itself after a [XaiAuthSync.SYNCED] result
-         * (the xAI sign-in). A reconcile-retry restart this sync's load noted is then dropped — one
-         * restart, not two. Otherwise it is flushed as usual (fold 5).
-         */
-        callerRestarts: Boolean = false,
     ): XaiAuthSync {
         // BAT-1157: the store was just written, so an earlier "done" / KEEP_LEGACY verdict is stale;
         // the reload below re-runs the confirmed sweep of any legacy copy.
@@ -2755,40 +2782,50 @@ object ConfigManager {
         if (!RuntimeStateStore.isInitialized) return XaiAuthSync.SYNCED
         var busyReason = ""
         var held = false
+        var owned: ReconcileRecord.Outcome? = null
         repeat(attempts.coerceAtLeast(1)) {
             val r = try {
                 // BAT-1661: a runtime_state write, so it runs under the model-selection lock. Both
                 // callers are on Dispatchers.IO, so it waits longer than a UI save.
                 ModelSelectionLock.transaction(lockTimeoutMs) { tx ->
-                    val out = loadConfigOut(context, tx, null, bootFiles = false)
+                    val out = loadConfigOut(context, tx, null, bootFiles = false, onResolved = { owned = it })
                     val reloaded = out.config
-                    if (reloaded.provider != "xai") return@transaction true
-                    // BAT-1661 v2.12 fold 1: an unresolved reconcile retry record holds every
-                    // automatic runtime selection write, this one included.
+                    // BAT-1661 v2.12 fold 1 (CodeRabbit 4628273773/4628273764): an unresolved reconcile
+                    // retry record — held at the start, or left by this load's own reconcile — holds
+                    // every automatic runtime selection write, this one included. Checked BEFORE any
+                    // success return: the loaded (projected) provider proves nothing about the file.
                     if (out.held) {
                         LogCollector.append(ReconcileRecord.XAI_SYNC_HELD, LogLevel.WARN)
                         held = true
                         return@transaction false
                     }
-                    val auth = runtimeAuthTypeFor(reloaded)
+                    // Whether an auth sync is needed is decided by runtime_state.json ON DISK (what Node
+                    // reads first): only an xai record there carries an xai auth mode to keep in step.
+                    val onDisk = (RuntimeStateFile.read(context.filesDir.toPath()) as? RuntimeStateFile.Read.Present)?.tuple
+                    if (onDisk == null || onDisk.provider != "xai") return@transaction true
+                    // The xAI selection's auth: the loaded config's when it is xai; otherwise the
+                    // record's own (its H5 guard image is the OAuth selection, as for bootSelection).
+                    val auth = if (reloaded.provider == "xai") {
+                        runtimeAuthTypeFor(reloaded)
+                    } else {
+                        val selected = if (isXaiGuardImage(context.filesDir.toPath(), reloaded.provider, reloaded.authType, onDisk.provider, onDisk.authType)) "oauth" else onDisk.authType
+                        runtimeAuthTypeForStored("xai", selected)
+                    }
                     RuntimeStateStore.updateExisting(tx) { current ->
                         if (current.provider == "xai" && current.authType != auth) current.copy(authType = auth) else null
                     } != com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.FAILED
                 }
             } catch (e: Exception) {
+                // The transaction is released here: the UI re-reads a notice this load's resolve saved.
+                RestartNotice.afterRelease(context.filesDir?.toPath(), owned)
                 LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
                 return XaiAuthSync.NOT_SAVED
             }
             when (r) {
                 is ModelSelectionLock.Result.Acquired -> {
-                    // v2.12 fold 5 + review m2: a reconcile retry this load finished may restart a
-                    // running agent — after the transaction, and only when the caller does not
-                    // restart it itself right after.
-                    if (r.value && callerRestarts) {
-                        ReconcileRecord.AgentRestart.discardPending()
-                    } else {
-                        ReconcileRecord.AgentRestart.flush(context.applicationContext ?: context)
-                    }
+                    // v2.12 fold 5′: this sync's own resolve outcome; the UI re-reads a notice it saved,
+                    // after the transaction. The sign-in keeps its own restart policy (BAT-1716).
+                    RestartNotice.afterRelease(context.filesDir?.toPath(), owned)
                     if (r.value) return XaiAuthSync.SYNCED
                     if (held) return XaiAuthSync.HELD
                     LogCollector.append("[Config] xAI OAuth runtime_state sync failed: runtime_state.json not written", LogLevel.WARN)
@@ -3058,6 +3095,7 @@ object ConfigManager {
         // must not be overwritten by a constant "no key" noted later).
         RuntimeStateStore.rederiveOpenAIKeyUsable { keyUsableOf(prefs(context)) }
         RuntimeStateStore.refreshDisplay()
+        context.filesDir?.toPath()?.let { RestartNotice.refreshAsync(it) } // fold 5′: after release
         out
     }
 
@@ -3105,6 +3143,7 @@ object ConfigManager {
         // record (checked, best-effort). Outside the OpenAI and xAI store locks. A Partial or Failed
         // reset leaves prefs on the change, so the record stays for the next resolve (finding I1).
         if (cleared) ReconcileRecord.clearSuperseded(tx, context.filesDir.toPath())
+        if (cleared) RestartNotice.invalidate(tx, context.filesDir.toPath()) // fold 5′
         bumpConfigVersionOnMain()
         return if (cleared) {
             ResetResult.Done

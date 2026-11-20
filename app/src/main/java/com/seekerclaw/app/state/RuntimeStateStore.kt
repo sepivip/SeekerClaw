@@ -257,15 +257,18 @@ object RuntimeStateStore {
      *  - Superseded, Unproven, Corrupt — nothing is seeded; the next locked load deals with it.
      */
     internal fun seedIfMissing(filesDir: File, sp: SharedPreferences, write: (RuntimeState) -> Boolean): Boolean {
-        var recovered = false
-        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { tx ->
-            if (File(filesDir, FILE_NAME).exists()) return@transaction true
-            seedInTx(tx, filesDir, sp, write, onRecovered = { recovered = true })
+        var outcome: com.seekerclaw.app.config.ReconcileRecord.Outcome? = null
+        val r = try {
+            ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { tx ->
+                if (File(filesDir, FILE_NAME).exists()) return@transaction true
+                seedInTx(tx, filesDir, sp, write, onOutcome = { outcome = it })
+            }
+        } finally {
+            // v2.12 H3 (Q16): a recovery inside the seed is signalled, and the restart notice it may have
+            // saved re-read for the UI (fold 5′), only once the transaction is released.
+            if (outcome is com.seekerclaw.app.config.ReconcileRecord.Outcome.Recovered) appContext?.let { com.seekerclaw.app.config.ConfigManager.signalConfigChanged(it) }
+            com.seekerclaw.app.config.RestartNotice.afterRelease(filesDir.toPath(), outcome)
         }
-        // v2.12 H3 (Q16): a recovery inside the seed is signalled, and may restart a running agent
-        // (fold 5), only now that the transaction is released.
-        if (recovered) appContext?.let { com.seekerclaw.app.config.ConfigManager.signalConfigChanged(it) }
-        com.seekerclaw.app.config.ReconcileRecord.AgentRestart.flush(appContext)
         return when (r) {
             is ModelSelectionLock.Result.Acquired -> r.value
             is ModelSelectionLock.Result.Busy -> {
@@ -284,8 +287,8 @@ object RuntimeStateStore {
         filesDir: File,
         sp: SharedPreferences,
         write: (RuntimeState) -> Boolean,
-        onRecovered: () -> Unit = {},
-        onHeld: () -> Unit = {},
+        /** This call's resolve outcome, for the caller to signal and schedule after its transaction. */
+        onOutcome: (com.seekerclaw.app.config.ReconcileRecord.Outcome) -> Unit = {},
     ): Boolean {
         tx.requireOpen()
         val dir = filesDir.toPath()
@@ -293,15 +296,16 @@ object RuntimeStateStore {
         // runtime_state, so the file is checked again after it (then nothing is seeded). While the
         // record is Deferred or Failed the seed is held (fold 1): nothing is written.
         val out = com.seekerclaw.app.config.ReconcileRecord.resolve(tx, dir, MainPrefs.view(sp))
-        com.seekerclaw.app.config.ReconcileRecord.AgentRestart.note(out)
-        if (out is com.seekerclaw.app.config.ReconcileRecord.Outcome.Recovered) onRecovered()
+        onOutcome(out)
         if (out.holds) {
             Log.i(TAG, "first-launch seed held: a model selection change is being finished")
-            onHeld()
             return true
         }
         if (com.seekerclaw.app.config.RuntimeStateFile.read(dir) is com.seekerclaw.app.config.RuntimeStateFile.Read.Present) return true
         return when (val intent = com.seekerclaw.app.config.ModelRepair.readIntent(dir)) {
+            // No restart-notice chokepoint here: the seed runs only while runtime_state holds no
+            // record and writes runtime_state only, never prefs. A notice is current then only
+            // through prefs, which the seed leaves as they are, so a seed can never orphan one.
             com.seekerclaw.app.config.ModelRepair.IntentRead.Absent -> write(seedNoIntent(sp, dir))
             is com.seekerclaw.app.config.ModelRepair.IntentRead.Present -> seedFromIntent(tx, dir, sp, intent.intent)
             is com.seekerclaw.app.config.ModelRepair.IntentRead.Corrupt -> {
@@ -392,7 +396,14 @@ object RuntimeStateStore {
      * ([syncPrefsFromFile] `onlyTo`). Otherwise mirroring would overwrite the retired prefs model
      * the repair decides from (CodeRabbit on f943231d). The display still follows the record.
      */
-    internal fun mirrorFromDisk(tx: ModelSelectionLock.Tx, sp: SharedPreferences): Boolean {
+    internal fun mirrorFromDisk(tx: ModelSelectionLock.Tx, sp: SharedPreferences): Boolean = mirrorFromDiskOut(tx, sp).first
+
+    /** [mirrorFromDisk], with this call's resolve outcome (its restart request is the caller's to schedule). */
+    internal fun mirrorFromDiskOut(
+        tx: ModelSelectionLock.Tx,
+        sp: SharedPreferences,
+        onOutcome: (com.seekerclaw.app.config.ReconcileRecord.Outcome) -> Unit = {},
+    ): Pair<Boolean, com.seekerclaw.app.config.ReconcileRecord.Outcome?> {
         tx.requireOpen()
         val dir = filesDir?.toPath()
         // BAT-1661 v2.12 H2 (Q16): an interrupted reconcile is finished FIRST. This is the cold-start
@@ -400,18 +411,19 @@ object RuntimeStateStore {
         // prefs already hold. Recovered: mirror the file as re-read after the recovery (a no-op for
         // prefs) and report a change so the caller signals. Deferred / Failed: hold — the display
         // follows the file, prefs are not written.
-        var recovered = false
+        var outcome: com.seekerclaw.app.config.ReconcileRecord.Outcome? = null
         if (dir != null) {
             val out = com.seekerclaw.app.config.ReconcileRecord.resolve(tx, dir, MainPrefs.view(sp))
-            com.seekerclaw.app.config.ReconcileRecord.AgentRestart.note(out)
+            outcome = out
+            onOutcome(out)
             if (out.holds) {
                 store?.readOrNull()?.let { if (isValidPair(it.provider, it.authType)) publish(it) }
                 Log.i(TAG, "prefs mirror held: a model selection change is being finished")
-                return false
+                return false to out
             }
-            recovered = out is com.seekerclaw.app.config.ReconcileRecord.Outcome.Recovered
         }
-        return mirrorRecordLocked(tx, sp, dir) || recovered
+        val recovered = outcome is com.seekerclaw.app.config.ReconcileRecord.Outcome.Recovered
+        return (mirrorRecordLocked(tx, sp, dir) || recovered) to outcome
     }
 
     /** [mirrorFromDisk] after the retry record is settled: the record on disk now, never a fallback. */
@@ -451,7 +463,10 @@ object RuntimeStateStore {
         // IS the OAuth selection, so `oauth` is mirrored.
         val guardImage = curProvider == "xai" && curAuth != null && dir != null &&
             com.seekerclaw.app.config.ConfigManager.isXaiGuardImage(dir, curProvider, curAuth, onDisk.provider, onDisk.authType)
-        return onObserved(if (guardImage) onDisk.copy(authType = "oauth") else onDisk, sp)
+        val mirrored = onObserved(if (guardImage) onDisk.copy(authType = "oauth") else onDisk, sp)
+        // Fold 5′ chokepoint: the mirror committed a selection; a notice neither store holds any more goes.
+        if (mirrored && dir != null) com.seekerclaw.app.config.RestartNotice.invalidateIfOrphaned(tx, dir, MainPrefs.view(sp))
+        return mirrored
     }
 
     /**
@@ -484,9 +499,16 @@ object RuntimeStateStore {
         // model-selection lock, and mirrors the file as it is NOW (re-read under the lock), not
         // the possibly older emission — a stale emission must never revert a newer save. This
         // runs on the collector's IO thread, so it may wait longer than a UI save would.
-        val r = ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { tx -> mirrorFromDisk(tx, sp) }
+        var owned: com.seekerclaw.app.config.ReconcileRecord.Outcome? = null
+        val r = try {
+            ModelSelectionLock.transaction(MIRROR_LOCK_TIMEOUT_MS) { tx -> mirrorFromDiskOut(tx, sp) { owned = it } }
+        } finally {
+            // v2.12 fold 5′: the UI re-reads a restart notice THIS mirror's resolve may have saved, after
+            // its own transaction ended. Nothing here stops or starts the agent.
+            com.seekerclaw.app.config.RestartNotice.afterRelease(filesDir?.toPath(), owned)
+        }
         val applied = when (r) {
-            is ModelSelectionLock.Result.Acquired -> r.value
+            is ModelSelectionLock.Result.Acquired -> r.value.first
             is ModelSelectionLock.Result.Busy -> {
                 // Display still follows the file; prefs catch up on the next emission, or on the
                 // next locked load (ConfigManager syncs prefs from the file before reconciling).
@@ -498,9 +520,6 @@ object RuntimeStateStore {
         if (applied) {
             appContext?.let { com.seekerclaw.app.config.ConfigManager.signalConfigChanged(it) }
         }
-        // v2.12 fold 5: a reconcile retry the mirror finished may restart a running agent — after the
-        // transaction, coalesced per record.
-        com.seekerclaw.app.config.ReconcileRecord.AgentRestart.flush(appContext)
     }
 
     /**
@@ -789,9 +808,6 @@ object RuntimeStateStore {
         return store?.write(value) ?: false
     }
 
-    /** Set when the toggle's seed finished a reconcile retry ([updateInOwnTransaction] signals it). */
-    @Volatile private var toggleRecovered = false
-
     /** v2.12 SD2: why a toggle failed while a reconcile retry record is held. */
     internal const val TOGGLE_HELD_REASON = "a model selection change is being finished"
 
@@ -858,9 +874,9 @@ object RuntimeStateStore {
      * carried into a different Custom identity —
      *  - [signatureKnown] (the reconcile has the loaded config): a signature other than the stored one
      *    resets the override and stores the new signature;
-     *  - not known (recovery, which decrypts nothing under the lock): only the same Custom model the
-     *    record already holds keeps them; any other identity resets the override, and the signature
-     *    is cleared for the next save to recompute.
+     *  - not known (recovery, which decrypts nothing under the lock): the identity can never be
+     *    proven, so on Custom the override is ALWAYS reset and the signature cleared for the next save
+     *    to recompute (Codex finding 4, a5c902b6). The reasoning toggles are kept either way.
      */
     internal fun selectionPatch(
         base: RuntimeState,
@@ -876,14 +892,14 @@ object RuntimeStateStore {
             val changed = base.customConfigSignature != signature
             return sel.copy(customEchoReasoning = if (changed) false else base.customEchoReasoning, customConfigSignature = signature)
         }
-        // v2.12 review m4 — DELIBERATELY stricter than the reconcile: recovery cannot compute the Custom
-        // signature (it would decrypt the Custom headers under the model transaction), so it cannot
-        // prove an identity unchanged. Only the very Custom model the record already holds keeps the
-        // override; e.g. a switch back from another provider to the same Custom gateway, which the
-        // reconcile keeps (equal signature), resets it here. Erring this way only turns an echo
-        // override off; it never carries one into a different gateway.
-        val sameIdentity = base.provider == "custom" && base.model == model
-        return if (sameIdentity) sel else sel.copy(customEchoReasoning = false, customConfigSignature = null)
+        // v2.12 review m4 + Codex finding 4 (a5c902b6) — DELIBERATELY stricter than the reconcile. The
+        // Custom identity is the whole signature: model, base URL, format AND header keys. The same
+        // model id is no proof of the same gateway (two gateways can serve one model id), and recovery
+        // cannot compute the signature (it would decrypt the Custom headers under the model
+        // transaction). So it never proves the identity: on Custom it always resets an enabled echo
+        // override and clears the signature for the next save to recompute. Erring this way only turns
+        // an echo override off; it never carries one into a different gateway.
+        return sel.copy(customEchoReasoning = false, customConfigSignature = null)
     }
 
     /**
@@ -923,12 +939,16 @@ object RuntimeStateStore {
      * failed. [IllegalArgumentException] from [transform] propagates, as from [update].
      */
     fun updateInOwnTransaction(transform: (RuntimeState) -> RuntimeState): Boolean {
-        toggleRecovered = false
-        val r = ModelSelectionLock.transaction { tx -> updateOrSeedLocked(tx, transform) }
-        // v2.12 H3: a recovery inside the toggle's seed is signalled (and may restart a running
-        // agent, fold 5) only after the transaction is released, as in seedIfMissing.
-        if (toggleRecovered) appContext?.let { com.seekerclaw.app.config.ConfigManager.signalConfigChanged(it) }
-        com.seekerclaw.app.config.ReconcileRecord.AgentRestart.flush(appContext)
+        // CodeRabbit 4628273817: this call's own resolve outcome, local to the call (as seedIfMissing).
+        var outcome: com.seekerclaw.app.config.ReconcileRecord.Outcome? = null
+        val r = try {
+            ModelSelectionLock.transaction { tx -> updateOrSeedLocked(tx, transform) { outcome = it } }
+        } finally {
+            // v2.12 H3: a recovery inside the toggle's seed is signalled, and its restart scheduled,
+            // only after the transaction is released — also when the toggle's transform threw after it.
+            if (outcome is com.seekerclaw.app.config.ReconcileRecord.Outcome.Recovered) appContext?.let { com.seekerclaw.app.config.ConfigManager.signalConfigChanged(it) }
+            com.seekerclaw.app.config.RestartNotice.afterRelease(filesDir?.toPath(), outcome)
+        }
         return r is ModelSelectionLock.Result.Acquired && r.value
     }
 
@@ -944,7 +964,11 @@ object RuntimeStateStore {
      * `{"reasoningEnabled":true,"reasoningDisplayInChat":true}`) keeps every other field it holds:
      * the record is decoded leniently and only provider / authType / model are replaced.
      */
-    private fun updateOrSeedLocked(tx: ModelSelectionLock.Tx, transform: (RuntimeState) -> RuntimeState): Boolean {
+    private fun updateOrSeedLocked(
+        tx: ModelSelectionLock.Tx,
+        transform: (RuntimeState) -> RuntimeState,
+        onOutcome: (com.seekerclaw.app.config.ReconcileRecord.Outcome) -> Unit = {},
+    ): Boolean {
         tx.requireOpen()
         val s = store ?: return false
         val dir = filesDir ?: return false
@@ -956,7 +980,7 @@ object RuntimeStateStore {
                 s.write(base.copy(provider = v.provider, authType = v.authType, model = v.model))
             }
             var held = false
-            if (!seedInTx(tx, dir, sp, seedWrite, onRecovered = { toggleRecovered = true }, onHeld = { held = true })) return false
+            if (!seedInTx(tx, dir, sp, seedWrite, onOutcome = { out -> held = out.holds; onOutcome(out) })) return false
             if (held) {
                 // v2.12 SD2: the reason is the unfinished selection change, not the model repair.
                 Log.w(TAG, "toggle not saved: $TOGGLE_HELD_REASON")

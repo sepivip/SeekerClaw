@@ -112,7 +112,11 @@ class LinkHygieneTest {
 
     /** BAT-1661 v2.12 (Q16): the reconcile retry record and its .tmp name, spelled out. */
     private fun missingRecordPaths(list: List<Path>): List<String> =
-        listOf("model_reconcile_record.json", "model_reconcile_record.json.tmp").filter { files.resolve(it) !in list }
+        listOf(
+            "model_reconcile_record.json", "model_reconcile_record.json.tmp",
+            // v2.12 fold 5′: the "restart to apply" notice.
+            "model_restart_notice.json", "model_restart_notice.json.tmp",
+        ).filter { files.resolve(it) !in list }
 
     @Test
     fun criticalListHasTheReconcileRetryRecord() {
@@ -120,6 +124,8 @@ class LinkHygieneTest {
         // Negative control: the list without them is reported.
         val without = critical().filterNot { it.fileName.toString().startsWith("model_reconcile_record") }
         assertEquals(2, missingRecordPaths(without).size)
+        val noNotice = critical().filterNot { it.fileName.toString().startsWith("model_restart_notice") }
+        assertEquals(2, missingRecordPaths(noNotice).size)
     }
 
     @Test

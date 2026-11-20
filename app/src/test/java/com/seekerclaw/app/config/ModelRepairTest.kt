@@ -433,9 +433,17 @@ class ModelRepairTest {
         val i = ModelRepair.decide(snap("gpt-5.4", "gpt-5.4", present("gpt-5.4")))!!
         listOf("gpt-5.4" to "gpt-5.4", "gpt-6.1-sol" to "gpt-5.4", "gpt-5.4" to "gpt-6.1-sol", "gpt-6.1-sol" to "gpt-6.1-sol")
             .forEach { (rt, ov) ->
-                val c = classify(i, snap("gpt-5.4", rt, present(ov, provider = "openai")))
+                // The captured overlay had no provider key: unchanged scope keys.
+                val c = classify(i, snap("gpt-5.4", rt, present(ov)))
                 assertEquals("runtime=$rt overlay=$ov", ModelRepair.IntentClass.Pending, c)
             }
+        // The repair's own write: the target model, then its scope's provider key (the boot publish).
+        listOf("gpt-5.4", "gpt-6.1-sol").forEach { rt ->
+            assertEquals("runtime=$rt, own publish", ModelRepair.IntentClass.Pending, classify(i, snap("gpt-5.4", rt, present("gpt-6.1-sol", provider = "openai"))))
+        }
+        // CodeRabbit 4628273784: a scope key added next to the OLD (captured) model is not the repair's
+        // write — the repair writes the target first — so it is a newer selection.
+        assertTrue(classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-5.4", provider = "openai"))) is ModelRepair.IntentClass.Superseded)
     }
 
     @Test
@@ -783,7 +791,9 @@ class ModelRepairTest {
         writeOverlay(overlayWithModel("gpt-6-astra", provider = "openai"))
         val a = anchor()
         boot()
-        assertTrue(logsSince(a).any { it.startsWith("[ModelRepair] pending repair cancelled: agent_settings.json holds a newer model") })
+        // The overlay gained a provider key next to a third model: a newer selection (since CodeRabbit
+        // 4628273784 the scope keys are checked first, so the reason names them).
+        assertTrue(logsSince(a).any { it.startsWith("[ModelRepair] pending repair cancelled: agent_settings.json holds a newer") })
         // The fresh decision keeps the user's astra (the effective overlay model).
         assertAllOn("gpt-6-astra")
     }

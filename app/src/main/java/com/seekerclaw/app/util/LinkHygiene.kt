@@ -556,6 +556,8 @@ class LinkHygiene(
             "model_selection.lock", "model_repair_intent.json", "model_repair_intent.json.tmp",
             // BAT-1661 v2.12 (Q16): the reconcile retry record (written via .kwrite/, same rule).
             "model_reconcile_record.json", "model_reconcile_record.json.tmp",
+            // v2.12 fold 5′: the "restart to apply" notice (same rule).
+            "model_restart_notice.json", "model_restart_notice.json.tmp",
         )
 
         /** Directories Node core reads; walked first and completely in step 2. */

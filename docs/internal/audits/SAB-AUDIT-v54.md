@@ -9,7 +9,7 @@
 > - Read all of `ReconcileRecord.kt` and every hunk of the main-source diff. Read the call sites of `resolve`, `write`, `clearSuperseded`, `AgentRestart.note/flush`, `BOOT_HELD`, `XAI_SYNC_HELD`, `APPLY_MODEL_KEYS` and `TOGGLE_HELD_REASON` in context.
 > - Grepped the diff for added `LogLevel.(ERROR|WARN)`, `LogCollector.append` and `Log.(w|e|i)` lines. Each hit was read in context. No JS log site is in the diff.
 > - Grepped every DIAGNOSTICS quote of a new or changed line with `grep -F` against `app/src/main/java`. Interpolated lines were checked as their fixed prefix and suffix. Every quote matches.
-> - Traced the restart path (`AgentRestart.run` → `SeekerClawService.restart` → `stopWithDurability`), the taint (`MainPrefs.GuardedEditor.commit` and `commitOrRestoreLocked` both set it, and only `ReconcileRecord.resolveLocked` reads it), and the process layout (`AndroidManifest.xml`: the service runs in `:node`, so MAIN dies when the task is swiped away).
+> - Traced the restart path (`AgentRestart.run` → `SeekerClawService.restart` → `stopWithDurability`), the taint (`MainPrefs.GuardedEditor.commit` and `commitOrRestoreLocked` both set it, and only `ReconcileRecord.resolveLocked` reads it), and the process layout (`AndroidManifest.xml`: the service runs in `:node`). Correction (CodeRabbit 4628273876): removing the task from Recents does NOT guarantee that Android ends MAIN; if MAIN survives, reopening the app keeps the failed-commit flag and the reconcile stays Deferred. Only a new MAIN process clears it, so the guidance is: force stop the app (Settings > Apps > SeekerClaw > Force stop) or restart the phone, reopen it, and start the agent again if needed.
 > - Traced 4 probes from door to target. No AI was invoked.
 > **Baseline:** SAB-AUDIT-v53.md (Delta). It is the highest number on any branch or open PR: `git log --all` over `docs/internal/audits/SAB-AUDIT-v*` and every `origin/*` tree top out at v53, and none of the open PRs carries a v54. Last full audit: SAB-AUDIT-v48.md (2026-10-19).
 > **Gate status:** On time. This audit ran before the merge of PR #465, and the fixes are in the same working tree (uncommitted). v53 recorded that v54 must be full. v54 is a delta anyway: it is a same-PR audit of one unpushed round whose surface a delta covers completely. **The full audit is still owed and moves to v55. It must be full and must run before the RC of the release that ships PR #465 is tagged.** This is the sixth delta in a row (v49–v54).
@@ -75,7 +75,7 @@ Every row reaches the Logs screen (`LogCollector.append`), except #18, which is 
 | 9 | `agentNotRunning` (INFO) | ✅ | ✅ | ✅ | "A stopped agent is never started" matches `AgentRestart.run` (STARTING counts as running). |
 | 10 | `agentRestartFailed` (WARN) | ✅ | ✅ | ✅ | |
 | 11 | `recoverFailed` (WARN) | ✅ | ✅ | ✅ | |
-| 12 | `BOOT_HELD` (WARN, `:node`) | ✅ | ⚠️ | ✅ | "Open the app" does not finish it while a tainted MAIN process is still alive (Deferred). The silent holds (record Unavailable, `runtime_state` confirm failed) had no explanation. Post-fix: close from recents first, the no-line case is named, and re-selecting in Settings is offered. |
+| 12 | `BOOT_HELD` (WARN, `:node`) | ✅ | ⚠️ | ✅ | "Open the app" does not finish it while a tainted MAIN process is still alive (Deferred). The silent holds (record Unavailable, `runtime_state` confirm failed) had no explanation. Post-fix: force stop the app (or restart the phone) first — removing it from Recents does not guarantee a new process — the no-line case is named, and a new selection in Settings is offered (a different model first: re-saving the shown selection is not a selection). |
 | 13 | `XAI_SYNC_HELD` (WARN) | ✅ | ⚠️ | ✅ | The hold returns false, so `sync failed: runtime_state.json not written` and `xAI sign-in saved, agent not restarted: runtime_state.json not saved — free storage, …` follow it. Those lines and the Settings message blame storage. Also, "once `Reconcile finished after a restart` appears" is not always logged (the Completed path is silent). |
 | 14 | `Reconcile produced invalid RuntimeState …` (WARN, meaning changed: record kept) | ✅ | ✅ | ✅ | The prefs commit succeeded, so the process is not tainted, and the next load recovers. Correct. |
 | 15 | `APPLY_MODEL_KEYS` (ERROR) | ✅ | ✅ | ✅ | "Unproven until the next app start" matches `GuardedEditor.apply` → `noteCommitFailed()`. |
@@ -170,10 +170,34 @@ Quote updates in "/model or /provider Switch Didn't Take Effect":
 
 Quote updates in "Settings Says Couldn't save":
 - New bullet for `sync held` with the new sign-in WARN and the two new Settings messages (sign-in and sign-out). "In all four cases" is now six (busy, storage or held, after a sign-in or a sign-out).
-- The silent flip-back sentence lists the two new hold WARNs. The Fix adds: after `sync held`, close and reopen the app first.
+- The silent flip-back sentence lists the two new hold WARNs. The Fix adds: after `sync held`, force stop the app (or restart the phone) and reopen it first; if the warning persists, force stop again, reopen, and start the agent if needed.
 
 Verification: every new or changed quote was checked with `grep -F` on its fixed parts against `app/src/main/java`. All match: `ReconcileRecord.kt` (agentRestarting, agentNotRunning, agentRestartFailed, agentRestartDeferred, recordUnavailable, runtimeConfirmFailed, XAI_SYNC_HELD), `SeekerClawService.kt` (startFromRestart), `XaiOAuthActivity.kt` (HELD WARN), `XaiOAuth.kt` (XAI_RESTART_NEEDED_HELD, XAI_SIGN_OUT_HELD).
 - `node tests/nodejs-project/smoke.js`: PASS (92/92 files parse, 39/39 modules load; the `quiesce.js` / `rich-markdown.js` notice was there before).
 - CI Node suite list (`ci_node.py`): 82 suites, 0 failures.
 
 The v55 full audit is still owed (see Remaining Gaps).
+
+## Addendum 2: fold 5′ — restart notice replaces the automatic restart (BAT-1661, Codex 90fed4d6, same PR)
+
+The contract reviewer replaced Q16's automatic agent restart with a user-initiated notice. Recovered/Completed now save a durable "restart to apply" notice (`filesDir/model_restart_notice.json`) inside the model-selection transaction, before the retry record is cleared; the dashboard shows it while the agent is running (health fresh) and the user restarts with the existing Restart action. A start that reaches RUNNING on the notice's selection clears it (`:node`); a newer Settings selection or a completed Reset invalidates it. `DIAGNOSTICS.md` only; no `ai.js` change (Section A not touched).
+
+Log sites, Section B (all on the Logs screen via `LogCollector.append`):
+
+| Site | Level | Change | Covered | Accurate |
+|---|---|---|---|---|
+| `agentRestarting`, `agentNotRunning`, `agentRestartDeferred`, `agentStoppedMeanwhile` | INFO | Removed (rows 8, 9 above and the Addendum 1 lines are superseded) | — | Entries removed from DIAGNOSTICS |
+| `agentRestartFailed` | WARN | Removed (row 10 superseded) | — | Entry removed |
+| `RestartNotice.noticeSaved` — `Reconcile finished: the new selection is saved (…) — restart the agent to apply it` | INFO | New | ✅ | ✅ says saved + restart needed, never "switched" |
+| `noticeWriteFailed` — `Reconcile: restart notice not saved (<reason>) — checked again on the next load` | WARN, once/process | New | ✅ | ✅ record and runtime kept |
+| `noticeCleared` — `restart notice cleared: the agent started with …` | INFO, `:node` | New | ✅ | ✅ only a RUNNING start on that selection |
+| `noticeClearFailed` — `restart notice not cleared at start (<reason>) — checked again at the next start` | WARN, `:node` | New; also `(busy)` after three lock tries (review round) | ✅ | ✅ the notice still matches the running selection, so the next start on it retries |
+| `noticeInvalidateFailed` — `restart notice not cleared (<reason>) — hidden now, removed the next time the app loads` | WARN | New; text corrected in the review round (the old "cleared at the agent's next start" could not happen: the next start consumes the newer selection) | ✅ | ✅ `visible` hides a notice no store holds; the next unheld load's `invalidateIfOrphaned` removes it |
+| `RECOVERED` (`Reconcile finished after a restart …`) | INFO | Meaning narrowed | ✅ | ✅ now says it is about the files, not the running agent, and that the app never stops/starts the agent |
+| `BOOT_HELD`, `startFromRestart` (ERROR), "not a crash" bullet | — | Reworded to point at the notice | ✅ | ✅ |
+
+Probe (Section D, re-traced): "I switched provider from chat but the agent still answers on the old one" → system prompt door → DIAGNOSTICS "/model or /provider Switch Didn't Take Effect" → `Reconcile finished: the new selection is saved …` bullet → dashboard notice + Restart. Actionable ✅.
+
+Verification: each new quote was checked with `grep -F` on its fixed prefix and suffix against `app/src/main/java` (one source hit each) and against DIAGNOSTICS; the UI title `Restart the agent to apply the change` matches `DashboardScreen.kt`. No DIAGNOSTICS text still refers to the removed restart lines (grep for `restarting the agent`, `not in the foreground`, `the agent is not running`, `switches to provider=`, `restartRequested`: only unrelated hits — OpenAI token persistence, MCP reconnect, xAI sign-out). Gaps found: 0 (drift 0, correction 0) — the DIAGNOSTICS update shipped with the code change.
+
+The v55 full audit is still owed before the RC of the release that ships PR #465.

@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.seekerclaw.app.BuildConfig
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.RestartNotice
+import com.seekerclaw.app.ui.settings.RestartDialog
 import com.seekerclaw.app.config.modelDisplayName
 import com.seekerclaw.app.config.providerById
 import com.seekerclaw.app.service.SeekerClawService
@@ -135,6 +137,28 @@ fun DashboardScreen(
 
     val cfgVersion by ConfigManager.configVersion
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
+
+    // BAT-1661 v2.12 fold 5′: the durable "restart to apply" notice. Re-read off the main thread
+    // whenever the agent's state or the config changes (a start may have cleared it in `:node`; a
+    // selection or Reset may have invalidated it); it survives an app reopen because it is a file.
+    val restartNotice by RestartNotice.state.collectAsState()
+    var showNoticeRestartDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(status, cfgVersion) { RestartNotice.refreshAsync(context.filesDir.toPath()) }
+    // Visible only while live AND still the stored selection (RestartNotice.isCurrent reads the
+    // files: computed off the main thread).
+    val runtimeNow by com.seekerclaw.app.state.RuntimeStateStore.state.collectAsState()
+    var showRestartNotice by remember { mutableStateOf(false) }
+    LaunchedEffect(restartNotice, status, health.isStale, cfgVersion, runtimeNow) {
+        showRestartNotice = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            RestartNotice.visible(
+                restartNotice,
+                status == ServiceStatus.RUNNING,
+                health.isStale,
+                com.seekerclaw.app.config.MainPrefs.read(context),
+                context.filesDir.toPath(),
+            )
+        }
+    }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
     val hasBotToken = remember(config) {
         if (config?.channel == "discord") config?.discordBotToken?.isNotBlank() == true
@@ -475,6 +499,48 @@ fun DashboardScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
+        }
+
+        // BAT-1661 v2.12 fold 5′: "restart to apply" — one inline notice, only while the agent is
+        // proven live (RUNNING with a fresh health file); a stopped agent uses the saved selection at
+        // its next start. The action is the existing Restart confirmation.
+        AnimatedVisibility(
+            visible = showRestartNotice,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(bottom = 24.dp)
+                    .fillMaxWidth()
+                    .background(SeekerClawColors.Warning.copy(alpha = 0.10f), shape)
+                    .border(1.dp, SeekerClawColors.Warning.copy(alpha = 0.3f), shape)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = RESTART_NOTICE_TITLE,
+                    fontFamily = RethinkSans,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = SeekerClawColors.Warning,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = RESTART_NOTICE_BODY,
+                    fontFamily = RethinkSans,
+                    fontSize = 13.sp,
+                    color = SeekerClawColors.TextDim,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                WarningButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { showNoticeRestartDialog = true },
+                    label = "Restart",
+                )
+            }
+        }
+        if (showNoticeRestartDialog) {
+            RestartDialog(context = context, onDismiss = { showNoticeRestartDialog = false })
         }
 
         // Setup needed card — prominent when config is incomplete
@@ -907,3 +973,8 @@ private fun formatLastActivity(timestamp: Long, context: Context): String {
     return format.format(Date(timestamp))
 }
 
+/** BAT-1661 v2.12 fold 5′: the dashboard's "restart to apply" notice (the selection is saved; the agent needs a restart). */
+internal const val RESTART_NOTICE_TITLE = "Restart the agent to apply the change"
+
+internal const val RESTART_NOTICE_BODY =
+    "Your new provider selection is saved. The agent keeps using the previous one until it restarts."

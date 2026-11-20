@@ -707,8 +707,12 @@ class SeekerClawService : Service() {
         // decide, checked intent, repair, publish config.json + agent_settings.json, then hand off
         // to the app on a confirmed file: the intent becomes `awaiting_main`). On a busy lock it is
         // a read-only boot: config.json only, no shared store written.
+        // BAT-1661 v2.12 fold 5′: the selection this boot consumes (the config it emits), compared with
+        // a "restart to apply" notice once the start has SUCCEEDED (RUNNING, below).
+        var consumed: com.seekerclaw.app.config.ModelTuple? = null
         val bootChannel = try {
             ModelRepair.serviceStart(this) { config ->
+                consumed = com.seekerclaw.app.config.ModelTuple(config.provider, config.authType, config.model)
                 ConfigManager.emitConfigJson(this, config, bridgeToken)
             }.orEmpty()
         } catch (e: java.io.IOException) {
@@ -783,6 +787,12 @@ class SeekerClawService : Service() {
         // Mark as running
         ServiceState.updateStatus(ServiceStatus.RUNNING)
         LogCollector.append("[Service] Claw Engine is now RUNNING")
+
+        // BAT-1661 v2.12 fold 5′: a SUCCESSFUL start on the notice's selection clears the "restart to
+        // apply" notice (a failed or aborted boot returned before this point, and STARTING is not
+        // RUNNING). Under the model-selection lock, off the main looper; a notice for another (newer)
+        // selection is never cleared by this boot.
+        consumed?.let { c -> scope.launch { com.seekerclaw.app.config.RestartNotice.clearIfStartedOn(filesDir.toPath(), c) } }
 
         // BAT-582 Phase 3: periodic sweep of stale Burner Wallet cap
         // reservations. Every 30s, any reservation whose expiresAtMs has
@@ -1291,8 +1301,7 @@ class SeekerClawService : Service() {
          * BAT-1661 (review M2 of v2.12): the restart's start, guarded. On Android 12+ a
          * `startForegroundService` from an app that is no longer in the foreground throws
          * (`ForegroundServiceStartNotAllowedException`); posted on the main looper, that would crash
-         * MAIN after the agent was already stopped. Callers check first (ReconcileRecord.AgentRestart
-         * restarts only while MAIN is in the foreground); this guard makes a failure a logged one.
+         * MAIN after the agent was already stopped. This guard makes a failure a logged one.
          */
         private fun startFromRestart(appCtx: Context) {
             try {

@@ -448,7 +448,7 @@ object ModelRepair {
                     // CodeRabbit on 7de1e77c (Major): the scope-changing keys are checked FIRST, apart
                     // from `model` — a changed provider or authType is a newer selection even when the
                     // overlay's model equals the target.
-                    if (!scopeKeysHeld(intent, cap, now.selection)) {
+                    if (!scopeKeysHeld(intent, cap, now.selection, now.model)) {
                         return IntentClass.Superseded("agent_settings.json holds a newer provider or sign-in type")
                     }
                     val captured = if (cap.present) cap.model?.trim()?.ifBlank { null } else null
@@ -510,13 +510,14 @@ object ModelRepair {
      * CodeRabbit on 7de1e77c (Major): the overlay's `provider` and `authType` keys, compared RAW and
      * apart from `model`, still stand for the intent's scope. Each key is held when its raw JSON is
      * the captured raw value ([CapturedOverlay.selection]; an overlay absent at capture had none), or
-     * exactly the intent's own scope value — what this repair's boot publish writes
-     * (`writeAgentSettingsJson` with the approved provider/auth). Any other added, removed or changed
-     * key is a newer selection. A legacy intent (no captured raw selection) has only the normalised
+     * exactly the intent's own scope value WHILE the overlay's model is the repair target — what this
+     * repair writes (the target model first, then the boot publish of the approved provider/auth;
+     * CodeRabbit 4628273784: a scope key changed to the scope value next to the OLD model is not the
+     * repair's write). Any other added, removed or changed key is a newer selection. A legacy intent (no captured raw selection) has only the normalised
      * scope as evidence: a present key must be exactly the scope value (a blank or non-string one
      * cannot pass via null-equality).
      */
-    private fun scopeKeysHeld(intent: RepairIntent, cap: CapturedOverlay, now: Map<String, String>): Boolean {
+    private fun scopeKeysHeld(intent: RepairIntent, cap: CapturedOverlay, now: Map<String, String>, nowModel: String?): Boolean {
         val own = mapOf(
             "provider" to JsonPrimitive(intent.provider).toString(),
             "authType" to JsonPrimitive(intent.authType).toString(),
@@ -525,7 +526,7 @@ object ModelRepair {
         return listOf("provider", "authType").all { k ->
             val v = now[k]
             if (captured != null) {
-                v == captured[k] || (v != null && v == own[k])
+                v == captured[k] || (v != null && v == own[k] && nowModel == intent.target)
             } else {
                 v == null || v == own[k]
             }

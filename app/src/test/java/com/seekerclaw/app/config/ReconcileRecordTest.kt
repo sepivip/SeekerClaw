@@ -67,10 +67,6 @@ class ReconcileRecordTest {
     }
     private val savedKeyUsableOf = ConfigManager.keyUsableOf
 
-    /** Fold 5: restarts requested, and whether the agent counts as running. */
-    private val restarts = mutableListOf<ReconcileRecord.Restart>()
-    private var agentRunning = true
-
     private class Crash : Error("injected process death")
 
     private val P = ModelTuple("openai", "oauth", "gpt-6-astra")
@@ -118,12 +114,7 @@ class ReconcileRecordTest {
         ctx = FakeContext(dir.toFile(), prefs)
         MainPrefs.resetProcessStateForTest()
         ReconcileRecord.resetForTest()
-        restarts.clear()
-        agentRunning = true
-        ReconcileRecord.AgentRestart.execute = { it.run() }
-        ReconcileRecord.AgentRestart.isAgentRunning = { agentRunning }
-        ReconcileRecord.AgentRestart.canStartAgent = { true }
-        ReconcileRecord.AgentRestart.restartAgent = { _, r -> restarts += r }
+        RestartNotice.execute = { it.run() } // ReconcileRecord.resetForTest reset the notice store
         ConfigManager.keyUsableOf = savedKeyUsableOf
         ConfigManager.afterSaveLockForTest = null
     }
@@ -1045,290 +1036,7 @@ class ReconcileRecordTest {
 
     // ---------------------------------------------------------------- fold 5 (binding)
 
-    private val restartToI = ReconcileRecord.AgentScope("xai", "api_key")
-    private val fromP = ReconcileRecord.AgentScope("openai", "oauth")
-
-    @Test
-    fun `fold 5 - a running read-only boot, then Recovered - one controlled restart`() {
-        base()
-        doubleFailure()
-        nodeProcess()
-        val a = anchor()
-        assertEquals("the read-only boot runs R0", "openai", serviceStart().provider)
-        assertTrue(logsSince(a).any { it.level == LogLevel.WARN && it.message == ReconcileRecord.BOOT_HELD })
-        mainProcess()
-        val b = anchor()
-        load()
-        assertEquals(1, restarts.size)
-        assertEquals(fromP, restarts[0].from)
-        assertEquals(restartToI, restarts[0].to)
-        assertTrue(logsSince(b).has(ReconcileRecord.agentRestarting("openai", "oauth", "xai", "api_key")))
-        load()
-        assertEquals("never twice for one record", 1, restarts.size)
-    }
-
-    @Test
-    fun `fold 5 - a running read-only boot, then Completed - one controlled restart`() {
-        base()
-        ReconcileRecord.beforeClearForTest = { throw Crash() }
-        expectCrash { load() }
-        nodeProcess()
-        val a = anchor()
-        serviceStart()
-        assertTrue(logsSince(a).has(ReconcileRecord.BOOT_HELD))
-        mainProcess()
-        load()
-        assertEquals(listOf(ReconcileRecord.Restart(fromP, restartToI)), restarts)
-    }
-
-    @Test
-    fun `fold 5 - a stopped agent is never started`() {
-        base()
-        doubleFailure()
-        restart()
-        agentRunning = false
-        val a = anchor()
-        load()
-        assertTrue(restarts.isEmpty())
-        assertTrue(logsSince(a).has(ReconcileRecord.agentNotRunning("xai", "api_key")))
-    }
-
-    @Test
-    fun `fold 5 - Failed and Deferred are not restart success, a model-only correction needs none`() {
-        base()
-        doubleFailure()
-        load() // Deferred: the same tainted process
-        assertTrue(restarts.isEmpty())
-        restart()
-        SafeFs.beforeMove = { _, t -> if (isRuntime(t)) throw IOException("injected recovery write failure") }
-        try { load() } finally { disarm() }
-        assertTrue("Failed", restarts.isEmpty())
-        fresh()
-        modelOnlyDoubleFailure()
-        val a = anchor()
-        load()
-        assertTrue(logsSince(a).has(ReconcileRecord.recovered("openai", "oauth", "gpt-6.1-sol")))
-        assertTrue("model-only: no restart", restarts.isEmpty())
-        assertFalse(logsSince(a).any { it.message.startsWith("[Config] Reconcile finished: ") })
-    }
-
-    @Test
-    fun `fold 5 - coalesced - repeated Completed outcomes for one record restart once`() {
-        base()
-        ReconcileRecord.beforeClearForTest = { throw Crash() }
-        expectCrash { load() }
-        restart()
-        ReconcileRecord.beforeClearForTest = { throw IOException("injected delete failure") } // the record stays Completed
-        try {
-            repeat(3) { load() }
-            repeat(2) { mirror(); ReconcileRecord.AgentRestart.flush(ctx) }
-        } finally {
-            disarm()
-        }
-        assertEquals(1, restarts.size)
-    }
-
-
     // ===================================================== review round (fold 5 hazards, m1–m4, SAB)
-
-    private fun writeServiceState(status: String) =
-        File(dir.toFile(), "service_state").writeText("$status\n0\n0\n0\n0\n0\n0\n0")
-
-    private fun writeHealth(updatedAtMs: Long) =
-        AgentSettingsFile.path(dir).resolveSibling("agent_health_state").toFile()
-            .writeText("""{"apiStatus":"healthy","updatedAt":"${java.time.Instant.ofEpochMilli(updatedAtMs)}"}""")
-
-    @Test
-    fun `M1 - the production liveness predicate fails closed - a stale RUNNING file is not a live agent`() {
-        val now = System.currentTimeMillis()
-        val live = { alive: Boolean -> ReconcileRecord.AgentRestart.agentLive(dir.toFile(), alive, now) }
-        assertFalse("no files at all", live(true))
-        writeServiceState("RUNNING")
-        writeHealth(now - 10_000)
-        assertTrue("a live node process, RUNNING, fresh health", live(true))
-        assertFalse("RUNNING survives a reboot / OOM kill: no node process, no restart", live(false))
-        writeHealth(now - 300_000)
-        assertFalse("stale health", live(true))
-        writeHealth(now + 300_000)
-        assertFalse("future-dated health", live(true))
-        writeHealth(now - 10_000)
-        writeServiceState("STARTING")
-        assertFalse("STARTING is not proof", live(true))
-        writeServiceState("RUNNING")
-        AgentSettingsFile.path(dir).resolveSibling("agent_health_state").toFile().writeText("{garbage")
-        assertFalse("unparsable health", live(true))
-    }
-
-    /**
-     * Node's `localTimestamp()` (config.js), the real producer of `agent_health_state.updatedAt`:
-     * local wall time to the second, then the UTC offset as `±hh:mm` — never the `Z` form.
-     */
-    private fun localTimestamp(epochMs: Long, offset: java.time.ZoneOffset): String =
-        java.time.OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(epochMs), offset)
-            .truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
-            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx"))
-
-    private fun writeHealthRaw(updatedAt: String) =
-        AgentSettingsFile.path(dir).resolveSibling("agent_health_state").toFile()
-            .writeText("""{"apiStatus":"healthy","consecutiveFailures":0,"updatedAt":"$updatedAt"}""")
-
-    @Test
-    fun `M1 - agentLive reads the real producer's offset timestamps (+04_00 and -05_00), and a stale one is not live`() {
-        writeServiceState("RUNNING")
-        // Copied in the exact shape config.js localTimestamp() writes: both are 06:00:00Z.
-        val now = java.time.Instant.parse("2026-11-19T06:00:10Z").toEpochMilli()
-        for (fresh in listOf("2026-11-19T10:00:00+04:00", "2026-11-19T01:00:00-05:00")) {
-            writeHealthRaw(fresh)
-            assertTrue("fresh in offset form: $fresh", ReconcileRecord.AgentRestart.agentLive(dir.toFile(), true, now))
-        }
-        // Generated the way localTimestamp() builds it, against the real clock.
-        val clock = System.currentTimeMillis()
-        for (offset in listOf(java.time.ZoneOffset.ofHours(4), java.time.ZoneOffset.ofHours(-5), java.time.ZoneOffset.ofHoursMinutes(5, 30))) {
-            val ts = localTimestamp(clock - 10_000, offset)
-            assertTrue("the producer's shape: $ts", Regex("""\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}""").matches(ts))
-            writeHealthRaw(ts)
-            assertTrue("fresh: $ts", ReconcileRecord.AgentRestart.agentLive(dir.toFile(), true, clock))
-            // Negative control: the same offset form, stale, is not live.
-            writeHealthRaw(localTimestamp(clock - 300_000, offset))
-            assertFalse("stale in offset form: $offset", ReconcileRecord.AgentRestart.agentLive(dir.toFile(), true, clock))
-        }
-        writeHealthRaw("2026-11-19T09:55:00+04:00") // 05:55:00Z: 310 s before `now`
-        assertFalse("stale literal in offset form", ReconcileRecord.AgentRestart.agentLive(dir.toFile(), true, now))
-    }
-
-    @Test
-    fun `M1 - through the restart flow - stale RUNNING with no live node process logs not-running and never restarts`() {
-        base()
-        doubleFailure()
-        restart()
-        val now = System.currentTimeMillis()
-        writeServiceState("RUNNING")
-        writeHealth(now - 10_000)
-        var nodeAlive = false
-        ReconcileRecord.AgentRestart.isAgentRunning = { ReconcileRecord.AgentRestart.agentLive(dir.toFile(), nodeAlive, System.currentTimeMillis()) }
-        val a = anchor()
-        load()
-        assertTrue("never started", restarts.isEmpty())
-        assertTrue(logsSince(a).has(ReconcileRecord.agentNotRunning("xai", "api_key")))
-        // Positive control: the same evidence with a live node process restarts (a new record).
-        fresh()
-        base()
-        doubleFailure()
-        restart()
-        writeServiceState("RUNNING")
-        writeHealth(System.currentTimeMillis() - 10_000)
-        nodeAlive = true
-        ReconcileRecord.AgentRestart.isAgentRunning = { ReconcileRecord.AgentRestart.agentLive(dir.toFile(), nodeAlive, System.currentTimeMillis()) }
-        load()
-        assertEquals(1, restarts.size)
-    }
-
-    @Test
-    fun `M2 - the foreground-start predicate - only a foreground MAIN may restart`() {
-        val info = android.app.ActivityManager.RunningAppProcessInfo::class.java
-        assertNotNull(info)
-        assertTrue(ReconcileRecord.AgentRestart.canStartForegroundService(android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND))
-        for (i in listOf(
-            android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE,
-            android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE,
-            android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED,
-            0,
-        )) {
-            assertFalse("importance $i", ReconcileRecord.AgentRestart.canStartForegroundService(i))
-        }
-    }
-
-    @Test
-    fun `M2 - MAIN in the background - the agent is not stopped, the change applies at its next start`() {
-        base()
-        doubleFailure()
-        restart()
-        var importance = android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED
-        ReconcileRecord.AgentRestart.canStartAgent = { ReconcileRecord.AgentRestart.canStartForegroundService(importance) }
-        val a = anchor()
-        load()
-        assertTrue("never stopped (no restart requested)", restarts.isEmpty())
-        assertTrue(logsSince(a).has(ReconcileRecord.agentRestartDeferred("xai", "api_key")))
-        // Positive control: in the foreground the same outcome restarts once (a new record).
-        fresh()
-        base()
-        doubleFailure()
-        restart()
-        importance = android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
-        ReconcileRecord.AgentRestart.canStartAgent = { ReconcileRecord.AgentRestart.canStartForegroundService(importance) }
-        load()
-        assertEquals(1, restarts.size)
-    }
-
-    @Test
-    fun `m1 - a Completed record whose clear keeps failing restarts once, across processes`() {
-        base()
-        ReconcileRecord.beforeClearForTest = { throw Crash() }
-        expectCrash { load() }
-        repeat(3) {
-            restart()
-            ReconcileRecord.beforeClearForTest = { throw IOException("injected delete failure") }
-            try {
-                load()
-            } finally {
-                disarm()
-            }
-        }
-        assertEquals("one restart for the record, ever", 1, restarts.size)
-        assertTrue("the durable marker", (ReconcileRecord.read(dir) as ReconcileRecord.Read.Present).record.restartRequested)
-    }
-
-    @Test
-    fun `m1 - two identical records in one process each restart once`() {
-        base()
-        val pl = PowerLossFs()
-        pl.install()
-        val inner = SafeFs.beforeMove
-        try {
-            fun unconfirmedReconcileToI() {
-                SafeFs.beforeMove = { tmpf, t -> inner(tmpf, t); if (isRuntime(t)) pl.syncFails = true }
-                load()
-                SafeFs.beforeMove = inner
-                pl.syncFails = false
-                assertTrue(recordPresent())
-            }
-            unconfirmedReconcileToI()
-            val first = recordBytes()
-            load() // Completed
-            assertEquals(1, restarts.size)
-            // Back to P (an ordinary, landed reconcile), then the same P → I transaction again.
-            writeOverlay(P)
-            load()
-            assertEquals(P, runtimeTuple())
-            writeOverlay(I)
-            unconfirmedReconcileToI()
-            assertArrayEquals("an identical record", first, recordBytes())
-            load() // Completed again: its own restart
-            assertEquals(2, restarts.size)
-        } finally {
-            SafeFs.beforeMove = inner
-            pl.syncFails = false
-            pl.uninstall()
-        }
-    }
-
-    @Test
-    fun `m2 - the xAI sign-in's own restart replaces the reconcile-retry restart`() {
-        base()
-        doubleFailure()
-        restart()
-        assertEquals(ConfigManager.XaiAuthSync.SYNCED, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1, callerRestarts = true))
-        assertEquals(I, runtimeTuple())
-        assertTrue("the sign-in restarts: no second restart", restarts.isEmpty())
-        assertFalse(ReconcileRecord.AgentRestart.hasPending())
-        // Positive control: a sync whose caller does not restart (the sign-out) flushes it.
-        fresh()
-        base()
-        doubleFailure()
-        restart()
-        assertEquals(ConfigManager.XaiAuthSync.SYNCED, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1))
-        assertEquals(1, restarts.size)
-    }
 
     @Test
     fun `m3 and m7 - the xAI sync while a record is held is HELD - record and runtime_state unchanged`() {
@@ -1342,7 +1050,7 @@ class ReconcileRecordTest {
         val recordBefore = recordBytes()
         val runtimeBefore = Files.readAllBytes(runtimePath())
         val a = anchor()
-        assertEquals(ConfigManager.XaiAuthSync.HELD, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1, callerRestarts = true))
+        assertEquals(ConfigManager.XaiAuthSync.HELD, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1))
         assertTrue(logsSince(a).any { it.level == LogLevel.WARN && it.message == ReconcileRecord.XAI_SYNC_HELD })
         assertFalse("not reported as a storage failure", logsSince(a).any { it.message.startsWith("[Config] xAI OAuth runtime_state sync failed") })
         assertArrayEquals(recordBefore, recordBytes())
@@ -1409,6 +1117,520 @@ class ReconcileRecordTest {
         assertEquals(1, warns.size)
         assertEquals(LogLevel.WARN, warns.single().level)
         assertTrue("held, record kept", recordPresent())
+    }
+
+    // ============================================= CodeRabbit on 8a477a47 (round 13)
+
+    @Test
+    fun `CR 4628273764 - a reconcile in the xAI sync's own load that leaves a record is HELD, never SYNCED`() {
+        xaiTokens(XaiOAuthTokens()) // no token yet: runtime_state holds the H5 guard image
+        seedPrefs(XO)
+        writeRuntime(ModelTuple("xai", "api_key", "grok-4.6"))
+        writeOverlay(ModelTuple("xai", "oauth", "grok-4.6-fast")) // Node /model B
+        mainProcess()
+        signedIn() // the sign-in lands: a sync would now patch the auth to oauth
+        var firstRuntimeMove = true
+        SafeFs.beforeMove = { _, t ->
+            if (isRuntime(t) && firstRuntimeMove) {
+                firstRuntimeMove = false
+                throw IOException("injected runtime_state write failure") // the reconcile's own write
+            }
+        }
+        val runtimeBefore = Files.readAllBytes(runtimePath())
+        val sync = try {
+            ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1)
+        } finally {
+            disarm()
+        }
+        assertEquals("the load's reconcile left its record unresolved", ConfigManager.XaiAuthSync.HELD, sync)
+        assertTrue(recordPresent())
+        assertArrayEquals("the old runtime record's auth was not patched", runtimeBefore, Files.readAllBytes(runtimePath()))
+    }
+
+    @Test
+    fun `CR 4628273773 - a held reconcile projecting another provider is HELD before any early success`() {
+        signedIn()
+        seedPrefs(ModelTuple("xai", "api_key", "grok-4.6"))
+        writeRuntime(ModelTuple("xai", "api_key", "grok-4.6"))
+        writeOverlay(ModelTuple("openai", "api_key", "gpt-6.1-sol")) // the overlay projects another provider
+        mainProcess()
+        doubleFailure() // tainted: Deferred, held
+        val runtimeBefore = Files.readAllBytes(runtimePath())
+        val recordBefore = recordBytes()
+        assertEquals(ConfigManager.XaiAuthSync.HELD, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1))
+        assertArrayEquals(runtimeBefore, Files.readAllBytes(runtimePath()))
+        assertArrayEquals(recordBefore, recordBytes())
+    }
+
+    @Test
+    fun `CR 4628273784 - a scope key changed to the scope value next to the OLD model supersedes`() {
+        val captured = """{"provider":"openai","authType":"api_key","model":"gpt-5.4"}"""
+        val authOnly = """{"provider":"openai","authType":"oauth","model":"gpt-5.4"}"""
+        assertTrue(ModelRepair.classifyIntent(repairIntent(captured), snapshot(authOnly)) is ModelRepair.IntentClass.Superseded)
+        // The repair's own write — the target model, then its scope — is still accepted.
+        val own = """{"provider":"openai","authType":"oauth","model":"gpt-6.1-sol"}"""
+        assertTrue(ModelRepair.classifyIntent(repairIntent(captured), snapshot(own)) is ModelRepair.IntentClass.Pending)
+    }
+
+    // ============================ review of the CodeRabbit round: a marked restart is never lost
+
+    // ======================================== Codex a5c902b6 (finding 4) and the D12.7/Q15 guard
+
+    @Test
+    fun `Codex finding 4 - recovery onto the same Custom model id at another gateway resets the echo override`() {
+        // Gateway A's record holds the echo override; the user's Custom settings now name gateway B
+        // with the SAME model id. The runtime record is unreadable to Node (an invalid pair), so
+        // recovery rebuilds it from the decoded fields: the override must not survive.
+        val sigA = CustomConfigSignature.compute("m1", "https://gateway-a.example/v1", "chat_completions", "")
+        val sigB = CustomConfigSignature.compute("m1", "https://gateway-b.example/v1", "chat_completions", "")
+        assertNotEquals("two gateway identities, one model id", sigA, sigB)
+        val target = ModelTuple("custom", "api_key", "m1")
+        prefs.seed(
+            "setup_complete" to true, "provider" to "custom", "auth_type" to "api_key", "model" to "m1",
+            "custom_base_url" to "https://gateway-b.example/v1", "custom_format" to "chat_completions",
+        )
+        Files.write(
+            runtimePath(),
+            ("""{"provider":"custom","authType":"oauth","model":"m1","reasoningEnabled":true,""" +
+                """"reasoningDisplayInChat":true,"customEchoReasoning":true,"customConfigSignature":"$sigA"}""").toByteArray(),
+        )
+        assertTrue(RuntimeStateFile.read(dir) is RuntimeStateFile.Read.Unreadable)
+        writeOverlay(target)
+        val obj = (AgentSettingsFile.read(dir) as AgentSettingsFile.Read.Present).obj
+        Files.write(
+            ReconcileRecord.path(dir),
+            enc.encodeToString(
+                ReconcileRecord.Record.serializer(),
+                ReconcileRecord.Record(
+                    prefsBefore = ReconcileRecord.RawTuple("openai", "api_key", "gpt-6.1-sol"),
+                    prefsAfter = ReconcileRecord.RawTuple("custom", "api_key", "m1"),
+                    target = target,
+                    runtime = ReconcileRecord.RuntimeCapture(ReconcileRecord.STATE_UNREADABLE),
+                    overlay = ReconcileRecord.RawTuple("custom", "api_key", "m1"),
+                    overlaySelection = ModelRepair.rawSelection(obj),
+                ),
+            ).toByteArray(),
+        )
+        val recordText = String(recordBytes(), Charsets.UTF_8)
+        assertFalse("no gateway or secret in the record", recordText.contains("gateway-") || recordText.contains("sig"))
+        mainProcess()
+        assertTrue(resolveNow() is ReconcileRecord.Outcome.Recovered)
+        val r = runtimeRecord()
+        assertEquals(target, ModelTuple(r.provider, r.authType, r.model))
+        assertFalse("the override is not carried to gateway B", r.customEchoReasoning)
+        assertNull("the signature is recomputed by the next save", r.customConfigSignature)
+        assertTrue("the reasoning toggles are kept", r.reasoningEnabled && r.reasoningDisplayInChat)
+    }
+
+    @Test
+    fun `D12_7 and Q15 - a readable metadata-only overlay carries no selection, changed or invalid selection keys do`() {
+        val full = """{"heartbeatIntervalMinutes":30,"provider":"xai","authType":"api_key","model":"grok-4.6"}"""
+        // A readable object with none of provider / authType / model: no selection evidence, whatever else changed.
+        for (metadataOnly in listOf("""{"heartbeatIntervalMinutes":45}""", """{"maxStepsPerTurn":20,"apiKeys":{"brave":"x"}}""", "{}")) {
+            fresh()
+            assertTrue("metadata-only $metadataOnly", resolveAfterOverlay(full, metadataOnly) is ReconcileRecord.Outcome.Recovered)
+        }
+        // Counterexamples: an introduced invalid or changed selection key supersedes.
+        for (newer in listOf(
+            """{"heartbeatIntervalMinutes":45,"authType":7}""",
+            """{"heartbeatIntervalMinutes":45,"provider":null}""",
+            """{"heartbeatIntervalMinutes":45,"model":"grok-4.6-fast"}""",
+        )) {
+            fresh()
+            assertEquals(newer, ReconcileRecord.Outcome.Superseded(ReconcileRecord.DROP_OVERLAY_NEWER), resolveAfterOverlay(full, newer))
+        }
+    }
+
+    // ===================================== fold 5′ (Codex 90fed4d6): the "restart to apply" notice
+
+    private fun notice(): RestartNotice.Notice? = (RestartNotice.read(dir) as? RestartNotice.Read.Present)?.notice
+
+    /** The P → I change (a provider and sign-in change) left half-done: record kept, prefs on I, runtime on R0. */
+    private fun interruptedProviderChange() {
+        base()
+        doubleFailure()
+        restart()
+    }
+
+    @Test
+    fun `5p - Recovered saves a notice for the SELECTION before the record goes, and logs it`() {
+        interruptedProviderChange()
+        val a = anchor()
+        load()
+        assertEquals(I, notice()?.selection)
+        assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
+        assertTrue(logsSince(a).has(RestartNotice.noticeSaved("xai", "api_key", "grok-4.6")))
+        assertEquals("the UI was told after the release", I, RestartNotice.state.value?.selection)
+    }
+
+    @Test
+    fun `5p - a model-only correction saves no notice`() {
+        modelOnlyDoubleFailure()
+        load()
+        assertNull(notice())
+    }
+
+    @Test
+    fun `5p - the notice holds the selection, not the H5 runtime image`() {
+        xaiTokens(XaiOAuthTokens()) // no token: runtime_state gets the api_key guard image
+        base(overlay = XO)
+        doubleFailure()
+        restart()
+        load()
+        assertEquals(ModelTuple("xai", "api_key", "grok-4.6"), runtimeTuple())
+        assertEquals("what a boot consumes as its config", XO, notice()?.selection)
+    }
+
+    @Test
+    fun `5p - crash before the notice is saved - the record survives, the next load saves it`() {
+        interruptedProviderChange()
+        RestartNotice.beforeWriteForTest = { throw Crash() }
+        expectCrash { load() }
+        RestartNotice.beforeWriteForTest = null
+        assertEquals("runtime_state was written", I, runtimeTuple())
+        assertNull(notice())
+        assertTrue("the evidence is kept", recordPresent())
+        restart()
+        load()
+        assertEquals(I, notice()?.selection)
+        assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
+    }
+
+    @Test
+    fun `5p - crash after the notice is saved, before or during the record clear - the notice is reused`() {
+        interruptedProviderChange()
+        ReconcileRecord.beforeClearForTest = { throw Crash() }
+        expectCrash { load() }
+        val first = notice()
+        assertNotNull("the notice came first", first)
+        assertTrue(recordPresent())
+        restart()
+        load() // Completed
+        assertEquals("same identity and timestamp", first, notice())
+        assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
+    }
+
+    @Test
+    fun `5p - repeated Completed outcomes reuse one notice (identity and timestamp stable)`() {
+        interruptedProviderChange()
+        ReconcileRecord.beforeClearForTest = { throw IOException("injected delete failure") } // the record stays Completed
+        var t = 1_000L
+        RestartNotice.clock = { t++ }
+        try {
+            load()
+            val first = notice()!!
+            repeat(3) { load(); mirror() }
+            assertEquals(first, notice())
+        } finally {
+            disarm()
+        }
+    }
+
+    @Test
+    fun `5p - a failed notice write keeps the record, never rolls back runtime_state, and retries`() {
+        interruptedProviderChange()
+        RestartNotice.beforeWriteForTest = { throw IOException("injected notice write failure") }
+        val a = anchor()
+        try {
+            repeat(2) { load() }
+        } finally {
+            RestartNotice.beforeWriteForTest = null
+        }
+        assertEquals("the confirmed runtime bytes stay", I, runtimeTuple())
+        assertTrue("the recovery evidence is kept", recordPresent())
+        assertNull(notice())
+        assertEquals("WARN once per process", 1, logsSince(a).count { it.level == LogLevel.WARN && it.message.startsWith("[Config] Reconcile: restart notice not saved (") })
+        load()
+        assertEquals(I, notice()?.selection)
+        assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
+    }
+
+    @Test
+    fun `5p - a failed notice clear at start logs a WARN, and the next start on the selection clears it`() {
+        interruptedProviderChange()
+        load()
+        RestartNotice.beforeDeleteForTest = { throw IOException("injected notice delete failure") }
+        val a = anchor()
+        try {
+            assertFalse(RestartNotice.clearIfStartedOn(dir, I))
+        } finally {
+            RestartNotice.beforeDeleteForTest = null
+        }
+        assertTrue(logsSince(a).any { it.level == LogLevel.WARN && it.message.startsWith("[Config] restart notice not cleared at start (") })
+        assertNotNull("kept: the agent runs it, so it is still current", notice())
+        assertTrue("checked again at the next start", RestartNotice.clearIfStartedOn(dir, I))
+        assertNull(notice())
+    }
+
+    @Test
+    fun `5p - a failed invalidation is hidden at once, kept while a load is held, removed by the next unheld load`() {
+        interruptedProviderChange()
+        load()
+        val b = ModelTuple("openai", "api_key", "gpt-6.1-sol")
+        RestartNotice.beforeDeleteForTest = { throw IOException("injected notice delete failure") }
+        val a = anchor()
+        try {
+            assertTrue(save(form(I) { it.copy(provider = b.provider, authType = b.authType, model = b.model) }))
+        } finally {
+            RestartNotice.beforeDeleteForTest = null
+        }
+        assertTrue(logsSince(a).any { it.level == LogLevel.WARN && it.message == RestartNotice.noticeInvalidateFailed("injected notice delete failure") })
+        val stale = notice()!!
+        assertFalse("hidden now: neither store holds it", RestartNotice.visible(stale, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+        // A held load (an unreadable retry record) is compute-only: it keeps the file.
+        Files.write(ReconcileRecord.path(dir), validRecordJson().toByteArray())
+        ReconcileRecord.beforeReadForTest = { throw IOException("injected read failure") }
+        try {
+            load()
+        } finally {
+            ReconcileRecord.beforeReadForTest = null
+        }
+        assertEquals("kept while held", stale, notice())
+        // The next unheld load removes it.
+        load()
+        assertNull("removed the next time the app loads", notice())
+    }
+
+    @Test
+    fun `5p - a newer selection invalidates the notice, an older resolve cannot recreate it, a queued UI update cannot revive it`() {
+        interruptedProviderChange()
+        val b = ModelTuple("openai", "api_key", "gpt-6.1-sol")
+        var once = true
+        RestartNotice.beforeStoreForTest = {
+            if (once) {
+                once = false
+                // The load's UI update has read notice A; before it stores, selection B lands
+                // (invalidating A) and B's own UI update runs.
+                assertTrue(save(form(I) { it.copy(provider = b.provider, authType = b.authType, model = b.model) }))
+            }
+        }
+        try {
+            load()
+        } finally {
+            RestartNotice.beforeStoreForTest = null
+        }
+        assertNull("invalidated by the newer selection", notice())
+        assertNull("the queued older update did not revive A", RestartNotice.state.value)
+        load()
+        assertNull("no resolve can recreate A after B", notice())
+        assertEquals(b, runtimeTuple())
+    }
+
+    @Test
+    fun `5p - a stale boot completion cannot clear a newer notice, a start on its selection clears it`() {
+        interruptedProviderChange()
+        load()
+        val a = anchor()
+        assertFalse("a boot that consumed the OLD selection", RestartNotice.clearIfStartedOn(dir, P))
+        assertFalse("another model", RestartNotice.clearIfStartedOn(dir, I.copy(model = "grok-4.6-fast")))
+        assertNotNull(notice())
+        assertTrue("a successful start on the notice's selection", RestartNotice.clearIfStartedOn(dir, I))
+        assertNull(notice())
+        assertTrue(logsSince(a).has(RestartNotice.noticeCleared("xai", "api_key", "grok-4.6")))
+    }
+
+    @Test
+    fun `5p - a completed Reset invalidates the notice`() {
+        xaiTokens(XaiOAuthTokens())
+        interruptedProviderChange()
+        load()
+        assertNotNull(notice())
+        ConfigManager.deleteKeystoreKey = {}
+        assertEquals(ConfigManager.ResetResult.Done, ConfigManager.resetConfig(ctx))
+        assertNull(notice())
+    }
+
+    @Test
+    fun `5p - the notice survives an app reopen`() {
+        interruptedProviderChange()
+        load()
+        val n = notice()
+        RestartNotice.resetForTest() // a new MAIN process: nothing in memory
+        RestartNotice.execute = { it.run() }
+        assertNull(RestartNotice.state.value)
+        RestartNotice.refreshAsync(dir)
+        assertEquals(n, RestartNotice.state.value)
+    }
+
+    @Test
+    fun `5p - the notice is shown only while the agent is proven live`() {
+        interruptedProviderChange()
+        load()
+        val n = notice()!!
+        val v = MainPrefs.view(prefs)
+        assertTrue(RestartNotice.visible(n, running = true, healthStale = false, v, dir))
+        assertFalse("stopped", RestartNotice.visible(n, running = false, healthStale = false, v, dir))
+        assertFalse("a stale persisted RUNNING", RestartNotice.visible(n, running = true, healthStale = true, v, dir))
+        assertFalse("no notice", RestartNotice.visible(null, running = true, healthStale = false, v, dir))
+    }
+
+    // ================= fold 5′ review: every selection writer invalidates an orphaned notice
+
+    private fun invalidateNow() = ModelSelectionLock.transaction { tx -> RestartNotice.invalidateIfOrphaned(tx, dir, MainPrefs.view(prefs)) }
+
+    private val B = ModelTuple("openai", "api_key", "gpt-6.1-sol")
+
+    @Test
+    fun `chat provider B while notice A is pending - the real reconcile path invalidates A, no notice for B`() {
+        interruptedProviderChange()
+        load()
+        assertEquals(I, notice()?.selection)
+        writeOverlay(B) // Node /provider B: the overlay, then runtime_state
+        writeRuntime(B)
+        load() // MAIN reconciles B into prefs
+        assertEquals("openai", prefs.disk["provider"])
+        assertNull("A is no longer stored: invalidated", notice())
+        assertEquals(B, runtimeTuple())
+    }
+
+    @Test
+    fun `chat provider B while notice A is pending - the real mirror path invalidates A, no notice for B`() {
+        interruptedProviderChange()
+        load()
+        writeOverlay(B)
+        writeRuntime(B)
+        assertEquals(ModelSelectionLock.Result.Acquired(true), mirror()) // the collector mirrors B into prefs
+        assertEquals("api_key", prefs.disk["auth_type"])
+        assertNull(notice())
+    }
+
+    @Test
+    fun `the reconcile that creates notice A does not invalidate A`() {
+        interruptedProviderChange()
+        load()
+        assertEquals(I, notice()?.selection)
+        invalidateNow()
+        assertEquals("still current", I, notice()?.selection)
+    }
+
+    @Test
+    fun `a busy start-clear logs the WARN, never silent`() {
+        interruptedProviderChange()
+        load()
+        val a = anchor()
+        // Called from inside a transaction on this thread: every try is refused (nested).
+        val r = ModelSelectionLock.transaction { RestartNotice.clearIfStartedOn(dir, I) }
+        assertEquals(ModelSelectionLock.Result.Acquired(false), r)
+        assertTrue(logsSince(a).any { it.level == LogLevel.WARN && it.message == RestartNotice.noticeClearFailed("busy") })
+        assertNotNull(notice())
+    }
+
+    @Test
+    fun `a model repair that changes the boot model - after MAIN converges prefs the notice is gone, not stuck`() {
+        // A provider change to openai/oauth on a retired model: recovery saves notice (openai, oauth, gpt-5.4).
+        val target = ModelTuple("openai", "oauth", "gpt-5.4")
+        seedPrefs(target)
+        writeRuntime(ModelTuple("xai", "api_key", "grok-4.6"))
+        val overlay = """{"heartbeatIntervalMinutes":30,"provider":"openai","authType":"oauth","model":"gpt-5.4"}"""
+        writeOverlayRaw(overlay)
+        Files.write(
+            ReconcileRecord.path(dir),
+            enc.encodeToString(
+                ReconcileRecord.Record.serializer(),
+                ReconcileRecord.Record(
+                    prefsBefore = ReconcileRecord.RawTuple("xai", "api_key", "grok-4.6"),
+                    prefsAfter = ReconcileRecord.RawTuple("openai", "oauth", "gpt-5.4"),
+                    target = target,
+                    runtime = ReconcileRecord.RuntimeCapture(ReconcileRecord.STATE_PRESENT, ModelTuple("xai", "api_key", "grok-4.6")),
+                    overlay = ReconcileRecord.RawTuple("openai", "oauth", "gpt-5.4"),
+                    overlaySelection = ModelRepair.rawSelection(Json.parseToJsonElement(overlay).jsonObject),
+                ),
+            ).toByteArray(),
+        )
+        mainProcess()
+        load()
+        assertEquals(target, notice()?.selection)
+        // The agent's boot repairs the retired model: it consumes gpt-6.1-sol, not the notice's model.
+        nodeProcess()
+        val consumed = serviceStart()
+        assertEquals("gpt-6.1-sol", consumed.model)
+        assertFalse(RestartNotice.clearIfStartedOn(dir, ModelTuple(consumed.provider, consumed.authType, consumed.model)))
+        assertNotNull("not cleared by that start", notice())
+        mainProcess()
+        load() // MAIN converges prefs on the repaired model
+        assertEquals("gpt-6.1-sol", prefs.disk["model"])
+        assertNull("the notice's selection is stored nowhere: gone, not stuck", notice())
+    }
+
+    /**
+     * The Completed-with-prefs-behind window: the resolve saves notice I while prefs still hold P and
+     * runtime_state already holds I. It must survive (visible, and the chokepoint keeps it) until the
+     * mirror commits I — and afterwards, because prefs then hold I.
+     */
+    private fun assertSurvivesWindowThenMirror() {
+        assertEquals("P", "openai", prefs.memory["provider"]) // prefs behind
+        val n = notice()
+        assertEquals(I, n?.selection)
+        assertTrue("visible in the window", RestartNotice.visible(n, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+        invalidateNow()
+        assertEquals("the chokepoint keeps it in the window", n, notice())
+        assertEquals(ModelSelectionLock.Result.Acquired(true), mirror()) // the mirror commits I
+        assertEquals("xai", prefs.memory["provider"])
+        assertEquals("kept after the mirror: prefs hold I", n, notice())
+        assertTrue(RestartNotice.visible(n, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+        load()
+        assertEquals(n, notice())
+    }
+
+    @Test
+    fun `Completed with prefs behind - after a prefs commit that returned false - notice I survives`() {
+        base()
+        prefs.failCommits = true
+        try { load() } finally { disarm() } // prefs stay on P; the record is kept
+        restart()
+        writeRuntime(I) // runtime_state then holds the target (e.g. Node wrote it)
+        assertTrue(resolveNow() is ReconcileRecord.Outcome.Completed)
+        assertSurvivesWindowThenMirror()
+    }
+
+    @Test
+    fun `Completed with prefs behind - in a tainted MAIN process - notice I survives`() {
+        base()
+        doubleFailure() // tainted: cache P, disk I, runtime_state R0
+        writeRuntime(I)
+        assertTrue(resolveNow() is ReconcileRecord.Outcome.Completed)
+        assertSurvivesWindowThenMirror()
+    }
+
+    // ------------------------------------------------------------------ Q17 = (b) (Codex 90fed4d6)
+
+    @Test
+    fun `Q17 - deleting captured selection keys gives no replacement choice, each key separately`() {
+        val full = """{"heartbeatIntervalMinutes":30,"provider":"xai","authType":"api_key","model":"grok-4.6"}"""
+        for (removed in listOf(
+            """{"heartbeatIntervalMinutes":30,"authType":"api_key","model":"grok-4.6"}""", // provider removed
+            """{"heartbeatIntervalMinutes":30,"provider":"xai","model":"grok-4.6"}""", // authType removed
+            """{"heartbeatIntervalMinutes":30,"provider":"xai","authType":"api_key"}""", // model removed
+            """{"heartbeatIntervalMinutes":30}""", // all selection keys removed
+        )) {
+            fresh()
+            assertTrue("removal only: $removed", resolveAfterOverlay(full, removed) is ReconcileRecord.Outcome.Recovered)
+        }
+    }
+
+    @Test
+    fun `Q17 - a removed key next to a blank, null or malformed replacement, or a changed remaining key, supersedes`() {
+        val full = """{"heartbeatIntervalMinutes":30,"provider":"xai","authType":"api_key","model":"grok-4.6"}"""
+        val newer = ReconcileRecord.Outcome.Superseded(ReconcileRecord.DROP_OVERLAY_NEWER)
+        for (now in listOf(
+            // provider removed, another key replaced by blank / null / malformed
+            """{"authType":"","model":"grok-4.6"}""",
+            """{"authType":"api_key","model":null}""",
+            """{"authType":7,"model":"grok-4.6"}""",
+            // authType removed, provider blank / model null / provider malformed
+            """{"provider":"","model":"grok-4.6"}""",
+            """{"provider":"xai","model":null}""",
+            """{"provider":["xai"],"model":"grok-4.6"}""",
+            // model removed, a replaced scope key
+            """{"provider":"xai","authType":""}""",
+            """{"provider":null,"authType":"api_key"}""",
+            // a key removed and a remaining key CHANGED
+            """{"provider":"xai","model":"grok-4.6-fast"}""",
+            """{"authType":"oauth","model":"grok-4.6"}""",
+        )) {
+            fresh()
+            assertEquals(now, newer, resolveAfterOverlay(full, now))
+        }
     }
 
     // ------------------------------------------------------------------ ModelRepair intents
@@ -1478,10 +1700,45 @@ class ReconcileRecordTest {
     }
 
     @Test
-    fun `I3 - an intent with the same target - Recovered`() {
-        repairNeighbour("gpt-5.4")
-        assertTrue(resolveNow() is ReconcileRecord.Outcome.Recovered)
-        assertEquals("gpt-5.4", runtimeTuple()?.model)
+    fun `I3 - a PROVEN intent with the same target - Recovered`() {
+        // CodeRabbit 4628273857: the intent must govern (proven, Pending), so only the same-target
+        // rule lets the record recover. The overlay model gpt-6-astra (not retired) is both targets;
+        // the retired id is in the captured runtime_state.
+        val before = ModelTuple("openai", "oauth", "gpt-6.1-sol")
+        val after = ModelTuple("openai", "oauth", "gpt-6-astra")
+        val r0 = ModelTuple("openai", "oauth", "gpt-5.4")
+        seedPrefs(after)
+        writeRuntime(r0)
+        val overlay = """{"heartbeatIntervalMinutes":30,"provider":"openai","authType":"oauth","model":"gpt-6-astra"}"""
+        writeOverlayRaw(overlay)
+        val obj = Json.parseToJsonElement(overlay).jsonObject
+        Files.write(
+            ReconcileRecord.path(dir),
+            enc.encodeToString(
+                ReconcileRecord.Record.serializer(),
+                ReconcileRecord.Record(
+                    prefsBefore = ReconcileRecord.RawTuple(before.provider, before.authType, before.model),
+                    prefsAfter = ReconcileRecord.RawTuple(after.provider, after.authType, after.model),
+                    target = after,
+                    runtime = ReconcileRecord.RuntimeCapture(ReconcileRecord.STATE_PRESENT, r0),
+                    overlay = ReconcileRecord.RawTuple("openai", "oauth", "gpt-6-astra"),
+                    overlaySelection = ModelRepair.rawSelection(obj),
+                ),
+            ).toByteArray(),
+        )
+        val intent = ModelRepair.RepairIntent(
+            provider = "openai", authType = "oauth", target = "gpt-6-astra", defaultAtDecision = "gpt-6.1-sol",
+            retired = listOf("gpt-5.4"), runtime = r0,
+            overlay = ModelRepair.CapturedOverlay(true, "openai", "gpt-6-astra", ModelRepair.rawSelection(obj)),
+            prefs = after,
+        )
+        ModelRepair.writeIntent(dir, intent)
+        mainProcess()
+        val c = ModelRepair.classifyIntent(intent, ConfigManager.modelSnapshotFrom(dir, MainPrefs.view(prefs)), main = true)
+        assertTrue("precondition: the repair governs the selection ($c)", c is ModelRepair.IntentClass.Pending)
+        assertTrue(ModelRepair.provenTarget(intent, ConfigManager.modelSnapshotFrom(dir, MainPrefs.view(prefs))))
+        assertTrue("the same target: no yield", resolveNow() is ReconcileRecord.Outcome.Recovered)
+        assertEquals(after, runtimeTuple())
     }
 
     @Test
@@ -1558,7 +1815,9 @@ class ReconcileRecordTest {
     }
 
     @Test
-    fun `X4 - an xai-oauth target with a usable token over an explicit xai-api_key R0 - Recovered`() {
+    fun `X4 - an xai-oauth target over an explicit xai-api_key R0, on the reauth path - Recovered`() {
+        // CodeRabbit 4628273866: signedIn() does not decrypt here, so this is the REAUTH path (the H5
+        // rule keeps oauth for a dead family). The usable-token path is the next pin.
         signedIn()
         val r0 = ModelTuple("xai", "api_key", "grok-4.6")
         seedPrefs(r0)
@@ -1571,7 +1830,32 @@ class ReconcileRecordTest {
         load()
         assertTrue(logsSince(a).has(ReconcileRecord.recovered("xai", "oauth", "grok-4.6")))
         assertEquals(XO, runtimeTuple())
-        assertEquals("the auth changed: a running agent is restarted", ReconcileRecord.AgentScope("xai", "api_key"), restarts.single().from)
+        assertEquals("the auth changed: a restart-to-apply notice for the selection", XO, notice()?.selection)
+    }
+
+    @Test
+    fun `X4b - an xai-oauth target with a USABLE token over an explicit xai-api_key R0 - Recovered`() {
+        ConfigManager.xaiCiphertextOpenerForTest = { enc -> "tok-$enc" }
+        try {
+            signedIn()
+            val view = ConfigManager.xaiSignInView(XaiOAuthTokenStore.read())
+            assertTrue("precondition: a usable token, no reauth", view.token.isNotBlank() && !view.effectiveReauth)
+            assertEquals("oauth", ConfigManager.runtimeAuthTypeForStored("xai", "oauth"))
+            val r0 = ModelTuple("xai", "api_key", "grok-4.6")
+            seedPrefs(r0)
+            writeRuntime(r0)
+            writeOverlay(XO)
+            mainProcess()
+            doubleFailure()
+            restart()
+            val a = anchor()
+            load()
+            assertTrue(logsSince(a).has(ReconcileRecord.recovered("xai", "oauth", "grok-4.6")))
+            assertEquals(XO, runtimeTuple())
+            assertEquals("a restart-to-apply notice for the selection", XO, notice()?.selection)
+        } finally {
+            ConfigManager.xaiCiphertextOpenerForTest = null
+        }
     }
 
     @Test

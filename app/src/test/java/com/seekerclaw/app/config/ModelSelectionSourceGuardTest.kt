@@ -80,6 +80,18 @@ class ModelSelectionSourceGuardTest {
                     (path.endsWith("RuntimeStateStore.kt") && line.contains("seedIfMissing("))
                 if (!guarded) offenders += "$path:${i + 1}  in  $sig"
             }
+            // CodeRabbit 4628273848: a model-key put split across lines (`putString(` then `KEY_MODEL`
+            // on the next line), which the line-based pattern above cannot see. Comments stripped.
+            val code = lines.map { if (isComment(it)) "" else it.substringBefore("//") }
+            val text = code.joinToString("\n")
+            val starts = IntArray(code.size).also { var o = 0; code.forEachIndexed { k, l -> it[k] = o; o += l.length + 1 } }
+            Regex("""putString\(\s*\n\s*KEY_(MODEL|PROVIDER|AUTH_TYPE)\b""").findAll(text).forEach { m ->
+                val i = starts.indexOfLast { it <= m.range.first }
+                seen++
+                val (sig, body) = enclosing(lines, i)
+                val guarded = body.substringBefore("{").contains("ModelSelectionLock.Tx") || body.contains("ModelSelectionLock.transaction")
+                if (!guarded) offenders += "$path:${i + 1}  in  $sig (multiline)"
+            }
         }
         return seen to offenders
     }
@@ -106,6 +118,18 @@ class ModelSelectionSourceGuardTest {
         // ...and the store form.
         val store = lines.toMutableList().apply { add(at, "    fun leak2(v: RuntimeState) { store?.writeVerified(v) }") }
         assertTrue(writerOffenders(sources + (path to store)).second.any { it.startsWith("$path:${at + 1}") })
+        // CodeRabbit 4628273848: an unlocked model-key put split across lines is reported; the same
+        // text inside a comment is not.
+        val multi = lines.toMutableList().apply {
+            add(at, "    fun leak3(p: SharedPreferences) { p.edit().putString(")
+            add(at + 1, "        KEY_MODEL, \"x\").commit() }")
+        }
+        assertTrue(writerOffenders(sources + (path to multi)).second.any { it.startsWith("$path:${at + 1}") })
+        val commented = lines.toMutableList().apply {
+            add(at, "    // fun leak3(p: SharedPreferences) { p.edit().putString(")
+            add(at + 1, "    //     KEY_MODEL, \"x\").commit() }")
+        }
+        assertEquals("the needle in a comment is not a writer", emptyList<String>(), writerOffenders(sources + (path to commented)).second)
     }
 
     // ------------------------------------------- v2.12 (Q16): who touches the reconcile retry record
@@ -164,7 +188,11 @@ class ModelSelectionSourceGuardTest {
                 }
             }
         }
-        if (lines.none { it.contains("when (ReconcileRecord.read(filesDir))") }) out += "boot does not read the record"
+        // CodeRabbit 4628273824: the read must be in the uncommented boot body, not just anywhere.
+        val boot = lines.indexOfFirst { !isComment(it) && Regex("""fun (<[^>]*> )?boot\(""").containsMatchIn(it) }
+        val bootEnd = if (boot < 0) -1 else (boot + 1 until lines.size).first { lines[it].startsWith("    }") }
+        val bootCode = if (boot < 0) emptyList() else lines.subList(boot, bootEnd + 1).filterNot { isComment(it) }.map { it.substringBefore("//") }
+        if (bootCode.none { it.contains("when (ReconcileRecord.read(filesDir))") }) out += "boot does not read the record"
         return out
     }
 
@@ -178,6 +206,9 @@ class ModelSelectionSourceGuardTest {
         assertTrue("negative control: a delete in the boot is reported", bootRecordOffenders(mutated).isNotEmpty())
         val noRead = lines.toMutableList().apply { this[at] = this[at].replace("ReconcileRecord.read(filesDir)", "ReconcileRecord.Read.Absent") }
         assertTrue("negative control: H4 removed is reported", bootRecordOffenders(noRead).isNotEmpty())
+        // CodeRabbit 4628273824: H4 removed, but the needle kept in a comment, is still reported.
+        val commented = noRead.toMutableList().apply { add(at, "        // when (ReconcileRecord.read(filesDir)) {") }
+        assertTrue("negative control: the read only in a comment", bootRecordOffenders(commented).isNotEmpty())
     }
 
     @Test
@@ -202,30 +233,45 @@ class ModelSelectionSourceGuardTest {
     private fun applyOffenders(srcs: Map<String, List<String>>): List<String> {
         val out = mutableListOf<String>()
         val memberFun = Regex("""^ {4}(?:(?:private|internal|public|override|suspend|inline)\s+)*fun\s""")
-        // v2.12 (Q16, D12.2): a model key put OR removed, or a whole-prefs clear(), then apply();
-        // and the KTX `edit { }` (which applies) in a member that touches a model key or clears.
-        val modelTouch = Regex("""(putString|remove)\(KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|edit\(\)\??\..*\bclear\(\)""")
+        // v2.12 (Q16, D12.2): a model key put OR removed, or a whole-prefs clear(), then apply(); and
+        // the KTX `edit { }` (which applies) in a member that touches a model key or clears.
+        // CodeRabbit 4628273848: matched over the WHOLE member text (comments stripped), so a call
+        // split across lines (`putString(` / `KEY_MODEL, …` / `).apply()`) is seen too.
+        // CodeRabbit 4628273833: a bare `clear()` inside a KTX `edit { … }` block counts.
+        val modelTouch = Regex("""(putString|remove)\(\s*KEY_(MODEL|PROVIDER|AUTH_TYPE)\b|edit\(\)\??\.[^;]*?\bclear\(\)""")
         val ktxEdit = Regex("""\.edit\s*(\(\s*commit\s*=\s*false\s*\))?\s*\{""")
+        val ktxClear = Regex("""\.edit\s*(\(\s*commit\s*=\s*false\s*\))?\s*\{[^}]*\bclear\(\)""")
+        val apply = Regex("""\.\s*apply\(\)""")
         for ((path, lines) in srcs) {
-            var sig = "<top>"
-            var putsModelKey = false
-            var ktxAt = -1
-            fun endMember() {
-                if (ktxAt >= 0 && putsModelKey) out += "$path:${ktxAt + 1}  in  $sig (KTX edit { })"
-                ktxAt = -1
+            var start = -1
+            fun scan(end: Int) {
+                if (start < 0) return
+                // Member text, comments stripped, with each char's line kept for the report.
+                val sb = StringBuilder()
+                val lineOf = mutableListOf<Int>()
+                for (i in start until end) {
+                    val l = lines[i]
+                    if (isComment(l)) continue
+                    val code = l.substringBefore("//") + "\n"
+                    sb.append(code)
+                    repeat(code.length) { lineOf += i }
+                }
+                val text = sb.toString()
+                val sig = lines[start].trim()
+                val touch = modelTouch.find(text)
+                if (touch != null) {
+                    apply.findAll(text, touch.range.first).forEach { out += "$path:${lineOf[it.range.first] + 1}  in  $sig" }
+                }
+                val ktx = ktxEdit.find(text)
+                if (ktx != null && (touch != null || ktxClear.containsMatchIn(text))) out += "$path:${lineOf[ktx.range.first] + 1}  in  $sig (KTX edit { })"
             }
             lines.forEachIndexed { i, line ->
                 if (memberFun.containsMatchIn(line)) {
-                    endMember()
-                    sig = line.trim()
-                    putsModelKey = false
+                    scan(i)
+                    start = i
                 }
-                if (isComment(line)) return@forEachIndexed
-                if (modelTouch.containsMatchIn(line)) putsModelKey = true
-                if (ktxEdit.containsMatchIn(line) && ktxAt < 0) ktxAt = i
-                if (putsModelKey && line.contains(".apply()")) out += "$path:${i + 1}  in  $sig"
             }
-            endMember()
+            scan(lines.size)
         }
         return out
     }
@@ -249,6 +295,19 @@ class ModelSelectionSourceGuardTest {
             this[at] = "            p.edit { putString(KEY_AUTH_TYPE, normalized) }"
         }
         assertTrue("KTX edit { } of a model key", applyOffenders(mapOf(path to ktx)).isNotEmpty())
+        // CodeRabbit 4628273833: a whole-prefs clear inside a KTX edit.
+        val ktxClear = lines.toMutableList().apply { this[at] = "            p.edit { clear() }" }
+        assertTrue("KTX edit { clear() }", applyOffenders(mapOf(path to ktxClear)).isNotEmpty())
+        // CodeRabbit 4628273848: a model-key write split across lines, then apply().
+        val multi = lines.toMutableList().apply {
+            this[at] = "            p.edit().putString("
+            add(at + 1, "                KEY_MODEL, normalized,")
+            add(at + 2, "            ).apply()")
+        }
+        assertTrue("multiline putString(\\n KEY_MODEL …).apply()", applyOffenders(mapOf(path to multi)).isNotEmpty())
+        // ...and the needle only in a comment is NOT reported (comments are stripped).
+        val inComment = lines.toMutableList().apply { this[at] = "            // p.edit().putString(KEY_MODEL, x).apply()" }
+        assertEquals(emptyList<String>(), applyOffenders(mapOf(path to inComment)))
     }
 
     @Test
@@ -590,34 +649,153 @@ class ModelSelectionSourceGuardTest {
         assertTrue("negative control: a guard without the catch is reported", restartStartOffenders(noCatch).isNotEmpty())
     }
 
-    /** The `android:process` of [service] in AndroidManifest.xml (parsed as text), or null. */
-    private fun manifestProcess(manifest: String, service: String): String? {
-        val tag = Regex("""<service\b[^>]*>""").findAll(manifest).map { it.value }
-            .firstOrNull { Regex("""android:name="[^"]*\Q$service\E"""").containsMatchIn(it) } ?: return null
-        return Regex("""android:process="([^"]*)"""").find(tag)?.groupValues?.get(1)
-    }
-
-    /** The process suffix ReconcileRecord's liveness check looks for (`context.packageName + "<suffix>"`). */
-    private fun livenessSuffix(rr: List<String>): String? =
-        rr.filterNot { isComment(it) }.firstNotNullOfOrNull { Regex("""context\.packageName \+ "([^"]+)"""").find(it)?.groupValues?.get(1) }
-
-    private fun processOffenders(manifest: String, rr: List<String>): List<String> {
-        val declared = manifestProcess(manifest, ".service.SeekerClawService") ?: return listOf("SeekerClawService has no android:process")
-        val looked = livenessSuffix(rr) ?: return listOf("ReconcileRecord's liveness check names no process")
-        return if (declared == looked) emptyList() else listOf("manifest $declared != liveness check $looked")
+    /**
+     * Fold 5′ (Codex 90fed4d6): the reconcile retry's model-selection code never stops or starts the
+     * agent — no reference to `SeekerClawService` in `config/` or `state/` (comments stripped). A
+     * finished change only saves a restart notice; the user restarts.
+     */
+    private fun serviceCallOffenders(srcs: Map<String, List<String>>): List<String> {
+        val out = mutableListOf<String>()
+        for ((path, lines) in srcs) {
+            if (!path.startsWith("com/seekerclaw/app/config/") && !path.startsWith("com/seekerclaw/app/state/")) continue
+            lines.forEachIndexed { i, l ->
+                if (!isComment(l) && Regex("""\bSeekerClawService\b""").containsMatchIn(l.substringBefore("//"))) out += "$path:${i + 1}"
+            }
+        }
+        return out
     }
 
     @Test
-    fun `v2_12 M1 - the liveness check looks for the process the manifest gives SeekerClawService`() {
-        val manifest = listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml").map { File(it) }.first { it.isFile }.readText()
-        val rr = sources.getValue("com/seekerclaw/app/config/ReconcileRecord.kt")
-        assertEquals(":node", manifestProcess(manifest, ".service.SeekerClawService"))
-        assertEquals(emptyList<String>(), processOffenders(manifest, rr))
-        // Negative controls: the service moved to another process; the check renamed.
-        val moved = manifest.replace("android:process=\":node\"", "android:process=\":agent\"")
-        assertTrue(processOffenders(moved, rr).isNotEmpty())
-        val renamed = rr.map { it.replace("context.packageName + \":node\"", "context.packageName + \":worker\"") }
-        assertTrue(processOffenders(manifest, renamed).isNotEmpty())
+    fun `v2_12 fold 5' - Recovered and Completed make zero service stop or start calls`() {
+        assertEquals(emptyList<String>(), serviceCallOffenders(sources))
+        val rr = "com/seekerclaw/app/config/ReconcileRecord.kt"
+        val lines = sources.getValue(rr)
+        val at = lines.indexOfFirst { it.contains("private fun noticeSaved(") }
+        assertTrue(at >= 0)
+        val restart = lines.toMutableList().apply { add(at, "    private fun kick(c: android.content.Context) = com.seekerclaw.app.service.SeekerClawService.restart(c)") }
+        assertTrue("negative control: a restart call is reported", serviceCallOffenders(sources + (rr to restart)).isNotEmpty())
+        val rss = "com/seekerclaw/app/state/RuntimeStateStore.kt"
+        val stop = sources.getValue(rss).toMutableList().apply { add(1, "fun x(c: android.content.Context) = com.seekerclaw.app.service.SeekerClawService.stop(c)") }
+        assertTrue("negative control: in state/ too", serviceCallOffenders(sources + (rss to stop)).isNotEmpty())
+        val commented = lines.toMutableList().apply { add(at, "    // SeekerClawService.restart(c)") }
+        assertEquals("a comment is not a call", emptyList<String>(), serviceCallOffenders(sources + (rr to commented)))
+    }
+
+    /** The body of [name] in [lines] (its `fun` line to the closing 4-space brace), comments stripped. */
+    private fun memberBody(lines: List<String>, name: String): String? {
+        val at = lines.indexOfFirst { !isComment(it) && Regex("""fun $name\(""").containsMatchIn(it) }
+        if (at < 0) return null
+        val end = (at + 1 until lines.size).firstOrNull { lines[it].isBlank() } ?: lines.size
+        return lines.subList(at, end).filterNot { isComment(it) }.joinToString(" ") { it.substringBefore("//") }
+    }
+
+    /**
+     * Codex 90fed4d6 review: ONE predicate decides whether a notice is current — `RestartNotice.isCurrent`
+     * — used by `visible`, `invalidateIfOrphaned` and (through it) the MAIN load's self-heal. No copy of
+     * the prefs/runtime comparison anywhere else in RestartNotice.
+     */
+    private fun predicateOffenders(rn: List<String>, cm: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        if (memberBody(rn, "visible")?.contains("isCurrent(") != true) out += "visible does not call isCurrent"
+        if (memberBody(rn, "invalidateIfOrphaned")?.contains("isCurrent(") != true) out += "invalidateIfOrphaned does not call isCurrent"
+        val pred = memberBody(rn, "isCurrent") ?: return out + "isCurrent not found"
+        if (!pred.contains("rawPrefsModelTuple(") || !pred.contains("ReconcileRecord.holdsTarget(")) out += "isCurrent is not the prefs-or-runtime rule"
+        val copies = rn.withIndex().filter { (i, l) -> !isComment(l) && (l.contains("rawPrefsModelTuple(") || l.contains("holdsTarget(")) }
+            .map { it.index }
+        val predAt = rn.indexOfFirst { it.contains("internal fun isCurrent(") }
+        if (copies.any { it < predAt || it > predAt + 6 }) out += "a copy of the predicate outside isCurrent"
+        if (cm.filterNot { isComment(it) }.none { it.contains("RestartNotice.invalidateIfOrphaned(tx!!, context.filesDir.toPath(), p)") }) out += "the MAIN load does not self-heal through invalidateIfOrphaned"
+        return out
+    }
+
+    @Test
+    fun `v2_12 fold 5' - one shared predicate for visible, the chokepoint and the load self-heal`() {
+        val rnPath = "com/seekerclaw/app/config/RestartNotice.kt"
+        val rn = sources.getValue(rnPath)
+        val cm = sources.getValue("com/seekerclaw/app/config/ConfigManager.kt")
+        assertEquals(emptyList<String>(), predicateOffenders(rn, cm))
+        // Negative control 1: visible with its own copy of the rule.
+        val v = rn.indexOfFirst { it.contains("notice != null && running && !healthStale && isCurrent(notice, prefs, filesDir)") }
+        assertTrue(v >= 0)
+        val copy = rn.toMutableList().apply { this[v] = "        notice != null && running && !healthStale && prefs != null && ConfigManager.rawPrefsModelTuple(prefs) == notice.selection" }
+        assertTrue("negative control: a copied rule in visible", predicateOffenders(copy, cm).isNotEmpty())
+        // Negative control 2: the chokepoint skipping the predicate.
+        val c = rn.indexOfFirst { it.contains("if (isCurrent(n, prefs, filesDir)) return") }
+        assertTrue(c >= 0)
+        val skip = rn.toMutableList().apply { this[c] = "        if (false) return" }
+        assertTrue("negative control: invalidateIfOrphaned without the predicate", predicateOffenders(skip, cm).isNotEmpty())
+        // Negative control 3: the load's self-heal removed.
+        val noHeal = cm.map { if (it.contains("RestartNotice.invalidateIfOrphaned(tx!!")) "" else it }
+        assertTrue("negative control: no self-heal in the load", predicateOffenders(rn, noHeal).isNotEmpty())
+    }
+
+    /**
+     * Fold 5′: the notice is cleared only by a SUCCESSFUL start — `RestartNotice.clearIfStartedOn` is
+     * called once, in `continueStart`, after `ServiceState.updateStatus(ServiceStatus.RUNNING)`, with
+     * the selection captured from the config this boot emitted. A failed or aborted boot returns
+     * before it; STARTING is not RUNNING.
+     */
+    private fun noticeClearOffenders(svc: List<String>): List<String> {
+        val code = svc.map { if (isComment(it)) "" else it.substringBefore("//") }
+        val calls = code.withIndex().filter { it.value.contains("RestartNotice.clearIfStartedOn(") }.map { it.index }
+        if (calls.size != 1) return listOf("clearIfStartedOn called ${calls.size} times")
+        val at = calls.single()
+        val cs = code.indexOfFirst { it.contains("private fun continueStart(") }
+        val running = (cs until at).firstOrNull { code[it].contains("ServiceState.updateStatus(ServiceStatus.RUNNING)") }
+        val out = mutableListOf<String>()
+        if (cs < 0 || cs > at) out += "not in continueStart"
+        if (running == null) out += "not after the RUNNING transition"
+        if (!code[at].contains("clearIfStartedOn(filesDir.toPath(), c)")) out += "not the consumed selection"
+        val emit = code.indexOfFirst { it.contains("consumed = com.seekerclaw.app.config.ModelTuple(config.provider, config.authType, config.model)") }
+        if (emit < 0 || emit > at) out += "the consumed selection is not the emitted config's"
+        return out
+    }
+
+    @Test
+    fun `v2_12 fold 5' - only a successful start on the consumed selection clears the notice`() {
+        val path = "com/seekerclaw/app/service/SeekerClawService.kt"
+        val svc = sources.getValue(path)
+        assertEquals(emptyList<String>(), noticeClearOffenders(svc))
+        val at = svc.indexOfFirst { it.contains("RestartNotice.clearIfStartedOn(") }
+        val running = svc.indexOfFirst { it.contains("ServiceState.updateStatus(ServiceStatus.RUNNING)") && svc.indexOf(it) > svc.indexOfFirst { l -> l.contains("private fun continueStart(") } }
+        // Negative control 1: the clear moved before the RUNNING transition (a start not yet proven).
+        val early = svc.toMutableList().apply {
+            val line = removeAt(at)
+            add(svc.indexOfFirst { it.contains("NodeBridge.start(workDir") }, line)
+        }
+        assertTrue("negative control: a clear before RUNNING is reported", noticeClearOffenders(early).isNotEmpty())
+        // Negative control 2: a clear with a selection other than the consumed one.
+        val other = svc.toMutableList().apply { this[at] = this[at].replace("clearIfStartedOn(filesDir.toPath(), c)", "clearIfStartedOn(filesDir.toPath(), ModelTuple(\"x\", \"y\", \"z\"))") }
+        assertTrue("negative control: another selection is reported", noticeClearOffenders(other).isNotEmpty())
+        assertTrue(running >= 0)
+    }
+
+    /** No main source ASSIGNS the xAI ciphertext test seam (comments stripped; the declaration is `name: type = null`). */
+    private fun xaiSeamOffenders(srcs: Map<String, List<String>>): List<String> {
+        val out = mutableListOf<String>()
+        val assign = Regex("""\bxaiCiphertextOpenerForTest\s*=(?!=)""")
+        for ((path, lines) in srcs) {
+            lines.forEachIndexed { i, l ->
+                if (!isComment(l) && assign.containsMatchIn(l.substringBefore("//"))) out += "$path:${i + 1}"
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun `v2_12 - production never assigns the xAI ciphertext test seam`() {
+        assertEquals(emptyList<String>(), xaiSeamOffenders(sources))
+        val cm = "com/seekerclaw/app/config/ConfigManager.kt"
+        val lines = sources.getValue(cm)
+        assertTrue("the seam is declared", lines.any { it.contains("internal var xaiCiphertextOpenerForTest: ((String) -> String)? = null") })
+        val at = lines.indexOfFirst { it.contains("fun isSetupComplete(context: Context): Boolean =") }
+        val assigned = lines.toMutableList().apply { add(at, "    init { xaiCiphertextOpenerForTest = { it } }") }
+        assertTrue("negative control: an assignment is reported", xaiSeamOffenders(sources + (cm to assigned)).isNotEmpty())
+        val elsewhere = "com/seekerclaw/app/SeekerClawApplication.kt"
+        val app = sources.getValue(elsewhere).toMutableList().apply { add(1, "fun x() { ConfigManager.xaiCiphertextOpenerForTest = null }") }
+        assertTrue("negative control: in another file", xaiSeamOffenders(sources + (elsewhere to app)).isNotEmpty())
+        val commented = lines.toMutableList().apply { add(at, "    // xaiCiphertextOpenerForTest = { it }") }
+        assertEquals("the needle in a comment is not reported", emptyList<String>(), xaiSeamOffenders(sources + (cm to commented)))
     }
 
     @Test
