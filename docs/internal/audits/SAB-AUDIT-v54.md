@@ -201,3 +201,23 @@ Probe (Section D, re-traced): "I switched provider from chat but the agent still
 Verification: each new quote was checked with `grep -F` on its fixed prefix and suffix against `app/src/main/java` (one source hit each) and against DIAGNOSTICS; the UI title `Restart the agent to apply the change` matches `DashboardScreen.kt`. No DIAGNOSTICS text still refers to the removed restart lines (grep for `restarting the agent`, `not in the foreground`, `the agent is not running`, `switches to provider=`, `restartRequested`: only unrelated hits — OpenAI token persistence, MCP reconnect, xAI sign-out). Gaps found: 0 (drift 0, correction 0) — the DIAGNOSTICS update shipped with the code change.
 
 The v55 full audit is still owed before the RC of the release that ships PR #465.
+
+### Addendum 2b: CodeRabbit round on `ff5fc5be` (same PR)
+
+Changed log and UI strings (each DIAGNOSTICS quote re-checked with `grep -F` against the source):
+
+| Site | Level | Change |
+|---|---|---|
+| `ReconcileRecord.XAI_SYNC_HELD` | WARN | Adds "(or its retry record cannot be read)" and "; if this repeats after reopening, check Logs for the reconcile warning (often storage) first" |
+| `XaiOAuthActivity` sign-in HELD line | WARN | Same two additions |
+| `XAI_RESTART_NEEDED_HELD`, `XAI_SIGN_OUT_HELD` | UI | Add "If this message comes back after reopening, check Logs for a reconcile warning (often full storage) first." |
+
+DIAGNOSTICS corrections (all were drift, now closed: the text claimed more than the code guarantees):
+- `XAI_SYNC_HELD` entries no longer say "not a storage problem": storage can keep the change pending. They no longer require a `Reconcile finished` line: a model-only completion is silent, and the change is done once no new `not finished` / `retry waits` / `not readable` / `not confirmed` lines appear.
+- `restart notice not saved` covers a sign-in-type change within one provider (for example OpenAI API key → sign-in): check `/provider`, and restart when it cannot be confirmed.
+- `written but not confirmed on disk` names both outcomes after a confirm: the notice line, or `restart notice not saved`.
+- This report's own recovery guidance (lines 57, 102, 129) says force stop or restart the phone, not "close from Recents".
+
+Behaviour that is not a string change but affects what the agent can tell the user: an unreadable `runtime_state.json` now keeps the restart notice (it is never deleted on doubt), and the notice that `:node` removes at start now disappears from the dashboard straight away (filesDir FileObserver).
+
+Gaps: 0 open.

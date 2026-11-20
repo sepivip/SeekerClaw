@@ -508,29 +508,32 @@ object ModelRepair {
 
     /**
      * CodeRabbit on 7de1e77c (Major): the overlay's `provider` and `authType` keys, compared RAW and
-     * apart from `model`, still stand for the intent's scope. Each key is held when its raw JSON is
-     * the captured raw value ([CapturedOverlay.selection]; an overlay absent at capture had none), or
-     * exactly the intent's own scope value WHILE the overlay's model is the repair target — what this
-     * repair writes (the target model first, then the boot publish of the approved provider/auth;
-     * CodeRabbit 4628273784: a scope key changed to the scope value next to the OLD model is not the
-     * repair's write). Any other added, removed or changed key is a newer selection. A legacy intent (no captured raw selection) has only the normalised
+     * apart from `model`, still stand for the intent's scope. With raw evidence
+     * ([CapturedOverlay.selection]; an overlay absent at capture had none) the two keys are judged
+     * as ONE PAIR, never key by key: held only when
+     *  - both are exactly the captured raw values (the repair has not published yet), or
+     *  - both are exactly the intent's own scope values WHILE the overlay's model is the repair
+     *    target — the boot publish writes provider, authType and model together, after the target
+     *    model (CodeRabbit 4628273784: the scope value next to the OLD model is not the repair's
+     *    write).
+     * A mix — one key captured, the other the scope value — is a newer selection: e.g. a captured
+     * `authType: "api_key"` with no provider, then `/provider openai api_key` writing the scope's
+     * provider next to the captured auth, must not resume an OAuth intent over the API-key choice
+     * (CodeRabbit on ff5fc5be). A legacy intent (no captured raw selection) has only the normalised
      * scope as evidence: a present key must be exactly the scope value (a blank or non-string one
      * cannot pass via null-equality).
      */
     private fun scopeKeysHeld(intent: RepairIntent, cap: CapturedOverlay, now: Map<String, String>, nowModel: String?): Boolean {
+        val keys = listOf("provider", "authType")
         val own = mapOf(
             "provider" to JsonPrimitive(intent.provider).toString(),
             "authType" to JsonPrimitive(intent.authType).toString(),
         )
         val captured: Map<String, String>? = if (cap.present) cap.selection else emptyMap()
-        return listOf("provider", "authType").all { k ->
-            val v = now[k]
-            if (captured != null) {
-                v == captured[k] || (v != null && v == own[k] && nowModel == intent.target)
-            } else {
-                v == null || v == own[k]
-            }
-        }
+        if (captured == null) return keys.all { k -> now[k] == null || now[k] == own[k] } // legacy
+        val capturedPair = keys.all { k -> now[k] == captured[k] }
+        val repairPair = nowModel == intent.target && keys.all { k -> now[k] == own[k] }
+        return capturedPair || repairPair
     }
 
     /**

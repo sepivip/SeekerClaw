@@ -54,7 +54,12 @@ class XaiOAuthOutcomeTest {
         assertEquals(XAI_RESTART_NEEDED_HELD, applyXaiOutcome(xaiSignInOutcome("held")) { calls++ })
         assertEquals(XAI_SIGN_OUT_HELD, applyXaiOutcome(xaiSignOutOutcome(ConfigManager.XaiAuthSync.HELD)) { calls++ })
         assertEquals("no restart prompt", 0, calls)
-        assertTrue(XAI_RESTART_NEEDED_HELD != XAI_RESTART_NEEDED_NOT_SAVED && !XAI_RESTART_NEEDED_HELD.contains("storage"))
-        assertTrue(!XAI_SIGN_OUT_HELD.contains("storage"))
+        assertTrue(XAI_RESTART_NEEDED_HELD != XAI_RESTART_NEEDED_NOT_SAVED && !XAI_RESTART_NEEDED_HELD.contains("Free up storage"))
+        assertTrue(!XAI_SIGN_OUT_HELD.contains("Free up storage"))
+        // CR ff5fc5be: HELD can also be an unreadable retry record — force stop first, then the Logs check.
+        for (m in listOf(XAI_RESTART_NEEDED_HELD, XAI_SIGN_OUT_HELD)) {
+            assertTrue(m.contains("Force stop the app (Settings > Apps > SeekerClaw) or restart the phone"))
+            assertTrue(m.contains("check Logs for a reconcile warning (often full storage)"))
+        }
     }
 }

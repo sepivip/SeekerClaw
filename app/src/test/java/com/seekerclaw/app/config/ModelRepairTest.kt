@@ -335,9 +335,10 @@ class ModelRepairTest {
         overlay,
     )
 
-    private fun present(model: String?, provider: String? = null): AgentSettingsFile.Read.Present {
+    private fun present(model: String?, provider: String? = null, authType: String? = null): AgentSettingsFile.Read.Present {
         val m = LinkedHashMap<String, kotlinx.serialization.json.JsonElement>()
         if (provider != null) m["provider"] = JsonPrimitive(provider)
+        if (authType != null) m["authType"] = JsonPrimitive(authType)
         if (model != null) m["model"] = JsonPrimitive(model)
         return AgentSettingsFile.Read.Present(JsonObject(m))
     }
@@ -437,13 +438,36 @@ class ModelRepairTest {
                 val c = classify(i, snap("gpt-5.4", rt, present(ov)))
                 assertEquals("runtime=$rt overlay=$ov", ModelRepair.IntentClass.Pending, c)
             }
-        // The repair's own write: the target model, then its scope's provider key (the boot publish).
+        // The repair's own write: the target model, then the boot publish (provider, authType and
+        // model together, the scope's values).
         listOf("gpt-5.4", "gpt-6.1-sol").forEach { rt ->
-            assertEquals("runtime=$rt, own publish", ModelRepair.IntentClass.Pending, classify(i, snap("gpt-5.4", rt, present("gpt-6.1-sol", provider = "openai"))))
+            assertEquals("runtime=$rt, own publish", ModelRepair.IntentClass.Pending, classify(i, snap("gpt-5.4", rt, present("gpt-6.1-sol", provider = "openai", authType = "oauth"))))
         }
         // CodeRabbit 4628273784: a scope key added next to the OLD (captured) model is not the repair's
         // write — the repair writes the target first — so it is a newer selection.
         assertTrue(classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-5.4", provider = "openai"))) is ModelRepair.IntentClass.Superseded)
+        assertTrue(classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-5.4", provider = "openai", authType = "oauth"))) is ModelRepair.IntentClass.Superseded)
+        // CodeRabbit on ff5fc5be: half a publish (the scope provider next to the captured, absent auth)
+        // is no write of the repair's: the pair is judged together.
+        assertTrue(classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol", provider = "openai"))) is ModelRepair.IntentClass.Superseded)
+    }
+
+    @Test
+    fun `CR ff5fc5be - the scope keys are ONE pair - the scope provider next to the captured api_key auth supersedes an OAuth intent`() {
+        // The intent captured an overlay with no provider and authType api_key; the stores run OpenAI OAuth.
+        val i = ModelRepair.decide(snap("gpt-5.4", "gpt-5.4", present("gpt-5.4", authType = "api_key")))!!
+        assertEquals("oauth", i.authType)
+        assertEquals("gpt-6.1-sol", i.target)
+        // Accepted: the complete captured pair (with the old or the target model) ...
+        listOf("gpt-5.4", "gpt-6.1-sol").forEach { ov ->
+            assertEquals("captured pair, overlay=$ov", ModelRepair.IntentClass.Pending, classify(i, snap("gpt-5.4", "gpt-5.4", present(ov, authType = "api_key"))))
+        }
+        // ... and the complete scope pair with the target model (the boot publish).
+        assertEquals(ModelRepair.IntentClass.Pending, classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol", provider = "openai", authType = "oauth"))))
+        // `/provider openai api_key` wrote {openai, api_key, gpt-6.1-sol}; the process died before its
+        // runtime_state write. Provider = the scope's, authType = the captured: a mix, a newer choice.
+        val c = classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol", provider = "openai", authType = "api_key")))
+        assertTrue("got $c", c is ModelRepair.IntentClass.Superseded)
     }
 
     @Test
@@ -483,7 +507,9 @@ class ModelRepairTest {
         val p = ModelRepair.IntentClass.Pending
         assertEquals(p, classify(i, snap("gpt-5.4", "gpt-5.4", AgentSettingsFile.Read.Absent)))
         assertEquals(p, classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol"))))
-        assertEquals("publisher filled the provider", p, classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol", "openai"))))
+        // The boot publish writes provider, authType and model together (ConfigManager.writeAgentSettingsJson).
+        assertEquals("publisher filled the scope", p, classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol", "openai", "oauth"))))
+        assertTrue("half a publish is no producer's write", classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6.1-sol", "openai"))) is ModelRepair.IntentClass.Superseded)
         assertTrue(classify(i, snap("gpt-5.4", "gpt-5.4", present("gpt-6-astra"))) is ModelRepair.IntentClass.Superseded)
         // Codex Q15 (58e426b6): an overlay with no selection keys contributes no model evidence —
         // the same as absent (an unrelated Settings save creates exactly this file). v2.10 read it
@@ -524,12 +550,12 @@ class ModelRepairTest {
     fun `v2_9 pin 9 - in MAIN a newer Settings choice in prefs supersedes, in node it cannot`() {
         val i = ModelRepair.decide(snap("gpt-5.4", "gpt-5.4", present("gpt-5.4")))!!
             .copy(state = ModelRepair.STATE_AWAITING_MAIN)
-        val files = snap("gpt-6-astra", "gpt-6.1-sol", present("gpt-6.1-sol", "openai"))
+        val files = snap("gpt-6-astra", "gpt-6.1-sol", present("gpt-6.1-sol", "openai", "oauth"))
         assertTrue("MAIN: prefs hold neither the captured value nor the target", classify(i, files, main = true) is ModelRepair.IntentClass.Superseded)
         assertEquals("`:node` never reads its prefs cache as a newer choice", ModelRepair.IntentClass.Holds, classify(i, files, main = false))
-        val captured = snap("gpt-5.4", "gpt-6.1-sol", present("gpt-6.1-sol", "openai"))
+        val captured = snap("gpt-5.4", "gpt-6.1-sol", present("gpt-6.1-sol", "openai", "oauth"))
         assertEquals("MAIN, prefs on the captured value", ModelRepair.IntentClass.Holds, classify(i, captured, main = true))
-        val target = snap("gpt-6.1-sol", "gpt-6.1-sol", present("gpt-6.1-sol", "openai"))
+        val target = snap("gpt-6.1-sol", "gpt-6.1-sol", present("gpt-6.1-sol", "openai", "oauth"))
         assertEquals("MAIN, prefs on the target", ModelRepair.IntentClass.Holds, classify(i, target, main = true))
     }
 

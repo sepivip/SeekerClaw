@@ -115,7 +115,7 @@ object ReconcileRecord {
 
     /** WARN: the xAI sign-in sync did not touch runtime_state while a record is unresolved (fold 1). */
     const val XAI_SYNC_HELD =
-        "[Config] xAI OAuth runtime_state sync held: a model selection change is not finished yet — force stop the app (Settings > Apps > SeekerClaw) or restart the phone, then sign out and sign in with Grok again"
+        "[Config] xAI OAuth runtime_state sync held: a model selection change is not finished yet (or its retry record cannot be read) — force stop the app (Settings > Apps > SeekerClaw) or restart the phone, then sign out and sign in with Grok again; if this repeats after reopening, check Logs for the reconcile warning (often storage) first"
 
     // ------------------------------------------------------------------------------- shape
 

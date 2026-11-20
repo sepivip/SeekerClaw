@@ -1163,6 +1163,24 @@ class ReconcileRecordTest {
     }
 
     @Test
+    fun `CR ff5fc5be - a held xAI sync with NO xai runtime record (non-xai or missing) is HELD, the hold comes before the disk shortcut`() {
+        for (missing in listOf(false, true)) {
+            fresh()
+            signedIn()
+            base() // prefs P (openai), runtime_state P (openai), the overlay on I (xai)
+            doubleFailure() // tainted: Deferred, held; runtime_state still holds openai
+            if (missing) Files.delete(runtimePath())
+            val runtimeBefore = if (missing) null else Files.readAllBytes(runtimePath())
+            val recordBefore = recordBytes()
+            val a = anchor()
+            assertEquals("missing=$missing", ConfigManager.XaiAuthSync.HELD, ConfigManager.syncXaiRuntimeAuthType(ctx, lockTimeoutMs = 50, attempts = 1))
+            assertTrue(logsSince(a).any { it.level == LogLevel.WARN && it.message == ReconcileRecord.XAI_SYNC_HELD })
+            if (missing) assertFalse("nothing seeded", Files.exists(runtimePath())) else assertArrayEquals(runtimeBefore, Files.readAllBytes(runtimePath()))
+            assertArrayEquals(recordBefore, recordBytes())
+        }
+    }
+
+    @Test
     fun `CR 4628273784 - a scope key changed to the scope value next to the OLD model supersedes`() {
         val captured = """{"provider":"openai","authType":"api_key","model":"gpt-5.4"}"""
         val authOnly = """{"provider":"openai","authType":"oauth","model":"gpt-5.4"}"""
@@ -1430,6 +1448,22 @@ class ReconcileRecordTest {
     }
 
     @Test
+    fun `CR fold 5p - the node delete at RUNNING reaches MAIN through the filesDir event, after a read that ran before it`() {
+        interruptedProviderChange()
+        load()
+        assertEquals("MAIN shows I (its RUNNING-triggered read ran before the delete)", I, RestartNotice.state.value?.selection)
+        nodeProcess()
+        assertTrue(RestartNotice.clearIfStartedOn(dir, I)) // :node, at RUNNING
+        mainProcess()
+        assertEquals("no in-process signal: the cache is stale", I, RestartNotice.state.value?.selection)
+        RestartNotice.handleFilesDirEvent(dir, "service_logs") // another file's event changes nothing
+        assertEquals(I, RestartNotice.state.value?.selection)
+        RestartNotice.handleFilesDirEvent(dir, RestartNotice.NAME) // the DELETE event on the notice file
+        assertNull("re-read after the delete: hidden", RestartNotice.state.value)
+        assertFalse(RestartNotice.visible(RestartNotice.state.value, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+    }
+
+    @Test
     fun `5p - a completed Reset invalidates the notice`() {
         xaiTokens(XaiOAuthTokens())
         interruptedProviderChange()
@@ -1590,6 +1624,27 @@ class ReconcileRecordTest {
         writeRuntime(I)
         assertTrue(resolveNow() is ReconcileRecord.Outcome.Completed)
         assertSurvivesWindowThenMirror()
+    }
+
+    @Test
+    fun `CR isCurrent - prefs behind and runtime_state unreadable - notice I is kept and shown, never deleted on doubt`() {
+        base()
+        doubleFailure() // tainted: cache P, disk I, runtime_state R0
+        writeRuntime(I)
+        assertTrue(resolveNow() is ReconcileRecord.Outcome.Completed)
+        assertEquals("P", "openai", prefs.memory["provider"]) // prefs behind
+        val n = notice()!!
+        assertEquals(I, n.selection)
+        // A read failure of runtime_state (here: bytes that do not parse) — undecidable.
+        Files.write(RuntimeStateFile.path(dir), "{not json".toByteArray())
+        assertTrue(RuntimeStateFile.read(dir) is RuntimeStateFile.Read.Unreadable)
+        invalidateNow()
+        assertEquals("kept: not proven orphaned", n, notice())
+        assertTrue("shown: a missing restart prompt is worse than a redundant one", RestartNotice.visible(n, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+        // Once both stores are readable and neither holds I, it goes.
+        writeRuntime(B)
+        invalidateNow()
+        assertNull("proven orphaned", notice())
     }
 
     // ------------------------------------------------------------------ Q17 = (b) (Codex 90fed4d6)

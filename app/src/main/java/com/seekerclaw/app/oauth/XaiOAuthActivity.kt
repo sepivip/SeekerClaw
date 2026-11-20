@@ -254,9 +254,9 @@ class XaiOAuthActivity : ComponentActivity() {
                                         when (sync) {
                                             ConfigManager.XaiAuthSync.BUSY ->
                                                 "[Config] xAI sign-in saved, agent not restarted: settings busy — sign out, then sign in with Grok again to finish"
-                                            // v2.12 review m3: an unfinished model selection change, not storage.
+                                            // v2.12 review m3: an unfinished model selection change (or an unreadable retry record, often storage).
                                             ConfigManager.XaiAuthSync.HELD ->
-                                                "[Config] xAI sign-in saved, agent not restarted: a model selection change is not finished yet — force stop the app (Settings > Apps > SeekerClaw) or restart the phone, then sign out and sign in with Grok again"
+                                                "[Config] xAI sign-in saved, agent not restarted: a model selection change is not finished yet (or its retry record cannot be read) — force stop the app (Settings > Apps > SeekerClaw) or restart the phone, then sign out and sign in with Grok again; if this repeats after reopening, check Logs for the reconcile warning (often storage) first"
                                             else ->
                                                 "[Config] xAI sign-in saved, agent not restarted: runtime_state.json not saved — free storage, then sign out and sign in with Grok again"
                                         },

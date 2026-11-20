@@ -139,8 +139,10 @@ fun DashboardScreen(
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
 
     // BAT-1661 v2.12 fold 5′: the durable "restart to apply" notice. Re-read off the main thread
-    // whenever the agent's state or the config changes (a start may have cleared it in `:node`; a
-    // selection or Reset may have invalidated it); it survives an app reopen because it is a file.
+    // whenever the agent's state or the config changes (a selection or Reset may have invalidated
+    // it); it survives an app reopen because it is a file. `:node`'s delete at RUNNING reaches MAIN
+    // through the filesDir FileObserver (RestartNotice.handleFilesDirEvent), which re-reads it after
+    // the delete, so a read that ran before it cannot leave the notice on screen.
     val restartNotice by RestartNotice.state.collectAsState()
     var showNoticeRestartDialog by remember { mutableStateOf(false) }
     LaunchedEffect(status, cfgVersion) { RestartNotice.refreshAsync(context.filesDir.toPath()) }

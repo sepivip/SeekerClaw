@@ -703,7 +703,8 @@ class ModelSelectionSourceGuardTest {
         val copies = rn.withIndex().filter { (i, l) -> !isComment(l) && (l.contains("rawPrefsModelTuple(") || l.contains("holdsTarget(")) }
             .map { it.index }
         val predAt = rn.indexOfFirst { it.contains("internal fun isCurrent(") }
-        if (copies.any { it < predAt || it > predAt + 6 }) out += "a copy of the predicate outside isCurrent"
+        val predEnd = (predAt + 1 until rn.size).firstOrNull { rn[it].isBlank() } ?: rn.size
+        if (copies.any { it < predAt || it >= predEnd }) out += "a copy of the predicate outside isCurrent"
         if (cm.filterNot { isComment(it) }.none { it.contains("RestartNotice.invalidateIfOrphaned(tx!!, context.filesDir.toPath(), p)") }) out += "the MAIN load does not self-heal through invalidateIfOrphaned"
         return out
     }
@@ -727,6 +728,43 @@ class ModelSelectionSourceGuardTest {
         // Negative control 3: the load's self-heal removed.
         val noHeal = cm.map { if (it.contains("RestartNotice.invalidateIfOrphaned(tx!!")) "" else it }
         assertTrue("negative control: no self-heal in the load", predicateOffenders(rn, noHeal).isNotEmpty())
+    }
+
+    /**
+     * CR (fold 5′): `:node` deletes the notice at RUNNING with no message to MAIN. MAIN's ONE filesDir
+     * FileObserver (LogCollector's — one observer per directory per process) must hand every event to
+     * `RestartNotice.handleFilesDirEvent` with that directory, and nothing in RestartNotice may take
+     * the model-selection lock on that path.
+     */
+    private fun noticeSignalOffenders(lc: List<String>, rn: List<String>): List<String> {
+        val code = lc.map { if (isComment(it)) "" else it.substringBefore("//") }
+        val ev = code.indexOfFirst { it.contains("override fun onEvent(event: Int, path: String?)") }
+        if (ev < 0) return listOf("LogCollector has no FileObserver onEvent")
+        val end = (ev + 1 until code.size).firstOrNull { code[it].contains(".also { it.startWatching() }") } ?: return listOf("onEvent end not found")
+        val out = mutableListOf<String>()
+        if ((ev until end).none { code[it].contains("RestartNotice.handleFilesDirEvent(parent.toPath(), fileName)") }) out += "the filesDir observer does not signal the restart notice"
+        val h = memberBody(rn, "handleFilesDirEvent") ?: return out + "handleFilesDirEvent not found"
+        if (!h.contains("refreshAsync(filesDir)")) out += "handleFilesDirEvent does not re-read the notice"
+        if (h.contains("ModelSelectionLock") || h.contains("transaction")) out += "handleFilesDirEvent takes the model-selection lock"
+        return out
+    }
+
+    @Test
+    fun `CR fold 5' - MAIN's filesDir FileObserver signals the restart notice, lock-free`() {
+        val lc = sources.getValue("com/seekerclaw/app/util/LogCollector.kt")
+        val rn = sources.getValue("com/seekerclaw/app/config/RestartNotice.kt")
+        assertEquals(emptyList<String>(), noticeSignalOffenders(lc, rn))
+        assertEquals("one filesDir observer in MAIN", 1, lc.count { !isComment(it) && it.contains("object : FileObserver(") })
+        // Negative control 1: the observer no longer signals the notice.
+        val noSignal = lc.map { if (it.contains("RestartNotice.handleFilesDirEvent(")) "" else it }
+        assertTrue("negative control: no signal", noticeSignalOffenders(noSignal, rn).isNotEmpty())
+        // Negative control 2: the same call only in a comment.
+        val commented = lc.map { if (it.contains("RestartNotice.handleFilesDirEvent(")) "// $it" else it }
+        assertTrue("negative control: commented out", noticeSignalOffenders(commented, rn).isNotEmpty())
+        // Negative control 3: the handler takes the lock.
+        val at = rn.indexOfFirst { it.contains("fun handleFilesDirEvent(") }
+        val locked = rn.toMutableList().apply { add(at + 1, "        ModelSelectionLock.transaction { }") }
+        assertTrue("negative control: lock on the signal path", noticeSignalOffenders(lc, locked).isNotEmpty())
     }
 
     /**

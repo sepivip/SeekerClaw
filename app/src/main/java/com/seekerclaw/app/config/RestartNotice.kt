@@ -175,14 +175,26 @@ object RestartNotice {
      * runtime_state.json (read with the resolver's own rule, [ReconcileRecord.holdsTarget], so its H5
      * guard image counts) hold it. Orphaned only when neither does — e.g. after a chat `/provider B`.
      * Both stores are needed: a Completed resolve can save the notice while prefs are still behind
-     * (a failed commit, a tainted process) and runtime_state already holds the change. Undecidable
-     * (an exception) counts as current: never delete on doubt.
+     * (a failed commit, a tainted process) and runtime_state already holds the change.
+     *
+     * Orphaned only when PROVEN: both stores were read and neither holds the selection. Anything
+     * undecidable — runtime_state [RuntimeStateFile.Read.Unreadable] (a transient read failure as
+     * much as bad content), no prefs reader, an exception — counts as current: the notice is kept
+     * and shown, never deleted on doubt (a missing restart prompt is worse than a redundant one).
      */
     internal fun isCurrent(n: Notice, prefs: PrefsReader?, filesDir: Path): Boolean = try {
-        (prefs != null && ConfigManager.rawPrefsModelTuple(prefs) == n.selection) ||
-            // Known cosmetic residual: a notice for (xai, oauth, m) stays current while runtime_state holds its H5 guard image (xai, api_key, m), also after a chat `/provider xai api_key`; it clears on the next Settings selection or Reset.
-            ((RuntimeStateFile.read(filesDir) as? RuntimeStateFile.Read.Present)?.tuple
-                ?.let { ReconcileRecord.holdsTarget(it, n.selection) } == true)
+        if (prefs != null && ConfigManager.rawPrefsModelTuple(prefs) == n.selection) {
+            true
+        } else {
+            when (val r = RuntimeStateFile.read(filesDir)) {
+                // Known cosmetic residual: a notice for (xai, oauth, m) stays current while runtime_state holds its H5 guard image (xai, api_key, m), also after a chat `/provider xai api_key`; it clears on the next Settings selection or Reset.
+                is RuntimeStateFile.Read.Present -> ReconcileRecord.holdsTarget(r.tuple, n.selection) || prefs == null
+                // No runtime_state: a boot consumes the prefs selection, which is not the notice's.
+                RuntimeStateFile.Read.Missing -> prefs == null
+                // Not proven orphaned (often a transient read failure): keep it.
+                is RuntimeStateFile.Read.Unreadable -> true
+            }
+        }
     } catch (_: Exception) {
         true
     }
@@ -307,6 +319,17 @@ object RestartNotice {
                 if (revision.get() == rev) _state.value = n
             }
         })
+    }
+
+    /**
+     * The cross-process signal (MAIN): `:node` removes the notice at RUNNING ([clearIfStartedOn]) with
+     * no message to MAIN, so the dashboard's RUNNING-triggered read can run before that delete and
+     * keep showing it. MAIN's one filesDir FileObserver ([com.seekerclaw.app.util.LogCollector])
+     * passes every event here; an event on the notice file (its delete, or its atomic write's rename)
+     * or an overflow (null name) re-reads it. Takes no lock: [refreshAsync] only reads the file.
+     */
+    fun handleFilesDirEvent(filesDir: Path, fileName: String?) {
+        if (fileName == null || fileName == NAME) refreshAsync(filesDir)
     }
 
     /**
