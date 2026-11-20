@@ -768,6 +768,34 @@ class ModelSelectionSourceGuardTest {
     }
 
     /**
+     * CR 00a3a05a: the filesDir observer has dropped events on the Seeker (BAT-513), so the
+     * dashboard's foreground catch-up loop — the one that already re-reads ServiceState every 1.5 s —
+     * must also re-read the restart notice. Otherwise a missed DELETE for `:node`'s clear at RUNNING
+     * leaves the notice on screen until another refresh.
+     */
+    private fun noticeCatchUpOffenders(dash: List<String>): List<String> {
+        val code = dash.map { if (isComment(it)) "" else it.substringBefore("//") }
+        val loop = code.indices.firstOrNull { i ->
+            code[i].contains("while (true)") && (i until minOf(i + 3, code.size)).any { code[it].contains("ServiceState.refreshFromFile()") }
+        } ?: return listOf("foreground catch-up loop not found")
+        val delay = (loop until code.size).firstOrNull { code[it].contains("delay(") } ?: return listOf("catch-up loop has no delay")
+        return if ((loop until delay).any { code[it].contains("RestartNotice.refreshAsync(") }) emptyList()
+        else listOf("the foreground catch-up does not re-read the restart notice")
+    }
+
+    @Test
+    fun `CR 00a3a05a - the dashboard's foreground catch-up re-reads the restart notice`() {
+        val dash = sources.getValue("com/seekerclaw/app/ui/dashboard/DashboardScreen.kt")
+        assertEquals(emptyList<String>(), noticeCatchUpOffenders(dash))
+        // Negative control 1: the call removed from the loop.
+        val removed = dash.map { if (it.contains("RestartNotice.refreshAsync(context.filesDir.toPath())") && !it.contains("LaunchedEffect")) "" else it }
+        assertTrue("negative control: removed", noticeCatchUpOffenders(removed).isNotEmpty())
+        // Negative control 2: the same call only in a comment.
+        val commented = dash.map { if (it.contains("RestartNotice.refreshAsync(context.filesDir.toPath())") && !it.contains("LaunchedEffect")) "// $it" else it }
+        assertTrue("negative control: commented out", noticeCatchUpOffenders(commented).isNotEmpty())
+    }
+
+    /**
      * Fold 5′: the notice is cleared only by a SUCCESSFUL start — `RestartNotice.clearIfStartedOn` is
      * called once, in `continueStart`, after `ServiceState.updateStatus(ServiceStatus.RUNNING)`, with
      * the selection captured from the config this boot emitted. A failed or aborted boot returns

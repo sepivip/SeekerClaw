@@ -1464,6 +1464,22 @@ class ReconcileRecordTest {
     }
 
     @Test
+    fun `CR 00a3a05a - a MISSED filesDir event - the foreground catch-up re-read still hides the cleared notice`() {
+        interruptedProviderChange()
+        load()
+        assertEquals(I, RestartNotice.state.value?.selection)
+        nodeProcess()
+        assertTrue(RestartNotice.clearIfStartedOn(dir, I)) // :node, at RUNNING
+        mainProcess()
+        // The DELETE event is dropped (BAT-513): no handleFilesDirEvent call. The cache is stale.
+        assertEquals(I, RestartNotice.state.value?.selection)
+        // The dashboard's 1.5 s catch-up re-read (the same call the loop makes).
+        RestartNotice.refreshAsync(dir)
+        assertNull("the catch-up re-read hides it without the event", RestartNotice.state.value)
+        assertFalse(RestartNotice.visible(RestartNotice.state.value, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+    }
+
+    @Test
     fun `5p - a completed Reset invalidates the notice`() {
         xaiTokens(XaiOAuthTokens())
         interruptedProviderChange()

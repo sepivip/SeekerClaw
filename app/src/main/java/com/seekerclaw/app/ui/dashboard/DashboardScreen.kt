@@ -131,6 +131,10 @@ fun DashboardScreen(
     LaunchedEffect(Unit) {
         while (true) {
             ServiceState.refreshFromFile()
+            // BAT-1661 fold 5′: the same safety net for the restart notice — a dropped DELETE event
+            // for :node's clear at RUNNING would otherwise leave it on screen until another refresh.
+            // Lock-free and revision-first (one small file read on the notice executor).
+            RestartNotice.refreshAsync(context.filesDir.toPath())
             kotlinx.coroutines.delay(1500)
         }
     }
