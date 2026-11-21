@@ -21,7 +21,7 @@ const {
     config: _config,
     runtimeState: _runtimeState,
 } = require('./config');
-const { reasoningSupportFor, thinkingBindingFor, displayNameForProvider } = require('./model-catalog');
+const { reasoningSupportFor, thinkingBindingFor, displayNameForProvider, retiredModelsFor, defaultModelForProvider, KNOWN_PROVIDERS } = require('./model-catalog');
 const { logSuppression: _logSuppression, SUPPRESSION_REASONS: _SUPPRESSION_REASONS } = require('./reasoning-gating');
 
 const { redactSecrets } = require('./security');
@@ -1128,7 +1128,20 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('If asked about config issues, check agent_settings.json and PLATFORM.md.');
     lines.push('**Quick model/provider switch from chat (BAT-504):** Users can run `/model <name>` and `/provider <claude|openai|openrouter|custom|xai>` directly in Telegram instead of opening Settings → AI Provider. Both write to runtime_state.json (live overlay) and survive restart. If the user asks how to switch model or provider, point them at these commands first.');
     lines.push('**Your model can change mid-conversation (BAT-1083):** The active model is re-resolved every turn, so a switch in Settings or via `/model` takes effect on your very next reply — your "Model:" line above always reflects the CURRENT model. You cannot see your own PAST model values across a conversation. If a user asks why an earlier reply named a different model, say it was most likely switched between turns — do NOT guess or claim you "misread" it.');
-    lines.push('**Custom model IDs (BAT-1032):** The Settings model picker has a "Custom model" entry — users can type ANY model ID for Anthropic/OpenAI; it persists across restarts and is NOT clamped to the known list. `/model` only accepts registry-listed IDs by design — for an off-list ID, point users to Settings > AI Provider > Model > Custom model. See DIAGNOSTICS.md "/model Rejects a Model ID That Settings Accepted".');
+    lines.push('**Custom model IDs (BAT-1032):** The Settings model picker has a "Custom model" entry — users can type ANY model ID for Anthropic/OpenAI; it persists across restarts and is NOT clamped to the known list — except a model the provider no longer serves for the current sign-in, which is replaced by the default (see DIAGNOSTICS.md "OpenAI Model Changed On Its Own After An Update"). `/model` only accepts registry-listed IDs by design — for an off-list ID, point users to Settings > AI Provider > Model > Custom model. See DIAGNOSTICS.md "/model Rejects a Model ID That Settings Accepted".');
+    // SAB-AUDIT-v52: provider defaults read from the registry, so "what's the default model?" never drifts.
+    try {
+        const _defaultsLine = (KNOWN_PROVIDERS || [])
+            .map((p) => [displayNameForProvider(p), defaultModelForProvider(p)])
+            .filter(([, d]) => d)
+            .map(([name, d]) => `${name} \`${d}\``)
+            .join(', ');
+        if (_defaultsLine) {
+            lines.push(`**Default models (registry):** ${_defaultsLine}; Custom has none. A new setup and a \`/provider\` switch start on the provider's default. An app update never moves an existing choice to a new default, except a model the provider no longer serves for the current sign-in (above). For the full list, the user runs \`/model\` with no arguments.`);
+        }
+    } catch (_) {
+        // Defensive: a registry read failure must never take down chat().
+    }
     lines.push('');
 
     // Environment Variables — user-set secrets accessible to tool code (BAT-495)
@@ -1491,6 +1504,11 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         lines.push(`You are running on OpenAI (model: ${activeModel}, auth: ${OPENAI_AUTH_TYPE}).`);
         if (OPENAI_AUTH_TYPE === 'oauth') {
             lines.push('Auth mode: **ChatGPT OAuth (Codex)** — the user signed in with their ChatGPT subscription instead of using a platform API key. Requests route through chatgpt.com/backend-api/codex/* (not api.openai.com). The OAuth token auto-refreshes when it expires; if refresh fails, the user must re-sign-in via Settings > AI Provider > OpenAI > Sign in with ChatGPT.');
+            // BAT-1661: read from the registry so the door never drifts from the retired list.
+            const retiredOnSignIn = retiredModelsFor('openai', 'oauth');
+            if (retiredOnSignIn.length) {
+                lines.push(`OpenAI no longer serves ${retiredOnSignIn.join(', ')} with ChatGPT sign-in: if one is selected, ${defaultModelForProvider('openai', 'oauth')} is used instead, and the app updates the saved choice once a startup repair succeeds (until then the saved choice can still name the old model). If the user asks why their model changed after an update, that is why — see DIAGNOSTICS.md → "OpenAI Model Changed On Its Own After An Update".`);
+            }
         } else if (AUTH_TYPE === 'oauth') {
             // BAT-1157 (D9): ChatGPT sign-in is SELECTED, but no usable sign-in is stored, so the
             // saved platform API key is being used. The selection itself is unchanged.
@@ -1533,7 +1551,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
         } else if (_support === 'no') {
             lines.push('Your model does not support extended thinking — the toggle is a no-op for you. Respond normally.');
         } else if (_support === 'unknown') {
-            lines.push('Your model is not in the registry. Whether extended thinking takes effect depends on your gateway/provider — assume it does not unless the user has confirmed otherwise.');
+            lines.push('Your model is not in the registry (a custom model ID, or a model that has left the model picker after an update): the Extended Thinking toggle has no effect on it — SeekerClaw never requests extra thinking for an unlisted model (the model may still reason at its own default level). The adapter still sends a reasoning setting where the transport requires one, whatever the toggle: always with a ChatGPT sign-in, and for a model ID containing `codex` on an API key too. Picking a listed model whose reasoning support is `yes` restores the toggle; a listed model marked `no` (e.g. Claude Haiku 4.5) does not use it either. See DIAGNOSTICS.md → "/think on Toggled But Model Doesn\'t Think Differently".');
         }
         lines.push('Users can toggle these any time via Settings > Reasoning OR via Telegram `/think on|off|show|hide`. The active state above reflects what was persisted at the START of THIS turn — a mid-turn toggle takes effect on the next user message.');
         lines.push('');
@@ -2373,7 +2391,14 @@ function sanitizeConversation(messages, turnId) {
 const MODEL_CONTEXT_LIMITS = {
     'claude-fable-5-1':    200000, // 1M actual; conservative cap consistent with mobile memory limits
     'claude-fable-5':      200000, // 1M actual; conservative cap consistent with mobile memory limits
+    // BAT-1661 v2.11: the Claude 5.5 line. Anthropic GET /v1/models (2026-11-18)
+    // reports a 1M input window and 128k output for each → the same 200000 mobile cap.
+    'claude-opus-5-5':     200000,
+    'claude-sonnet-5-5':   200000,
+    'claude-haiku-5-5':    200000,
     'claude-opus-5':       200000, // 1M actual; conservative cap consistent with mobile memory limits
+    // BAT-1661 v2.11: claude-opus-4-8 and claude-sonnet-4-6 left the picker
+    // (latest + one previous per line). Their entries stay for existing users.
     'claude-opus-4-8':     200000,
     // BAT-1315: dropped from the registry dropdown under the latest+previous rule,
     // kept here for existing users still on them. Reconcile's equality gate lets a
@@ -2387,6 +2412,24 @@ const MODEL_CONTEXT_LIMITS = {
     'claude-sonnet-4-5':   200000,
     'claude-haiku-4-5':    200000,
     'gpt-6-astra':         200000, // 1.05M actual; same mobile cap as the rest
+    // BAT-1661 v2.11: the GPT-6.x windows differ by transport, so both sources
+    // are recorded (checked 2026-11-18). Every one is above the 200000 mobile cap:
+    //   - OpenAI's public API model pages (api_key): gpt-6.2-sol and
+    //     gpt-6.2-astra have a 1,050,000-token context / 922,000 max input
+    //     (the GPT-6.1/6 tiers were 1,050,000 when checked 2026-11-05);
+    //   - the signed-in Codex catalog (oauth): 500k for gpt-6.2-sol,
+    //     gpt-6.1-sol and gpt-6.1-terra; 272k for gpt-6.2-astra, gpt-6-astra,
+    //     gpt-6-sol and gpt-6-luna.
+    'gpt-6.2-sol':         200000,
+    'gpt-6.2-astra':       200000,
+    'gpt-6.1-sol':         200000,
+    'gpt-6.1-terra':       200000,
+    // gpt-6-sol left the picker in v2.11 (not retired); the entry stays for
+    // existing users so they don't fall to DEFAULT_CONTEXT_LIMIT (128000).
+    'gpt-6-sol':           200000,
+    'gpt-6-luna':          200000,
+    // BAT-1661: dropped from the picker — kept so existing API-key users on
+    // these ids don't fall to DEFAULT_CONTEXT_LIMIT (128000) and trim early.
     'gpt-5.6-sol':         200000, // BAT-1151: gpt-5.6 family real window 272k → 200000 mobile cap (consistent with the caps above)
     'gpt-5.6-terra':       200000,
     'gpt-5.6-luna':        200000,

@@ -226,7 +226,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             }
             android.widget.Toast.makeText(
                 context,
-                "Couldn't save $fieldLabel. Try again or free up storage.",
+                "Couldn't save $fieldLabel. Try again in a moment — if it keeps failing, check free storage.",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
             return false
@@ -280,10 +280,11 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
 
         // Resolve the effective authType for the new provider. OpenAI defaults to OAuth
         // (ChatGPT subscription) on first switch-in — the OAuth section shows a Sign In
-        // button. writeConfigJson translates oauth+blank → api_key only so Node doesn't
-        // crash on an unsupported authType combination; a valid OpenAI API key is still
-        // required if the user never completes sign-in. Explicit picker choice is
-        // remembered per-provider via lastAuthType_<id>.
+        // button. Kotlin keeps the selected OpenAI auth as it is (emitConfigJson downgrades
+        // only xAI's oauth+blank); Node's config.js uses a saved API key while there is no
+        // usable sign-in, and starts in reconnect-required mode when there is neither.
+        // Don't add a Kotlin downgrade: it would bypass that reconnect handling. Explicit
+        // picker choice is remembered per-provider via lastAuthType_<id>.
         val savedNewAuthType = prefs.getString("lastAuthType_$newProviderId", null)
         val effectiveAuthType = when (newProviderId) {
             "openai" -> when (savedNewAuthType) {
@@ -358,7 +359,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
             )
             android.widget.Toast.makeText(
                 context,
-                "Couldn't save provider change. Try again or free up storage.",
+                "Couldn't save provider change. Try again in a moment — if it keeps failing, check free storage.",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
         }
@@ -399,9 +400,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         val authTypeLabel = if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API Key"
                         ConfigField(
                             label = "Model",
-                            value = availableModels.find { it.id == config?.model }
+                            value = availableModels.find { it.id == config?.displayModel }
                                 ?.displayName
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.displayModel?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
@@ -458,9 +459,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                         ConfigField(
                             label = "Model",
-                            value = openaiModelList.find { it.id == config?.model }
+                            value = openaiModelList.find { it.id == config?.displayModel }
                                 ?.displayName
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.displayModel?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
@@ -514,9 +515,9 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         )
                         ConfigField(
                             label = "Model",
-                            value = xaiModelList.find { it.id == config?.model }
+                            value = xaiModelList.find { it.id == config?.displayModel }
                                 ?.displayName
-                                ?: config?.model?.ifBlank { "Not set" } ?: "Not set",
+                                ?: config?.displayModel?.ifBlank { "Not set" } ?: "Not set",
                             onClick = { showModelPicker = true },
                             info = SettingsHelpTexts.MODEL,
                         )
@@ -831,7 +832,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
         var selectedModel by remember(activeProvider, effectiveAuthType) {
             // Preserve the user's current model even when it's not in the known list —
             // otherwise opening the picker would silently overwrite a custom model ID.
-            val current = config?.model.orEmpty()
+            val current = config?.displayModel.orEmpty() // BAT-1661: what the row shows
             mutableStateOf(
                 when {
                     current.isNotBlank() -> current
@@ -840,6 +841,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                 }
             )
         }
+
+        // BAT-1661 (contract v2.4 §0): true once the user picks a row or edits the custom ID. Until
+        // then the preselected value may be the display substitute, which Save never writes.
+        var touched by remember(activeProvider, effectiveAuthType) { mutableStateOf(false) }
 
         // Custom-model state hoisted to the picker's outer composable scope so
         // persistCustomModelAndClose (wired into onDismissRequest / confirmButton /
@@ -907,13 +912,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { selectedModel = model.id }
+                                .clickable { selectedModel = model.id; touched = true }
                                 .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(
                                 selected = selectedModel == model.id,
-                                onClick = { selectedModel = model.id },
+                                onClick = { selectedModel = model.id; touched = true },
                                 colors = RadioButtonDefaults.colors(
                                     selectedColor = SeekerClawColors.ActionPrimary,
                                     unselectedColor = SeekerClawColors.TextDim,
@@ -939,13 +944,13 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } }
+                            .clickable { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL }; touched = true }
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
                             selected = isCustomSelected || selectedModel == CUSTOM_MODEL_SENTINEL,
-                            onClick = { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL } },
+                            onClick = { selectedModel = customModelId.ifBlank { CUSTOM_MODEL_SENTINEL }; touched = true },
                             colors = RadioButtonDefaults.colors(
                                 selectedColor = SeekerClawColors.ActionPrimary,
                                 unselectedColor = SeekerClawColors.TextDim,
@@ -962,6 +967,7 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                                 value = customModelId,
                                 onValueChange = {
                                     customModelId = it
+                                    touched = true
                                     // Update selectedModel even when blank — point at the sentinel
                                     // so canSave (which excludes the sentinel) disables Save.
                                     // The in-memory `customModelId` persists for the lifetime of
@@ -1003,8 +1009,18 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             // Node trims on read (agent_settings.json resolver), but the
                             // UI doesn't, so a raw-saved "  gpt-5.4  " would display
                             // differently in Settings than in /status / /model output.
-                            saveField("model", trimmedModel, needsRestart = false)
-                            Analytics.modelSelected(trimmedModel)
+                            // BAT-1661 (contract v2.4 §0): an untouched display substitute is not a
+                            // choice, so Save writes nothing for it (pickerSaveValue).
+                            val toSave = pickerSaveValue(
+                                stored = config?.model.orEmpty(),
+                                display = config?.displayModel.orEmpty(),
+                                selected = trimmedModel,
+                                touched = touched,
+                            )
+                            if (toSave != null) {
+                                saveField("model", toSave, needsRestart = false)
+                                Analytics.modelSelected(toSave)
+                            }
                             persistCustomModelAndClose()
                         }
                     },
@@ -1091,9 +1107,10 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                         // Persist the user's selection immediately. If they pick "oauth"
                         // without a token yet, that's fine — the OAuth section will render
                         // with a Sign In button. resolveAuthType() preserves the
-                        // "oauth selected, sign-in pending" state in SharedPreferences;
-                        // the oauth+blank → api_key fallback only happens at writeConfigJson
-                        // time so Node never sees an unstartable combination.
+                        // "oauth selected, sign-in pending" state in SharedPreferences.
+                        // OpenAI's fallback happens in Node (config.js): a saved API key
+                        // while there is no usable sign-in, else reconnect-required mode;
+                        // emitConfigJson downgrades only xAI's oauth+blank to api_key.
                         // Multi-step save: short-circuit the model
                         // fallback if the authType save failed.
                         // Otherwise we'd end up with a fallback model
@@ -1115,8 +1132,8 @@ fun ProviderConfigScreen(onBack: () -> Unit) {
                             val currentModel = config?.model ?: ""
                             val allowedModels = modelsForProvider(activeProvider, selectedAuth)
                             // Only clamp models that belonged to the OLD auth
-                            // mode's list (e.g. gpt-5.4-mini is oauth-only and
-                            // must not survive oauth→api_key). A model on
+                            // mode's list (a model only the old auth listed must
+                            // not survive the switch). A model on
                             // NEITHER list is a user-typed custom ID — leave
                             // it alone (BAT-1032). For xAI both auth lists are
                             // identical today, so this is a no-op there.
@@ -1433,7 +1450,7 @@ private fun xaiChatPing(bearer: String, isOAuth: Boolean, userAgent: String) {
     conn.connectTimeout = 15000
     conn.readTimeout = 15000
     val payload = JSONObject().apply {
-        put("model", "grok-4.3") // stable ping target, NOT the default grok-4.5 (see kdoc)
+        put("model", "grok-4.3") // stable ping target, NOT the registry default (see kdoc)
         put("max_tokens", 1)
         put(
             "messages",
@@ -1745,7 +1762,8 @@ private fun runReasoningUpdate(
 ) {
     scope.launch(Dispatchers.IO) {
         val ok = try {
-            RuntimeStateStore.update(transform)
+            // BAT-1661: the record carries the model too, so it is written under the lock.
+            RuntimeStateStore.updateInOwnTransaction(transform)
         } catch (_: IllegalArgumentException) {
             false
         }
@@ -1819,7 +1837,7 @@ private fun CustomEchoReasoningRow() {
                 // customEchoReasoning field is mutated.
                 scope.launch(Dispatchers.IO) {
                     val ok = try {
-                        RuntimeStateStore.update { it.copy(customEchoReasoning = newValue) }
+                        RuntimeStateStore.updateInOwnTransaction { it.copy(customEchoReasoning = newValue) }
                     } catch (_: IllegalArgumentException) {
                         false
                     }

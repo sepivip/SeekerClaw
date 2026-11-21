@@ -122,7 +122,7 @@ fun SystemScreen(onBack: () -> Unit) {
     val config = remember(cfgVersion) { ConfigManager.loadConfig(context) }
     val agentName = remember(config) { config?.agentName?.ifBlank { "SeekerClaw" } ?: "SeekerClaw" }
     val modelName = remember(config) {
-        config?.model
+        config?.displayModel
             ?.ifBlank { null }
             ?.let { modelDisplayName(it) }
             ?: "Not set"

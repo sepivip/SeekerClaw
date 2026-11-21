@@ -259,6 +259,9 @@ object LogCollector {
                     if (path == null || fileName == "service_state" || fileName == "bridge_token") {
                         ServiceState.handleFilesDirEvent(fileName)
                     }
+                    // BAT-1661 fold 5′: `:node` deletes the restart notice at RUNNING; this event
+                    // is MAIN's only signal of it (filters to the notice file or an overflow).
+                    com.seekerclaw.app.config.RestartNotice.handleFilesDirEvent(parent.toPath(), fileName)
                 }
             }.also { it.startWatching() }
         } // end synchronized(startWatchingLock)

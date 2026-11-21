@@ -473,8 +473,19 @@ fun SettingsScreen(
     )
 
     fun saveField(field: String, value: String) {
-        ConfigManager.updateConfigField(context, field, value)
+        val saved = ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
+        if (!saved) {
+            // BAT-1661 (CodeRabbit on 444ba220): a save can now be refused with nothing written
+            // (the model-selection lock was busy). Say so; no restart prompt for a save that
+            // did not happen.
+            android.widget.Toast.makeText(
+                context,
+                SettingsHelpTexts.SAVE_FAILED_TOAST,
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
         if (field !in liveUpdateFields) {
             showRestartDialog = true
         }
@@ -531,7 +542,7 @@ fun SettingsScreen(
                     label = "AI Configuration",
                     value = config?.let { cfg ->
                         val providerName = providerById(cfg.provider).displayName
-                        val modelName = ModelRegistry.modelDisplayName(cfg.model)
+                        val modelName = ModelRegistry.modelDisplayName(cfg.displayModel)
                         val aiAuthLabel = when (cfg.provider) {
                             "claude" -> if (cfg.authType == "setup_token") "Setup token" else "API key"
                             "openai", "xai" -> if (cfg.authType == "oauth") "OAuth" else "API key"

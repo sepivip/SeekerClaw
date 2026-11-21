@@ -51,7 +51,7 @@ node tests/live/openai/live-models.probe.js
 
 # Options
 node tests/live/openai/live-models.probe.js --mode oauth --diagnose
-node tests/live/openai/live-models.probe.js --models gpt-5.4,gpt-5.5
+node tests/live/openai/live-models.probe.js --models gpt-6.1-sol,gpt-6-astra
 node tests/live/openai/live-models.probe.js --base-url http://127.0.0.1:8080
 node tests/live/openai/live-models.probe.js --help
 ```

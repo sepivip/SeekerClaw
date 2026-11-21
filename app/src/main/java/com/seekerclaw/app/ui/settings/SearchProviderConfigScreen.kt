@@ -84,8 +84,19 @@ fun SearchProviderConfigScreen(onBack: () -> Unit) {
     }
 
     fun saveField(field: String, value: String, needsRestart: Boolean = false) {
-        ConfigManager.updateConfigField(context, field, value)
+        val saved = ConfigManager.updateConfigField(context, field, value)
         config = ConfigManager.loadConfig(context)
+        if (!saved) {
+            // BAT-1661 (CodeRabbit on 444ba220): a save can now be refused with nothing written
+            // (the model-selection lock was busy). Say so; no restart prompt for a save that
+            // did not happen.
+            android.widget.Toast.makeText(
+                context,
+                SettingsHelpTexts.SAVE_FAILED_TOAST,
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
         if (needsRestart) showRestartDialog = true
     }
 

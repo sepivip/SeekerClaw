@@ -23,7 +23,7 @@
 //   node tests/live/openai/live-models.probe.js --self-check      # offline, no creds, no EXTERNAL network*
 //   node tests/live/openai/live-models.probe.js                   # live sweep (needs .env.test)
 //   node tests/live/openai/live-models.probe.js --mode oauth --diagnose
-//   node tests/live/openai/live-models.probe.js --models gpt-5.4,gpt-5.5
+//   node tests/live/openai/live-models.probe.js --models gpt-6.1-sol,gpt-6-astra
 //   node tests/live/openai/live-models.probe.js --base-url http://127.0.0.1:8080
 //
 //   * "no EXTERNAL network": --self-check makes no OpenAI/internet call, but the real
@@ -107,7 +107,7 @@ function loadRegistryOpenAI() {
     const openai = (j.providers || []).find((p) => p.id === 'openai') || {};
     const apikey = (openai.models || []).map((m) => m.id);
     const oauth = ((openai.modelsByAuth && openai.modelsByAuth.oauth) || openai.models || []).map((m) => m.id);
-    return { apikey, oauth, defaultModel: openai.defaultModel || 'gpt-5.4' };
+    return { apikey, oauth, defaultModel: openai.defaultModel || 'gpt-6.1-sol' };
 }
 
 function modelsForMode(mode, modelsFlag, regModels, testModelsEnv) {
@@ -139,7 +139,7 @@ function runWorker(mode, { selfCheck, diagnose, live, baseUrl, models, creds }) 
         try {
             seedFixture(fixtureDir, {
                 mode,
-                model: (models && models[0]) || 'gpt-5.4',
+                model: (models && models[0]) || 'gpt-6.1-sol',
                 apiKey: mode === 'apikey' ? (creds.apiKey || undefined) : undefined,
                 oauthToken: mode === 'oauth' ? (creds.oauth || undefined) : undefined,
                 oauthRefresh: mode === 'oauth' ? (creds.refresh || undefined) : undefined,

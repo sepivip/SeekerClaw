@@ -231,9 +231,11 @@ function turnLogs(mark, re) { return LOGS.slice(mark).filter((l) => re.test(l.ms
 // ════════════════════════════════════════════════════════════════════════════
 async function main() {
     // ── C0-1 flagged: byte-stable prefix, aging once pre-anchor, frozen tools, no per-round trim
-    console.log('── C0 (flagged claude-fable-5-1): stable history within a turn ──');
-    {
-        currentAdapter = claude; currentModel = 'claude-fable-5-1'; toolsNow = TOOLS_A; toolResultSize = 1500;
+    // BAT-1661 v2.11: claude-opus-5-5 is the new DEFAULT and is flagged, so most new
+    // users take this path: the same stable-history pins run on it, not only on fable-5-1.
+    for (const C0_MODEL of ['claude-fable-5-1', 'claude-opus-5-5']) {
+        console.log(`── C0 (flagged ${C0_MODEL}): stable history within a turn ──`);
+        currentAdapter = claude; currentModel = C0_MODEL; toolsNow = TOOLS_A; toolResultSize = 1500;
         const chatId = newChatId();
         seed(chatId, 14); // 4 + 28 = 32 messages before the anchor → > MAX_HISTORY (35) mid-turn
         const ROUNDS = 6;
@@ -241,14 +243,20 @@ async function main() {
         SCRIPT = [];
         for (let r = 1; r <= ROUNDS; r++) SCRIPT.push(ok200(toolResp([th(`r${r}`), { type: 'text', text: `step ${r}` }, tu(`c${r}`)])));
         SCRIPT.push(ok200(textResp('all done')));
-        execHook = (n) => { if (n === 2) toolsNow = TOOLS_B; }; // an MCP tool appears mid-turn
+        // An MCP tool appears mid-turn, after this case's SECOND tool call. EXEC_CALLS is
+        // cumulative across cases, so count from this case's start (CodeRabbit on 444ba220: an
+        // absolute `n === 2` never fired for the second model, so its frozen-tools check could
+        // not fail), and assert the switch happened.
         const execBefore = EXEC_CALLS;
+        let switched = false;
+        execHook = (n) => { if (n - execBefore === 2) { toolsNow = TOOLS_B; switched = true; } };
         const mark = LOGS.length;
         const reply = await ai.chat(chatId, 'the long question');
         execHook = null; toolsNow = TOOLS_A;
-        eq('C0: final reply', reply, 'all done');
-        eq('C0: one request per round + final', SENT.length, ROUNDS + 1);
-        eq('C0: every tool still executed (availability checks unaffected)', EXEC_CALLS - execBefore, ROUNDS);
+        ok(`C0 (${C0_MODEL}): the mid-turn tool change happened`, switched);
+        eq(`C0 (${C0_MODEL}): final reply`, reply, 'all done');
+        eq(`C0 (${C0_MODEL}): one request per round + final`, SENT.length, ROUNDS + 1);
+        eq(`C0 (${C0_MODEL}): every tool still executed (availability checks unaffected)`, EXEC_CALLS - execBefore, ROUNDS);
         let prefixOk = true; let detail = '';
         for (let k = 1; k < SENT.length; k++) {
             const prev = SENT[k - 1].body, cur = SENT[k].body;
@@ -260,22 +268,22 @@ async function main() {
                 prefixOk = false; detail = `messages differ at request ${k + 1}, index ${at}`; break;
             }
         }
-        ok('C0: system + tools + every message of request N are byte-identical in request N+1', prefixOk, detail);
-        ok('C0: frozen tools — the mid-turn MCP tool never reaches the wire', SENT.every((r) => r.body.tools.length === TOOLS_A.length));
+        ok(`C0 (${C0_MODEL}): system + tools + every message of request N are byte-identical in request N+1`, prefixOk, detail);
+        ok(`C0 (${C0_MODEL}): frozen tools — the mid-turn MCP tool never reaches the wire`, SENT.every((r) => r.body.tools.length === TOOLS_A.length));
         const tr0 = toolResultContents(SENT[0].body);
-        ok('C0: aging ran before the first request on the pre-anchor tool result', tr0.some((t) => t.id === 'old_t' && /^\[Trimmed: read result/.test(t.content)));
+        ok(`C0 (${C0_MODEL}): aging ran before the first request on the pre-anchor tool result`, tr0.some((t) => t.id === 'old_t' && /^\[Trimmed: read result/.test(t.content)));
         const last = SENT[SENT.length - 1].body;
         const inTurn = toolResultContents(last).filter((t) => /^c\d$/.test(t.id));
-        eq('C0: all in-turn tool results reach the last request', inTurn.length, ROUNDS);
-        ok('C0: no in-turn tool result is ever aged', inTurn.every((t) => t.content.length > 1000));
-        eq('C0: [Aging] ran exactly once this turn', turnLogs(mark, /^\[Aging\]/).length, 1);
-        ok('C0: no per-round trim — the last request carries > MAX_HISTORY (35) messages', last.messages.length > 35, `len=${last.messages.length}`);
-        eq('C0: no "toolRound" [History] trim this turn', turnLogs(mark, /"site":"toolRound"/).length, 0);
+        eq(`C0 (${C0_MODEL}): all in-turn tool results reach the last request`, inTurn.length, ROUNDS);
+        ok(`C0 (${C0_MODEL}): no in-turn tool result is ever aged`, inTurn.every((t) => t.content.length > 1000));
+        eq(`C0 (${C0_MODEL}): [Aging] ran exactly once this turn`, turnLogs(mark, /^\[Aging\]/).length, 1);
+        ok(`C0 (${C0_MODEL}): no per-round trim — the last request carries > MAX_HISTORY (35) messages`, last.messages.length > 35, `len=${last.messages.length}`);
+        eq(`C0 (${C0_MODEL}): no "toolRound" [History] trim this turn`, turnLogs(mark, /"site":"toolRound"/).length, 0);
         const conv = ai.getConversation(chatId);
-        ok('C0: after the turn the history is bounded again (<= 36 with the anchor exemption)', conv.length <= 36, `len=${conv.length}`);
-        ok('C0: …and the trim kept the anchor', conv.some((m) => m.role === 'user' && m.content === 'the long question'));
-        ok('C0: in-turn thinking was replayed (nothing forced stripping)', anyThinking(last));
-        eq('C0: no request over budget', VIOLATIONS.length, 0);
+        ok(`C0 (${C0_MODEL}): after the turn the history is bounded again (<= 36 with the anchor exemption)`, conv.length <= 36, `len=${conv.length}`);
+        ok(`C0 (${C0_MODEL}): …and the trim kept the anchor`, conv.some((m) => m.role === 'user' && m.content === 'the long question'));
+        ok(`C0 (${C0_MODEL}): in-turn thinking was replayed (nothing forced stripping)`, anyThinking(last));
+        eq(`C0 (${C0_MODEL}): no request over budget`, VIOLATIONS.length, 0);
     }
 
     // ── C0-2 turn-end trim on a THROWN exit keeps the anchor
@@ -307,7 +315,9 @@ async function main() {
 
     // ── C0-3 loop-final: frozen tools + tool_choice none (flagged) vs no tools (unflagged)
     console.log('\n── C0: loop-final round ──');
-    for (const model of ['claude-fable-5-1', 'claude-opus-5']) {
+    // BAT-1661 v2.11: the flagged default (claude-opus-5-5) takes the flagged branch.
+    const LOOP_FLAGGED = new Set(['claude-fable-5-1', 'claude-opus-5-5']);
+    for (const model of ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5']) {
         currentAdapter = claude; currentModel = model; toolResultSize = 10;
         const chatId = newChatId();
         SENT.length = 0;
@@ -316,7 +326,7 @@ async function main() {
         const reply = await ai.chat(chatId, 'loop please');
         const finalReq = SENT[5] && SENT[5].body;
         ok(`loop-final (${model}): the 6th request is the forced-final round`, !!finalReq && JSON.stringify(finalReq.messages).includes('Tool loop detected'));
-        if (model === 'claude-fable-5-1') {
+        if (LOOP_FLAGGED.has(model)) {
             eq('loop-final (flagged): frozen tools sent unchanged', JSON.stringify(finalReq.tools), JSON.stringify(SENT[0].body.tools));
             eq('loop-final (flagged): tool_choice none', finalReq.tool_choice, { type: 'none' });
             ok('loop-final (flagged): earlier rounds carry no tool_choice', SENT.slice(0, 5).every((r) => !('tool_choice' in r.body)));
@@ -548,10 +558,14 @@ async function main() {
     // edit history mid-turn but deliberately do NOT strip replayed thinking:
     // the live --compat probe (2026-11-16) showed fable-5, opus-5, opus-4-8,
     // sonnet-5 and sonnet-4-6 never run the prefix check, and stripping from
-    // round 2 on every long turn of the DEFAULT model would cost reasoning for
-    // nothing. An unknown id that does check is covered by the C3 heal; models
-    // that check must be FLAGGED (thinkingBinding) instead. Change this only
-    // with a new --compat run.
+    // round 2 on every long turn of claude-opus-5 would cost reasoning for
+    // nothing. (When this was written opus-5 was the DEFAULT model. BAT-1661
+    // v2.11 made the flagged claude-opus-5-5 the default; opus-5 stays listed
+    // and unflagged, so this record and its assertions — which run on
+    // claude-opus-5 — still hold. The default's own path is the flagged C0
+    // case above.) An unknown id that does check is covered by the C3 heal;
+    // models that check must be FLAGGED (thinkingBinding) instead. Change this
+    // only with a new --compat run.
     console.log('\n── Unflagged per-round edits: decision record ──');
     const DR = "unflagged Claude: per-round aging/trim does NOT strip replayed thinking — unflagged registry models don't run the prefix check (live --compat 2026-11-16); unknown checking ids rely on the C3 heal";
     {

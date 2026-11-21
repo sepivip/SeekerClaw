@@ -93,7 +93,7 @@ data class AppConfig(
     val openaiOAuthEpoch: Long = 0L,
     // BAT-1124: xAI Grok. `xaiApiKey` = console.x.ai key (api_key path); the four
     // `xaiOAuth*` fields = "Sign in with Grok" OAuth. All default "" so old configs
-    // are untouched and writeConfigJson only emits them when non-blank (upgrade-safe).
+    // are untouched and emitConfigJson only emits them when non-blank (upgrade-safe).
     val xaiApiKey: String = "",
     val xaiOAuthToken: String = "",
     val xaiOAuthRefresh: String = "",
@@ -102,11 +102,42 @@ data class AppConfig(
     // BAT-1155: the xAI OAuth triple above is now SOURCED FROM the dedicated
     // XaiOAuthTokenStore (decrypted from its ciphertext), NOT from prefs. The
     // three control fields below carry the store's non-secret revision/state
-    // so writeConfigJson can round-trip them into config.json for Node.
+    // so emitConfigJson can round-trip them into config.json for Node.
     val xaiOAuthEpoch: Long = 0L,
     val xaiOAuthReauthRequired: Boolean = false,
     val xaiOAuthReauthNotifiedEpoch: Long = -1L,
+    /**
+     * BAT-1661 (contract v2.5 §2): the (provider, authType, model) as [ConfigManager.loadConfig]
+     * returned them. `copy()` keeps it, so `saveConfig` can tell an explicit selection (the
+     * edited tuple differs from the one the form loaded) from an unrelated save. Null for a config
+     * built from scratch (Setup), which is always a selection.
+     */
+    val loadedModelTuple: ModelTuple? = null,
 ) {
+    /**
+     * BAT-1661: the model to SHOW. A model this sign-in can no longer use shows as the provider
+     * default (what Node actually sends). Display only — never written back (contract v2.4 §0).
+     */
+    val displayModel: String
+        get() = try {
+            // Codex review of ca06bb79 #4: the retirement scope is the TRANSPORT Node runs with
+            // (`_EFFECTIVE_AUTH`), from this config's own credentials — not the selected auth.
+            ModelRegistry.applyRetiredModelRule(
+                provider,
+                // Codex 7ec40d8b #1: the key Node can USE — the decrypted value config.json carries,
+                // normalised as config.js does — never the ciphertext's mere presence.
+                ConfigManager.displayAuth(
+                    provider,
+                    authType,
+                    ConfigManager.nodeUsesSecret(openaiOAuthToken),
+                    ConfigManager.nodeUsesSecret(openaiApiKey),
+                ),
+                model,
+            )
+        } catch (_: IllegalStateException) {
+            model // registry not initialised (unit tests): show the stored value
+        }
+
     /** Anthropic/authType-based credential — used by SetupScreen and legacy flows. */
     val activeCredential: String
         get() = if (authType == "setup_token") setupToken else anthropicApiKey
@@ -245,13 +276,13 @@ object ConfigManager {
     private const val KEY_API_KEY_ENC = "api_key_enc"
     private const val KEY_BOT_TOKEN_ENC = "bot_token_enc"
     private const val KEY_OWNER_ID = "owner_id"
-    private const val KEY_MODEL = "model"
+    internal const val KEY_MODEL = "model" // v2.12: shared with MainPrefs / ReconcileRecord (no third copy)
     private const val KEY_AGENT_NAME = "agent_name"
     private const val KEY_AUTO_START = "auto_start_on_boot"
     private const val KEY_RICH_MESSAGES = "rich_messages"
     private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
     private const val KEY_SETUP_COMPLETE = "setup_complete"
-    private const val KEY_AUTH_TYPE = "auth_type"
+    internal const val KEY_AUTH_TYPE = "auth_type"
     private const val KEY_SETUP_TOKEN_ENC = "setup_token_enc"
     private const val KEY_BRAVE_API_KEY_ENC = "brave_api_key_enc"
     private const val KEY_SEARCH_PROVIDER = "search_provider"
@@ -267,8 +298,8 @@ object ConfigManager {
     private const val KEY_ENV_VARS_ENC = "env_vars_enc"
     private const val KEY_HEARTBEAT_INTERVAL = "heartbeat_interval"
     private const val KEY_MAX_STEPS_PER_TURN = "max_steps_per_turn"
-    private const val KEY_PROVIDER = "provider"
-    private const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
+    internal const val KEY_PROVIDER = "provider"
+    internal const val KEY_OPENAI_API_KEY_ENC = "openai_api_key_enc"
     private const val KEY_OPENROUTER_API_KEY_ENC = "openrouter_api_key_enc"
     private const val KEY_OPENROUTER_FALLBACK_MODEL = "openrouter_fallback_model"
     private const val KEY_OPENROUTER_MODEL_CONTEXT = "openrouter_model_context"
@@ -308,7 +339,13 @@ object ConfigManager {
     @Volatile
     private var xaiOAuthMigrationDone = false
 
-    private fun resolveAuthType(context: Context, p: PrefsReader): String {
+    /**
+     * [tx] non-null: persist the normalised value. BAT-1661: `auth_type` is a model-selection key, so
+     * it is written only by a caller holding the [ModelSelectionLock] transaction; a compute-only
+     * load (lock busy, read-only boot) normalises in memory only. BAT-1157 (D7.2): in `:node` it is
+     * compute-only even under the lock; MAIN persists the normalisation.
+     */
+    private fun resolveAuthType(context: Context, p: PrefsReader, tx: ModelSelectionLock.Tx?): String {
         // Migrate legacy/invalid authType combinations so Node's strict validation
         // doesn't hard-crash on older installs and the UI doesn't drift from persisted
         // state. Rules:
@@ -320,24 +357,84 @@ object ConfigManager {
         // — flipping it on every loadConfig would silently revert the user's choice
         // when they return from a failed/canceled sign-in. The unstartable
         // oauth+blank-token combination is instead handled at workspace/config.json
-        // write time (writeConfigJson) so Node never sees it.
+        // write time (emitConfigJson) so Node never sees it.
         val raw = p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key"
         val provider = p.getString(KEY_PROVIDER, "claude") ?: "claude"
-        val normalized = when {
+        val normalized = normalizeAuthType(p)
+        if (normalized != raw && tx != null) {
+            tx.requireOpen()
+            Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider)")
+            // BAT-1661 (Codex diff review #4): commit(), not apply() — under the lock, checked.
+            // BAT-1157 (D7.2): compute-only in `:node`; MAIN persists the normalisation.
+            if (!ProcessRole.isNode) {
+                val w = prefsForWrite(context, "resolveAuthType")
+                if (w == null || !w.edit().putString(KEY_AUTH_TYPE, normalized).commit()) tx.markWriteFailed()
+            }
+        }
+        return normalized
+    }
+
+    /** The normalisation [resolveAuthType] applies, computed only (writes nothing). */
+    private fun normalizeAuthType(p: PrefsReader): String =
+        normalizeAuthTypeRaw(p.getString(KEY_PROVIDER, "claude") ?: "claude", p.getString(KEY_AUTH_TYPE, "api_key") ?: "api_key")
+
+    /** [normalizeAuthType] over raw values (v2.12: [projectPrefsTuple]). */
+    private fun normalizeAuthTypeRaw(provider: String, raw: String): String {
+        return when {
             provider == "openai" && raw != "oauth" && raw != "api_key" -> "api_key"
             // BAT-1124: xai supports oauth|api_key only (same generic authType, no xai-specific type).
             provider == "xai" && raw != "oauth" && raw != "api_key" -> "api_key"
             provider != "claude" && raw == "setup_token" -> "api_key"
             else -> raw
         }
-        if (normalized != raw) {
-            Log.w(TAG, "Normalizing authType '$raw' → '$normalized' (provider=$provider)")
-            // BAT-1157 (D7.2): compute-only in `:node`; MAIN persists the normalisation.
-            if (!ProcessRole.isNode) {
-                prefsForWrite(context, "resolveAuthType")?.edit()?.putString(KEY_AUTH_TYPE, normalized)?.apply()
-            }
+    }
+
+    /**
+     * BAT-1661: the prefs side of [ModelRepair.Snapshot], read without writing anything: provider,
+     * auth and model exactly as stored (the auth normalised as [resolveAuthType] would; contract
+     * v2.9 §1). The auth is the SELECTION and is never lowered for a missing sign-in; the
+     * transport is [ModelRepair.Snapshot.transport].
+     */
+    internal fun rawPrefsModelTuple(p: PrefsReader): ModelTuple =
+        projectPrefsTuple(p.getString(KEY_PROVIDER, null), p.getString(KEY_AUTH_TYPE, null), p.getString(KEY_MODEL, null))
+
+    /**
+     * BAT-1661 v2.12: the selection the three RAW prefs values (null = absent) stand for — the
+     * [rawPrefsModelTuple] rules: provider defaults to `claude`, auth normalised, model trimmed and
+     * defaulted. A reconcile retry record's target must be exactly this of its `prefsAfter`.
+     */
+    internal fun projectPrefsTuple(provider: String?, authType: String?, model: String?): ModelTuple {
+        val p = provider ?: "claude"
+        val m = (model ?: "claude-opus-5-5").trim().ifBlank { "claude-opus-5-5" }
+        return ModelTuple(p, normalizeAuthTypeRaw(p, authType ?: "api_key"), m)
+    }
+
+    /**
+     * BAT-1661: the stores' model-relevant content, for [ModelRepair]. Writes no model store.
+     *
+     * [migrate] (v2.8 §4 ordering): runs the BAT-1157 fill-only OpenAI sign-in migration first, so a
+     * Node-first upgrade of a signed-in user takes the token-presence snapshot after it. The
+     * migration writes the token store only, never prefs.
+     */
+    internal fun modelSnapshot(context: Context, migrate: Boolean = true): ModelRepair.Snapshot {
+        val p = prefs(context)
+        if (migrate && OpenAIOAuthTokenStore.isInitialized) {
+            OpenAIOAuthTokenStore.migrateIfNeeded { legacyOpenAIPair(p) }
         }
-        return normalized
+        return modelSnapshotFrom(context.filesDir.toPath(), p)
+    }
+
+    /** [modelSnapshot] from an explicit prefs view (the collector mirror's), with no migration. */
+    internal fun modelSnapshotFrom(files: java.nio.file.Path, p: PrefsReader): ModelRepair.Snapshot {
+        val runtime = RuntimeStateFile.read(files)
+        return ModelRepair.Snapshot(
+            prefs = rawPrefsModelTuple(p),
+            runtime = (runtime as? RuntimeStateFile.Read.Present)?.tuple,
+            overlay = AgentSettingsFile.read(files),
+            runtimeRead = runtime,
+            oauthUsable = OpenAIOAuthTokenStore.hasUsableToken(),
+            apiKeySaved = !p.getString(KEY_OPENAI_API_KEY_ENC, null).isNullOrBlank(),
+        )
     }
     private const val KEY_OPENAI_OAUTH_EXPIRES_AT = "openai_oauth_expires_at"
 
@@ -384,8 +481,69 @@ object ConfigManager {
      * Pre-BAT-513 callers that ignore the return value continue to
      * compile (Boolean values can be discarded) — they retain the
      * pre-BAT-513 fire-and-forget behaviour.
+     *
+     * BAT-1661: runs inside one [ModelSelectionLock] transaction; a busy lock returns false with
+     * nothing written. Only an EXPLICIT selection — the saved (provider, authType, model) differs
+     * from [AppConfig.loadedModelTuple] — writes those three fields (prefs, runtime_state, the
+     * overlay) and cancels a pending model repair. Any other save leaves them, and the repair
+     * intent, exactly as stored (contract v2.5 §2).
      */
-    fun saveConfig(context: Context, config: AppConfig): Boolean {
+    fun saveConfig(
+        context: Context,
+        config: AppConfig,
+        lockTimeoutMs: Long = ModelSelectionLock.LOCK_TIMEOUT_MS,
+    ): Boolean = saveConfigWith(context, config, lockTimeoutMs, SecretSealer.Keystore)
+
+    /** [saveConfig] with an explicit [sealer] — the JVM tests' entry point (see [SecretSealer]). */
+    internal fun saveConfigWith(
+        context: Context,
+        config: AppConfig,
+        lockTimeoutMs: Long,
+        sealer: SecretSealer,
+    ): Boolean {
+        val r = ModelSelectionLock.transaction(lockTimeoutMs) { tx -> saveConfigLocked(context, config, tx, sealer) }
+        afterSaveLockForTest?.invoke()
+        // BAT-1661: the saved OpenAI key decides the display transport too. Re-projected AFTER the
+        // lock is released (it reads credentials), whatever the save's outcome.
+        // CodeRabbit (key-revision thread, comment 4626795862): REVISION FIRST, then read. Every
+        // outcome re-derives the flag from what prefs hold NOW (the usable key, as config.json will
+        // carry it — Codex 7ec40d8b #1): the revision is taken before the key is read, so the last
+        // revision taken always reads the newest committed key. Publishing the value this save
+        // holds would let two saves whose notes run in reverse order publish the older key. A failed
+        // save can have changed the stored key too (the whole-map commit lands before the later
+        // stages). Decrypts on the store's IO scope in production.
+        RuntimeStateStore.rederiveOpenAIKeyUsable { keyUsableOf(prefs(context)) }
+        RuntimeStateStore.refreshDisplay()
+        // Fold 5′: a selection may have invalidated a restart notice; the UI re-reads it after release.
+        context.filesDir?.toPath()?.let { RestartNotice.refreshAsync(it) }
+        return when (r) {
+            is ModelSelectionLock.Result.Acquired -> r.value
+            is ModelSelectionLock.Result.Busy -> {
+                LogCollector.append(
+                    "[Config] saveConfig: model selection is being updated (${r.reason}) — nothing saved",
+                    LogLevel.WARN,
+                )
+                false
+            }
+        }
+    }
+
+    /**
+     * BAT-1661: what a failed save's runtime_state undo did. [KEPT_NEWER]: the record no longer
+     * held this save's values (a newer writer's), so it was left alone — not a failure, not an undo.
+     */
+    private enum class RuntimeUndo { UNDONE, KEPT_NEWER, FAILED }
+
+    private fun RuntimeUndo.logSuffix(): String = if (this == RuntimeUndo.KEPT_NEWER) ", runtime_kept_newer=true" else ""
+
+    /** True when [config] changes the stored model selection (see [saveConfig]). */
+    internal fun isModelSelection(config: AppConfig): Boolean {
+        val loaded = config.loadedModelTuple ?: return true
+        return loaded != ModelTuple(config.provider, config.authType, config.model)
+    }
+
+    private fun saveConfigLocked(context: Context, config: AppConfig, tx: ModelSelectionLock.Tx, sealer: SecretSealer): Boolean {
+        val isSelection = isModelSelection(config)
         // BAT-513: validate the (provider, authType) matrix BEFORE any
         // persistence. Without this, the matrix gate inside
         // RuntimeStateStore.write would only fire AFTER prefs.commit
@@ -463,6 +621,20 @@ object ConfigManager {
         val oldAgentName = oldAgentPrefs?.agentName ?: sp.getString(KEY_AGENT_NAME, null)
         val oldSearchProvider = oldAgentPrefs?.searchProvider ?: sp.getString(KEY_SEARCH_PROVIDER, null)
 
+        // Restore the prefs this save may have changed to their pre-save values. commit(), not
+        // apply(): the caller is told the save failed, so the rollback must be on disk first.
+        fun rollbackPrefs(): Boolean {
+            val rollback = sp.edit()
+            // BAT-1661: only a selection wrote these three, so only a selection rolls them back.
+            if (isSelection) rollbackModelSelection(tx, rollback, oldProvider, oldAuthType, oldModel)
+            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
+            else rollback.remove(KEY_AGENT_NAME)
+            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
+            else rollback.remove(KEY_SEARCH_PROVIDER)
+            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
+            return rollback.commit()
+        }
+
         // BAT-515 v3 §4 step 2: pre-validate agent-preferences fields
         // BEFORE any persistence. The cap/allowlist gates inside
         // AgentPreferencesStore.update would fire AFTER prefs.commit
@@ -495,33 +667,37 @@ object ConfigManager {
             }
         }
 
-        val encApiKey = KeystoreHelper.encrypt(config.anthropicApiKey)
-        val encBotToken = KeystoreHelper.encrypt(config.telegramBotToken)
+        val encApiKey = sealer.seal(config.anthropicApiKey)
+        val encBotToken = sealer.seal(config.telegramBotToken)
 
-        val editor = sp.edit()
-            .putString(KEY_API_KEY_ENC, Base64.encodeToString(encApiKey, Base64.NO_WRAP))
-            .putString(KEY_BOT_TOKEN_ENC, Base64.encodeToString(encBotToken, Base64.NO_WRAP))
+        val editor = MainPrefs.edit(sp)
+            .putString(KEY_API_KEY_ENC, encApiKey)
+            .putString(KEY_BOT_TOKEN_ENC, encBotToken)
             .putString(KEY_OWNER_ID, config.telegramOwnerId)
-            .putString(KEY_MODEL, config.model)
             .putString(KEY_AGENT_NAME, config.agentName)
-            .putString(KEY_AUTH_TYPE, config.authType)
             .putBoolean(KEY_AUTO_START, config.autoStartOnBoot)
             .putBoolean(KEY_RICH_MESSAGES, config.richMessages)
             .putInt(KEY_HEARTBEAT_INTERVAL, config.heartbeatIntervalMinutes)
             .putInt(KEY_MAX_STEPS_PER_TURN, config.maxStepsPerTurn)
             .putBoolean(KEY_SETUP_COMPLETE, true)
+        // BAT-1661: the model selection is written only by a selection (see saveConfig KDoc).
+        if (isSelection) {
+            editor.putString(KEY_PROVIDER, config.provider)
+                .putString(KEY_AUTH_TYPE, config.authType)
+                .putString(KEY_MODEL, config.model)
+        }
 
         // Store setup token separately so switching auth type preserves both
         if (config.setupToken.isNotBlank()) {
-            val encSetupToken = KeystoreHelper.encrypt(config.setupToken)
-            editor.putString(KEY_SETUP_TOKEN_ENC, Base64.encodeToString(encSetupToken, Base64.NO_WRAP))
+            val encSetupToken = sealer.seal(config.setupToken)
+            editor.putString(KEY_SETUP_TOKEN_ENC, encSetupToken)
         } else {
             editor.remove(KEY_SETUP_TOKEN_ENC)
         }
 
         if (config.braveApiKey.isNotBlank()) {
-            val encBrave = KeystoreHelper.encrypt(config.braveApiKey)
-            editor.putString(KEY_BRAVE_API_KEY_ENC, Base64.encodeToString(encBrave, Base64.NO_WRAP))
+            val encBrave = sealer.seal(config.braveApiKey)
+            editor.putString(KEY_BRAVE_API_KEY_ENC, encBrave)
         } else {
             editor.remove(KEY_BRAVE_API_KEY_ENC)
         }
@@ -529,59 +705,57 @@ object ConfigManager {
         editor.putString(KEY_SEARCH_PROVIDER, config.searchProvider)
 
         if (config.perplexityApiKey.isNotBlank()) {
-            val encPerplexity = KeystoreHelper.encrypt(config.perplexityApiKey)
-            editor.putString(KEY_PERPLEXITY_API_KEY_ENC, Base64.encodeToString(encPerplexity, Base64.NO_WRAP))
+            val encPerplexity = sealer.seal(config.perplexityApiKey)
+            editor.putString(KEY_PERPLEXITY_API_KEY_ENC, encPerplexity)
         } else {
             editor.remove(KEY_PERPLEXITY_API_KEY_ENC)
         }
 
         if (config.exaApiKey.isNotBlank()) {
-            val encExa = KeystoreHelper.encrypt(config.exaApiKey)
-            editor.putString(KEY_EXA_API_KEY_ENC, Base64.encodeToString(encExa, Base64.NO_WRAP))
+            val encExa = sealer.seal(config.exaApiKey)
+            editor.putString(KEY_EXA_API_KEY_ENC, encExa)
         } else {
             editor.remove(KEY_EXA_API_KEY_ENC)
         }
 
         if (config.tavilyApiKey.isNotBlank()) {
-            val encTavily = KeystoreHelper.encrypt(config.tavilyApiKey)
-            editor.putString(KEY_TAVILY_API_KEY_ENC, Base64.encodeToString(encTavily, Base64.NO_WRAP))
+            val encTavily = sealer.seal(config.tavilyApiKey)
+            editor.putString(KEY_TAVILY_API_KEY_ENC, encTavily)
         } else {
             editor.remove(KEY_TAVILY_API_KEY_ENC)
         }
 
         if (config.firecrawlApiKey.isNotBlank()) {
-            val encFirecrawl = KeystoreHelper.encrypt(config.firecrawlApiKey)
-            editor.putString(KEY_FIRECRAWL_API_KEY_ENC, Base64.encodeToString(encFirecrawl, Base64.NO_WRAP))
+            val encFirecrawl = sealer.seal(config.firecrawlApiKey)
+            editor.putString(KEY_FIRECRAWL_API_KEY_ENC, encFirecrawl)
         } else {
             editor.remove(KEY_FIRECRAWL_API_KEY_ENC)
         }
 
         if (config.jupiterApiKey.isNotBlank()) {
-            val encJupiter = KeystoreHelper.encrypt(config.jupiterApiKey)
-            editor.putString(KEY_JUPITER_API_KEY_ENC, Base64.encodeToString(encJupiter, Base64.NO_WRAP))
+            val encJupiter = sealer.seal(config.jupiterApiKey)
+            editor.putString(KEY_JUPITER_API_KEY_ENC, encJupiter)
         } else {
             editor.remove(KEY_JUPITER_API_KEY_ENC)
         }
 
         if (config.heliusApiKey.isNotBlank()) {
-            val encHelius = KeystoreHelper.encrypt(config.heliusApiKey)
-            editor.putString(KEY_HELIUS_API_KEY_ENC, Base64.encodeToString(encHelius, Base64.NO_WRAP))
+            val encHelius = sealer.seal(config.heliusApiKey)
+            editor.putString(KEY_HELIUS_API_KEY_ENC, encHelius)
         } else {
             editor.remove(KEY_HELIUS_API_KEY_ENC)
         }
 
-        editor.putString(KEY_PROVIDER, config.provider)
-
-        if (config.openaiApiKey.isNotBlank()) {
-            val encOpenai = KeystoreHelper.encrypt(config.openaiApiKey)
-            editor.putString(KEY_OPENAI_API_KEY_ENC, Base64.encodeToString(encOpenai, Base64.NO_WRAP))
+        if (keepsSecret(config.openaiApiKey)) {
+            val encOpenai = sealer.seal(config.openaiApiKey)
+            editor.putString(KEY_OPENAI_API_KEY_ENC, encOpenai)
         } else {
             editor.remove(KEY_OPENAI_API_KEY_ENC)
         }
 
         if (config.openrouterApiKey.isNotBlank()) {
-            val encOpenRouter = KeystoreHelper.encrypt(config.openrouterApiKey)
-            editor.putString(KEY_OPENROUTER_API_KEY_ENC, Base64.encodeToString(encOpenRouter, Base64.NO_WRAP))
+            val encOpenRouter = sealer.seal(config.openrouterApiKey)
+            editor.putString(KEY_OPENROUTER_API_KEY_ENC, encOpenRouter)
         } else {
             editor.remove(KEY_OPENROUTER_API_KEY_ENC)
         }
@@ -590,15 +764,15 @@ object ConfigManager {
         editor.putString(KEY_OPENROUTER_FALLBACK_CONTEXT, config.openrouterFallbackContext)
 
         if (config.customApiKey.isNotBlank()) {
-            val encCustom = KeystoreHelper.encrypt(config.customApiKey)
-            editor.putString(KEY_CUSTOM_API_KEY_ENC, Base64.encodeToString(encCustom, Base64.NO_WRAP))
+            val encCustom = sealer.seal(config.customApiKey)
+            editor.putString(KEY_CUSTOM_API_KEY_ENC, encCustom)
         } else {
             editor.remove(KEY_CUSTOM_API_KEY_ENC)
         }
         editor.putString(KEY_CUSTOM_BASE_URL, config.customBaseUrl)
         if (config.customHeaders.isNotBlank()) {
-            val encHeaders = KeystoreHelper.encrypt(config.customHeaders)
-            editor.putString(KEY_CUSTOM_HEADERS_ENC, Base64.encodeToString(encHeaders, Base64.NO_WRAP))
+            val encHeaders = sealer.seal(config.customHeaders)
+            editor.putString(KEY_CUSTOM_HEADERS_ENC, encHeaders)
         } else {
             editor.remove(KEY_CUSTOM_HEADERS_ENC)
         }
@@ -606,8 +780,8 @@ object ConfigManager {
 
         editor.putString(KEY_CHANNEL, config.channel)
         if (config.discordBotToken.isNotBlank()) {
-            val encDiscord = KeystoreHelper.encrypt(config.discordBotToken)
-            editor.putString(KEY_DISCORD_BOT_TOKEN_ENC, Base64.encodeToString(encDiscord, Base64.NO_WRAP))
+            val encDiscord = sealer.seal(config.discordBotToken)
+            editor.putString(KEY_DISCORD_BOT_TOKEN_ENC, encDiscord)
         } else {
             editor.remove(KEY_DISCORD_BOT_TOKEN_ENC)
         }
@@ -619,8 +793,8 @@ object ConfigManager {
         // BAT-1124: xAI api-key secret (api_key path). The xAI *OAuth* triple
         // is intentionally NOT written here anymore.
         if (config.xaiApiKey.isNotBlank()) {
-            val encXai = KeystoreHelper.encrypt(config.xaiApiKey)
-            editor.putString(KEY_XAI_API_KEY_ENC, Base64.encodeToString(encXai, Base64.NO_WRAP))
+            val encXai = sealer.seal(config.xaiApiKey)
+            editor.putString(KEY_XAI_API_KEY_ENC, encXai)
         } else {
             editor.remove(KEY_XAI_API_KEY_ENC)
         }
@@ -631,7 +805,10 @@ object ConfigManager {
         // XaiOAuthTokenStore, written ONLY by sign-in/sign-out (MAIN) and
         // rotation (:node bridge) — no unrelated config save can clobber it.
 
-        val persisted = editor.commit()
+        // BAT-1661 (CodeRabbit on 444ba220): a failed commit leaves the new values in MAIN's prefs
+        // cache, and the next successful commit of ANY key (an auto-start toggle) would flush the
+        // rejected selection to disk. commitOrRestore puts the old values back.
+        val persisted = MainPrefs.commitOrRestore(editor)
         if (!persisted) {
             LogCollector.append("[Config] Failed to persist config (commit=false)", LogLevel.ERROR)
             return false
@@ -711,10 +888,11 @@ object ConfigManager {
         // for a separate cleanup PR.
         //
         // Custom-signature reset:
-        //   - Only recompute when config.provider == "custom" because
-        //     AppConfig has no separate "customModel" field; config.model
-        //     is the active model, which represents Custom only when
-        //     on Custom. Switching providers and back must NOT reset
+        //   - Only recompute when the provider being stored is "custom"
+        //     (BAT-1661: config.provider/model on a selection, the stored
+        //     provider/model on an unrelated save) because AppConfig has
+        //     no separate "customModel" field; the model represents Custom
+        //     only when on Custom. Switching providers and back must NOT reset
         //     the override — only direct edits to Custom config fields.
         //   - When the new sig != current.customConfigSignature, reset
         //     customEchoReasoning to false (gateway-specific contract;
@@ -729,40 +907,93 @@ object ConfigManager {
         // a concurrent /think writer landed between the read and our
         // update's writeLock acquisition.
         var preForwardRuntime: RuntimeState? = null
+        // BAT-1661: the record this save's forward update wrote (the undo's compare-and-swap value).
+        var postForwardRuntime: RuntimeState? = null
         var loggedSigReset = false
-        val runtimeWritten = if (RuntimeStateStore.isInitialized) try {
-            kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                RuntimeStateStore.update { current ->
-                    preForwardRuntime = current
-                    val newCustomSig = if (config.provider == "custom") {
-                        CustomConfigSignature.compute(
-                            customModel = config.model,
-                            customBaseUrl = config.customBaseUrl,
-                            customFormat = config.customFormat,
-                            customHeaders = config.customHeaders,
-                        )
+
+        // Undo the RuntimeStateStore forward update. Skip when nothing was forwarded
+        // (RuntimeStateStore not initialized, no record for an unrelated save, OR an
+        // IllegalArgumentException short-circuited the lambda — the forward update never persisted).
+        //
+        // BAT-1661 (CodeRabbit on 444ba220): compare-and-swap. Only while the record still holds
+        // what THIS save wrote are the fields it wrote put back; a newer writer that landed in
+        // between (Node's /provider or /model, which cannot take the Kotlin lock — BAT-1663) keeps
+        // its tuple, and a concurrent /think keeps its reasoning toggles. That outcome is
+        // [RuntimeUndo.KEPT_NEWER] (logged as `runtime_kept_newer=true`), never reported as an undo.
+        fun undoRuntimeWrite(): RuntimeUndo {
+            val snapshot = preForwardRuntime
+            val forward = postForwardRuntime
+            return if (RuntimeStateStore.isInitialized && snapshot != null && forward != null) try {
+                when (RuntimeStateStore.updateExisting(tx) { cur ->
+                    val stillOurs = cur.provider == forward.provider && cur.authType == forward.authType &&
+                        cur.model == forward.model && cur.customEchoReasoning == forward.customEchoReasoning &&
+                        cur.customConfigSignature == forward.customConfigSignature
+                    if (!stillOurs) {
+                        null
                     } else {
-                        current.customConfigSignature
+                        cur.copy(
+                            provider = snapshot.provider,
+                            authType = snapshot.authType,
+                            model = snapshot.model,
+                            customEchoReasoning = snapshot.customEchoReasoning,
+                            customConfigSignature = snapshot.customConfigSignature,
+                        )
                     }
-                    val customSigChanged = config.provider == "custom"
-                        && current.customConfigSignature != newCustomSig
-                    val newCustomEcho = if (customSigChanged) false else current.customEchoReasoning
-                    if (customSigChanged && current.customEchoReasoning) {
-                        loggedSigReset = true
-                    }
-                    current.copy(
-                        provider = config.provider,
-                        // BAT-1124 H5: gate (xai, oauth) with a blank token → api_key so
-                        // runtime_state.json never advertises an unstartable oauth pair.
-                        authType = runtimeAuthTypeFor(config),
-                        model = config.model,
-                        // reasoningEnabled / reasoningDisplayInChat
-                        // are preserved verbatim from `current` — no
-                        // change in saveConfig.
-                        customEchoReasoning = newCustomEcho,
-                        customConfigSignature = newCustomSig,
-                    )
+                }) {
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.WRITTEN -> RuntimeUndo.UNDONE
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.FAILED -> RuntimeUndo.FAILED
+                    // The record changed (or went) since this save wrote it: a newer writer's, kept.
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.UNCHANGED,
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.ABSENT -> RuntimeUndo.KEPT_NEWER
                 }
+            } catch (e: IllegalArgumentException) {
+                // Should not happen — the snapshot came out of RuntimeStateStore itself, so its
+                // (provider,authType) is guaranteed valid. Defense-in-depth log.
+                LogCollector.append(
+                    "[Config] RuntimeStateStore rollback rejected snapshot (unexpected): ${e.message}",
+                    LogLevel.ERROR,
+                )
+                RuntimeUndo.FAILED
+            } else RuntimeUndo.UNDONE
+        }
+        val forwardRecord = { current: RuntimeState ->
+            preForwardRuntime = current
+            val newCustomSig = customSignatureForSave(isSelection, config, current)
+            val customSigChanged = (if (isSelection) config.provider else current.provider) == "custom"
+                && current.customConfigSignature != newCustomSig
+            val newCustomEcho = if (customSigChanged) false else current.customEchoReasoning
+            if (customSigChanged && current.customEchoReasoning) {
+                loggedSigReset = true
+            }
+            // BAT-1661: an unrelated save keeps the stored selection (v2.5 §2).
+            current.copy(
+                provider = if (isSelection) config.provider else current.provider,
+                // BAT-1124 H5: gate (xai, oauth) with a blank token → api_key so
+                // runtime_state.json never advertises an unstartable oauth pair.
+                authType = if (isSelection) runtimeAuthTypeFor(config) else current.authType,
+                model = if (isSelection) config.model else current.model,
+                // reasoningEnabled / reasoningDisplayInChat
+                // are preserved verbatim from `current` — no
+                // change in saveConfig.
+                customEchoReasoning = newCustomEcho,
+                customConfigSignature = newCustomSig,
+            ).also { postForwardRuntime = it }
+        }
+        val runtimeWritten = if (RuntimeStateStore.isInitialized) try {
+            if (isSelection) {
+                // BAT-1661: the IO hop runs on another thread; the transaction is the `tx` token, which
+                // crosses it, so nothing is re-acquired here (contract v2.4 §4).
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    RuntimeStateStore.update(tx) { current -> forwardRecord(current) }
+                }
+            } else {
+                // BAT-1661 (CodeRabbit on 444ba220): an unrelated save only carries its own fields
+                // forward on the record ON DISK. With no record, `update` would build one from the
+                // launch-time seed — a selection that can predate the user's (or a pending repair's)
+                // and that Node reads first. No record: nothing of the selection to keep in step, so
+                // nothing is written and the save goes on (Node falls back to config.json).
+                RuntimeStateStore.updateExisting(tx) { current -> forwardRecord(current) } !=
+                    com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.FAILED
             }
         } catch (e: IllegalArgumentException) {
             LogCollector.append(
@@ -794,13 +1025,7 @@ object ConfigManager {
             // skip Setup on next launch, leaving the user stranded
             // with an unconfigured agent. For existing users (snapshot
             // already true), the rollback is a no-op.
-            val rollback = sp.edit()
-            if (oldProvider != null) rollback.putString(KEY_PROVIDER, oldProvider)
-            else rollback.remove(KEY_PROVIDER)
-            if (oldAuthType != null) rollback.putString(KEY_AUTH_TYPE, oldAuthType)
-            else rollback.remove(KEY_AUTH_TYPE)
-            if (oldModel != null) rollback.putString(KEY_MODEL, oldModel)
-            else rollback.remove(KEY_MODEL)
+            //
             // R5 Copilot: BAT-515 added KEY_AGENT_NAME / KEY_SEARCH_PROVIDER
             // to the same `editor.commit()` block above (lines 367, 389).
             // The pre-BAT-515 rollback only covered the BAT-513 runtime
@@ -811,14 +1036,8 @@ object ConfigManager {
             // the old values. Without these two extra rollback lines,
             // prefs and the cross-process files would diverge on the
             // RuntimeStateStore-failure path, undoing the v3 §4 atomicity
-            // contract. Mirror the same put-or-remove shape the later
-            // AgentPreferencesStore-failure rollback already uses.
-            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
-            else rollback.remove(KEY_AGENT_NAME)
-            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
-            else rollback.remove(KEY_SEARCH_PROVIDER)
-            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
-            val rollbackOk = rollback.commit()
+            // contract. rollbackPrefs restores both, as every rollback path does.
+            val rollbackOk = rollbackPrefs()
             if (!rollbackOk) {
                 // Synchronous commit failed (rare — usually means the
                 // disk is genuinely full). Log loudly; the partial
@@ -907,19 +1126,7 @@ object ConfigManager {
             // intentional rollback semantic. /think writes are
             // tolerable to lose under this rare path; preferring user-
             // intent atomicity over inter-update concurrent retention.
-            val rollback = sp.edit()
-            if (oldProvider != null) rollback.putString(KEY_PROVIDER, oldProvider)
-            else rollback.remove(KEY_PROVIDER)
-            if (oldAuthType != null) rollback.putString(KEY_AUTH_TYPE, oldAuthType)
-            else rollback.remove(KEY_AUTH_TYPE)
-            if (oldModel != null) rollback.putString(KEY_MODEL, oldModel)
-            else rollback.remove(KEY_MODEL)
-            if (oldAgentName != null) rollback.putString(KEY_AGENT_NAME, oldAgentName)
-            else rollback.remove(KEY_AGENT_NAME)
-            if (oldSearchProvider != null) rollback.putString(KEY_SEARCH_PROVIDER, oldSearchProvider)
-            else rollback.remove(KEY_SEARCH_PROVIDER)
-            rollback.putBoolean(KEY_SETUP_COMPLETE, oldSetupComplete)
-            val rollbackOk = rollback.commit()
+            val rollbackOk = rollbackPrefs()
             if (!rollbackOk) {
                 LogCollector.append(
                     "[Config] Rollback commit() returned false — prefs may be in inconsistent state " +
@@ -927,34 +1134,54 @@ object ConfigManager {
                     LogLevel.ERROR,
                 )
             }
-            // Undo the RuntimeStateStore forward update by restoring
-            // the captured snapshot. Skip when preForwardRuntime is
-            // null (RuntimeStateStore wasn't initialized OR an
-            // IllegalArgumentException short-circuited the lambda
-            // before assignment — in that latter case the forward
-            // update never persisted, so there's nothing to undo).
-            val runtimeUndone = if (RuntimeStateStore.isInitialized && preForwardRuntime != null) try {
-                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                    RuntimeStateStore.update { _ -> preForwardRuntime!! }
-                }
-            } catch (e: IllegalArgumentException) {
-                // Should not happen — preForwardRuntime came out of
-                // RuntimeStateStore itself, so its (provider,authType)
-                // is guaranteed valid. Defense-in-depth log.
-                LogCollector.append(
-                    "[Config] RuntimeStateStore rollback rejected snapshot (unexpected): ${e.message}",
-                    LogLevel.ERROR,
-                )
-                false
-            } else true
+            val runtimeUndo = undoRuntimeWrite()
+            val runtimeUndone = runtimeUndo != RuntimeUndo.FAILED
             bumpConfigVersionOnMain()
             LogCollector.append(
                 "[Config] AgentPreferencesStore.update failed — rolled back prefs to " +
                     "(provider=$oldProvider, authType=$oldAuthType, model=$oldModel, " +
                     "agentName=$oldAgentName, searchProvider=$oldSearchProvider) and " +
                     "KEY_SETUP_COMPLETE to $oldSetupComplete " +
-                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone)",
+                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone${runtimeUndo.logSuffix()})",
                 LogLevel.WARN,
+            )
+            return false
+        }
+
+        // BAT-513 round-9: the overlay is written ONLY after prefs, runtime_state.json and
+        // agent_preferences.json all succeeded. It persists provider/authType/model too; writing
+        // it first would mean a failure-path rollback would also need to revert the overlay (and
+        // the next loadConfig's reconcileWithAgentSettings would re-adopt it back into prefs).
+        //
+        // Publish THIS config directly: a loadConfig round-trip would
+        // re-trigger reconcile (PR #339 device-test regression fix).
+        // BAT-1661: an unrelated save keeps the overlay's provider/authType/model.
+        //
+        // BAT-1661 (Codex diff review #2): its outcome is checked. Node reads the overlay first,
+        // so a selection acknowledged over a failed overlay write would be reverted by the old
+        // overlay, and would clear a pending repair on top. The write is atomic, so the previous
+        // file is still in place: undo every store this save wrote and report the failure.
+        if (!writeAgentSettingsJson(context, tx, config, publishModelFields = isSelection)) {
+            val rollbackOk = rollbackPrefs()
+            val runtimeUndo = undoRuntimeWrite()
+            val runtimeUndone = runtimeUndo != RuntimeUndo.FAILED
+            val agentPrefsUndone = if (AgentPreferencesStore.isInitialized && oldAgentPrefs != null) try {
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    AgentPreferencesStore.update { current ->
+                        current.copy(searchProvider = oldAgentPrefs.searchProvider, agentName = oldAgentPrefs.agentName)
+                    }
+                }
+            } catch (e: IllegalArgumentException) {
+                false
+            } else true
+            bumpConfigVersionOnMain()
+            LogCollector.append(
+                "[Config] agent_settings.json write failed — rolled back prefs to " +
+                    "(provider=$oldProvider, authType=$oldAuthType, model=$oldModel, " +
+                    "agentName=$oldAgentName, searchProvider=$oldSearchProvider) and " +
+                    "KEY_SETUP_COMPLETE to $oldSetupComplete " +
+                    "(commit_ok=$rollbackOk, runtime_undone=$runtimeUndone${runtimeUndo.logSuffix()}, agent_prefs_undone=$agentPrefsUndone)",
+                if (rollbackOk && runtimeUndone && agentPrefsUndone) LogLevel.WARN else LogLevel.ERROR,
             )
             return false
         }
@@ -978,27 +1205,52 @@ object ConfigManager {
             )
         }
 
-        // BAT-513 round-9: write the overlay AND broadcast the change
-        // ONLY after both prefs commit + RuntimeStateStore.write
-        // succeeded. The overlay persists provider/authType/model too;
-        // writing it before the runtime-state write would mean a
-        // failure-path rollback would also need to revert the
-        // overlay (and the next loadConfig's reconcileWithAgentSettings
-        // would re-adopt the unreverted overlay back into prefs).
-        // Deferring keeps all three persistent stores (prefs, overlay,
-        // runtime_state.json) atomic at the runtime-fields level —
-        // either all updated together or all left at the prior values.
-        //
-        // configOverride=config: skip the loadConfig round-trip
-        // writeAgentSettingsJson would otherwise do, which would
-        // re-trigger reconcile (PR #339 device-test regression fix).
-        writeAgentSettingsJson(context, configOverride = config)
+        // BAT-1661 (v2.5 §2): a successful selection — every store written, the overlay included —
+        // supersedes a pending model repair.
+        if (isSelection) ModelRepair.cancelAfterSelection(tx, context.filesDir.toPath())
+        // BAT-1661 v2.12 H5 (Q16): ...and an interrupted reconcile's retry record (checked,
+        // best-effort; a leftover classifies Superseded or Completed at the next resolve). Unrelated
+        // saves never write the selection, so they leave it alone.
+        if (isSelection) ReconcileRecord.clearSuperseded(tx, context.filesDir.toPath())
+        // Fold 5′: ...and any "restart to apply" notice for an older selection (same transaction).
+        if (isSelection) RestartNotice.invalidate(tx, context.filesDir.toPath())
         // Notify the OTHER process — main-process UI relies on this
         // to refresh after :node-process writes (e.g. /provider
         // Telegram switch's service-start reconcile). Same-process
         // observers already saw the configVersion bump above.
         broadcastConfigChanged(context)
         return true
+    }
+
+    /**
+     * The Custom-provider signature [saveConfig] stores (BAT-1661). An unrelated save keeps the
+     * stored provider and model, so the signature is computed for THAT pair, not the form's: a
+     * `/model` change after the form loaded would otherwise keep a stale signature (and echo
+     * override) for the new model. Off Custom, the stored signature is carried unchanged.
+     */
+    internal fun customSignatureForSave(isSelection: Boolean, config: AppConfig, current: RuntimeState): String? {
+        val provider = if (isSelection) config.provider else current.provider
+        val model = if (isSelection) config.model else current.model
+        if (provider != "custom") return current.customConfigSignature
+        return CustomConfigSignature.compute(
+            customModel = model,
+            customBaseUrl = config.customBaseUrl,
+            customFormat = config.customFormat,
+            customHeaders = config.customHeaders,
+        )
+    }
+
+    private fun rollbackModelSelection(
+        tx: ModelSelectionLock.Tx,
+        rollback: SharedPreferences.Editor,
+        oldProvider: String?,
+        oldAuthType: String?,
+        oldModel: String?,
+    ) {
+        tx.requireOpen()
+        if (oldProvider != null) rollback.putString(KEY_PROVIDER, oldProvider) else rollback.remove(KEY_PROVIDER)
+        if (oldAuthType != null) rollback.putString(KEY_AUTH_TYPE, oldAuthType) else rollback.remove(KEY_AUTH_TYPE)
+        if (oldModel != null) rollback.putString(KEY_MODEL, oldModel) else rollback.remove(KEY_MODEL)
     }
 
     /**
@@ -1010,7 +1262,113 @@ object ConfigManager {
      */
     fun loadConfig(context: Context): AppConfig? {
         if (!isSetupComplete(context)) return null
-        return loadConfigUnchecked(context)
+        return loadConfigLocked(context)
+    }
+
+    /**
+     * BAT-1661: how long a load waits for the [ModelSelectionLock] before reconciling compute-only.
+     * Short, because loads run on the UI thread; a busy lock only means "a model write is in
+     * flight", and a compute-only load returns the same values without committing them.
+     */
+    private const val LOAD_LOCK_TIMEOUT_MS = 250L
+
+    /**
+     * Reconcile may commit provider/authType/model to prefs and runtime_state, so it runs under
+     * the lock. A busy lock (or a load nested inside a transaction) reconciles compute-only.
+     *
+     * BAT-1661 (contract v2.7 §1): in `:node` it never opens a transaction. `:node` writes no
+     * prefs, so its load is compute-only anyway; taking the lock would only stall a Node
+     * `/provider` call (up to [LOAD_LOCK_TIMEOUT_MS]) behind a Settings save.
+     */
+    private fun loadConfigLocked(context: Context): AppConfig {
+        if (ProcessRole.isNode) return loadConfigUnchecked(context, null, null)
+        // BAT-1661 v2.12 fold 5′: this load's own resolve outcome; a finished change may have saved a
+        // restart notice, which the UI re-reads only after THIS transaction is released. Nothing here
+        // stops or starts the agent.
+        var owned: ReconcileRecord.Outcome? = null
+        val r = try {
+            ModelSelectionLock.transaction(LOAD_LOCK_TIMEOUT_MS) { tx ->
+                loadConfigOut(context, tx, null, bootFiles = false, onResolved = { owned = it })
+            }
+        } finally {
+            RestartNotice.afterRelease(context.filesDir?.toPath(), owned)
+        }
+        val config = when (r) {
+            is ModelSelectionLock.Result.Acquired -> r.value.config
+            is ModelSelectionLock.Result.Busy -> loadConfigUnchecked(context, null, null)
+        }
+        // BAT-1661 (round-10 gap c): the display's key flag, derived AFTER the model transaction is
+        // released, revision first (CodeRabbit 4626795862: never a key value read earlier). The
+        // decrypt and the re-projection (which decrypts the OpenAI sign-in) run on the store's IO
+        // scope in production — neither under the model lock nor on the calling (often main) thread.
+        RuntimeStateStore.rederiveOpenAIKeyUsable { keyUsableOf(prefs(context)) }
+        return config
+    }
+
+    /**
+     * BAT-1661 service start: the load inside the boot transaction, with the repair's
+     * [approved] target carried into reconcile (contract v2.4 §2). Null when setup is incomplete.
+     *
+     * Contract v2.7 §2 (D7.3): the selection is resolved from the files read fresh, in Node's
+     * order ([bootSelection]), never from `:node`'s prefs cache, which can be older than a MAIN save.
+     */
+    internal fun loadConfigForBoot(
+        context: Context,
+        tx: ModelSelectionLock.Tx,
+        approved: ModelRepair.ApprovedTarget?,
+    ): AppConfig? {
+        tx.requireOpen()
+        if (!isSetupComplete(context)) return null
+        return loadConfigUnchecked(context, tx, approved, bootFiles = true)
+    }
+
+    /**
+     * BAT-1661 contract v2.7 §2 (D7.3): the boot's selection, from the files read fresh, in Node's
+     * order (`config.js`):
+     *  - provider and auth: runtime_state.json when it is Present, else prefs;
+     *  - model: [NodeDispatch.winner] — an applicable overlay with a non-blank model, else
+     *    runtime_state's, else prefs'.
+     * Reconcile then runs against this selection, so an overlay model the files agree on equals it
+     * and is never clamped, even when unlisted.
+     *
+     * One exception keeps the user's auth: a runtime_state auth that is only the BAT-1124 boot-guard
+     * image of the prefs selection ([isXaiGuardImage]) is the SAME selection, so prefs' auth is
+     * kept. Taking it would publish api_key into the overlay, and MAIN's reconcile would then
+     * commit it over the user's OAuth choice. A fresh overlay explicitly on xai/api_key proves a
+     * real API-key choice, which is then taken (Codex Q12).
+     */
+    internal fun bootSelection(files: java.nio.file.Path, fromPrefs: AppConfig): AppConfig {
+        val rt = RuntimeStateFile.read(files)
+        val w = NodeDispatch.winner(rt, AgentSettingsFile.read(files), fromPrefs.provider, fromPrefs.model)
+        val tuple = (rt as? RuntimeStateFile.Read.Present)?.tuple
+            ?: return fromPrefs.copy(model = w.model.ifBlank { fromPrefs.model })
+        val guardImage = isXaiGuardImage(files, fromPrefs.provider, fromPrefs.authType, tuple.provider, tuple.authType)
+        return fromPrefs.copy(
+            provider = tuple.provider,
+            authType = if (guardImage) "oauth" else tuple.authType,
+            model = w.model.ifBlank { fromPrefs.model },
+        )
+    }
+
+    /**
+     * BAT-1661 read-only boot (contract v2.5 §1): the same load with reconcile in compute-only
+     * mode. Writes no model-selection store. Null when setup is incomplete.
+     */
+    internal fun loadConfigReadOnly(context: Context): AppConfig? {
+        if (!isSetupComplete(context)) return null
+        return loadConfigUnchecked(context, null, null)
+    }
+
+    /**
+     * BAT-1661 (CodeRabbit on 444ba220): the service start's read-only boot (lock busy, or a plan
+     * that leaves the model stores alone). Compute-only like [loadConfigReadOnly], with the
+     * selection from the files in Node's order ([bootSelection], contract v2.7 §2 / D7.3), as the
+     * ordinary boot takes it — so a busy start emits the same provider the ordinary one would,
+     * never a foreign overlay's (Node's own dispatch ignores it). Null when setup is incomplete.
+     */
+    internal fun loadConfigReadOnlyForBoot(context: Context): AppConfig? {
+        if (!isSetupComplete(context)) return null
+        return loadConfigUnchecked(context, null, null, bootFiles = true)
     }
 
     /**
@@ -1024,14 +1382,109 @@ object ConfigManager {
      * so this never throws on a truly fresh install — it just returns a blank
      * AppConfig with whatever few fields have been written so far.
      */
-    fun loadConfigOrBootstrap(context: Context): AppConfig = loadConfigUnchecked(context)
+    fun loadConfigOrBootstrap(context: Context): AppConfig = loadConfigLocked(context)
 
-    private fun loadConfigUnchecked(context: Context): AppConfig {
+    /**
+     * [tx] non-null: reconcile may commit (the caller holds the model-selection lock). Null:
+     * compute-only — the returned config is the same, but no model-selection store is written.
+     */
+    private fun loadConfigUnchecked(
+        context: Context,
+        tx: ModelSelectionLock.Tx?,
+        approved: ModelRepair.ApprovedTarget?,
+        /** The `:node` boot transaction: the selection comes from the files ([bootSelection]). */
+        bootFiles: Boolean = false,
+    ): AppConfig = loadConfigOut(context, tx, approved, bootFiles).config
+
+    /**
+     * [loadConfigUnchecked]'s result. [held]: a reconcile retry record is unresolved after this load —
+     * it held the selection work (fold 1), or this load's own reconcile left one (its runtime_state
+     * write failed; CodeRabbit 4628273764). [outcome]: this load's resolve, whose restart request the
+     * caller owns and schedules after its transaction (CodeRabbit 4628273797).
+     */
+    private class LoadOut(val config: AppConfig, val held: Boolean, val outcome: ReconcileRecord.Outcome?)
+
+    private fun loadConfigOut(
+        context: Context,
+        tx: ModelSelectionLock.Tx?,
+        approved: ModelRepair.ApprovedTarget?,
+        bootFiles: Boolean,
+        /** Called with this load's resolve outcome as soon as it is known (the caller owns its restart). */
+        onResolved: (ReconcileRecord.Outcome) -> Unit = {},
+    ): LoadOut {
+        tx?.requireOpen()
         // BAT-1155 §4: adopt the xAI OAuth record into XaiOAuthTokenStore
         // (marker-gated, idempotent) BEFORE we read it below. Runs in BOTH
         // the MAIN and `:node` processes — whichever loads config first.
         migrateXaiOAuthToStoreIfNeeded(context)
         val p = prefs(context)
+        // BAT-1661 v2.12 H1 (Q16): finish an interrupted reconcile FIRST — after the xAI adoption
+        // above (the H5 rule sees the adopted token), before the repair snapshot, ModelRepair.mainLoad
+        // (whose same-scope sync would copy runtime_state's old model over a model-only change), the
+        // normaliser and reconcile. MAIN only, under the lock.
+        // Fold 1: on Deferred or Failed the WHOLE automatic selection work of this load is held —
+        // no normaliser commit, no reconcile commit, no runtime selection write, no intent mutation,
+        // and the unresolved record is never replaced: [selTx] is null from here on (compute-only).
+        var held = false
+        var resolved: ReconcileRecord.Outcome? = null
+        val recordOwner = approved == null && tx != null && !ProcessRole.isNode && RuntimeStateStore.isInitialized
+        if (recordOwner) {
+            val w0 = prefsForWrite(context, "ReconcileRecord.resolve")
+            if (w0 != null) {
+                val out = ReconcileRecord.resolve(tx!!, context.filesDir.toPath(), MainPrefs.view(w0))
+                when {
+                    out is ReconcileRecord.Outcome.Recovered -> {
+                        postConfigVersionBump()
+                        broadcastConfigChanged(context)
+                    }
+                    out.holds -> held = true
+                }
+                resolved = out
+                onResolved(out)
+            }
+        }
+        val selTx = if (held) null else tx
+        // BAT-1661: in the main process, prefs are a per-process cache that `:node` writes cannot
+        // refresh. Bring the prefs MODEL up to date from runtime_state.json BEFORE reconciling, so
+        // reconcile never mistakes a stale prefs model for a user change and clamps a repaired,
+        // valid-but-unlisted model away (contract v2.4 §2). Model only, same provider and auth
+        // only — see syncPrefsFromFile (Codex diff review #3).
+        //
+        // The repair is classified FIRST, from the stores as they are (CodeRabbit on f1607b5d): the
+        // sync would otherwise overwrite a retired prefs model — the repair's evidence — with
+        // runtime_state's, and reconcile would then find nothing pending and clamp a valid unlisted
+        // overlay model. While a repair governs the stores, the sync may only move prefs to the
+        // repair's own target. Under the lock, MAIN also acts on the intent (contract v2.8 §3,
+        // v2.9 §3–§5: delete a superseded one, converge a handed-off one; ModelRepair.mainLoad).
+        // The boot transaction ([approved] set) decides for itself.
+        val pending = if (approved != null) null else try {
+            val files = context.filesDir.toPath()
+            // BAT-1157 (D7.1): the sync writes prefs, so MAIN only (RuntimeStateStore is MAIN-only too).
+            val w = if (selTx != null && !ProcessRole.isNode && RuntimeStateStore.isInitialized) {
+                prefsForWrite(context, "syncPrefsFromFile")
+            } else {
+                null
+            }
+            // v2.8 §4 ordering: the sign-in migration runs before the token-presence snapshot.
+            val first = modelSnapshot(context)
+            if (selTx != null && w != null) {
+                var next: ModelRepair.Snapshot? = first
+                val out = ModelRepair.mainLoad(
+                    selTx,
+                    files,
+                    snapshot = { next?.also { next = null } ?: modelSnapshot(context, migrate = false) },
+                    sync = { onlyTo -> RuntimeStateStore.syncPrefsFromFile(selTx, files, w, onlyTo = onlyTo) },
+                    commitModel = { model -> RuntimeStateStore.commitModelChecked(selTx, w, model) },
+                )
+                if (out.prefsChanged) postConfigVersionBump()
+                out.pending
+            } else {
+                // Also the held load (fold 1): read-only, so no sync can erase the record's evidence.
+                ModelRepair.pendingRepair(files, first, main = !ProcessRole.isNode)
+            }
+        } catch (_: IllegalStateException) {
+            null // registry not initialised (unit tests); production inits it in Application.onCreate
+        }
 
         val apiKey = try {
             val enc = p.getString(KEY_API_KEY_ENC, null)
@@ -1123,14 +1576,9 @@ object ConfigManager {
             ""
         }
 
-        val openaiApiKey = try {
-            val enc = p.getString(KEY_OPENAI_API_KEY_ENC, null)
-            if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to decrypt OpenAI API key", e)
-            LogCollector.append("[Config] Failed to decrypt OpenAI API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
-            ""
-        }
+        // BAT-1661 (Codex 7ec40d8b #1): the display projection's key signal is recorded from this
+        // decrypted key by loadConfigLocked, after the model transaction (round-10 gap c).
+        val openaiApiKey = decryptOpenAIKey(p, log = true)
 
         val openrouterApiKey = try {
             val enc = p.getString(KEY_OPENROUTER_API_KEY_ENC, null)
@@ -1194,19 +1642,10 @@ object ConfigManager {
         // POTENTIALLY CONSUMED. Never hand it to the provider — treat the family as dead (blank +
         // reauthRequired) so :node boots INTO reconnect. SeekerClawService.reconcileXaiOAuthOnBoot
         // durably converts this to reauth; this belt covers a conversion that could not persist.
-        val rotationUnsafe = !xaiRec.tombstone && xaiRec.rotationInFlightEpoch == xaiRec.epoch
-        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired || rotationUnsafe
-        // Decrypt the required token fields; null = a NON-blank ciphertext failed to
-        // decrypt (Codex major-1). A decrypt failure makes the family effectively dead —
-        // fail closed to reauth (blank tokens + reauthRequired) so it boots INTO reconnect,
-        // never downgrades to api_key on a "" that merely looks like an absent token.
-        val accessDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
-        val refreshDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
-        val xaiDecryptFailed = accessDec == null || refreshDec == null
-        val xaiEffectiveReauth = xaiRec.reauthRequired || rotationUnsafe || xaiDecryptFailed
-        val xaiDead = deadByFlag || xaiDecryptFailed
-        val xaiOAuthToken = if (xaiDead) "" else (accessDec ?: "")
-        val xaiOAuthRefresh = if (xaiDead) "" else (refreshDec ?: "")
+        val xaiView = xaiSignInView(xaiRec)
+        val xaiEffectiveReauth = xaiView.effectiveReauth
+        val xaiOAuthToken = xaiView.token
+        val xaiOAuthRefresh = xaiView.refresh
         val xaiOAuthEmail = decryptXaiCiphertext(xaiRec.emailEnc) ?: "" // email non-critical → "" on failure
 
         // BAT-515 v3 §4: prefer live AgentPreferencesStore values over
@@ -1230,7 +1669,7 @@ object ConfigManager {
         val fromPrefs = AppConfig(
             anthropicApiKey = apiKey,
             setupToken = setupToken,
-            authType = resolveAuthType(context, p),
+            authType = resolveAuthType(context, p, selTx),
             telegramBotToken = botToken,
             telegramOwnerId = loadOwnerIdFromFile(context, "telegram"),
             // Trim at the read boundary: legacy prefs values (pre-BAT-1032
@@ -1238,8 +1677,8 @@ object ConfigManager {
             // path uses config.model verbatim — a padded ID breaks provider
             // requests. Blank-after-trim falls back to the default.
             // BAT-1315: default tracks model-registry.json providers[claude].defaultModel.
-            model = (p.getString(KEY_MODEL, "claude-opus-5") ?: "claude-opus-5")
-                .trim().ifBlank { "claude-opus-5" },
+            model = (p.getString(KEY_MODEL, "claude-opus-5-5") ?: "claude-opus-5-5")
+                .trim().ifBlank { "claude-opus-5-5" },
             agentName = livePrefs?.agentName ?: (p.getString(KEY_AGENT_NAME, "MyAgent") ?: "MyAgent"),
             braveApiKey = braveApiKey,
             searchProvider = livePrefs?.searchProvider ?: (p.getString(KEY_SEARCH_PROVIDER, "brave") ?: "brave"),
@@ -1288,34 +1727,76 @@ object ConfigManager {
         // restart. Node writes provider/authType/model directly to this
         // file; we adopt them here and mirror back to SharedPreferences so
         // the next loadConfig reads a consistent state.
-        return reconcileWithAgentSettings(context, p, fromPrefs)
+        // BAT-1661 v2.7 §2 (D7.3): in the boot transaction, reconcile against the files' selection.
+        val base = if (bootFiles) bootSelection(context.filesDir.toPath(), fromPrefs) else fromPrefs
+        val reconciledRaw = reconcileWithAgentSettings(context, p, base, selTx, approved, pending)
+        // BAT-1661 v2.7 §2 (D7.3, strict): in the boot, [bootSelection] is the authority for the
+        // selection. Reconcile must not replace provider or auth with a foreign overlay's (Node's own
+        // dispatch ignores it), and the overlay contributes only its model, and only when it applies,
+        // which bootSelection has already taken through NodeDispatch.
+        val merged = if (bootFiles) {
+            reconciledRaw.copy(provider = base.provider, authType = base.authType, model = base.model)
+        } else {
+            reconciledRaw
+        }
+        // BAT-1661 (contract v2.8 §2, D7.3): a boot that carries a repair target publishes the
+        // files' selection — the intent's (provider, authType), which the classifier proved equal to
+        // runtime_state-then-prefs, and its target. So config.json and the overlay publish never take
+        // a retired model from `:node`'s stale prefs cache, nor a foreign overlay's provider, which
+        // Node's own dispatch ignores.
+        val reconciled = if (approved != null) {
+            merged.copy(provider = approved.provider, authType = approved.authType, model = approved.model)
+        } else {
+            merged
+        }
+        // BAT-1661: what the caller loaded — saveConfig compares the edited tuple to it.
+        // CodeRabbit 4628273764: a record this load's own reconcile left (written, then its runtime_state
+        // write failed) is as unresolved as a held one — the callers must not treat the stores as in step.
+        val unresolved = held || (recordOwner && ReconcileRecord.read(context.filesDir.toPath()).let {
+            it is ReconcileRecord.Read.Present || it is ReconcileRecord.Read.Unavailable
+        })
+        // Fold 5′ chokepoint + self-heal (Codex 90fed4d6 rule 3): after this load's selection work —
+        // including any reconcile commit — a "restart to apply" notice whose selection neither prefs
+        // nor runtime_state holds any more (a chat `/provider`, a repaired model) goes, in THIS
+        // transaction. Never while held (fold 1: compute-only) or with a record still unresolved.
+        if (recordOwner && !unresolved) RestartNotice.invalidateIfOrphaned(tx!!, context.filesDir.toPath(), p)
+        return LoadOut(reconciled.copy(loadedModelTuple = ModelTuple(reconciled.provider, reconciled.authType, reconciled.model)), unresolved, resolved)
     }
 
+    /** Always posted, never synchronous: a load may run inside a composition that reads it. */
+    private fun postConfigVersionBump() {
+        mainHandler.post { configVersion.intValue = configVersion.intValue + 1 }
+    }
+
+    /**
+     * [tx] null: compute-only (the reconciled config is returned, nothing is committed).
+     * [approved]: the boot transaction's repair target (BAT-1661), see [resolveModelForReconcile].
+     * [pending]: the repair pending outside the boot transaction, decided by the caller BEFORE the
+     * prefs sync could remove its evidence ([ModelRepair.pendingRepair]); null when none.
+     */
     private fun reconcileWithAgentSettings(
         context: Context,
         prefs: PrefsReader,
         fromPrefs: AppConfig,
+        tx: ModelSelectionLock.Tx?,
+        approved: ModelRepair.ApprovedTarget?,
+        pending: ModelRepair.RepairIntent?,
     ): AppConfig {
-        val settingsFile = File(File(context.filesDir, "workspace"), "agent_settings.json")
         // BAT-1409 P1-C/P1-J: lstat + no-follow read — a link here is treated as unreadable.
-        if (!SafeFs.existsNoFollow(settingsFile.toPath())) return fromPrefs
-        val json = try {
-            JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), settingsFile.toPath()))
-        } catch (e: Exception) {
-            LogCollector.append("[Config] agent_settings.json unreadable (${e.message}) — skipping reconciliation", LogLevel.WARN)
-            return fromPrefs
+        // BAT-1661: kotlinx JSON (AgentSettingsFile) — org.json is a stub in JVM tests.
+        val json = when (val r = AgentSettingsFile.read(context.filesDir.toPath())) {
+            AgentSettingsFile.Read.Absent -> return fromPrefs
+            is AgentSettingsFile.Read.Unreadable -> {
+                LogCollector.append("[Config] agent_settings.json unreadable (${r.reason}) — skipping reconciliation", LogLevel.WARN)
+                return fromPrefs
+            }
+            is AgentSettingsFile.Read.Present -> r.obj
         }
 
-        // Use opt() + cast rather than optString() — optString() coerces
-        // non-string JSON values (numbers, booleans, nested objects) into
-        // strings via .toString(), which would silently adopt a corrupted
-        // or tampered agent_settings.json value into SharedPreferences.
-        // Reject non-String values up front.
-        fun stringField(key: String): String? {
-            val raw = json.opt(key) ?: return null
-            val v = (raw as? String)?.trim() ?: return null
-            return if (v.isBlank()) null else v
-        }
+        // Non-string JSON values (numbers, booleans, nested objects) are rejected,
+        // never coerced, so a corrupted or tampered agent_settings.json value is
+        // never adopted into SharedPreferences.
+        fun stringField(key: String): String? = AgentSettingsFile.stringField(json, key)
 
         val newProvider = stringField("provider")
         val newAuthType = stringField("authType")
@@ -1400,10 +1881,10 @@ object ConfigManager {
         // blank after a successful Setup flow, so this edge case is
         // unreachable for normal users.
         //
-        // Auth changes matter too: OpenAI's oauth model list includes
-        // gpt-5.4-mini but the api_key list doesn't, so switching oauth→
-        // api_key on OpenAI must revalidate prefs.model against the new
-        // auth mode's allowlist even when provider stays the same.
+        // Auth changes matter too: if a provider's auth modes ever list
+        // different models (the modelsByAuth mechanism), switching auth must
+        // revalidate prefs.model against the new auth mode's allowlist even
+        // when provider stays the same.
         val resolvedModel: String = resolveModelForReconcile(
             providerChanged = providerChanged,
             authChanged = authChanged,
@@ -1411,24 +1892,89 @@ object ConfigManager {
             prefsModel = fromPrefs.model,
             effectiveProvider = effectiveProviderAfter,
             effectiveAuth = effectiveAuthAfter,
+            approvedTarget = approved,
         )
         val modelChanged = resolvedModel != fromPrefs.model
 
         if (!providerChanged && !authChanged && !modelChanged) return fromPrefs
 
+        // BAT-1661 (Codex re-review of 29ed3c72, #1): a model-only change while a model repair is
+        // pending in this scope. Committing it would clamp away the evidence the repair decides
+        // from (e.g. a valid unlisted overlay model next to a retired prefs model) before the
+        // start sees it. Leave every store as it is and report the model the repair will settle
+        // on. Not the boot transaction (it passes `approved`), and never a provider or auth
+        // switch, which reconciles as before.
+        if (approved == null && !providerChanged && !authChanged) {
+            if (pending != null && pending.provider == fromPrefs.provider && pending.authType == fromPrefs.authType) {
+                Log.i(TAG, "model repair pending — load leaves the stored model as it is (shows ${pending.target})")
+                return fromPrefs.copy(model = pending.target)
+            }
+        }
+
+        val reconciled = fromPrefs.copy(
+            provider = if (providerChanged) validProvider!! else fromPrefs.provider,
+            authType = if (authChanged) validAuthType!! else fromPrefs.authType,
+            model = if (modelChanged) resolvedModel else fromPrefs.model,
+        )
+        // BAT-1661: compute-only (lock busy, read-only boot) — same result, nothing committed.
+        if (tx == null) return reconciled
+        tx.requireOpen()
+
         // BAT-1157 (D7.2): compute-only in `:node`. A `:node` commit writes its WHOLE cached prefs
         // map, which can undo a newer Settings save; MAIN persists the reconcile on its own load.
-        val editor = if (ProcessRole.isNode) null else prefsForWrite(context, "reconcileWithAgentSettings")?.edit()
-        if (editor == null) {
-            return fromPrefs.copy(
-                provider = if (providerChanged) validProvider!! else fromPrefs.provider,
-                authType = if (authChanged) validAuthType!! else fromPrefs.authType,
-                model = if (modelChanged) resolvedModel else fromPrefs.model,
-            )
-        }
+        val sp = if (ProcessRole.isNode) null else prefsForWrite(context, "reconcileWithAgentSettings")
+        if (sp == null) return reconciled
+        val editor = MainPrefs.edit(sp)
         if (providerChanged) editor.putString(KEY_PROVIDER, validProvider)
         if (authChanged) editor.putString(KEY_AUTH_TYPE, validAuthType)
         if (modelChanged) editor.putString(KEY_MODEL, resolvedModel)
+        // CodeRabbit on ca06bb79: the stored values, as stored, for the rollback if runtime_state
+        // cannot be written after this commit lands.
+        val storedProvider = sp.getString(KEY_PROVIDER, null)
+        val storedAuth = sp.getString(KEY_AUTH_TYPE, null)
+        val storedModel = sp.getString(KEY_MODEL, null)
+        val files = context.filesDir.toPath()
+
+        // BAT-1661 v2.12 (Q16) §1: the retry record, written and confirmed BEFORE the prefs commit,
+        // whenever a runtime_state write follows. It lets a later MAIN process prove where this
+        // transaction stopped (ReconcileRecord.resolve) if both the runtime_state write and the
+        // rollback below fail and the process exits.
+        if (RuntimeStateStore.isInitialized) {
+            // Fold 1: a new record only once the previous one was resolved or superseded — never
+            // over an unresolved (Present or Unavailable) one. This load stays compute-only.
+            when (ReconcileRecord.read(files)) {
+                is ReconcileRecord.Read.Present, is ReconcileRecord.Read.Unavailable -> {
+                    Log.i(TAG, "reconcile held: a model selection change is being finished")
+                    return reconciled
+                }
+                else -> Unit
+            }
+            val record = ReconcileRecord.Record(
+                prefsBefore = ReconcileRecord.RawTuple(storedProvider, storedAuth, storedModel),
+                prefsAfter = ReconcileRecord.RawTuple(
+                    if (providerChanged) validProvider else storedProvider,
+                    if (authChanged) validAuthType else storedAuth,
+                    if (modelChanged) resolvedModel else storedModel,
+                ),
+                target = ModelTuple(reconciled.provider, reconciled.authType, reconciled.model),
+                runtime = when (val rt = RuntimeStateFile.read(files)) {
+                    is RuntimeStateFile.Read.Present -> ReconcileRecord.RuntimeCapture(ReconcileRecord.STATE_PRESENT, rt.tuple)
+                    RuntimeStateFile.Read.Missing -> ReconcileRecord.RuntimeCapture(ReconcileRecord.STATE_MISSING)
+                    is RuntimeStateFile.Read.Unreadable -> ReconcileRecord.RuntimeCapture(ReconcileRecord.STATE_UNREADABLE)
+                },
+                overlay = ReconcileRecord.RawTuple(newProvider, newAuthType, newModel),
+                overlaySelection = ModelRepair.rawSelection(json),
+            )
+            try {
+                ReconcileRecord.write(tx, files, record)
+            } catch (e: Exception) {
+                // WriteNotApplied, WriteUnconfirmed (a visible but unconfirmed record is harmless:
+                // prefs are still on prefsBefore) or an invalid record: no mutation at all.
+                tx.markWriteFailed()
+                LogCollector.append(ReconcileRecord.recordWriteFailed(e.message ?: e.javaClass.simpleName), LogLevel.ERROR)
+                return reconciled
+            }
+        }
         // commit() not apply(): the broadcast below races the async disk
         // flush of apply(). Main process receives the broadcast → bumps
         // configVersion → Compose recomposes screens that re-read
@@ -1439,13 +1985,98 @@ object ConfigManager {
         // completes, so the broadcast can't outrun the data. Same
         // class of bug as 76041c1 (apply→commit before killProcess in
         // onDestroy); same fix.
-        editor.commit()
+        if (!MainPrefs.commitOrRestore(editor)) {
+            // BAT-1661 (Codex diff review #2): false means not on disk. Flag the transaction (the
+            // service start then keeps any repair intent), and stop here: no runtime_state write
+            // and no broadcast for a reconcile that did not persist. This load still returns it.
+            // CodeRabbit on 444ba220: commitOrRestore put the old values back in the cache.
+            // v2.12: the retry record is kept — only a process that can prove the prefs state
+            // (ReconcileRecord.resolve) may drop it, and this process cannot any more (D12.2).
+            tx.markWriteFailed()
+            LogCollector.append(
+                "[Config] Reconcile: prefs commit failed — model selection not saved this time " +
+                    "(provider=${reconciled.provider}, authType=${reconciled.authType}, model=${reconciled.model})",
+                LogLevel.ERROR,
+            )
+            return reconciled
+        }
+
+        // BAT-513: keep runtime_state.json in sync with the prefs we just
+        // reconciled. Without this, the legacy agent_settings.json overlay
+        // path could update prefs while the new RuntimeStateStore-backed
+        // file goes stale, and the next `:node` startup would read the
+        // stale file via runtime-state.js and overwrite our reconciled
+        // prefs back. Main process only: RuntimeStateStore.init runs only there,
+        // and Telegram-originated /provider and /model write runtime_state.json
+        // directly via runtime-state.js in `:node`.
+        //
+        // BAT-1661 v2.12 (Q16) §2: a CHECKED write (RuntimeStateStore.writeSelectionVerified), and the
+        // retry record is cleared only after it is confirmed. Fold 2: only the selection fields are
+        // patched on the current record — the reasoning toggles, the Custom echo override and its
+        // signature are kept (saveConfig's Custom-signature reset policy applies).
+        if (RuntimeStateStore.isInitialized) try {
+            RuntimeStateStore.writeSelectionVerified(
+                tx,
+                reconciled.provider,
+                // BAT-1124 H5: same (xai, oauth)+blank-token → api_key gate as saveConfig,
+                // so a reconcile can't seed the boot-loop pair into runtime_state.json.
+                runtimeAuthTypeFor(reconciled),
+                reconciled.model,
+                customSignature = { current -> customSignatureForSave(true, reconciled, current) },
+            )
+            // A failed clear is RECORD_CLEAR_FAILED; the reconcile still succeeded, and the next
+            // resolve finds the record Completed (idempotent).
+            ReconcileRecord.clearLogged(tx, files)
+        } catch (e: SafeFs.WriteNotApplied) {
+            // CodeRabbit on ca06bb79: prefs landed, runtime_state did not (it is unchanged). Put
+            // prefs back to what they held with a REAL commit (BAT-513's saveConfig rule: prefs and
+            // runtime_state move together). Even if that commit fails, the cache holds the old
+            // values. Codex diff review #2 still holds: no broadcast for a reconcile that did not land.
+            // v2.12: the retry record is KEPT; the next resolve proves which state prefs are in.
+            tx.markWriteFailed()
+            // A BLIND write of the stored values, safe only because provider / auth_type / model
+            // are written solely under ModelSelectionLock, which `tx` holds: no other writer can
+            // have changed them since they were read above. If an unlocked writer of these keys
+            // is ever added, this needs commitOrRestore's per-key compare (restore a key only
+            // while the cache still holds this reconcile's value).
+            val back = sp.edit()
+            fun restore(key: String, v: String?) { if (v == null) back.remove(key) else back.putString(key, v) }
+            if (providerChanged) restore(KEY_PROVIDER, storedProvider)
+            if (authChanged) restore(KEY_AUTH_TYPE, storedAuth)
+            if (modelChanged) restore(KEY_MODEL, storedModel)
+            val rolledBack = back.commit()
+            LogCollector.append(
+                "[Config] Reconcile: runtime_state.json not saved — model selection rolled back, " +
+                    "retried on the next load (commit_ok=$rolledBack)",
+                LogLevel.WARN,
+            )
+            return fromPrefs
+        } catch (e: SafeFs.WriteUnconfirmed) {
+            // v2.12 §2: the new bytes are already visible (and broadcast), so MAIN's collector will
+            // see the change in runtime_state. A rollback would leave prefs on the old selection
+            // next to a visible new one: the split again. No rollback; the record is kept, and the
+            // next resolve confirms runtime_state with a rewrite, or recovers it after a power loss.
+            tx.markWriteFailed()
+            LogCollector.append(ReconcileRecord.RUNTIME_UNCONFIRMED, LogLevel.WARN)
+            return reconciled
+        } catch (e: Exception) {
+            // v2.12 fold 4: an exception after the prefs commit (a validation or write failure) is
+            // Failed — the record is KEPT, never deleted because of an exception class. Prefs hold
+            // the change; the next resolve recovers runtime_state, or holds the automatic writers.
+            tx.markWriteFailed()
+            LogCollector.append(
+                "[Config] Reconcile produced invalid RuntimeState — runtime_state.json " +
+                    "left untouched (prefs still updated): ${e.message}",
+                LogLevel.WARN,
+            )
+            return reconciled
+        }
 
         // Bump same-process configVersion so any in-process UI observer
         // recomposes. /provider Telegram → :node service-start reconcile
         // is the canonical path here, where :node's ConfigManager.
         // configVersion bumps but main-process UI needs the broadcast
-        // below to know.
+        // below to know. BAT-1661: after runtime_state landed too.
         bumpConfigVersionOnMain()
         broadcastConfigChanged(context)
 
@@ -1455,64 +2086,6 @@ object ConfigManager {
                 "authType=${if (authChanged) "$validAuthType (was ${fromPrefs.authType})" else fromPrefs.authType}, " +
                 "model=${if (modelChanged) "$resolvedModel (was ${fromPrefs.model})" else fromPrefs.model}"
         )
-
-        val reconciled = fromPrefs.copy(
-            provider = if (providerChanged) validProvider!! else fromPrefs.provider,
-            authType = if (authChanged) validAuthType!! else fromPrefs.authType,
-            model = if (modelChanged) resolvedModel else fromPrefs.model,
-        )
-        // BAT-513: keep runtime_state.json in sync with the prefs we just
-        // reconciled. Without this, the legacy agent_settings.json overlay
-        // path could update prefs while the new RuntimeStateStore-backed
-        // file goes stale, and the next `:node` startup would read the
-        // stale file via runtime-state.js and overwrite our reconciled
-        // prefs back. RuntimeStateStore.write is a no-op (returns false)
-        // if init() hasn't run yet — that's fine for the `:node` process,
-        // which doesn't init RuntimeStateStore. The collector's
-        // redundancy guard ensures prefs aren't double-mirrored. Wrap
-        // in try/catch so a (theoretically unreachable) invalid combo
-        // out of reconcile doesn't crash this hot path; the prefs side
-        // is already updated and the agent stays operational.
-        //
-        // Capture and log the Boolean so a transient FS failure (full
-        // storage etc.) surfaces — without this, runtime_state.json
-        // could go stale relative to prefs without any signal,
-        // hiding the divergence until the next successful write.
-        //
-        // Gate on RuntimeStateStore.isInitialized: reconcile fires in
-        // BOTH the main process and `:node`, but RuntimeStateStore.init
-        // is only called in the main process. In `:node`, write() would
-        // always return false (store is null) — that would produce a
-        // misleading WARN every reconcile call there. The :node side
-        // doesn't need this mirror anyway: Telegram-originated
-        // /provider/model commands write runtime_state.json directly
-        // via runtime-state.js, so the reconcile→runtime_state path
-        // is a genuinely main-process-only sync of the legacy overlay
-        // back into the new file.
-        if (RuntimeStateStore.isInitialized) try {
-            val runtimeWritten = RuntimeStateStore.write(
-                RuntimeState(
-                    provider = reconciled.provider,
-                    // BAT-1124 H5: same (xai, oauth)+blank-token → api_key gate as saveConfig,
-                    // so a reconcile can't seed the boot-loop pair into runtime_state.json.
-                    authType = runtimeAuthTypeFor(reconciled),
-                    model = reconciled.model,
-                ),
-            )
-            if (!runtimeWritten) {
-                LogCollector.append(
-                    "[Config] Reconcile: RuntimeStateStore.write returned false — " +
-                        "runtime_state.json may be stale vs prefs until next successful write",
-                    LogLevel.WARN,
-                )
-            }
-        } catch (e: IllegalArgumentException) {
-            LogCollector.append(
-                "[Config] Reconcile produced invalid RuntimeState — runtime_state.json " +
-                    "left untouched (prefs still updated): ${e.message}",
-                LogLevel.WARN,
-            )
-        }
         return reconciled
     }
 
@@ -1534,8 +2107,16 @@ object ConfigManager {
      * Branches 2-3 keep the defensive clamps: a genuine external change
      * (overlay != prefs, e.g. Node-written /model values or tampered files)
      * is validated against the effective provider+auth, and a provider/auth
-     * switch revalidates prefs.model against the NEW pair (e.g. oauth→
-     * api_key on OpenAI must clamp the oauth-only gpt-5.4-mini).
+     * switch revalidates prefs.model against the NEW pair (e.g. an auth
+     * switch must clamp a model the new auth mode doesn't list).
+     *
+     * Branch 0 (BAT-1661, contract v2.4 §2): inside the service-start repair
+     * transaction, an overlay model equal to the transaction's [approvedTarget]
+     * is adopted when the scope still matches. That is a decision record, not a
+     * validation result: the repair may keep a valid model no longer listed
+     * (prefs on a retired id, overlay on a dropped-but-working one), which
+     * branch 2 would otherwise clamp to the default. Outside the transaction
+     * [approvedTarget] is null and nothing changes.
      */
     @VisibleForTesting
     internal fun resolveModelForReconcile(
@@ -1545,7 +2126,15 @@ object ConfigManager {
         prefsModel: String,
         effectiveProvider: String,
         effectiveAuth: String,
+        approvedTarget: ModelRepair.ApprovedTarget? = null,
     ): String {
+        if (approvedTarget != null &&
+            newModel == approvedTarget.model &&
+            effectiveProvider == approvedTarget.provider &&
+            effectiveAuth == approvedTarget.authType
+        ) {
+            return approvedTarget.model
+        }
         // stringField() trims the overlay value, so the prefs side must be
         // trimmed too or a legacy padded prefs value (e.g. an untrimmed
         // claim import) would miss the equality gate and fall into the
@@ -1771,20 +2360,38 @@ object ConfigManager {
         if (migrated == OpenAIOAuthTokenStore.MigrateOutcome.DONE && !ProcessRole.isNode) {
             sweepLegacyOpenAIOAuthKeysIfConfirmed(context, p)
         }
+        return resolveOpenAIOAuth(p, quiet = false)
+    }
+
+    /**
+     * BAT-1661 (CodeRabbit on aefe5f82): Node can use an OpenAI sign-in — the SAME resolution the
+     * load emits to config.json ([resolveOpenAIOAuth], #466's legacy-pair fallback included, and only
+     * for an absent record with no marker), read-only: no migration, no sweep, no log. For the
+     * display projection; call off the main thread (it decrypts).
+     */
+    internal fun openAIOAuthUsableReadOnly(p: PrefsReader): Boolean =
+        OpenAIOAuthTokenStore.isInitialized && nodeUsesSecret(resolveOpenAIOAuth(p, quiet = true).access)
+
+    /**
+     * The OpenAI sign-in as config.json carries it, from the store as it is now. The legacy pair is
+     * used only while the record is Absent AND no migration marker exists, so a sign-out (tombstone)
+     * or a completed migration can never bring an old pair back. [quiet]: no logs (display reads).
+     */
+    private fun resolveOpenAIOAuth(p: PrefsReader, quiet: Boolean): OpenAIOAuthRead {
         return when (val st = OpenAIOAuthTokenStore.snapshot()) {
             is OpenAIOAuthTokenStore.State.Present -> {
                 val r = st.record
                 if (r.tombstone) return OpenAIOAuthRead()
                 val live = OpenAIOAuthTokenStore.livePair(st)
                 if (live == null) {
-                    logOpenAIUnreadableOnce("decrypt failed")
+                    if (!quiet) logOpenAIUnreadableOnce("decrypt failed")
                     OpenAIOAuthRead()
                 } else {
                     OpenAIOAuthRead(live.access, live.refresh, live.email, r.expiresAt, r.familyId, r.epoch)
                 }
             }
             is OpenAIOAuthTokenStore.State.Unreadable -> {
-                logOpenAIUnreadableOnce(st.reason)
+                if (!quiet) logOpenAIUnreadableOnce(st.reason)
                 OpenAIOAuthRead()
             }
             OpenAIOAuthTokenStore.State.Absent -> {
@@ -1792,7 +2399,7 @@ object ConfigManager {
                 val legacy = legacyOpenAIPair(p) ?: return OpenAIOAuthRead()
                 val access = OpenAIOAuthTokenStore.open(legacy.accessEnc).orEmpty()
                 if (access.isBlank()) return OpenAIOAuthRead()
-                if (openaiMigrationWarned.compareAndSet(false, true)) {
+                if (!quiet && openaiMigrationWarned.compareAndSet(false, true)) {
                     LogCollector.append(
                         "[Config] OpenAI sign-in migration failed — using the saved pair, will retry",
                         LogLevel.WARN,
@@ -1904,6 +2511,7 @@ object ConfigManager {
         if (r is OpenAIOAuthTokenStore.Result.Ok) {
             rearmOpenAILegacySweep()
             sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
+            RuntimeStateStore.refreshDisplay() // the transport, and so the shown model, may change
             bumpConfigVersionOnMain()
             return true
         }
@@ -1924,6 +2532,7 @@ object ConfigManager {
         }
         rearmOpenAILegacySweep()
         sweepLegacyOpenAIOAuthKeysIfConfirmed(context, prefs(context))
+        RuntimeStateStore.refreshDisplay() // the transport, and so the shown model, may change
         bumpConfigVersionOnMain()
         return true
     }
@@ -1938,13 +2547,44 @@ object ConfigManager {
         openaiSweepNotBefore = 0L
     }
 
+    /** The xAI sign-in as a load (and the boot) sees it; see [xaiSignInView]. */
+    internal class XaiSignInView(val token: String, val refresh: String, val effectiveReauth: Boolean)
+
     /**
-     * BAT-1155: decrypt a base64 Keystore ciphertext blob from
-     * [XaiOAuthTokenStore]. Returns "" for a blank input or any decrypt
-     * failure (never throws, never logs the cleartext).
+     * BAT-1155 amendment 3 / Codex major-1, shared by [loadConfigUnchecked] and the runtime_state
+     * seed ([runtimeAuthTypeForStored], BAT-1661) so both apply ONE H5 decision.
      */
+    internal fun xaiSignInView(xaiRec: com.seekerclaw.app.state.XaiOAuthTokens): XaiSignInView {
+        // An armed rotation marker means a refresh POST for this epoch was in flight when the
+        // prior process died → the on-disk refresh token is POTENTIALLY CONSUMED. Never hand it to
+        // the provider — treat the family as dead (blank + reauthRequired) so :node boots INTO
+        // reconnect. SeekerClawService.reconcileXaiOAuthOnBoot durably converts this to reauth;
+        // this belt covers a conversion that could not persist.
+        val rotationUnsafe = !xaiRec.tombstone && xaiRec.rotationInFlightEpoch == xaiRec.epoch
+        val deadByFlag = xaiRec.tombstone || xaiRec.reauthRequired || rotationUnsafe
+        // Decrypt the required token fields; null = a NON-blank ciphertext failed to
+        // decrypt (Codex major-1). A decrypt failure makes the family effectively dead —
+        // fail closed to reauth (blank tokens + reauthRequired) so it boots INTO reconnect,
+        // never downgrades to api_key on a "" that merely looks like an absent token.
+        val accessDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.accessTokenEnc)
+        val refreshDec = if (deadByFlag) "" else decryptXaiCiphertext(xaiRec.refreshTokenEnc)
+        val decryptFailed = accessDec == null || refreshDec == null
+        val dead = deadByFlag || decryptFailed
+        return XaiSignInView(
+            token = if (dead) "" else (accessDec ?: ""),
+            refresh = if (dead) "" else (refreshDec ?: ""),
+            effectiveReauth = xaiRec.reauthRequired || rotationUnsafe || decryptFailed,
+        )
+    }
+
     /**
-     * Decrypt a stored xAI OAuth ciphertext. Returns the plaintext, `""` for a
+     * Test seam: opens an xAI ciphertext without the Keystore (JVM tests). Production NEVER assigns it
+     * (ModelSelectionSourceGuardTest pins that no main source does); it stays null.
+     */
+    @Volatile internal var xaiCiphertextOpenerForTest: ((String) -> String)? = null
+
+    /**
+     * BAT-1155: decrypt a stored xAI OAuth ciphertext (a base64 Keystore blob from [XaiOAuthTokenStore]). Returns the plaintext, `""` for a
      * BLANK ciphertext (a legitimately absent field), or `null` when a NON-blank
      * ciphertext FAILS to decrypt (corruption / Keystore key change). Codex major-1:
      * the caller MUST distinguish these — a decrypt failure of a required token is
@@ -1954,6 +2594,7 @@ object ConfigManager {
     private fun decryptXaiCiphertext(enc: String): String? {
         if (enc.isBlank()) return ""
         return try {
+            xaiCiphertextOpenerForTest?.let { return it(enc) }
             KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP))
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decrypt xAI OAuth field", e)
@@ -1969,7 +2610,7 @@ object ConfigManager {
      * BAT-1155 §4 — one-time adoption of the legacy `seekerclaw_prefs` xAI
      * OAuth keys into [XaiOAuthTokenStore]. Runs BEFORE the first config emit
      * in BOTH the MAIN and `:node` processes (called from [loadConfigUnchecked]
-     * and [writeConfigJson]). Idempotent + cheap once the process-local latch
+     * and [emitConfigJson]). Idempotent + cheap once the process-local latch
      * is set.
      *
      * MARKER-ONLY gate (Codex blocker 1): keyed on the mere existence of
@@ -2084,33 +2725,117 @@ object ConfigManager {
     }
 
     /**
+     * BAT-1661: lock bound per attempt for [syncXaiRuntimeAuthType] (its callers are on
+     * Dispatchers.IO). The sign-in runs it inside ResetGate's read side, so the TOTAL wait
+     * ([XAI_SYNC_ATTEMPTS] × this) stays near the earlier single 5 s bound: a Reset Config that
+     * arrives meanwhile waits no longer than before.
+     */
+    internal const val XAI_SYNC_LOCK_TIMEOUT_MS = 1_700L
+
+    /** BAT-1661: lock attempts for [syncXaiRuntimeAuthType] before it reports [XaiAuthSync.BUSY]. */
+    internal const val XAI_SYNC_ATTEMPTS = 3
+
+    /** What [syncXaiRuntimeAuthType] did. */
+    enum class XaiAuthSync {
+        /** runtime_state.json is in step (written, already right, or no record to sync). */
+        SYNCED,
+
+        /** The model-selection lock stayed busy through every attempt: nothing was written. */
+        BUSY,
+
+        /** The write failed (storage) or the sync threw: runtime_state.json may be stale. */
+        NOT_SAVED,
+
+        /**
+         * BAT-1661 v2.12 (review m3): an interrupted model selection change is not finished yet (its
+         * retry record holds every automatic selection write, fold 1): nothing was written.
+         */
+        HELD,
+    }
+
+    /**
      * BAT-1155 H5 — after a MAIN-process sign-in/sign-out writes the store,
      * re-derive the xai `runtime_state.json` authType through the same H5 gate
      * so runtime_state (which Node reads FIRST) can never disagree with
      * config.json on the xai auth mode. Preserves the exact behaviour the old
      * `persistXaiOAuthTokens` had (ConfigManager.kt H5 block). Main-process
-     * only (`:node` never inits RuntimeStateStore); best-effort — a failure
-     * here does not invalidate the token already durably in the store.
+     * only (`:node` never inits RuntimeStateStore). A failure here does not
+     * invalidate the token already durably in the store.
+     *
+     * BAT-1661 (CodeRabbit on 444ba220): [XaiAuthSync.SYNCED] when `runtime_state.json` is in step
+     * (written, already right, or there is nothing to sync). Otherwise it may still hold the old
+     * xai auth mode — [XaiAuthSync.BUSY] or [XaiAuthSync.NOT_SAVED] — and the caller must NOT
+     * restart `:node` as if it were (the restarted boot would take that auth mode). A busy lock is
+     * retried [attempts] times, [lockTimeoutMs] each.
+     * Only a record on disk is updated: with none, Node reads config.json, which [emitConfigJson]
+     * gates the same way, and a record built from the launch seed could carry an old selection.
      */
-    fun syncXaiRuntimeAuthType(context: Context) {
+    fun syncXaiRuntimeAuthType(
+        context: Context,
+        lockTimeoutMs: Long = XAI_SYNC_LOCK_TIMEOUT_MS,
+        attempts: Int = XAI_SYNC_ATTEMPTS,
+    ): XaiAuthSync {
         // BAT-1157: the store was just written, so an earlier "done" / KEEP_LEGACY verdict is stale;
         // the reload below re-runs the confirmed sweep of any legacy copy.
         xaiOAuthMigrationDone = false
         bumpConfigVersionOnMain()
-        if (!RuntimeStateStore.isInitialized) return
-        try {
-            val reloaded = loadConfigOrBootstrap(context)
-            if (reloaded.provider == "xai") {
-                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                    RuntimeStateStore.update { current ->
-                        if (current.provider == "xai") current.copy(authType = runtimeAuthTypeFor(reloaded))
-                        else current
+        if (!RuntimeStateStore.isInitialized) return XaiAuthSync.SYNCED
+        var busyReason = ""
+        var held = false
+        var owned: ReconcileRecord.Outcome? = null
+        repeat(attempts.coerceAtLeast(1)) {
+            val r = try {
+                // BAT-1661: a runtime_state write, so it runs under the model-selection lock. Both
+                // callers are on Dispatchers.IO, so it waits longer than a UI save.
+                ModelSelectionLock.transaction(lockTimeoutMs) { tx ->
+                    val out = loadConfigOut(context, tx, null, bootFiles = false, onResolved = { owned = it })
+                    val reloaded = out.config
+                    // BAT-1661 v2.12 fold 1 (CodeRabbit 4628273773/4628273764): an unresolved reconcile
+                    // retry record — held at the start, or left by this load's own reconcile — holds
+                    // every automatic runtime selection write, this one included. Checked BEFORE any
+                    // success return: the loaded (projected) provider proves nothing about the file.
+                    if (out.held) {
+                        LogCollector.append(ReconcileRecord.XAI_SYNC_HELD, LogLevel.WARN)
+                        held = true
+                        return@transaction false
                     }
+                    // Whether an auth sync is needed is decided by runtime_state.json ON DISK (what Node
+                    // reads first): only an xai record there carries an xai auth mode to keep in step.
+                    val onDisk = (RuntimeStateFile.read(context.filesDir.toPath()) as? RuntimeStateFile.Read.Present)?.tuple
+                    if (onDisk == null || onDisk.provider != "xai") return@transaction true
+                    // The xAI selection's auth: the loaded config's when it is xai; otherwise the
+                    // record's own (its H5 guard image is the OAuth selection, as for bootSelection).
+                    val auth = if (reloaded.provider == "xai") {
+                        runtimeAuthTypeFor(reloaded)
+                    } else {
+                        val selected = if (isXaiGuardImage(context.filesDir.toPath(), reloaded.provider, reloaded.authType, onDisk.provider, onDisk.authType)) "oauth" else onDisk.authType
+                        runtimeAuthTypeForStored("xai", selected)
+                    }
+                    RuntimeStateStore.updateExisting(tx) { current ->
+                        if (current.provider == "xai" && current.authType != auth) current.copy(authType = auth) else null
+                    } != com.seekerclaw.app.util.CrossProcessStore.UpdateOutcome.FAILED
                 }
+            } catch (e: Exception) {
+                // The transaction is released here: the UI re-reads a notice this load's resolve saved.
+                RestartNotice.afterRelease(context.filesDir?.toPath(), owned)
+                LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
+                return XaiAuthSync.NOT_SAVED
             }
-        } catch (e: Exception) {
-            LogCollector.append("[Config] xAI OAuth runtime_state sync failed: ${e.message}", LogLevel.WARN)
+            when (r) {
+                is ModelSelectionLock.Result.Acquired -> {
+                    // v2.12 fold 5′: this sync's own resolve outcome; the UI re-reads a notice it saved,
+                    // after the transaction. The sign-in keeps its own restart policy (BAT-1716).
+                    RestartNotice.afterRelease(context.filesDir?.toPath(), owned)
+                    if (r.value) return XaiAuthSync.SYNCED
+                    if (held) return XaiAuthSync.HELD
+                    LogCollector.append("[Config] xAI OAuth runtime_state sync failed: runtime_state.json not written", LogLevel.WARN)
+                    return XaiAuthSync.NOT_SAVED
+                }
+                is ModelSelectionLock.Result.Busy -> busyReason = r.reason
+            }
         }
+        LogCollector.append("[Config] xAI OAuth runtime_state sync skipped: lock busy ($busyReason)", LogLevel.WARN)
+        return XaiAuthSync.BUSY
     }
 
     /**
@@ -2349,8 +3074,40 @@ object ConfigManager {
      * Keystore key only if BOTH are confirmed — never over a record that could still be live.
      * Then clear prefs with a checked `commit()`. A rotation from `:node` during the reset waits
      * on a store lock and then finds a tombstone (409).
+     *
+     * BAT-1661 (contract v2.8 §4): inside the gate, the reset takes [ModelSelectionLock] FIRST,
+     * before the OpenAI and xAI store locks (the lock order everywhere), so it never interleaves
+     * with a model transaction: a `saveConfig` rollback or a collector mirror cannot write old
+     * values back over a reset. A busy lock is [ResetResult.Failed] with nothing changed.
      */
     fun resetConfig(context: Context): ResetResult = ResetGate.exclusive {
+        val out = when (val r = ModelSelectionLock.transaction { tx -> resetLocked(context, tx) }) {
+            is ModelSelectionLock.Result.Acquired -> r.value
+            is ModelSelectionLock.Result.Busy -> {
+                LogCollector.append("[Config] Reset: model selection busy (${r.reason}) — nothing reset", LogLevel.WARN)
+                ResetResult.Failed(RESET_MODEL_BUSY)
+            }
+        }
+        // BAT-1661: the display's key flag after Reset (outside the model lock). A completed Reset
+        // removed the key (prefs cleared, Keystore key deleted); any other outcome re-derives it from
+        // what is stored. Then the projection follows.
+        // CodeRabbit 4626795862: revision first for every outcome (a save after a completed Reset
+        // must not be overwritten by a constant "no key" noted later).
+        RuntimeStateStore.rederiveOpenAIKeyUsable { keyUsableOf(prefs(context)) }
+        RuntimeStateStore.refreshDisplay()
+        context.filesDir?.toPath()?.let { RestartNotice.refreshAsync(it) } // fold 5′: after release
+        out
+    }
+
+    /** Reset's Keystore key deletion; a test replaces it (no AndroidKeyStore on the JVM). */
+    @Volatile internal var deleteKeystoreKey: () -> Unit = { KeystoreHelper.deleteKey() }
+
+    /** [ResetResult.Failed.reason] when the model-selection lock was busy (contract v2.8 §4). */
+    const val RESET_MODEL_BUSY = "model selection busy"
+
+    /** [resetConfig]'s body, holding the model-selection lock ([tx]). */
+    private fun resetLocked(context: Context, tx: ModelSelectionLock.Tx): ResetResult {
+        tx.requireOpen()
         val none = TombstoneOutcome.NOT_WRITTEN
         var openai = none
         var xai = none
@@ -2364,7 +3121,7 @@ object ConfigManager {
                     xai == TombstoneOutcome.CONFIRMED
                 ) {
                     keyDeleted = try {
-                        KeystoreHelper.deleteKey()
+                        deleteKeystoreKey()
                         true
                     } catch (e: Exception) {
                         LogCollector.append("[Config] Reset: Keystore key not deleted (${e.javaClass.simpleName})", LogLevel.ERROR)
@@ -2377,13 +3134,18 @@ object ConfigManager {
             }
         }
         if (outer is SidecarFileLock.Outcome.NotAcquired) {
-            return@exclusive ResetResult.Failed(outer.reason)
+            return ResetResult.Failed(outer.reason)
         }
-        if (openai == none) return@exclusive ResetResult.Failed("OpenAI sign-in not removed")
+        if (openai == none) return ResetResult.Failed("OpenAI sign-in not removed")
         val cleared = keyDeleted &&
             (prefsForWrite(context, "resetConfig")?.edit()?.clear()?.commit() == true) // incl. MCP servers
+        // BAT-1661 v2.12 H6 (Q16): a fully cleared Reset supersedes an interrupted reconcile's retry
+        // record (checked, best-effort). Outside the OpenAI and xAI store locks. A Partial or Failed
+        // reset leaves prefs on the change, so the record stays for the next resolve (finding I1).
+        if (cleared) ReconcileRecord.clearSuperseded(tx, context.filesDir.toPath())
+        if (cleared) RestartNotice.invalidate(tx, context.filesDir.toPath()) // fold 5′
         bumpConfigVersionOnMain()
-        if (cleared) {
+        return if (cleared) {
             ResetResult.Done
         } else {
             LogCollector.append(
@@ -2411,10 +3173,139 @@ object ConfigManager {
         // provider/authType, so downgrading it to api_key here would split-brain against the
         // oauth config.json and stop the family booting INTO reauth. Only a FRESH
         // oauth-selected-but-never-signed-in family (blank token, NOT reauth) downgrades.
-        // Matches the writeConfigJson effectiveAuthType guard.
-        if (config.provider == "xai" && config.authType == "oauth" &&
-            config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired)
-            "api_key" else config.authType
+        // Matches the emitConfigJson effectiveAuthType guard.
+        runtimeAuthType(config.provider, config.authType, config.xaiOAuthToken, config.xaiOAuthReauthRequired)
+
+    /**
+     * BAT-1661 (Codex Q12, 58e426b6; CodeRabbit on ab6385bd): is runtime_state's (xai, api_key) only
+     * the BAT-1124 H5 boot-guard image of an xAI OAuth selection — the SAME selection — rather than
+     * a user's API-key choice? The one rule for every reader that reasons about a guard image
+     * ([bootSelection], the prefs mirror in RuntimeStateStore).
+     *
+     * A guard image unless a fresh file PROVES an explicit API-key selection. The proof is
+     * agent_settings.json present with `provider` "xai" AND `authType` "api_key": every API-key
+     * choice writes that file — a Settings selection (it publishes the selected auth, never the
+     * guard image) and Node's `/provider xai api_key` (overlay first, then runtime_state) — while
+     * no writer ever puts the guard image there. runtime_state alone proves nothing: its api_key
+     * is exactly what the guard writes. Token state is NOT used: a sign-in between the guard write
+     * and its sync must not turn the old guard into an "explicit" API-key choice (CodeRabbit).
+     *
+     * The OAuth selection itself may come from the caller's prefs OR from that same fresh file
+     * explicitly on xai/oauth: `:node`'s prefs cache can still say api_key after a Settings save
+     * switched to OAuth (CodeRabbit on aefe5f82). A guard image is the OAuth selection, so callers
+     * keep `oauth` ([bootSelection] publishes it; the mirror keeps it).
+     */
+    internal fun isXaiGuardImage(
+        files: java.nio.file.Path,
+        selectedProvider: String,
+        selectedAuth: String,
+        runtimeProvider: String,
+        runtimeAuth: String,
+    ): Boolean {
+        if (runtimeProvider != "xai" || runtimeAuth != "api_key") return false
+        val ov = (AgentSettingsFile.read(files) as? AgentSettingsFile.Read.Present)?.obj
+        val ovProvider = ov?.let { AgentSettingsFile.stringField(it, "provider") }
+        val ovAuth = ov?.let { AgentSettingsFile.stringField(it, "authType") }
+        // A fresh file that explicitly holds the API-key choice: never a guard.
+        if (ovProvider == "xai" && ovAuth == "api_key") return false
+        // The selection is xAI OAuth: the caller's prefs say so, OR a fresh file explicitly does
+        // (CodeRabbit on aefe5f82 — `:node`'s prefs cache can predate the Settings save that
+        // published xai/oauth to the overlay and the guard to runtime_state; D7.3: fresh files win).
+        val oauthSelected = (selectedProvider == "xai" && selectedAuth == "oauth") ||
+            (ovProvider == "xai" && ovAuth == "oauth")
+        return oauthSelected
+    }
+
+    /**
+     * BAT-1661 (Codex review of ca06bb79 #4): the auth the retired-model rule uses for DISPLAY —
+     * Node's `_EFFECTIVE_AUTH` (config.js), from the same table ([ModelRepair.transportOf] /
+     * [OpenAIAuth]). OpenAI oauth with no usable sign-in but a saved key runs on api_key; with
+     * neither (reconnect-required) Node keeps `oauth`. Never written anywhere.
+     */
+    internal fun displayAuth(provider: String, selectedAuth: String, oauthUsable: Boolean, apiKeySaved: Boolean): String {
+        val t = ModelRepair.transportOf(ModelRepair.Scope(provider, selectedAuth), oauthUsable, apiKeySaved).authType
+        return if (t == ModelRepair.TRANSPORT_RECONNECT) "oauth" else t
+    }
+
+    /**
+     * The stored OpenAI API key, decrypted; "" when there is none or it does not decrypt (then
+     * config.json carries no key, and Node has none). [log]: report a decrypt failure (the load);
+     * the display's background read stays quiet so a failure is not reported twice.
+     */
+    private fun decryptOpenAIKey(p: PrefsReader, log: Boolean): String = try {
+        val enc = p.getString(KEY_OPENAI_API_KEY_ENC, null)
+        if (enc != null) KeystoreHelper.decrypt(Base64.decode(enc, Base64.NO_WRAP)) else ""
+    } catch (e: Exception) {
+        if (log) {
+            Log.w(TAG, "Failed to decrypt OpenAI API key", e)
+            LogCollector.append("[Config] Failed to decrypt OpenAI API key: ${e.javaClass.simpleName}", LogLevel.ERROR)
+        }
+        ""
+    }
+
+    /**
+     * BAT-1661 (Codex 7ec40d8b #1): Node can use this OpenAI API key — the decrypted key, normalised
+     * the way config.js `normalizeSecret` does (line breaks removed, then trimmed; JS `trim` also
+     * strips U+FEFF), is not empty. Call off the main thread (it decrypts).
+     */
+    internal fun openaiKeyUsable(p: PrefsReader): Boolean = nodeUsesSecret(decryptOpenAIKey(p, log = false))
+
+    /**
+     * BAT-1661 (CodeRabbit 4626795862): the key derive every flag publish uses ([openaiKeyUsable]);
+     * a test replaces it (no Keystore on the JVM). Called only inside
+     * [RuntimeStateStore.rederiveOpenAIKeyUsable], after its revision is taken.
+     */
+    @Volatile internal var keyUsableOf: (PrefsReader) -> Boolean = { openaiKeyUsable(it) }
+
+    /** Test seam: runs in [saveConfigWith] after the model transaction, before the key derive. */
+    @Volatile internal var afterSaveLockForTest: (() -> Unit)? = null
+
+    /**
+     * BAT-1661 (CodeRabbit on 3240d3c9): whether saveConfig STORES and emitConfigJson EMITS a secret
+     * (the OpenAI key; the sign-in token is emitted on the same rule). Kotlin `isNotBlank`, unchanged:
+     * it also treats U+001C–U+001F as blank, so such a key is dropped and never reaches config.json.
+     */
+    internal fun keepsSecret(v: String): Boolean = v.isNotBlank()
+
+    /**
+     * BAT-1661: Node can USE [v] — Kotlin stores and emits it ([keepsSecret]) AND it survives
+     * config.js `normalizeSecret` ([isNodeUsableSecret]). The ONE predicate the display uses
+     * (AppConfig.displayModel, the RuntimeStateStore key flag), so save, emit and display agree.
+     */
+    internal fun nodeUsesSecret(v: String): Boolean = keepsSecret(v) && isNodeUsableSecret(v)
+
+    /**
+     * config.js `normalizeSecret(v) !== ''`, exactly: `/[\r\n\u2028\u2029]+/g` removed, then
+     * `String.prototype.trim` — whose set is ECMAScript WhiteSpace + LineTerminator ([isJsTrimSpace]),
+     * NOT Kotlin's `isWhitespace` (which also strips U+001C–U+001F, where JS keeps them).
+     */
+    internal fun isNodeUsableSecret(v: String): Boolean =
+        v.filterNot { it == '\r' || it == '\n' || it == '\u2028' || it == '\u2029' }
+            .trim { isJsTrimSpace(it) }
+            .isNotEmpty()
+
+    /** ECMAScript WhiteSpace and LineTerminator code points (what `String.prototype.trim` strips). */
+    private fun isJsTrimSpace(ch: Char): Boolean =
+        ch in '\u0009'..'\u000D' || ch == '\u0020' || ch == '\u00A0' || ch == '\u1680' ||
+            ch in '\u2000'..'\u200A' || ch == '\u2028' || ch == '\u2029' || ch == '\u202F' ||
+            ch == '\u205F' || ch == '\u3000' || ch == '\uFEFF'
+
+    /** The H5 rule itself (one definition for [runtimeAuthTypeFor] and [runtimeAuthTypeForStored]). */
+    private fun runtimeAuthType(provider: String, authType: String, xaiToken: String, xaiReauth: Boolean): String =
+        if (provider == "xai" && authType == "oauth" && xaiToken.isBlank() && !xaiReauth) "api_key" else authType
+
+    /**
+     * BAT-1661 (CodeRabbit on ca06bb79): [runtimeAuthTypeFor] for a STORED selection, with the xAI
+     * sign-in read from XaiOAuthTokenStore — for writers that hold no loaded config (the
+     * runtime_state seed) and for recognising the guard image in the prefs mirror. The store read
+     * takes no lock, so it is safe under ModelSelectionLock. A store that is not initialised reads
+     * as dead + reauth (fail closed), which keeps oauth, as the loaded config would.
+     */
+    internal fun runtimeAuthTypeForStored(provider: String, authType: String): String {
+        if (provider != "xai" || authType != "oauth") return authType
+        val v = xaiSignInView(com.seekerclaw.app.state.XaiOAuthTokenStore.read())
+        return runtimeAuthType(provider, authType, v.token, v.effectiveReauth)
+    }
 
     /**
      * Write ephemeral config.json to workspace for Node.js to read on startup.
@@ -2432,21 +3323,42 @@ object ConfigManager {
     }
 
     /**
-     * Writes `workspace/config.json` for the `:node` boot. Returns the channel it wrote (BAT-1409
-     * P1-D: the bridge's owner-claim check compares against this boot channel), or null when no
-     * config could be loaded.
+     * Writes `workspace/config.json` for the `:node` boot from an already-loaded [config] and
+     * returns the channel it wrote (BAT-1409 P1-D: the bridge's owner-claim check compares
+     * against this boot channel).
+     *
+     * BAT-1661: called only by [ModelRepair.serviceStart], which loads [config] either inside the
+     * boot transaction (reconcile committed, repair target honoured) or, on a busy lock,
+     * compute-only. config.json is this boot's own ephemeral file, read only by this process's
+     * Node; it is not one of the shared model-selection stores. The model is carried as loaded.
+     * The xAI OAuth adoption (BAT-1155 §4) already ran in that load (loadConfigUnchecked).
      */
-    fun writeConfigJson(context: Context, bridgeToken: String): String? {
-        // BAT-1155 §4: ensure the xAI OAuth record is adopted into the store
-        // BEFORE this (the `:node`-boot) config emit — so `:node` never emits
-        // an empty store on the first boot after upgrade. loadConfig() also
-        // triggers this, but calling it explicitly documents the ordering.
-        migrateXaiOAuthToStoreIfNeeded(context)
-        val config = loadConfig(context)
-        if (config == null) {
-            LogCollector.append("[Config] writeConfigJson: loadConfig returned null (cross-process?)", LogLevel.WARN)
-            return null
-        }
+    /**
+     * The `authType` config.json carries. BAT-1155: a DEAD xAI-OAuth family (tombstone/reauthRequired
+     * → xaiOAuthReauthRequired=true, token blanked) stays authType=oauth so Node boots INTO reauth
+     * (shows reconnect) instead of crashing "Missing required config". Only a FRESH oauth-selected-
+     * but-never-signed-in family (blank token, NOT reauth) downgrades to api_key so the api-key
+     * fallback engages or Node exits cleanly. Every other selection, OpenAI's included, as selected.
+     */
+    internal fun emittedAuthType(config: AppConfig): String = when {
+        config.provider == "xai" && config.authType == "oauth" &&
+            config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired -> "api_key"
+        else -> config.authType
+    }
+
+    /**
+     * BAT-1661 (CodeRabbit on 3240d3c9): the OpenAI secrets [emitConfigJson] writes — the key and the
+     * sign-in token, each only when [keepsSecret] (the rule saveConfig stores the key by). The
+     * producer half of the Kotlin/Node producer parity (`openai-emission-parity.json`). Pure.
+     */
+    internal fun openAIConfigFields(config: AppConfig): LinkedHashMap<String, String> {
+        val m = LinkedHashMap<String, String>()
+        if (keepsSecret(config.openaiApiKey)) m["openaiApiKey"] = config.openaiApiKey
+        if (keepsSecret(config.openaiOAuthToken)) m["openaiOAuthToken"] = config.openaiOAuthToken
+        return m
+    }
+
+    fun emitConfigJson(context: Context, config: AppConfig, bridgeToken: String): String {
         val workspaceDir = ensureWorkspaceDir(context)
         val json = JSONObject().apply {
             put("botToken", config.telegramBotToken)
@@ -2466,18 +3378,7 @@ object ConfigManager {
             // was absent; otherwise Node read oauth from runtime_state and exited on the blank token.)
             // BAT-1124: xAI keeps its oauth-blank → api_key downgrade (lets the api-key fallback
             // engage; if there is also no xaiApiKey, Node cleanly process.exit(1)s).
-            val effectiveAuthType = when {
-                // BAT-1155: a DEAD xAI-OAuth family (tombstone/reauthRequired →
-                // xaiOAuthReauthRequired=true, token blanked) stays authType=oauth
-                // so Node boots INTO reauth (shows reconnect) instead of crashing
-                // "Missing required config". Only a FRESH oauth-selected-but-never-
-                // signed-in family (blank token, NOT reauth) downgrades to api_key
-                // so the api-key fallback engages or Node exits cleanly.
-                config.provider == "xai" && config.authType == "oauth" &&
-                    config.xaiOAuthToken.isBlank() && !config.xaiOAuthReauthRequired -> "api_key"
-                else -> config.authType
-            }
-            put("authType", effectiveAuthType)
+            put("authType", emittedAuthType(config))
             put("provider", config.provider)
             put("model", config.model)
             put("agentName", config.agentName)
@@ -2499,7 +3400,9 @@ object ConfigManager {
             if (config.firecrawlApiKey.isNotBlank()) put("firecrawlApiKey", config.firecrawlApiKey)
             if (config.jupiterApiKey.isNotBlank()) put("jupiterApiKey", config.jupiterApiKey)
             if (config.heliusApiKey.isNotBlank()) put("heliusApiKey", config.heliusApiKey)
-            if (config.openaiApiKey.isNotBlank()) put("openaiApiKey", config.openaiApiKey)
+            // BAT-1661: the OpenAI key and sign-in token, from the one producer function the parity
+            // tests pin (openai-emission-parity.json).
+            openAIConfigFields(config).forEach { (k, v) -> put(k, v) }
             if (config.openrouterApiKey.isNotBlank()) put("openrouterApiKey", config.openrouterApiKey)
             if (config.openrouterFallbackModel.isNotBlank()) put("openrouterFallbackModel", config.openrouterFallbackModel)
             if (config.openrouterModelContext.isNotBlank()) put("openrouterModelContext", config.openrouterModelContext)
@@ -2514,11 +3417,10 @@ object ConfigManager {
             // Email stays Android-only. BAT-1143: expiresAt is NO LONGER Android-only —
             // Node needs it to proactively refresh the OAuth access token before the ~6h
             // expiry (xAI returns 403-not-401 on expiry, so a reactive-only refresh never
-            // fires and the agent dies every ~6h). writeConfigJson runs at service boot and
+            // fires and the agent dies every ~6h). emitConfigJson runs at service boot and
             // regenerates the ephemeral config.json from SharedPreferences, so emitting the
             // expiry here is what makes `_currentExpiresAtMs` non-zero on the Node side.
             // Each field is written only when non-blank (upgrade-safe; old configs untouched).
-            if (config.openaiOAuthToken.isNotBlank()) put("openaiOAuthToken", config.openaiOAuthToken)
             if (config.openaiOAuthRefresh.isNotBlank()) put("openaiOAuthRefresh", config.openaiOAuthRefresh)
             // openaiOAuthExpiresAt: data-plumbing only for OpenAI symmetry/readiness — the
             // OpenAI proactive-refresh hook is a separate follow-up; adding the field now
@@ -2527,7 +3429,7 @@ object ConfigManager {
             // BAT-1157: the sign-in family and epoch from the same store read as the pair. A null
             // family means the pair came from the legacy prefs keys: Node must confirm-family
             // (which completes the migration) before it may refresh.
-            if (config.openaiOAuthToken.isNotBlank()) {
+            if (keepsSecret(config.openaiOAuthToken)) {
                 put("openaiOAuthFamily", config.openaiOAuthFamily ?: JSONObject.NULL)
                 put("openaiOAuthEpoch", config.openaiOAuthEpoch)
             }
@@ -2557,7 +3459,7 @@ object ConfigManager {
             // (bot tokens, API keys, OAuth tokens, MCP tokens) is also decrypted
             // from Keystore on the same thread. Capped at 256 keys × 8 KB; typical
             // real-world size is a few keys × a few hundred bytes, so total work is
-            // small. If `writeConfigJson` is ever migrated off the main thread,
+            // small. If `emitConfigJson` is ever migrated off the main thread,
             // this block moves with it — see service/SeekerClawService.kt caller.
             val envVars = loadEnvVars(context)
             if (envVars.isNotEmpty()) {
@@ -2591,48 +3493,53 @@ object ConfigManager {
      * Write the Android-managed slice of agent_settings.json (the file Node
      * reads for live-pickup of model + heartbeat + maxSteps).
      *
-     * @param configOverride if non-null, write THESE values to the overlay
-     *   without going through loadConfig. Used by saveField (Settings UI)
-     *   so the just-saved AppConfig lands directly in the overlay,
-     *   bypassing reconcileWithAgentSettings — otherwise the reconcile
-     *   would see the stale overlay (from a prior /provider command)
-     *   and revert prefs back to the overlay's value, undoing the
-     *   Settings UI save. Service-start callers omit this param to get
-     *   the default reconcile-then-publish behavior.
+     * [config] is published directly — never re-loaded here — so a Settings
+     * save lands as saved instead of being reconciled against a stale overlay
+     * (PR #339), and service start publishes what its transaction loaded.
+     *
+     * BAT-1661: a model-selection writer, so it takes the [tx] and runs only
+     * inside a [ModelSelectionLock] transaction. [publishModelFields] false (an
+     * unrelated Settings save) leaves the overlay's provider/authType/model
+     * keys exactly as stored (contract v2.5 §2). Every key it does not own is
+     * kept, in order (kotlinx JSON: testable on the JVM, unlike org.json).
+     *
+     * Returns false when the file was not written (logged as a WARN). The write is
+     * atomic and not durable, so a failure leaves the previous file in place:
+     * callers must not acknowledge a save, or clear a repair intent, on false.
      */
-    fun writeAgentSettingsJson(context: Context, configOverride: AppConfig? = null) {
-        val config = configOverride ?: loadConfig(context)
-        if (config == null) {
-            LogCollector.append("[Config] writeAgentSettingsJson: loadConfig returned null; skipping write", LogLevel.WARN)
-            return
-        }
-        val workspaceDir = ensureWorkspaceDir(context)
-        val settingsFile = File(workspaceDir, "agent_settings.json")
+    fun writeAgentSettingsJson(
+        context: Context,
+        tx: ModelSelectionLock.Tx,
+        config: AppConfig,
+        publishModelFields: Boolean,
+    ): Boolean {
+        tx.requireOpen()
         try {
-            // Read existing file to preserve agent-written fields (e.g. apiKeys)
-            // BAT-1409 P1-J: lstat + no-follow read; a link here no longer counts as "no
-            // existing file" while the write below follows it.
-            val existing = if (SafeFs.existsNoFollow(settingsFile.toPath())) {
-                try { JSONObject(SafeFs.readTextNoFollow(context.filesDir.toPath(), settingsFile.toPath())) } catch (_: Exception) { JSONObject() }
-            } else {
-                JSONObject()
+            ensureWorkspaceDir(context)
+            val files = context.filesDir.toPath()
+            // Preserve agent-written fields (e.g. apiKeys). A missing or corrupt file
+            // starts from an empty object, as the org.json writer did.
+            var o = (AgentSettingsFile.read(files) as? AgentSettingsFile.Read.Present)?.obj
+                ?: kotlinx.serialization.json.JsonObject(emptyMap())
+            fun put(key: String, value: kotlinx.serialization.json.JsonElement) {
+                o = AgentSettingsFile.with(o, key, value)
             }
-            // Android-managed fields always overwrite. The provider/authType/model
-            // triple is included so Node-initiated changes (via /model or /provider
-            // Telegram commands) have a single consistent source of truth, and a
-            // Settings UI save here publishes the canonical values.
-            existing.put("heartbeatIntervalMinutes", config.heartbeatIntervalMinutes)
-            existing.put("maxStepsPerTurn", config.maxStepsPerTurn)
-            existing.put("provider", config.provider)
-            existing.put("authType", config.authType)
-            existing.put("model", config.model)
+            put("heartbeatIntervalMinutes", kotlinx.serialization.json.JsonPrimitive(config.heartbeatIntervalMinutes))
+            put("maxStepsPerTurn", kotlinx.serialization.json.JsonPrimitive(config.maxStepsPerTurn))
+            if (publishModelFields) {
+                // The provider/authType/model triple gives Node-initiated changes (via
+                // /model or /provider) one consistent source of truth.
+                put("provider", kotlinx.serialization.json.JsonPrimitive(config.provider))
+                put("authType", kotlinx.serialization.json.JsonPrimitive(config.authType))
+                put("model", kotlinx.serialization.json.JsonPrimitive(config.model))
+            }
             // Ensure apiKeys object exists (agent writes individual keys into it)
-            if (!existing.has("apiKeys")) {
-                existing.put("apiKeys", JSONObject())
-            }
-            SafeFs.writeAtomicText(context.filesDir.toPath(), settingsFile.toPath(), existing.toString(2))
+            if (!o.containsKey("apiKeys")) put("apiKeys", kotlinx.serialization.json.JsonObject(emptyMap()))
+            AgentSettingsFile.write(files, o)
+            return true
         } catch (e: Exception) {
             LogCollector.append("[Config] Failed to write agent_settings.json: ${e.message}", LogLevel.WARN)
+            return false
         }
     }
 
@@ -2649,7 +3556,7 @@ object ConfigManager {
                 hasApiKey = config.openaiApiKey.isNotBlank(),
             )
             // BAT-1124 (CodeRabbit): validate the credential for the EFFECTIVE auth mode
-            // (matching writeConfigJson's oauth+blank→api_key downgrade), not "either".
+            // (matching emitConfigJson's oauth+blank→api_key downgrade), not "either".
             // Otherwise api_key mode with a blank key but a STALE xaiOAuthToken would report
             // "startable" while Node, on api_key, finds a blank key → process.exit(1).
             // BAT-1155: a DEAD oauth family (reauthRequired, token blanked) is STILL
@@ -2942,7 +3849,7 @@ object ConfigManager {
             "openai", "xai" -> if (config?.authType == "oauth") "OAuth" else "API key"
             else -> "API key"
         }
-        val aiModel = config?.model ?: "claude-opus-5" // BAT-1315
+        val aiModel = config?.model ?: "claude-opus-5-5" // BAT-1315; pinned by ModelDefaultCopiesDriftTest
 
         // Timestamp
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)

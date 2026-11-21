@@ -63,7 +63,8 @@ const DEFAULTS = Object.freeze({
     authType: 'api_key',
     // BAT-1315: must match RuntimeState.kt's `model` default and the registry's
     // claude defaultModel — this is the Node mirror of the same value.
-    model: 'claude-opus-5',
+    // Pinned by ModelDefaultCopiesDriftTest and model-list-v2-11.test.js.
+    model: 'claude-opus-5-5',
     reasoningEnabled: false,
     reasoningDisplayInChat: false,
     customEchoReasoning: false,

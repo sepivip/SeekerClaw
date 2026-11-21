@@ -639,17 +639,25 @@ async function main() {
     // ── §5 Registry ─────────────────────────────────────────────────────────
     console.log('\n── §5 Registry: thinkingBindingFor ──');
     {
-        ok('Registry: claude-fable-5-1 (api_key) → true', catalog.thinkingBindingFor('claude', 'claude-fable-5-1', 'api_key') === true);
-        ok('Registry: claude-fable-5-1 (setup_token) → true', catalog.thinkingBindingFor('claude', 'claude-fable-5-1', 'setup_token') === true);
-        for (const m of ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-fable-5-1-custom', 'my-proxy-model', '', null]) {
+        // BAT-1661 v2.11: the three 5.5 models run the prefix check (live-probed 2026-11-18,
+        // both auths), so they are flagged alongside fable-5-1. Their predecessors stay unflagged.
+        const FLAGGED = ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+        for (const m of FLAGGED) {
+            ok(`Registry: ${m} (api_key) → true`, catalog.thinkingBindingFor('claude', m, 'api_key') === true);
+            ok(`Registry: ${m} (setup_token) → true`, catalog.thinkingBindingFor('claude', m, 'setup_token') === true);
+        }
+        // claude-opus-4-8 / claude-sonnet-4-6 left the picker in v2.11 (unlisted → false, as before).
+        for (const m of ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-fable-5-1-custom', 'my-proxy-model', '', null]) {
             ok(`Registry: ${JSON.stringify(m)} → false`, catalog.thinkingBindingFor('claude', m, 'api_key') === false);
         }
         ok('Registry: custom provider, same id → false', catalog.thinkingBindingFor('custom', 'claude-fable-5-1', 'api_key') === false);
         ok('Registry: openrouter → false', catalog.thinkingBindingFor('openrouter', 'anthropic/claude-fable-5-1', 'api_key') === false);
+        ok('Registry: openrouter, a flagged 5.5 id → false', catalog.thinkingBindingFor('openrouter', 'anthropic/claude-opus-5-5', 'api_key') === false);
         const reg = JSON.parse(fs.readFileSync(path.join(BUNDLE, 'model-registry.json'), 'utf8'));
         const flagged = [];
         for (const p of reg.providers) for (const m of (p.models || [])) if ('thinkingBinding' in m) flagged.push(`${p.id}/${m.id}=${m.thinkingBinding}`);
-        eq('Registry: the field is set exactly once (claude/claude-fable-5-1=true)', flagged, ['claude/claude-fable-5-1=true']);
+        eq('Registry: the field is set on exactly the four checking models (fable-5-1, opus-5-5, sonnet-5-5, haiku-5-5)',
+            flagged, FLAGGED.map((m) => `claude/${m}=true`));
     }
 
     // ── §6 C3 — signature heal through chat() ───────────────────────────────

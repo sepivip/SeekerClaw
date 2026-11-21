@@ -38,12 +38,20 @@ data class ProviderInfo(
     val models: List<ModelInfo>,
     /**
      * Per-auth-type override map. Optional — most providers don't need
-     * it. Today only OpenAI uses this (`oauth` exposes an extra
-     * `gpt-5.4-mini` that the API-key flow doesn't have access to).
+     * it. No shipped provider uses it today (BAT-1151 removed OpenAI's
+     * split); the clamp mechanism stays for a future per-auth roster.
      * Default `emptyMap()` so providers that omit the field parse
      * cleanly via kotlinx-serialization (Codex v2.1 finding).
      */
     val modelsByAuth: Map<String, List<ModelInfo>> = emptyMap(),
+    /**
+     * BAT-1661: ids the provider RETIRED for an auth type — still valid for
+     * other auth types (API-key users keep them), but rejected on this one
+     * (OpenAI: gpt-5.5/5.4/5.4-mini on ChatGPT sign-in). The same JSON
+     * Node reads (model-catalog.js retiredModelsFor), so one list serves
+     * both runtimes. Default `emptyMap()`: optional in the schema.
+     */
+    val retiredForAuth: Map<String, List<String>> = emptyMap(),
 )
 
 @Serializable
@@ -255,6 +263,28 @@ object ModelRegistry {
     fun defaultModelForProvider(providerId: String, @Suppress("UNUSED_PARAMETER") authType: String?): String {
         val provider = providers.find { it.id == providerId } ?: return ""
         return provider.defaultModel
+    }
+
+    /**
+     * BAT-1661: ids retired for (providerId, authType). Mirrors Node's
+     * `retiredModelsFor`. Empty for unknown providers / unlisted auth types.
+     */
+    fun retiredModelsFor(providerId: String, authType: String?): List<String> {
+        if (authType == null) return emptyList()
+        val provider = providers.find { it.id == providerId } ?: return emptyList()
+        return provider.retiredForAuth[authType] ?: emptyList()
+    }
+
+    /**
+     * BAT-1661 read rule, applied at USE (display, dispatch) — never when a
+     * value is written to a store (contract v2.4 §0). A model retired for
+     * this auth becomes the provider default; anything else (custom ids,
+     * dropped-but-working ids) is returned unchanged, byte-for-byte.
+     * Mirrors Node's `applyRetiredModelRule` (trimmed exact match).
+     */
+    fun applyRetiredModelRule(providerId: String, authType: String?, model: String): String {
+        if (model.trim() !in retiredModelsFor(providerId, authType)) return model
+        return defaultModelForProvider(providerId, authType).ifBlank { model }
     }
 
     /**

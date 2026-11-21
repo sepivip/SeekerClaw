@@ -191,7 +191,7 @@ Sensitive fields are encrypted via Android Keystore (AES-256-GCM). Non-sensitive
 
 ### Config Generation
 
-On every service start, Kotlin (`ConfigManager.writeConfigJson`, called from `SeekerClawService`) writes `workspace/config.json` from the stored configuration — SharedPreferences, `workspace/owner_ids`, and the Keystore-encrypted secrets, which are decrypted into it — and Node reads it once in `config.js`. `SeekerClawService` deletes the file about 5s later. It is a short-lived handoff, safe to regenerate, but while it exists it holds API keys, bot and OAuth tokens and the bridge token, so treat it as sensitive: it is on the agent's file-tool blocklist (`config.js`). Settings the user changes at runtime (for example the heartbeat interval) are also written to `workspace/agent_settings.json`, which Node re-reads without a restart.
+On every service start, Kotlin (`ConfigManager.emitConfigJson`, called from `SeekerClawService` inside `ModelRepair.serviceStart`) writes `workspace/config.json` from the stored configuration — SharedPreferences, `workspace/owner_ids`, and the Keystore-encrypted secrets, which are decrypted into it — and Node reads it once in `config.js`. `SeekerClawService` deletes the file about 5s later. It is a short-lived handoff, safe to regenerate, but while it exists it holds API keys, bot and OAuth tokens and the bridge token, so treat it as sensitive: it is on the agent's file-tool blocklist (`config.js`). Settings the user changes at runtime (for example the heartbeat interval) are also written to `workspace/agent_settings.json`, which Node re-reads without a restart.
 
 ### Workspace Seeding
 
