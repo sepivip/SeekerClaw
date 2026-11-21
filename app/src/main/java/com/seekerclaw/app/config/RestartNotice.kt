@@ -29,9 +29,12 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * - **Created** only inside the model-selection transaction, by the resolver, BEFORE the retry record
  *   is disposed of ([ensure]). A write failure keeps the record (idempotent retry); repeated
- *   Completed outcomes reuse the same notice (identity and timestamp unchanged).
+ *   Completed outcomes keep the same notice (identity and timestamp unchanged), each re-proved
+ *   durable by a byte-identical rewrite before the record may go — never accepted as merely visible.
  * - **Invalidated** by a newer explicit Settings selection or a completed Reset, in their
- *   transactions ([invalidate]).
+ *   transactions ([invalidate]); by any other newer selection (a chat `/provider`, including an
+ *   explicit xAI API-key choice over an xAI OAuth notice) at MAIN's next mirror or load
+ *   ([invalidateIfOrphaned]).
  * - **Cleared** only by a successful agent start whose consumed config selection equals the notice's
  *   ([clearIfStartedOn], `:node`, at the RUNNING transition, under the same lock). A Restart click,
  *   STARTING, or a failed or aborted boot never clears it; a start on another selection keeps it.
@@ -138,15 +141,19 @@ object RestartNotice {
 
     /**
      * Inside the model-selection transaction, BEFORE the retry record is disposed of: make sure a
-     * notice targets [selection]. An existing notice for the same selection is reused unchanged
-     * (stable identity and timestamp); any other is replaced. Returns false (WARN once per process)
-     * when the checked write failed — the caller then keeps the retry record. MAIN only.
+     * DURABLE notice targets [selection]. An existing notice for the same selection keeps its
+     * identity and timestamp, but being visible is no proof it is durable (its rename may sit behind
+     * a failed directory fsync, and a later successful fsync does not fix that): it is re-proved with
+     * a checked, byte-identical rewrite ([SafeFs.rewriteVerified], as the record's confirm step does
+     * for runtime_state). Any other notice is replaced by a checked write. Returns false (WARN once
+     * per process) when the write or the confirming rewrite failed — the caller then keeps the retry
+     * record. MAIN only.
      */
     fun ensure(tx: ModelSelectionLock.Tx, filesDir: Path, selection: ModelTuple): Boolean {
         tx.requireOpen()
         if (ProcessRole.isNode) return false
         val existing = (read(filesDir) as? Read.Present)?.notice
-        if (existing != null && existing.selection == selection) return true
+        if (existing != null && existing.selection == selection) return reconfirm(filesDir, existing)
         val now = clock()
         val n = Notice(
             id = java.util.UUID.randomUUID().toString(),
@@ -169,11 +176,31 @@ object RestartNotice {
     }
 
     /**
+     * [ensure] on an existing same-selection notice: rewrite its current bytes byte for byte and
+     * check they still decode to the same notice (same id, same createdAtMs). A failure is the same
+     * WARN as a failed write, and returns false.
+     */
+    private fun reconfirm(filesDir: Path, existing: Notice): Boolean = try {
+        beforeWriteForTest?.invoke()
+        val confirmed = SafeFs.rewriteVerified(filesDir, path(filesDir))
+        val again = json.decodeFromString(Notice.serializer(), String(confirmed, Charsets.UTF_8))
+        if (again != existing) throw java.io.IOException("notice changed during its confirming rewrite")
+        true
+    } catch (e: Exception) {
+        if (writeFailedLogged.compareAndSet(false, true)) {
+            LogCollector.append(noticeWriteFailed(e.message ?: e.javaClass.simpleName), LogLevel.WARN)
+        }
+        false
+    }
+
+    /**
      * THE predicate (one function for [visible], [invalidateIfOrphaned] and the MAIN load's self-heal;
      * pinned by ModelSelectionSourceGuardTest): is the notice's selection still STORED? Current while
      * prefs (projected exactly as [ConfigManager.rawPrefsModelTuple] / `projectPrefsTuple` does) OR
      * runtime_state.json (read with the resolver's own rule, [ReconcileRecord.holdsTarget], so its H5
-     * guard image counts) hold it. Orphaned only when neither does — e.g. after a chat `/provider B`.
+     * guard image counts — but only while [ConfigManager.isXaiGuardImage] says it is one: an explicit
+     * xAI API-key choice is a newer selection) hold it. Orphaned only when neither does — e.g. after
+     * a chat `/provider B`, or `/provider xai api_key` over an xAI OAuth notice.
      * Both stores are needed: a Completed resolve can save the notice while prefs are still behind
      * (a failed commit, a tainted process) and runtime_state already holds the change.
      *
@@ -187,8 +214,14 @@ object RestartNotice {
             true
         } else {
             when (val r = RuntimeStateFile.read(filesDir)) {
-                // Known cosmetic residual: a notice for (xai, oauth, m) stays current while runtime_state holds its H5 guard image (xai, api_key, m), also after a chat `/provider xai api_key`; it clears on the next Settings selection or Reset.
-                is RuntimeStateFile.Read.Present -> ReconcileRecord.holdsTarget(r.tuple, n.selection) || prefs == null
+                // The exact selection, or its H5 guard image (xai, api_key, m) for an xAI OAuth
+                // notice — but only while it IS a guard image: a fresh overlay explicitly on xai +
+                // api_key (a chat `/provider xai api_key`, a Settings API-key choice) is a newer
+                // selection, never the guard (the shared rule, ConfigManager.isXaiGuardImage).
+                is RuntimeStateFile.Read.Present -> r.tuple == n.selection ||
+                    (ReconcileRecord.holdsTarget(r.tuple, n.selection) &&
+                        ConfigManager.isXaiGuardImage(filesDir, n.provider, n.authType, r.tuple.provider, r.tuple.authType)) ||
+                    prefs == null
                 // No runtime_state: a boot consumes the prefs selection, which is not the notice's.
                 RuntimeStateFile.Read.Missing -> prefs == null
                 // Not proven orphaned (often a transient read failure): keep it.

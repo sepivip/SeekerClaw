@@ -441,7 +441,8 @@ object ReconcileRecord {
     /**
      * Fold 5′: when [now] needs a restart, the durable notice for the SELECTION ([Record.target]: the
      * provider, sign-in type and model the user chose — what a boot consumes as its config) is saved
-     * before the record goes. Returns false only when that write failed.
+     * before the record goes. Returns false when that write — or, for a notice already there, its
+     * confirming byte-identical rewrite — failed: the record is then kept.
      */
     private fun noticeSaved(tx: ModelSelectionLock.Tx, dir: Path, rec: Record, now: ModelTuple): Boolean =
         !needsRestart(rec, now) || RestartNotice.ensure(tx, dir, rec.target)

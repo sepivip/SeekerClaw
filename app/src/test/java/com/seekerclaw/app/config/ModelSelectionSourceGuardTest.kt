@@ -700,7 +700,9 @@ class ModelSelectionSourceGuardTest {
         if (memberBody(rn, "invalidateIfOrphaned")?.contains("isCurrent(") != true) out += "invalidateIfOrphaned does not call isCurrent"
         val pred = memberBody(rn, "isCurrent") ?: return out + "isCurrent not found"
         if (!pred.contains("rawPrefsModelTuple(") || !pred.contains("ReconcileRecord.holdsTarget(")) out += "isCurrent is not the prefs-or-runtime rule"
-        val copies = rn.withIndex().filter { (i, l) -> !isComment(l) && (l.contains("rawPrefsModelTuple(") || l.contains("holdsTarget(")) }
+        // Codex 54dc46e5: the H5 image counts only through the SHARED guard rule, never a copy of it.
+        if (!pred.contains("ConfigManager.isXaiGuardImage(")) out += "isCurrent accepts a guard image without isXaiGuardImage"
+        val copies = rn.withIndex().filter { (i, l) -> !isComment(l) && (l.contains("rawPrefsModelTuple(") || l.contains("holdsTarget(") || l.contains("isXaiGuardImage(") || l.contains("\"api_key\"")) }
             .map { it.index }
         val predAt = rn.indexOfFirst { it.contains("internal fun isCurrent(") }
         val predEnd = (predAt + 1 until rn.size).firstOrNull { rn[it].isBlank() } ?: rn.size
@@ -728,6 +730,11 @@ class ModelSelectionSourceGuardTest {
         // Negative control 3: the load's self-heal removed.
         val noHeal = cm.map { if (it.contains("RestartNotice.invalidateIfOrphaned(tx!!")) "" else it }
         assertTrue("negative control: no self-heal in the load", predicateOffenders(rn, noHeal).isNotEmpty())
+        // Negative control 4 (Codex 54dc46e5): the old holdsTarget-only runtime check.
+        val g = rn.indexOfFirst { it.contains("ConfigManager.isXaiGuardImage(filesDir, n.provider") }
+        assertTrue(g >= 0)
+        val noGuard = rn.toMutableList().apply { this[g] = "                        true) ||" }
+        assertTrue("negative control: holdsTarget without the shared guard rule", predicateOffenders(noGuard, cm).isNotEmpty())
     }
 
     /**

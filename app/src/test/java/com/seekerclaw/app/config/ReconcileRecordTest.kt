@@ -1314,6 +1314,155 @@ class ReconcileRecordTest {
         assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
     }
 
+    // ============ Codex 54dc46e5 (fix 1): a visible notice is re-proved before the record may go
+
+    private fun isNotice(t: Path) = t.fileName.toString() == RestartNotice.NAME
+
+    /**
+     * PowerLossFs, with the checked directory fsync failing right after a notice rename (and only
+     * then) while [noticeSyncFails] says so. Every other rename's fsync succeeds.
+     */
+    private fun <T> withNoticeSyncFailure(noticeSyncFails: () -> Boolean, block: (PowerLossFs) -> T): T {
+        val pl = PowerLossFs()
+        pl.install()
+        val inner = SafeFs.beforeMove
+        SafeFs.beforeMove = { tmpf, t -> inner(tmpf, t); pl.syncFails = isNotice(t) && noticeSyncFails() }
+        try {
+            return block(pl)
+        } finally {
+            SafeFs.beforeMove = inner
+            pl.syncFails = false
+            pl.uninstall()
+        }
+    }
+
+    @Test
+    fun `Codex 54dc46e5 - a notice visible behind a failed fsync is re-proved by a rewrite before the record goes, and survives power loss`() {
+        interruptedProviderChange()
+        val noticePath = RestartNotice.path(dir)
+        var failNext = true
+        withNoticeSyncFailure({ failNext.also { failNext = false } }) { pl ->
+            load() // Recovered: runtime_state confirmed on I; the notice rename is visible, its fsync fails
+            assertEquals("runtime_state is confirmed", I, runtimeTuple())
+            assertTrue("runtime_state is durable", pl.isDurable(runtimePath()))
+            val first = notice()
+            assertEquals("visible", I, first?.selection)
+            assertFalse("not durable", pl.isDurable(noticePath))
+            assertTrue("the recovery evidence is kept while the notice is unconfirmed", recordPresent())
+            // The record may go only once the notice is durable.
+            ReconcileRecord.beforeClearForTest = {
+                assertTrue("never discarded while the notice is unconfirmed", pl.isDurable(noticePath))
+            }
+            try {
+                load() // I/O restored: Completed — the existing notice is rewritten byte for byte
+            } finally {
+                ReconcileRecord.beforeClearForTest = null
+            }
+            assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
+            assertTrue(pl.isDurable(noticePath))
+            pl.powerLoss()
+            assertEquals("same identity and timestamp, and it survived", first, notice())
+            assertEquals(I, runtimeTuple())
+        }
+    }
+
+    @Test
+    fun `Codex 54dc46e5 - repeated notice confirmation failure keeps the record every time, power loss loses only the notice, the next load restores it`() {
+        interruptedProviderChange()
+        val noticePath = RestartNotice.path(dir)
+        val a = anchor()
+        val first = withNoticeSyncFailure({ true }) { pl ->
+            load()
+            val n = notice()
+            assertNotNull(n)
+            repeat(3) {
+                load()
+                assertTrue("the record is kept after confirmation failure ${it + 1}", recordPresent())
+                assertFalse(pl.isDurable(noticePath))
+                assertEquals("identity and timestamp stable", n, notice())
+            }
+            pl.powerLoss()
+            n
+        }
+        assertEquals("WARN once per process", 1, logsSince(a).count { it.level == LogLevel.WARN && it.message.startsWith("[Config] Reconcile: restart notice not saved (") })
+        assertNull("the unconfirmed notice did not survive", notice())
+        assertTrue("the evidence survived", recordPresent())
+        assertEquals("runtime_state was confirmed", I, runtimeTuple())
+        load()
+        assertEquals(I, notice()?.selection)
+        assertNotEquals("a new notice", first!!.id, notice()!!.id)
+        assertEquals(ReconcileRecord.Read.Absent, ReconcileRecord.read(dir))
+    }
+
+    // ===== Codex 54dc46e5 (fix 2): an explicit xAI API-key choice is a newer selection, not the guard
+
+    /** Notice XO (xai/oauth) with runtime_state on its H5 guard image (xai, api_key, grok-4.6). */
+    private fun xaiOAuthNoticeOnGuardImage() {
+        xaiTokens(XaiOAuthTokens()) // the empty OAuth family: the guard image
+        base(overlay = XO)
+        doubleFailure()
+        restart()
+        load()
+        assertEquals(ModelTuple("xai", "api_key", "grok-4.6"), runtimeTuple())
+        assertEquals(XO, notice()?.selection)
+    }
+
+    /** Node's `/provider xai api_key`: the overlay first, then runtime_state. */
+    private fun chatXaiApiKey() {
+        writeOverlay(ModelTuple("xai", "api_key", "grok-4.6"))
+        writeRuntime(ModelTuple("xai", "api_key", "grok-4.6"))
+    }
+
+    @Test
+    fun `Codex 54dc46e5 - a genuine OAuth guard image keeps the xAI OAuth notice current`() {
+        xaiOAuthNoticeOnGuardImage()
+        val n = notice()!!
+        mirror()
+        invalidateNow()
+        load()
+        assertEquals("kept: the guard image is the OAuth selection", n, notice())
+        assertTrue(RestartNotice.isCurrent(n, null, dir))
+        // Prefs lagging (still the old selection) and only runtime_state's guard image holding it.
+        assertTrue(RestartNotice.isCurrent(n, MainPrefs.view(FakePrefs()), dir))
+        assertTrue(RestartNotice.visible(n, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+    }
+
+    @Test
+    fun `Codex 54dc46e5 - an explicit chat API-key choice, then the mirror and the load, invalidate the OAuth notice, and the start leaves none`() {
+        xaiOAuthNoticeOnGuardImage()
+        chatXaiApiKey()
+        mirror() // MAIN adopts the API-key choice
+        assertEquals("api_key", prefs.disk["auth_type"])
+        assertNull("invalidated: a newer selection", notice())
+        load()
+        assertNull(notice())
+        // A successful start on the API-key selection: no notice to clear, none left, no Settings or Reset needed.
+        nodeProcess()
+        val consumed = serviceStart()
+        assertEquals(ModelTuple("xai", "api_key", "grok-4.6"), ModelTuple(consumed.provider, consumed.authType, consumed.model))
+        assertFalse(RestartNotice.clearIfStartedOn(dir, ModelTuple(consumed.provider, consumed.authType, consumed.model)))
+        mainProcess()
+        assertNull(notice())
+    }
+
+    @Test
+    fun `Codex 54dc46e5 - an explicit chat API-key choice whose notice delete fails hides the notice, the next load removes it`() {
+        xaiOAuthNoticeOnGuardImage()
+        chatXaiApiKey()
+        RestartNotice.beforeDeleteForTest = { throw IOException("injected notice delete failure") }
+        val a = anchor()
+        try {
+            mirror()
+        } finally {
+            RestartNotice.beforeDeleteForTest = null
+        }
+        assertTrue(logsSince(a).any { it.level == LogLevel.WARN && it.message == RestartNotice.noticeInvalidateFailed("injected notice delete failure") })
+        val stale = notice()!!
+        assertFalse("hidden: obsolete", RestartNotice.visible(stale, running = true, healthStale = false, MainPrefs.view(prefs), dir))
+        load()
+        assertNull(notice())
+    }
+
     @Test
     fun `5p - crash after the notice is saved, before or during the record clear - the notice is reused`() {
         interruptedProviderChange()
