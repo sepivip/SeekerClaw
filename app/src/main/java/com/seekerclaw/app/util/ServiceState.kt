@@ -76,7 +76,23 @@ object ServiceState {
 
     @Volatile private var raw = RawStatus(ServiceStatus.STOPPED, null)
     private val rawGen = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * Guards [raw], [rawGen] and the publication of [status] together (Codex e0db6a17 #2): a
+     * recompute validates its generation and publishes in one critical section, so no raw
+     * replacement can land between the check and the write. Never held across a binder call or
+     * file I/O.
+     */
     private val rawLock = Any()
+
+    /**
+     * Serialises every transition between [raw] and `service_state` (Codex e0db6a17 #2): a file
+     * read and its commit, and a status change with its write. Two overlapping reads therefore
+     * commit in the order they read, so an older read can never land after a newer snapshot. Held
+     * across file I/O only — never across the liveness probe or the publication.
+     * Lock order: initLock → fileLock → rawLock.
+     */
+    private val fileLock = Any()
 
     /** Replaces [raw] (bumping its generation when it changes). Returns true when it changed. */
     private fun setRaw(next: RawStatus): Boolean = synchronized(rawLock) {
@@ -108,11 +124,27 @@ object ServiceState {
 
     @Volatile private var probeCache: ProbeCache? = null
     private val probeSeq = java.util.concurrent.atomic.AtomicLong(0)
-    private val probeCacheLock = Any()
+
+    /**
+     * Serialises fresh probes (Codex e0db6a17 #3). The sequence is taken in the same critical
+     * section as the OS sample, so sequence order IS sampling order. Independent of every other
+     * lock; only off-main recomputes ever wait on it.
+     */
+    private val probeLock = Any()
     @Volatile private var appContext: Context? = null
 
-    /** Test seam: runs just before a recompute takes the publish lock (a race hook; null in production). */
+    // Race hooks for tests; all null in production.
+    /** Runs just before a recompute takes [rawLock] to publish. */
     @Volatile internal var beforePublishForTest: (() -> Unit)? = null
+
+    /** Runs under [rawLock], after the generation check and before the write. */
+    @Volatile internal var afterPublishCheckForTest: (() -> Unit)? = null
+
+    /** Runs under [fileLock], after `service_state` was read and before it is committed. */
+    @Volatile internal var afterFileReadForTest: (() -> Unit)? = null
+
+    /** Runs after the first restore released initLock and before it publishes. */
+    @Volatile internal var afterRestoreForTest: (() -> Unit)? = null
 
     /**
      * A liveness answer and its observation sequence: when the OS was actually asked (a cache hit
@@ -124,9 +156,8 @@ object ServiceState {
     // is published only if its observation is at least as new as the last published one — so an
     // older observation, fresh or cached, never replaces a newer one, whichever recompute started
     // first. A new raw generation always publishes (its first value may be the raw status).
-    private val publishLock = Any()
-    private var lastPublishedGen = -1L // guarded by publishLock
-    private var lastPublishedObs = 0L // guarded by publishLock
+    private var lastPublishedGen = -1L // guarded by rawLock
+    private var lastPublishedObs = 0L // guarded by rawLock
 
     private fun defaultLivenessProbe(): NodeLiveness {
         val ctx = appContext ?: return NodeLiveness.Unknown
@@ -144,24 +175,31 @@ object ServiceState {
     /**
      * The liveness answer for [ownerPid], from the cache when it is younger than [LIVENESS_CACHE_MS]
      * and was taken for the same owner; otherwise a fresh probe. A clock that went backwards
-     * invalidates the cache. A probe that started earlier never replaces the cached answer of
-     * one that started later. Every answer — fresh or cached — carries its observation sequence,
+     * invalidates the cache. Every answer — fresh or cached — carries its observation sequence,
      * and [recomputeStatus] orders publication by it, so a stale answer is never shown over a
      * newer one (CodeRabbit on 18de5316 / 3f3dc8d5).
+     *
+     * Fresh probes run one at a time under [probeLock], taking their sequence in the same critical
+     * section as the OS sample, so a higher sequence always means a later sample and the cache
+     * always holds the newest one (Codex e0db6a17 #3). A recompute that waited for the lock
+     * re-checks the cache and reuses the answer just taken, instead of probing again.
      */
     private fun liveness(ownerPid: Int?): Observation {
-        val now = elapsedClock()
-        probeCache?.let { c ->
-            val age = now - c.atMs
-            if (c.ownerPid == ownerPid && age in 0 until LIVENESS_CACHE_MS) return Observation(c.result, c.seq)
+        cachedLiveness(ownerPid, elapsedClock())?.let { return it }
+        synchronized(probeLock) {
+            val now = elapsedClock()
+            cachedLiveness(ownerPid, now)?.let { return it }
+            val seq = probeSeq.incrementAndGet()
+            val result = try { nodeLivenessProbe() } catch (_: Exception) { NodeLiveness.Unknown }
+            probeCache = ProbeCache(ownerPid, now, seq, result)
+            return Observation(result, seq)
         }
-        val seq = probeSeq.incrementAndGet()
-        val result = try { nodeLivenessProbe() } catch (_: Exception) { NodeLiveness.Unknown }
-        synchronized(probeCacheLock) {
-            val c = probeCache
-            if (c == null || seq > c.seq) probeCache = ProbeCache(ownerPid, now, seq, result)
-        }
-        return Observation(result, seq)
+    }
+
+    private fun cachedLiveness(ownerPid: Int?, now: Long): Observation? {
+        val c = probeCache ?: return null
+        val age = now - c.atMs
+        return if (c.ownerPid == ownerPid && age in 0 until LIVENESS_CACHE_MS) Observation(c.result, c.seq) else null
     }
 
     /**
@@ -170,11 +208,13 @@ object ServiceState {
      * raw value and schedules an off-main recompute). It publishes only for the current raw
      * snapshot (generation check) and only if its liveness observation is at least as new as the
      * last one published for that snapshot — so neither a slow probe nor a stale cache hit can
-     * overwrite fresher state, whichever recompute started first. No lock is held across the probe.
+     * overwrite fresher state, whichever recompute started first. The generation and its snapshot
+     * are captured together, and validated and published together, under [rawLock], which also
+     * guards every raw replacement (Codex e0db6a17 #2). No lock but [probeLock] is held across
+     * the probe.
      */
     private fun recomputeStatus(scheduled: Boolean = false) {
-        val gen = rawGen.get()
-        val snap = raw
+        val (gen, snap) = synchronized(rawLock) { rawGen.get() to raw }
         val active = snap.status == ServiceStatus.RUNNING || snap.status == ServiceStatus.STARTING
         var obsSeq = 0L // no observation: the raw status is shown
         val eff = when {
@@ -192,7 +232,7 @@ object ServiceState {
             }
         }
         beforePublishForTest?.invoke()
-        synchronized(publishLock) {
+        synchronized(rawLock) {
             if (rawGen.get() != gen) {
                 // A newer raw snapshot exists. This result is stale for it — but a real observation
                 // made here may be newer than the one the new snapshot published with (CodeRabbit
@@ -202,6 +242,7 @@ object ServiceState {
                 return
             }
             if (gen == lastPublishedGen && obsSeq < lastPublishedObs) return // an older observation
+            afterPublishCheckForTest?.invoke()
             lastPublishedGen = gen
             lastPublishedObs = obsSeq
             if (_status.value != eff) _status.value = eff
@@ -334,6 +375,9 @@ object ServiceState {
             initialized = true
             Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
         }
+        // [raw] is authoritative from here, but [status] is not published until the recompute
+        // below — so decisions taken right after init() read [raw] (see [markStoppedUnlessError]).
+        afterRestoreForTest?.invoke()
         recomputeStatus()
     }
 
@@ -380,11 +424,28 @@ object ServiceState {
      * (BAT-1724); MAIN (its Stop) keeps the owner pid as read and never stamps its own.
      */
     fun updateStatus(s: ServiceStatus) {
-        synchronized(rawLock) {
+        synchronized(fileLock) {
             setRaw(RawStatus(s, if (ProcessRole.isNode) myPid() else raw.ownerPid))
+            writeToFile()
         }
-        writeToFile()
         recomputeStatus()
+    }
+
+    /**
+     * Sets STOPPED unless the status is ERROR — decided on the raw snapshot and applied in one step
+     * (Codex e0db6a17 #1). Stop paths must use this, not `status.value != ERROR`: right after a
+     * concurrent first restore, [status] can still hold its default STOPPED while [raw] already
+     * holds the restored ERROR, and writing STOPPED then would erase the persisted ERROR.
+     */
+    fun markStoppedUnlessError() {
+        val changed = synchronized(fileLock) {
+            val cur = raw
+            if (cur.status == ServiceStatus.ERROR) return@synchronized false
+            setRaw(RawStatus(ServiceStatus.STOPPED, if (ProcessRole.isNode) myPid() else cur.ownerPid))
+            writeToFile()
+            true
+        }
+        if (changed) recomputeStatus()
     }
 
     /**
@@ -420,15 +481,17 @@ object ServiceState {
     }
 
     fun reset() {
-        synchronized(rawLock) { setRaw(RawStatus(ServiceStatus.STOPPED, raw.ownerPid)) }
-        _serviceStartTimeMs.value = 0L
-        _messageCount.value = 0
-        _messagesToday.value = 0
-        _lastActivityTime.value = 0L
-        _tokensToday.value = 0L
-        _tokensTotal.value = 0L
-        clearBridgeToken()
-        writeToFile()
+        synchronized(fileLock) {
+            setRaw(RawStatus(ServiceStatus.STOPPED, raw.ownerPid))
+            _serviceStartTimeMs.value = 0L
+            _messageCount.value = 0
+            _messagesToday.value = 0
+            _lastActivityTime.value = 0L
+            _tokensToday.value = 0L
+            _tokensTotal.value = 0L
+            clearBridgeToken()
+            writeToFile()
+        }
         recomputeStatus()
     }
 
@@ -812,7 +875,9 @@ object ServiceState {
      * effective status MAIN shows — so a display override can never reach
      * the file.
      */
-    private fun writeToFile() {
+    private fun writeToFile() { synchronized(fileLock) { writeToFileLocked() } }
+
+    private fun writeToFileLocked() {
         val file = stateFile ?: return
         try {
             val snap = raw
@@ -845,11 +910,15 @@ object ServiceState {
         recomputeStatus()
     }
 
-    private fun readStateFileSnapshot() {
+    /** Reads `service_state` and commits it, under [fileLock] so reads commit in the order they read. */
+    private fun readStateFileSnapshot() { synchronized(fileLock) { readStateFileSnapshotLocked() } }
+
+    private fun readStateFileSnapshotLocked() {
         val file = stateFile ?: return
         run {
             if (!SafeFs.existsNoFollow(file.toPath())) return
             val lines = SafeFs.readTextNoFollow(file.parentFile.toPath(), file.toPath()).lines()
+            afterFileReadForTest?.invoke()
             if (lines.size >= 5) {
                 val fileStatus = try { ServiceStatus.valueOf(lines[0]) } catch (_: Exception) { return }
                 // lines[1] is the deprecated uptime field — read but
@@ -1014,10 +1083,15 @@ object ServiceState {
 
     internal fun resetForTest() {
         _status.value = ServiceStatus.STOPPED
-        synchronized(rawLock) { raw = RawStatus(ServiceStatus.STOPPED, null); rawGen.incrementAndGet() }
-        synchronized(publishLock) { lastPublishedGen = -1L; lastPublishedObs = 0L }
+        synchronized(rawLock) {
+            raw = RawStatus(ServiceStatus.STOPPED, null); rawGen.incrementAndGet()
+            lastPublishedGen = -1L; lastPublishedObs = 0L
+        }
         probeCache = null
         beforePublishForTest = null
+        afterPublishCheckForTest = null
+        afterFileReadForTest = null
+        afterRestoreForTest = null
         probeSeq.set(0L)
         appContext = null
         nodeLivenessProbe = { defaultLivenessProbe() }
@@ -1045,4 +1119,10 @@ object ServiceState {
 
     /** Recomputes from the current raw snapshot, as an IO read would (BAT-1724), for tests. */
     internal fun recomputeStatusForTest() = recomputeStatus()
+
+    /** The raw status (BAT-1724), for tests. */
+    internal fun rawStatusForTest(): ServiceStatus = raw.status
+
+    /** The first-time restore, as [init] / [startWatching] run it, for tests. */
+    internal fun restoreFromDiskForTest() = restoreFromDisk()
 }

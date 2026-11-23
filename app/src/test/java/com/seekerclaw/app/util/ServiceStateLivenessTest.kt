@@ -306,18 +306,17 @@ class ServiceStateLivenessTest {
     }
 
     @Test
-    fun `a probe for an older raw snapshot cannot publish while the newer one is still probing`() {
-        // X probes for RUNNING/100; the raw status then changes to RUNNING/300, whose own probe (Y)
-        // is still in flight when X finishes. X must not publish its stale answer in between.
+    fun `a probe for an older raw snapshot never publishes, and the newer snapshot probes after it`() {
+        // X probes for RUNNING/100; the raw status then changes to RUNNING/300. Fresh probes are
+        // serialised, so Y's probe waits for X's; X's stale answer must never be shown.
         writeFile("RUNNING", 100)
         val xEntered = CountDownLatch(1); val xRelease = CountDownLatch(1)
-        val yEntered = CountDownLatch(1); val yRelease = CountDownLatch(1)
         val calls = AtomicInteger(0)
         ServiceState.nodeLivenessProbe = {
             if (calls.getAndIncrement() == 0) {
                 xEntered.countDown(); xRelease.await(5, TimeUnit.SECONDS); NodeLiveness.Alive(100)
             } else {
-                yEntered.countDown(); yRelease.await(5, TimeUnit.SECONDS); NodeLiveness.Absent
+                NodeLiveness.Absent
             }
         }
         val x = Thread { ServiceState.readFromFileForTest() }.apply { start() }
@@ -325,50 +324,52 @@ class ServiceStateLivenessTest {
 
         writeFile("RUNNING", 300)
         val y = Thread { ServiceState.readFromFileForTest() }.apply { start() }
-        assertTrue(yEntered.await(5, TimeUnit.SECONDS))
+        y.join(300)
+        assertEquals("Y does not sample while X is in the OS", 1, calls.get())
 
         xRelease.countDown(); x.join(5_000)
-        assertEquals("the stale snapshot's answer is never shown", ServiceStatus.STOPPED, ServiceState.status.value)
+        assertTrue("the stale snapshot's answer is never shown", ServiceState.status.value != ServiceStatus.RUNNING)
 
-        yRelease.countDown(); y.join(5_000)
+        y.join(5_000)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (ServiceState.status.value != ServiceStatus.STOPPED && System.currentTimeMillis() < deadline) Thread.sleep(10)
         assertEquals(ServiceStatus.STOPPED, ServiceState.status.value)
     }
 
     @Test
-    fun `a newer recompute holding an older probe answer publishes the newest observation`() {
-        // CodeRabbit on 18de5316: recompute B (newer sequence) can start its probe BEFORE recompute
-        // A (older sequence). A's probe answers later but is the newer observation (Absent); B's
-        // older answer (Alive) must not be published over it because B's recompute is newer.
+    fun `an earlier-issued probe that samples later is never outranked by an earlier sample`() {
+        // Codex e0db6a17 #3: probe A is issued first but reaches the OS late; probe B is issued
+        // second and samples Alive first; the process then dies and A samples Absent. When the
+        // sequence was taken before the OS call, A's later sample carried the OLDER sequence and
+        // was dropped at both the cache and the publication, leaving a dead :node shown RUNNING.
+        // Fresh probes now take their sequence and sample under one lock, so B cannot sample while
+        // A is in the OS: it waits, re-checks the cache and reuses A's answer.
         writeFile("RUNNING", 100)
-        val aAtClock = CountDownLatch(1); val aClockRelease = CountDownLatch(1)
-        val bAtProbe = CountDownLatch(1); val bProbeRelease = CountDownLatch(1)
-        lateinit var a: Thread
-        ServiceState.elapsedClock = {
-            if (Thread.currentThread() === a && aAtClock.count > 0) {
-                aAtClock.countDown(); aClockRelease.await(5, TimeUnit.SECONDS)
-            }
-            now
-        }
+        val aInOs = CountDownLatch(1); val aRelease = CountDownLatch(1)
         val calls = AtomicInteger(0)
         ServiceState.nodeLivenessProbe = {
             if (calls.getAndIncrement() == 0) {
-                bAtProbe.countDown(); bProbeRelease.await(5, TimeUnit.SECONDS); NodeLiveness.Alive(100) // older observation
+                aInOs.countDown(); aRelease.await(5, TimeUnit.SECONDS); NodeLiveness.Absent // after the death
             } else {
-                NodeLiveness.Absent // newer observation: the process is gone
+                NodeLiveness.Alive(100) // a sample from before the death
             }
         }
-        a = Thread { ServiceState.readFromFileForTest() }
-        a.start()
-        assertTrue("A holds its recompute sequence, before probing", aAtClock.await(5, TimeUnit.SECONDS))
+        val a = Thread { ServiceState.readFromFileForTest() }.apply { start() }
+        assertTrue("A was issued and is in the OS", aInOs.await(5, TimeUnit.SECONDS))
 
-        val b = Thread { ServiceState.readFromFileForTest() }.apply { start() } // newer sequence, probes first
-        assertTrue(bAtProbe.await(5, TimeUnit.SECONDS))
+        val bDone = CountDownLatch(1)
+        val b = Thread { ServiceState.readFromFileForTest(); bDone.countDown() }.apply { start() }
+        assertFalse("B cannot sample while A is in the OS", bDone.await(300, TimeUnit.MILLISECONDS))
 
-        aClockRelease.countDown(); a.join(5_000) // A probes second (newer observation) and publishes
-        assertEquals(ServiceStatus.STOPPED, ServiceState.status.value)
-
-        bProbeRelease.countDown(); b.join(5_000) // B's older answer arrives last
-        assertEquals("the newest observation wins", ServiceStatus.STOPPED, ServiceState.status.value)
+        aRelease.countDown(); a.join(5_000); b.join(5_000)
+        assertEquals("only A sampled; B reused its answer", 1, calls.get())
+        assertEquals("the later sample wins", ServiceStatus.STOPPED, ServiceState.status.value)
+        // The cache holds that newest sample, for a read inside the window and for a new raw
+        // snapshot from the same owner (which publishes unconditionally).
+        assertEquals(ServiceStatus.STOPPED, read())
+        writeFile("STARTING", 100)
+        assertEquals("a same-owner status change sees the newest cached answer", ServiceStatus.STOPPED, read())
+        assertEquals(1, calls.get())
     }
 
     @Test
@@ -441,33 +442,6 @@ class ServiceStateLivenessTest {
     }
 
     @Test
-    fun `an older probe completion cannot overwrite a newer one for the same raw status`() {
-        writeFile("RUNNING", 100)
-        val entered = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val first = AtomicInteger(0)
-        ServiceState.nodeLivenessProbe = {
-            if (first.getAndIncrement() == 0) {
-                entered.countDown(); release.await(5, TimeUnit.SECONDS); NodeLiveness.Alive(100) // stale "alive"
-            } else {
-                NodeLiveness.Absent // the newer, true answer
-            }
-        }
-        val slow = Thread { ServiceState.readFromFileForTest() }.apply { start() }
-        assertTrue(entered.await(5, TimeUnit.SECONDS))
-
-        assertEquals("the newer probe publishes first", ServiceStatus.STOPPED, read())
-
-        release.countDown(); slow.join(5_000)
-        assertEquals("the older completion is discarded", ServiceStatus.STOPPED, ServiceState.status.value)
-        // Nor may the stale answer be cached over the newer one: a read inside the window agrees.
-        assertEquals("the cache keeps the newer answer", ServiceStatus.STOPPED, read())
-        // ...including for a new raw snapshot from the same owner, which publishes unconditionally.
-        writeFile("STARTING", 100)
-        assertEquals("a same-owner status change sees the newer cached answer", ServiceStatus.STOPPED, read())
-    }
-
-    @Test
     fun `a cache hit keeps its original observation order against a fresher probe in flight`() {
         // A cached Alive (observation 1) is read by B while A's fresh probe (observation 2, Absent)
         // is still in flight. A's newer observation must win even though B publishes first.
@@ -488,12 +462,139 @@ class ServiceStateLivenessTest {
         assertEquals("A's newer observation wins", ServiceStatus.STOPPED, ServiceState.status.value)
     }
 
+    // ── Codex e0db6a17: init, raw/publish atomicity, read order ─────
+
+    @Test
+    fun `a Stop during the first restore never erases a persisted ERROR`() {
+        // Codex e0db6a17 #1: the restore marks itself initialized before it publishes. A Stop in
+        // that window (finishStop: init() fast path, then the ERROR guard) saw the default STOPPED
+        // and wrote STOPPED over the persisted ERROR. The guard now reads the raw snapshot.
+        val dir = java.nio.file.Files.createTempDirectory("bat1724-restore").toFile()
+        try {
+            tmp.delete()
+            tmp = File(dir, "service_state") // the restore also writes service_state_day beside it
+            ServiceState.setStateFileForTest(tmp)
+            writeFile("ERROR", 100)
+            val atProjection = CountDownLatch(1); val release = CountDownLatch(1)
+            lateinit var restorer: Thread
+            ServiceState.afterRestoreForTest = {
+                if (Thread.currentThread() === restorer) { atProjection.countDown(); release.await(5, TimeUnit.SECONDS) }
+            }
+            restorer = Thread { ServiceState.restoreFromDiskForTest() }
+            restorer.start()
+            assertTrue("restored and initialized, not yet published", atProjection.await(5, TimeUnit.SECONDS))
+            assertEquals("the shown status is still the default", ServiceStatus.STOPPED, ServiceState.status.value)
+
+            ServiceState.restoreFromDiskForTest() // finishStop's init(): the fast path returns
+            ServiceState.markStoppedUnlessError() // finishStop's guarded Stop
+
+            assertEquals(ServiceStatus.ERROR, ServiceState.rawStatusForTest())
+            assertEquals("the file keeps ERROR", "ERROR", tmp.readLines()[0])
+            release.countDown(); restorer.join(5_000)
+            assertEquals(ServiceStatus.ERROR, ServiceState.status.value)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a Stop of a non-ERROR status still writes STOPPED and keeps the owner`() {
+        writeFile("RUNNING", 100)
+        live = NodeLiveness.Alive(100)
+        assertEquals(ServiceStatus.RUNNING, read())
+        ServiceState.markStoppedUnlessError()
+        assertEquals(ServiceStatus.STOPPED, ServiceState.status.value)
+        val lines = tmp.readLines()
+        assertEquals("STOPPED", lines[0])
+        assertEquals("MAIN keeps the owner pid it read", "100", lines[8])
+    }
+
+    @Test
+    fun `a raw change cannot land between the generation check and the publish`() {
+        // Codex e0db6a17 #2: the generation check and the write of the shown status are one
+        // critical section with every raw replacement.
+        writeFile("RUNNING", 100)
+        live = NodeLiveness.Alive(100)
+        val inWindow = CountDownLatch(1); val release = CountDownLatch(1)
+        lateinit var older: Thread
+        ServiceState.afterPublishCheckForTest = {
+            if (Thread.currentThread() === older && inWindow.count > 0) { inWindow.countDown(); release.await(5, TimeUnit.SECONDS) }
+        }
+        older = Thread { ServiceState.readFromFileForTest() }
+        older.start()
+        assertTrue("the older recompute passed its check and is about to publish", inWindow.await(5, TimeUnit.SECONDS))
+
+        writeFile("STARTING", 200)
+        live = NodeLiveness.Alive(200)
+        val newerDone = CountDownLatch(1)
+        val newer = Thread { ServiceState.readFromFileForTest(); newerDone.countDown() }.apply { start() }
+        assertFalse("the newer snapshot waits for the publication in progress", newerDone.await(300, TimeUnit.MILLISECONDS))
+        assertEquals("raw is not replaced inside the window", 100, ServiceState.rawOwnerPidForTest())
+
+        release.countDown(); older.join(5_000); newer.join(5_000)
+        assertEquals(ServiceStatus.STARTING, ServiceState.status.value)
+    }
+
+    @Test
+    fun `an older file read cannot commit after a newer one`() {
+        // Codex e0db6a17 #2: overlapping reads (observer, ticker, catch-up) commit in the order
+        // they read, so an older read can never land as a new generation after a newer snapshot.
+        writeFile("RUNNING", 100)
+        live = NodeLiveness.Alive(200)
+        val readOld = CountDownLatch(1); val release = CountDownLatch(1)
+        lateinit var older: Thread
+        ServiceState.afterFileReadForTest = {
+            if (Thread.currentThread() === older && readOld.count > 0) { readOld.countDown(); release.await(5, TimeUnit.SECONDS) }
+        }
+        older = Thread { ServiceState.readFromFileForTest() }
+        older.start()
+        assertTrue("the older read has RUNNING/100 in hand, uncommitted", readOld.await(5, TimeUnit.SECONDS))
+
+        writeFile("STARTING", 200) // a new :node took over
+        val newer = Thread { ServiceState.readFromFileForTest() }.apply { start() }
+        newer.join(300) // left unserialised, it would commit STARTING/200 here
+
+        release.countDown(); older.join(5_000); newer.join(5_000)
+        assertEquals(ServiceStatus.STARTING, ServiceState.rawStatusForTest())
+        assertEquals(200, ServiceState.rawOwnerPidForTest())
+        assertEquals(ServiceStatus.STARTING, ServiceState.status.value)
+    }
+
+    @Test
+    fun `an older file read cannot commit after a Stop`() {
+        writeFile("RUNNING", 100)
+        live = NodeLiveness.Alive(100)
+        val readOld = CountDownLatch(1); val release = CountDownLatch(1)
+        lateinit var older: Thread
+        ServiceState.afterFileReadForTest = {
+            if (Thread.currentThread() === older && readOld.count > 0) { readOld.countDown(); release.await(5, TimeUnit.SECONDS) }
+        }
+        older = Thread { ServiceState.readFromFileForTest() }
+        older.start()
+        assertTrue(readOld.await(5, TimeUnit.SECONDS))
+
+        val stop = Thread { ServiceState.markStoppedUnlessError() }.apply { start() }
+        stop.join(300) // left unserialised, the Stop would land here and the old read after it
+
+        release.countDown(); older.join(5_000); stop.join(5_000)
+        assertEquals(ServiceStatus.STOPPED, ServiceState.rawStatusForTest())
+        assertEquals("STOPPED", tmp.readLines()[0])
+        assertEquals(ServiceStatus.STOPPED, ServiceState.status.value)
+    }
+
     // ── Source guards ────────────────────────────────────────────────
+
+    @Test
+    fun `both Stop paths keep ERROR through the raw snapshot`() {
+        val code = SourceText.codeOnly(SourceText.main("com/seekerclaw/app/service/SeekerClawService.kt"))
+        assertFalse("no Stop decides on the shown status", code.contains("status.value != ServiceStatus.ERROR"))
+        assertEquals("onDestroy and finishStop", 2, Regex("""ServiceState\.markStoppedUnlessError\(\)""").findAll(code).count())
+    }
 
     @Test
     fun `writeToFile serialises the raw snapshot, never the shown status`() {
         val code = SourceText.codeOnly(SourceText.main("com/seekerclaw/app/util/ServiceState.kt"))
-        val body = SourceText.flat(code.substring(SourceText.functionBody(code, "writeToFile")))
+        val body = SourceText.flat(code.substring(SourceText.functionBody(code, "writeToFileLocked")))
         assertTrue("reads one raw snapshot", body.contains("val snap = raw"))
         assertTrue("line 0 is the raw status", body.contains("appendLine(snap.status.name)"))
         assertFalse("never the shown status: $body", body.contains("_status"))
