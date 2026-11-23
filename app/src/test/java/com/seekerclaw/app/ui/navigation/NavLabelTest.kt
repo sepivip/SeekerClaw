@@ -63,17 +63,53 @@ class NavLabelTest {
     }
 
     @Test
+    fun `a width plateau longer than any fixed number of passes still ends in a fit`() {
+        // CodeRabbit on efccd5d0: the width holds at 240 until the factor drops below 0.90.
+        // The result must be MEASURED to fit, and close to the largest factor that does.
+        val plateau: (Float) -> Int = { f -> if (f >= 0.90f) 240 else ceil(240 * f).toInt() }
+        val f = fits(plateau, 239)
+        assertTrue("near the largest fitting factor (just under 0.90): $f", f > 0.85f && f < 0.90f)
+    }
+
+    @Test
+    fun `the result is always a factor that was measured to fit`() {
+        // Non-monotonic noise: the returned factor must be one that measured as fitting, never a guess.
+        val measured = mutableMapOf<Float, Int>()
+        val noisy: (Float) -> Int = { f -> (ceil(300 * f).toInt() + if ((f * 1000).toInt() % 3 == 0) 9 else 0).also { measured[f] = it } }
+        val f = navLabelFitFactor(240, noisy)
+        assertTrue("returned factor $f was measured", measured.containsKey(f))
+        assertTrue("and it measured as fitting: ${measured[f]}", measured.getValue(f) <= 240)
+    }
+
+    @Test
     fun `an unknown slot width never shrinks the label`() {
         assertEquals(1f, navLabelFitFactor(0, linear(500)))
         assertEquals(1f, navLabelFitFactor(-1, linear(500)))
     }
 
     @Test
-    fun `re-measuring is bounded even when nothing fits`() {
+    fun `when even the floor does not fit, it stops at the floor with bounded work`() {
         var calls = 0
-        val f = navLabelFitFactor(10) { calls++; 500 } // never shrinks: a pathological measure
-        assertEquals("one initial measure plus the bounded passes", 1 + NAV_LABEL_FIT_PASSES, calls)
-        assertTrue("still shrank as far as the passes allow: $f", f < 1f)
+        val f = navLabelFitFactor(10) { calls++; 500 } // never fits: a pathological measure
+        assertEquals(NAV_LABEL_MIN_FACTOR, f)
+        assertEquals("full size, the guess, the floor — then it stops without searching", 3, calls)
+    }
+
+    @Test
+    fun `a label that fits, exactly or with room, costs one measure`() {
+        for (full in listOf(180, 240)) {
+            var calls = 0
+            assertEquals(1f, navLabelFitFactor(240) { f -> calls++; ceil(full * f).toInt() })
+            assertEquals("width $full in a 240 slot", 1, calls)
+        }
+    }
+
+    @Test
+    fun `the search is bounded in measures`() {
+        var calls = 0
+        val plateau: (Float) -> Int = { f -> calls++; if (f >= 0.90f) 240 else ceil(240 * f).toInt() }
+        navLabelFitFactor(239, plateau)
+        assertTrue("at most 3 + steps measures: $calls", calls <= 3 + NAV_LABEL_FIT_STEPS)
     }
 
     @Test

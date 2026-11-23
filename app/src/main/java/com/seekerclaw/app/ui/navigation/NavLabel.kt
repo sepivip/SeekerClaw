@@ -14,27 +14,38 @@ import com.seekerclaw.app.ui.theme.RethinkSans
 /** The bottom-nav label size at the system's default font scale. */
 internal val NAV_LABEL_FONT_SIZE = 11.sp
 
-/** Re-measure passes [navLabelFitFactor] may take before it gives up (bounded work per layout). */
-internal const val NAV_LABEL_FIT_PASSES = 6
+/** The smallest factor a label is shrunk to (half the user's size) — the search's floor. */
+internal const val NAV_LABEL_MIN_FACTOR = 0.5f
+
+/** Binary-search steps between the floor and the proportional guess (bounded work per layout). */
+internal const val NAV_LABEL_FIT_STEPS = 6
 
 /**
- * BAT-1725: the factor (0 < f ≤ 1) to scale the label by so its one-line width fits [maxWidthPx].
+ * BAT-1725: the largest factor (≤ 1) to scale the label by so its one-line width fits [maxWidthPx].
  * [widthAt] measures the label at a factor with the real text metrics. Width is not exactly linear
- * in the factor (font hinting rounds glyph advances), so each pass re-measures and shrinks again
- * — by at least 1% — until it fits, at most [NAV_LABEL_FIT_PASSES] times. 1 when the label already
- * fits, or when the slot width is unknown (not positive): it is then never shrunk.
+ * in the factor (font hinting rounds glyph advances, and can hold the width flat for a while), so
+ * a proportional shrink is only a first guess:
+ * - 1 when the label already fits, or when the slot width is unknown (not positive).
+ * - the proportional guess when it measures as fitting.
+ * - otherwise a binary search in [NAV_LABEL_MIN_FACTOR, guess] that only ever returns a factor
+ *   it has MEASURED to fit — however long a width plateau lasts.
+ * Only if even the floor does not fit does it return the floor (the smallest size it will draw).
+ * At most 3 + [NAV_LABEL_FIT_STEPS] measures; a fitting label costs one.
  */
 internal fun navLabelFitFactor(maxWidthPx: Int, widthAt: (Float) -> Int): Float {
     if (maxWidthPx <= 0) return 1f
-    var factor = 1f
-    var width = widthAt(factor)
-    var passes = 0
-    while (width > maxWidthPx && passes < NAV_LABEL_FIT_PASSES) {
-        factor *= (maxWidthPx.toFloat() / width).coerceAtMost(0.99f)
-        width = widthAt(factor)
-        passes++
+    val full = widthAt(1f)
+    if (full <= maxWidthPx) return 1f
+    val guess = (maxWidthPx.toFloat() / full).coerceAtLeast(NAV_LABEL_MIN_FACTOR)
+    if (widthAt(guess) <= maxWidthPx) return guess
+    if (widthAt(NAV_LABEL_MIN_FACTOR) > maxWidthPx) return NAV_LABEL_MIN_FACTOR
+    var fits = NAV_LABEL_MIN_FACTOR // invariant: measured to fit
+    var tooWide = guess // invariant: measured too wide
+    repeat(NAV_LABEL_FIT_STEPS) {
+        val mid = (fits + tooWide) / 2
+        if (widthAt(mid) <= maxWidthPx) fits = mid else tooWide = mid
     }
-    return factor
+    return fits
 }
 
 /**
