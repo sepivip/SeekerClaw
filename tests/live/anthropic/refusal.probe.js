@@ -112,7 +112,11 @@ async function child() {
         RAW = [];
         const res = await realHttp.httpStreamingRequest(opts, body);
         lastStop = res && res.data ? String(res.data.stop_reason || '') : '';
-        if (res && res.status === 200 && lastStop === 'refusal') transport.refusalBytes = RAW.join('');
+        if (res && res.status === 200 && lastStop === 'refusal') {
+            transport.refusalBytes = RAW.join('');
+            // Tools from EARLIER rounds may have run; none may run from the refused response.
+            transport.execAtRefusal = EXEC;
+        }
         process.stderr.write(`  [${MODE}] status=${res.status} stop=${lastStop}${res.data && res.data.stop_details && res.data.stop_details.category ? ':' + res.data.stop_details.category : ''} (cap left ${remaining})\n`);
         if (res.status === 401 || res.status === 403) remaining = 0;
         return res;
@@ -156,7 +160,7 @@ async function child() {
     for (let a = 1; a <= ATTEMPTS && remaining > 0; a++) {
         const chatId = `probe-${MODE}-${a}`;
         seed(chatId);
-        transport.refusalBytes = null; EXEC = 0;
+        transport.refusalBytes = null; transport.execAtRefusal = null; EXEC = 0;
         let reply = null, threw = null, outcome = null;
         ACTIVE = true;
         try {
@@ -176,6 +180,7 @@ async function child() {
             notSilent: !!reply && !/\[\[SILENT_REPLY\]\]/.test(reply),
             outcomeReported: !!r && r.kind === 'model_refusal',
             warnTrace: LOGS.some((l) => l.level === 'WARN' && /"reason":"model_refusal"/.test(l.msg)),
+            noToolAfterRefusal: EXEC === transport.execAtRefusal,
         };
         // Sanitize: response body only; replace message ids. No headers, no credentials.
         const sanitized = transport.refusalBytes.replace(/"id":"msg_[A-Za-z0-9_]+"/g, '"id":"msg_fixture"');
