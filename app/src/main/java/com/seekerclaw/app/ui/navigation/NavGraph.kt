@@ -11,7 +11,6 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -19,11 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
-import com.seekerclaw.app.ui.theme.RethinkSans
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -150,14 +145,7 @@ fun SeekerClawNavHost() {
                                         contentDescription = item.label,
                                     )
                                 },
-                                label = {
-                                    Text(
-                                        text = item.label,
-                                        fontFamily = RethinkSans,
-                                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                                        fontSize = 11.sp,
-                                    )
-                                },
+                                label = { NavLabel(item.label, selected) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = SeekerClawColors.Primary,
                                     selectedTextColor = SeekerClawColors.Primary,
