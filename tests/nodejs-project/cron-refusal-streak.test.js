@@ -220,8 +220,25 @@ async function main() {
         await run(j); // returns at the timeout
         await sleep(450);
         eq('a refused result after the timeout starts no send', REQUESTS.length, 0);
+        ok('an unfinished turn at the timeout still gets the generic failure notice',
+            NORMAL_SENDS.some(t => /Scheduled task "Job late-result" failed: Job timed out/.test(t)));
         ok('and changes no state', !notified('late-result') && !state().active.includes('late-result'));
         ok('logged as expired', LOGS.some(l => /refusal after run expired, not sent job=late-result/.test(l.msg)));
+    }
+    {
+        // CodeRabbit on #472: the refusal arrives just before the deadline and its notice
+        // send is in flight when the timeout wins — the owner must not ALSO get the generic
+        // "Scheduled task failed" message.
+        const j = job('race-notice');
+        cron.setSendSystemMessage(async () => { await sleep(300); return { messageId: 9 }; });
+        SCRIPT = [async () => { await sleep(20); return { text: 'n', refusal: REFUSAL() }; }];
+        const before = NORMAL_SENDS.length;
+        await run(j); // the timeout (60 ms) wins while the refusal notice is being sent
+        await sleep(450);
+        ok('no generic failure notice once the refusal notice send started',
+            !NORMAL_SENDS.slice(before).some(t => /Scheduled task "Job race-notice" failed/.test(t)), JSON.stringify(NORMAL_SENDS.slice(before)));
+        ok('skip logged', LOGS.some(l => /failure notice skipped: a refusal notice is already being sent job=race-notice/.test(l.msg)));
+        cron.setSendSystemMessage(realSystemSend);
     }
     {
         // Late non-refused RESULT does not reset an existing streak.

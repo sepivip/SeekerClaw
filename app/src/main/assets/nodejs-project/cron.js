@@ -96,7 +96,7 @@ function _normalizeTurnResult(r) {
  * when delivery was confirmed by a message id. Never throws for a delivery failure
  * (no "task failed" follow-up send, which would be an immediate retry).
  */
-async function _deliverRefusalNotice(job, refusal, isLive) {
+async function _deliverRefusalNotice(job, refusal, isLive, onSendStart = () => {}) {
     if (!isLive()) {
         log(`[Cron] refusal after run expired, not sent job=${job.id}`, 'DEBUG');
         return false;
@@ -117,6 +117,7 @@ async function _deliverRefusalNotice(job, refusal, isLive) {
     );
     let res;
     try {
+        onSendStart(); // the refusal notice now owns this run's owner-facing message
         res = await send(ownerChatId, text);
     } catch (e) {
         log(`[Cron] refusal notice delivery failed job=${job.id}`, 'DEBUG');
@@ -694,6 +695,9 @@ const cronService = {
         let status = 'ok';
         let error = null;
         let delivered = false;
+        // BAT-1705: set once a refusal notice send has started, so a timeout that wins the
+        // race does not ALSO send the generic "Scheduled task failed" message (CodeRabbit on #472).
+        let refusalSendStarted = false;
 
         // Select timeout based on payload kind: agentTurn needs much longer (full AI turn with tools)
         // Use optional chaining — corrupted jobs.json could have null/missing payload
@@ -749,7 +753,7 @@ const cronService = {
                     if (result.refusal) {
                         // The returned notice text is ignored: cron sends its own bounded,
                         // one-request notice, at most once per streak (A2′).
-                        delivered = await _deliverRefusalNotice(job, result.refusal, isLive);
+                        delivered = await _deliverRefusalNotice(job, result.refusal, isLive, () => { refusalSendStarted = true; });
                     } else if (result.text) {
                         const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
                         if (_sendMessage && ownerChatId) {
@@ -782,7 +786,9 @@ const cronService = {
             status = 'error';
             error = e.message;
             // For agentTurn failures, notify the owner so they know the scheduled task failed
-            if (payloadKind === 'agentTurn' && _sendMessage) {
+            if (payloadKind === 'agentTurn' && _sendMessage && refusalSendStarted) {
+                log(`[Cron] failure notice skipped: a refusal notice is already being sent job=${job.id}`, 'DEBUG');
+            } else if (payloadKind === 'agentTurn' && _sendMessage) {
                 const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
                 if (ownerChatId) {
                     _sendMessage(ownerChatId, `⚠️ Scheduled task "${job.name}" failed: ${e.message}`).catch(() => {});
