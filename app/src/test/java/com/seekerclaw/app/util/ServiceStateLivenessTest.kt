@@ -335,6 +335,43 @@ class ServiceStateLivenessTest {
     }
 
     @Test
+    fun `a newer recompute holding an older probe answer publishes the newest observation`() {
+        // CodeRabbit on 18de5316: recompute B (newer sequence) can start its probe BEFORE recompute
+        // A (older sequence). A's probe answers later but is the newer observation (Absent); B's
+        // older answer (Alive) must not be published over it because B's recompute is newer.
+        writeFile("RUNNING", 100)
+        val aAtClock = CountDownLatch(1); val aClockRelease = CountDownLatch(1)
+        val bAtProbe = CountDownLatch(1); val bProbeRelease = CountDownLatch(1)
+        lateinit var a: Thread
+        ServiceState.elapsedClock = {
+            if (Thread.currentThread() === a && aAtClock.count > 0) {
+                aAtClock.countDown(); aClockRelease.await(5, TimeUnit.SECONDS)
+            }
+            now
+        }
+        val calls = AtomicInteger(0)
+        ServiceState.nodeLivenessProbe = {
+            if (calls.getAndIncrement() == 0) {
+                bAtProbe.countDown(); bProbeRelease.await(5, TimeUnit.SECONDS); NodeLiveness.Alive(100) // older observation
+            } else {
+                NodeLiveness.Absent // newer observation: the process is gone
+            }
+        }
+        a = Thread { ServiceState.readFromFileForTest() }
+        a.start()
+        assertTrue("A holds its recompute sequence, before probing", aAtClock.await(5, TimeUnit.SECONDS))
+
+        val b = Thread { ServiceState.readFromFileForTest() }.apply { start() } // newer sequence, probes first
+        assertTrue(bAtProbe.await(5, TimeUnit.SECONDS))
+
+        aClockRelease.countDown(); a.join(5_000) // A probes second (newer observation) and publishes
+        assertEquals(ServiceStatus.STOPPED, ServiceState.status.value)
+
+        bProbeRelease.countDown(); b.join(5_000) // B's older answer arrives last
+        assertEquals("the newest observation wins", ServiceStatus.STOPPED, ServiceState.status.value)
+    }
+
+    @Test
     fun `an older probe completion cannot overwrite a newer one for the same raw status`() {
         writeFile("RUNNING", 100)
         val entered = CountDownLatch(1)

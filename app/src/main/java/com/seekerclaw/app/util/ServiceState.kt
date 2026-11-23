@@ -131,7 +131,9 @@ object ServiceState {
      * The liveness answer for [ownerPid], from the cache when it is younger than [LIVENESS_CACHE_MS]
      * and was taken for the same owner; otherwise a fresh probe. A clock that went backwards
      * invalidates the cache. A probe that started earlier never replaces the cached answer of
-     * one that started later, so a slow, stale answer cannot be served from the cache.
+     * one that started later — and if a later probe for the same owner has already answered, the
+     * caller gets that newer observation instead of its own stale one (CodeRabbit on 18de5316: a
+     * newer recompute must not publish an older observation).
      */
     private fun liveness(ownerPid: Int?): NodeLiveness {
         val now = elapsedClock()
@@ -143,7 +145,11 @@ object ServiceState {
         val result = try { nodeLivenessProbe() } catch (_: Exception) { NodeLiveness.Unknown }
         synchronized(probeCacheLock) {
             val c = probeCache
-            if (c == null || seq > c.seq) probeCache = ProbeCache(ownerPid, now, seq, result)
+            if (c == null || seq > c.seq) {
+                probeCache = ProbeCache(ownerPid, now, seq, result)
+            } else if (c.ownerPid == ownerPid) {
+                return c.result // a later probe for this owner already answered: newest observation wins
+            }
         }
         return result
     }
