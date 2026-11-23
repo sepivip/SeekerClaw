@@ -56,7 +56,9 @@ _stub('config.js', {
     config: { agentName: 'TestAgent', jupiterApiKey: '' },
     runtimeState: { read: () => ({ reasoningEnabled: false, reasoningDisplayInChat: false }) },
 });
-_stub('security.js', { redactSecrets: (s) => s });
+// A registered secret, as security.js redacts a configured *ApiKey (literal match).
+const SECRET = 'SECRETTOKEN_abcdefghij';
+_stub('security.js', { redactSecrets: (s) => (typeof s === 'string' ? s.split(SECRET).join('[REDACTED:testApiKey]') : s) });
 _stub('channel.js', { sendMessage: async () => {}, sendTyping: () => {}, getOwnerChatId: () => 'OWNER' });
 _stub('telegram.js', {
     sentMessageCache: new Map(), SENT_CACHE_TTL: 60000,
@@ -251,6 +253,16 @@ async function main() {
         SCRIPT = [orRefusalResp(`${'x'.repeat(2500)}`)];
         const { r } = await turn(chatId, 'x');
         ok('the model message is shown, capped at 2000', r.length === 2000 && r.endsWith('…'), String(r.length));
+    }
+    {
+        // Codex connector on #472: a secret straddling the 2,000-char cap must be redacted
+        // BEFORE the cap, or its prefix survives and no literal redactor matches it later.
+        reset(openrouter, 'some/model'); const chatId = newChat();
+        SCRIPT = [orRefusalResp('x'.repeat(1990) + SECRET + ' trailing')];
+        const { r } = await turn(chatId, 'x');
+        ok('no part of a secret straddling the cap reaches the reply', !r.includes('SECRETTOKEN') && !r.includes('SECRETT'), r.slice(1980));
+        // The marker may itself be cut by the cap — harmless: it holds no secret.
+        ok('the secret was redacted before the cap (marker, possibly cut, remains)', r.includes('[REDACTED'), r.slice(1980));
     }
     {
         reset(openrouter, 'some/model'); const chatId = newChat();

@@ -3130,7 +3130,7 @@ async function _chatTurn(chatId, userMessage, options, outcome) {
         clearActiveTask(chatId);
         cleanupChatCheckpoints(chatId);
         if (isHeartbeat) return SILENT_REPLY_TOKEN;
-        const reply = refusalNotice.buildRefusalNotice(refusal, dispatchedTools);
+        const reply = refusalNotice.buildRefusalNotice(refusal, dispatchedTools, { redact: redactSecrets });
         addToConversation(chatId, 'assistant', reply, null, _turnAnchor); // BAT-1186 (A9)
         {
             const trk = getSessionTrack(chatId);

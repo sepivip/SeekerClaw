@@ -53,9 +53,13 @@ function sanitizeModelMessage(msg, max = MODEL_MESSAGE_MAX_CHARS) {
  * The two parts of a notice: `fixed` (always shown) and `optional` (the model's
  * own message, which may be dropped to fit a budget). `join` composes them.
  */
-function noticeParts(refusal, dispatchedTools) {
+function noticeParts(refusal, dispatchedTools, redact = s => s) {
     const filtered = refusal && refusal.kind === 'provider_content_filter';
-    const optional = filtered ? null : sanitizeModelMessage(refusal && refusal.modelMessage);
+    // Redact the RAW model message before it is capped (Codex connector on #472): a
+    // registered secret straddling the cap would otherwise lose its tail and no longer
+    // match the literal redactors downstream, leaking its prefix.
+    const raw = refusal && typeof refusal.modelMessage === 'string' ? redact(refusal.modelMessage) : null;
+    const optional = filtered ? null : sanitizeModelMessage(raw);
     if (dispatchedTools > 0) {
         // Disclosure first; the model message, if any, is appended after it.
         const fixed = `${filtered ? DISCLOSURE_FILTERED : DISCLOSURE_DECLINED}\n\n${RECOVERY_LINE}`;
@@ -67,9 +71,12 @@ function noticeParts(refusal, dispatchedTools) {
     return { fixed: NOTICE_DECLINED, optional, join: (f, o) => (o || f) };
 }
 
-/** The reply for a refused / filtered turn. */
-function buildRefusalNotice(refusal, dispatchedTools = 0) {
-    const p = noticeParts(refusal, dispatchedTools);
+/**
+ * The reply for a refused / filtered turn. Pass the channel's `redact` so the model's
+ * message is redacted before it is capped (the channel redacts again on send).
+ */
+function buildRefusalNotice(refusal, dispatchedTools = 0, { redact = s => s } = {}) {
+    const p = noticeParts(refusal, dispatchedTools, redact);
     return p.join(p.fixed, p.optional);
 }
 
@@ -90,7 +97,7 @@ function _cleanLabel(name) {
  */
 function buildCronRefusalNotice({ jobName, refusal, dispatchedTools = 0 }, { redact = s => s, limit = CRON_NOTICE_MAX_CHARS } = {}) {
     const fits = s => redact(s).length <= limit;
-    const p = noticeParts(refusal, dispatchedTools);
+    const p = noticeParts(refusal, dispatchedTools, redact);
     const fixed = redact(p.fixed);
 
     let label = redact(_cleanLabel(jobName));
