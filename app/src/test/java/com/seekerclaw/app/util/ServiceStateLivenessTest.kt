@@ -319,18 +319,32 @@ class ServiceStateLivenessTest {
                 NodeLiveness.Absent
             }
         }
-        val x = Thread { ServiceState.readFromFileForTest() }.apply { start() }
+        lateinit var x: Thread
+        // Every publisher except X (Y, and X's scheduled republish) is held before publishing, so
+        // whatever the flow shows after X finishes is X's own doing (CodeRabbit on b5307fb8).
+        val releaseOthers = CountDownLatch(1)
+        ServiceState.beforePublishForTest = {
+            if (Thread.currentThread() !== x) releaseOthers.await(5, TimeUnit.SECONDS)
+        }
+        x = Thread { ServiceState.readFromFileForTest() }
+        x.start()
         assertTrue(xEntered.await(5, TimeUnit.SECONDS))
 
         writeFile("RUNNING", 300)
         val y = Thread { ServiceState.readFromFileForTest() }.apply { start() }
-        y.join(300)
+        // A positive, bounded signal that Y committed RUNNING/300 before X is released.
+        val committed = System.currentTimeMillis() + 5_000
+        while (ServiceState.rawOwnerPidForTest() != 300 && System.currentTimeMillis() < committed) Thread.sleep(5)
+        assertEquals("Y committed the newer snapshot", 300, ServiceState.rawOwnerPidForTest())
         assertEquals("Y does not sample while X is in the OS", 1, calls.get())
 
         xRelease.countDown(); x.join(5_000)
-        assertTrue("the stale snapshot's answer is never shown", ServiceState.status.value != ServiceStatus.RUNNING)
+        assertEquals("X published nothing for its stale snapshot", ServiceStatus.STOPPED, ServiceState.status.value)
 
-        y.join(5_000)
+        releaseOthers.countDown(); y.join(5_000)
+        // The flow already showed STOPPED, so prove the newer snapshot actually sampled after X:
+        // exactly one more probe (Y or X's scheduled republish; the other reuses its answer).
+        assertEquals("the newer snapshot probed after X", 2, calls.get())
         val deadline = System.currentTimeMillis() + 5_000
         while (ServiceState.status.value != ServiceStatus.STOPPED && System.currentTimeMillis() < deadline) Thread.sleep(10)
         assertEquals(ServiceStatus.STOPPED, ServiceState.status.value)
