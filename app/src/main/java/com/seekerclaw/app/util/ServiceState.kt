@@ -110,9 +110,23 @@ object ServiceState {
     private val probeSeq = java.util.concurrent.atomic.AtomicLong(0)
     private val probeCacheLock = Any()
     @Volatile private var appContext: Context? = null
-    private val recomputeSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** Test seam: runs just before a recompute takes the publish lock (a race hook; null in production). */
+    @Volatile internal var beforePublishForTest: (() -> Unit)? = null
+
+    /**
+     * A liveness answer and its observation sequence: when the OS was actually asked (a cache hit
+     * carries the sequence of the probe that filled the cache). 0 = no observation (raw shown).
+     */
+    private data class Observation(val result: NodeLiveness, val seq: Long)
+
+    // Publication order (CodeRabbit on 18de5316 / 3f3dc8d5): within one raw generation, a result
+    // is published only if its observation is at least as new as the last published one — so an
+    // older observation, fresh or cached, never replaces a newer one, whichever recompute started
+    // first. A new raw generation always publishes (its first value may be the raw status).
     private val publishLock = Any()
-    private var lastPublishedSeq = 0L // guarded by publishLock
+    private var lastPublishedGen = -1L // guarded by publishLock
+    private var lastPublishedObs = 0L // guarded by publishLock
 
     private fun defaultLivenessProbe(): NodeLiveness {
         val ctx = appContext ?: return NodeLiveness.Unknown
@@ -131,41 +145,38 @@ object ServiceState {
      * The liveness answer for [ownerPid], from the cache when it is younger than [LIVENESS_CACHE_MS]
      * and was taken for the same owner; otherwise a fresh probe. A clock that went backwards
      * invalidates the cache. A probe that started earlier never replaces the cached answer of
-     * one that started later — and if a later probe for the same owner has already answered, the
-     * caller gets that newer observation instead of its own stale one (CodeRabbit on 18de5316: a
-     * newer recompute must not publish an older observation).
+     * one that started later. Every answer — fresh or cached — carries its observation sequence,
+     * and [recomputeStatus] orders publication by it, so a stale answer is never shown over a
+     * newer one (CodeRabbit on 18de5316 / 3f3dc8d5).
      */
-    private fun liveness(ownerPid: Int?): NodeLiveness {
+    private fun liveness(ownerPid: Int?): Observation {
         val now = elapsedClock()
         probeCache?.let { c ->
             val age = now - c.atMs
-            if (c.ownerPid == ownerPid && age in 0 until LIVENESS_CACHE_MS) return c.result
+            if (c.ownerPid == ownerPid && age in 0 until LIVENESS_CACHE_MS) return Observation(c.result, c.seq)
         }
         val seq = probeSeq.incrementAndGet()
         val result = try { nodeLivenessProbe() } catch (_: Exception) { NodeLiveness.Unknown }
         synchronized(probeCacheLock) {
             val c = probeCache
-            if (c == null || seq > c.seq) {
-                probeCache = ProbeCache(ownerPid, now, seq, result)
-            } else if (c.ownerPid == ownerPid) {
-                return c.result // a later probe for this owner already answered: newest observation wins
-            }
+            if (c == null || seq > c.seq) probeCache = ProbeCache(ownerPid, now, seq, result)
         }
-        return result
+        return Observation(result, seq)
     }
 
     /**
      * BAT-1724: republishes [status] from the current [raw] snapshot. `:node` shows the raw status.
      * MAIN probes only for a raw RUNNING / STARTING, never on the main thread (there it shows the
-     * raw value and schedules an off-main recompute), and publishes only if no newer raw snapshot
-     * or newer recompute has published first — a slow probe can never overwrite fresher state. No
-     * lock is held across the probe.
+     * raw value and schedules an off-main recompute). It publishes only for the current raw
+     * snapshot (generation check) and only if its liveness observation is at least as new as the
+     * last one published for that snapshot — so neither a slow probe nor a stale cache hit can
+     * overwrite fresher state, whichever recompute started first. No lock is held across the probe.
      */
     private fun recomputeStatus(scheduled: Boolean = false) {
-        val seq = recomputeSeq.incrementAndGet()
         val gen = rawGen.get()
         val snap = raw
         val active = snap.status == ServiceStatus.RUNNING || snap.status == ServiceStatus.STARTING
+        var obsSeq = 0L // no observation: the raw status is shown
         val eff = when {
             ProcessRole.isNode || !active -> snap.status
             isMainThread() -> {
@@ -174,11 +185,18 @@ object ServiceState {
                 if (!scheduled) scope.launch { recomputeStatus(scheduled = true) }
                 snap.status
             }
-            else -> effectiveStatus(snap.status, snap.ownerPid, liveness(snap.ownerPid))
+            else -> {
+                val obs = liveness(snap.ownerPid)
+                obsSeq = obs.seq
+                effectiveStatus(snap.status, snap.ownerPid, obs.result)
+            }
         }
+        beforePublishForTest?.invoke()
         synchronized(publishLock) {
-            if (rawGen.get() != gen || seq < lastPublishedSeq) return
-            lastPublishedSeq = seq
+            if (rawGen.get() != gen) return // a newer raw snapshot exists; its own recompute publishes
+            if (gen == lastPublishedGen && obsSeq < lastPublishedObs) return // an older observation
+            lastPublishedGen = gen
+            lastPublishedObs = obsSeq
             if (_status.value != eff) _status.value = eff
         }
     }
@@ -990,9 +1008,9 @@ object ServiceState {
     internal fun resetForTest() {
         _status.value = ServiceStatus.STOPPED
         synchronized(rawLock) { raw = RawStatus(ServiceStatus.STOPPED, null); rawGen.incrementAndGet() }
-        synchronized(publishLock) { lastPublishedSeq = 0L }
-        recomputeSeq.set(0L)
+        synchronized(publishLock) { lastPublishedGen = -1L; lastPublishedObs = 0L }
         probeCache = null
+        beforePublishForTest = null
         probeSeq.set(0L)
         appContext = null
         nodeLivenessProbe = { defaultLivenessProbe() }

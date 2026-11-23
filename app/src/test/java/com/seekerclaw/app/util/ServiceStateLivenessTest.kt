@@ -372,6 +372,45 @@ class ServiceStateLivenessTest {
     }
 
     @Test
+    fun `a cached older observation cannot overwrite a fresher one, whichever recompute started first`() {
+        // CodeRabbit on 3f3dc8d5: recompute A starts first but pauses before reading the clock;
+        // recompute B starts later, takes the CACHED Alive and pauses before publishing; the cache
+        // expires, A probes Absent and publishes STOPPED; B must not then publish its older Alive.
+        writeFile("RUNNING", 100)
+        live = NodeLiveness.Alive(100)
+        assertEquals(ServiceStatus.RUNNING, read()) // caches Alive (observation 1)
+
+        val aAtClock = CountDownLatch(1); val aClockRelease = CountDownLatch(1)
+        val bAtPublish = CountDownLatch(1); val bPublishRelease = CountDownLatch(1)
+        lateinit var a: Thread
+        lateinit var b: Thread
+        ServiceState.elapsedClock = {
+            if (Thread.currentThread() === a && aAtClock.count > 0) {
+                aAtClock.countDown(); aClockRelease.await(5, TimeUnit.SECONDS)
+            }
+            now
+        }
+        ServiceState.beforePublishForTest = {
+            if (Thread.currentThread() === b && bAtPublish.count > 0) {
+                bAtPublish.countDown(); bPublishRelease.await(5, TimeUnit.SECONDS)
+            }
+        }
+        a = Thread { ServiceState.readFromFileForTest() }
+        b = Thread { ServiceState.readFromFileForTest() }
+        a.start()
+        assertTrue("A started first and is parked before its clock read", aAtClock.await(5, TimeUnit.SECONDS))
+        b.start()
+        assertTrue("B took the cached Alive and is parked before publishing", bAtPublish.await(5, TimeUnit.SECONDS))
+
+        afterCache(); live = NodeLiveness.Absent // the cache expires; the process is gone
+        aClockRelease.countDown(); a.join(5_000)
+        assertEquals("A's fresh probe shows the death", ServiceStatus.STOPPED, ServiceState.status.value)
+
+        bPublishRelease.countDown(); b.join(5_000)
+        assertEquals("B's older cached observation is discarded", ServiceStatus.STOPPED, ServiceState.status.value)
+    }
+
+    @Test
     fun `an older probe completion cannot overwrite a newer one for the same raw status`() {
         writeFile("RUNNING", 100)
         val entered = CountDownLatch(1)
@@ -393,6 +432,30 @@ class ServiceStateLivenessTest {
         assertEquals("the older completion is discarded", ServiceStatus.STOPPED, ServiceState.status.value)
         // Nor may the stale answer be cached over the newer one: a read inside the window agrees.
         assertEquals("the cache keeps the newer answer", ServiceStatus.STOPPED, read())
+        // ...including for a new raw snapshot from the same owner, which publishes unconditionally.
+        writeFile("STARTING", 100)
+        assertEquals("a same-owner status change sees the newer cached answer", ServiceStatus.STOPPED, read())
+    }
+
+    @Test
+    fun `a cache hit keeps its original observation order against a fresher probe in flight`() {
+        // A cached Alive (observation 1) is read by B while A's fresh probe (observation 2, Absent)
+        // is still in flight. A's newer observation must win even though B publishes first.
+        writeFile("RUNNING", 100)
+        live = NodeLiveness.Alive(100)
+        assertEquals(ServiceStatus.RUNNING, read()) // caches Alive as observation 1
+
+        val aAtProbe = CountDownLatch(1); val aRelease = CountDownLatch(1)
+        lateinit var a: Thread
+        ServiceState.elapsedClock = { if (Thread.currentThread() === a) now + ServiceState.LIVENESS_CACHE_MS else now }
+        ServiceState.nodeLivenessProbe = { aAtProbe.countDown(); aRelease.await(5, TimeUnit.SECONDS); NodeLiveness.Absent }
+        a = Thread { ServiceState.readFromFileForTest() } // its clock sees the cache expired: fresh probe
+        a.start()
+        assertTrue(aAtProbe.await(5, TimeUnit.SECONDS))
+
+        assertEquals("B's cache hit publishes the older observation first", ServiceStatus.RUNNING, read())
+        aRelease.countDown(); a.join(5_000)
+        assertEquals("A's newer observation wins", ServiceStatus.STOPPED, ServiceState.status.value)
     }
 
     // ── Source guards ────────────────────────────────────────────────
