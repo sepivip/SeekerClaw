@@ -754,10 +754,15 @@ const cronService = {
                         const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
                         if (_sendMessage && ownerChatId) {
                             const prefix = job.name ? `**[${job.name}]**\n\n` : '';
-                            await _sendMessage(ownerChatId, prefix + result.text);
-                            delivered = true;
-                            // Reset only after the raced delivery succeeded (Codex 563398e8 pin 2).
-                            if (isLive()) refusalStreaks.delete(job.id);
+                            const sent = await _sendMessage(ownerChatId, prefix + result.text);
+                            delivered = true; // unchanged meaning: the send call completed
+                            // Reset only after the raced delivery is CONFIRMED (Codex 563398e8 pin 2;
+                            // Codex connector on #472): the channel senders can resolve without a
+                            // message id after a rejected send, so resolving proves nothing. An
+                            // unconfirmed send (rarely, an uncertain but delivered Rich send) leaves
+                            // the streak: a later refusal stays suppressed until the next confirmed
+                            // delivery or silent completion. The owner was already told once.
+                            if (isLive() && sent && typeof sent === 'object' && sent.messageId != null) refusalStreaks.delete(job.id);
                         } else {
                             log(`[Cron] WARNING: sendMessage or ownerChatId missing, cannot deliver agentTurn result for job ${job.id}`, 'ERROR');
                             throw new Error('sendMessage/ownerChatId not available for agentTurn delivery');

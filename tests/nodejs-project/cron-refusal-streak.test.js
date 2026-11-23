@@ -152,6 +152,24 @@ async function main() {
         SCRIPT = [textResult('all good')]; await run(j);
         ok('a delivered non-refused result resets the streak', !notified('streak'));
     }
+    {
+        // Codex connector on #472: a normal send that resolves WITHOUT a message id
+        // (the real Telegram/Discord senders do this after a rejected send) is not a
+        // confirmed delivery, so it must not reset the streak.
+        const j = job('noack-normal');
+        REQUESTS.length = 0; tgMode = 'ok';
+        SCRIPT = [refused()]; await run(j);
+        ok('precondition: notified', notified('noack-normal'));
+        cron.setSendMessage(async () => undefined);
+        SCRIPT = [textResult('answer')]; await run(j);
+        ok('an unconfirmed normal delivery does not reset the streak', notified('noack-normal'));
+        cron.setSendMessage(async () => ({}));
+        SCRIPT = [textResult('answer')]; await run(j);
+        ok('…nor does a resolved {} without an id', notified('noack-normal'));
+        cron.setSendMessage(async (chatId, text) => { NORMAL_SENDS.push(text); return { messageId: ++nextId }; });
+        SCRIPT = [textResult('answer')]; await run(j);
+        ok('a confirmed normal delivery resets it', !notified('noack-normal'));
+    }
 
     // ── 3. acknowledgement evidence
     console.log('── positive delivery evidence ──');
