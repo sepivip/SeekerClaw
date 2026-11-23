@@ -282,7 +282,12 @@ function toApiMessages(messages, _model, requestOptions) {
 /**
  * Parse Claude API response into neutral format.
  * @param {object} raw - Raw Claude response (data field from httpStreamingRequest)
- * @returns {{ text, toolCalls, reasoningBlocks, stopReason, usage }}
+ * @returns {{ text, toolCalls, reasoningBlocks, stopReason, usage, refusal }}
+ *
+ * BAT-1705: `refusal` is null, or { kind: 'model_refusal' | 'provider_content_filter',
+ * category: string|null (raw; ai.js allowlists it before logging), modelMessage: string|null,
+ * partialChars, droppedToolCalls }. When set, text is null and toolCalls / reasoningBlocks /
+ * wireContent are empty — a refused response is never shown, executed or replayed.
  *
  * BAT-549 Commit 2: also captures `thinking` and `redacted_thinking`
  * content blocks verbatim into `reasoningBlocks[]` (raw wire payloads,
@@ -345,6 +350,30 @@ function fromApiResponse(raw) {
     const inputTransformations = (raw && Array.isArray(raw.input_transformations))
         ? raw.input_transformations : null;
 
+    // BAT-1705: a refusal (classifier block or the model's own) can fire before any
+    // output or mid-stream after partial output. Branch on stop_reason only, never
+    // stop_details (which may be null). Nothing from the refused response survives:
+    // no partial text, no (possibly cut-off) tool call, no reasoning / wire replay.
+    if (raw.stop_reason === 'refusal') {
+        const sd = raw.stop_details;
+        return {
+            text: null,
+            toolCalls: [],
+            reasoningBlocks: [],
+            wireContent: [],
+            inputTransformations,
+            stopReason: 'model_refusal',
+            usage: raw.usage || {},
+            refusal: {
+                kind: 'model_refusal',
+                category: (sd && typeof sd.category === 'string') ? sd.category : null,
+                modelMessage: null,
+                partialChars: text ? text.length : 0,
+                droppedToolCalls: toolCalls.length,
+            },
+        };
+    }
+
     return {
         text,
         toolCalls,
@@ -353,6 +382,7 @@ function fromApiResponse(raw) {
         inputTransformations,
         stopReason: raw.stop_reason || 'end_turn',
         usage: raw.usage || {},
+        refusal: null,
     };
 }
 

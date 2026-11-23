@@ -129,7 +129,7 @@ grep -iE "429|rate.limit|Retry-After" node_debug.log
 ```
 grep "\[Trace\]" node_debug.log
 ```
-**Diagnosis:** Look at the `elapsedMs` field in trace entries. Values over 60s indicate transport timeouts. Common on unstable mobile networks. Since BAT-259, responses use streaming which reduces but doesn't eliminate this.
+**Diagnosis:** Look at the `elapsedMs` field in trace entries. Values over 60s indicate transport timeouts. Common on unstable mobile networks. Since BAT-259, responses use streaming which reduces but doesn't eliminate this. A `[Trace]` line with a `reason` field instead of `elapsedMs` is not a timeout: `context_budget_exceeded` (see "turn stopped at the context limit"), `tool_budget_exhausted` (the turn used all its tool rounds; Settings → Configuration → Max Agent Steps Per Turn), `model_refusal` / `provider_content_filter` (see "The model declined to answer").
 **Fix:**
 1. Check network stability: `grep -iE "ETIMEDOUT|ECONNRESET|socket hang up" node_debug.log`
 2. If frequent: suggest the user switch to WiFi or a more stable connection
@@ -205,6 +205,34 @@ grep -E "\[ContextBudget\]|context_budget_exceeded" node_debug.log
 1. Ask for a smaller step: fewer or smaller files per request, narrower searches, a smaller page fetched.
 2. Start a fresh context with `/new` and restate the task. `/resume` or "continue" is not guaranteed to make progress: if the oversized results are still in the history it stops at the same limit again, and if the end-of-turn history cap or the checkpoint already dropped them, they are lost and the step must be redone.
 3. Frequent on short tasks → a tool is returning very large results; report it with the log.
+
+### The model declined to answer (refusal or provider content filter) (BAT-1705)
+**Symptoms:** Instead of an answer, the user gets one of these replies:
+- "I couldn't answer that: the model declined this request. Try rephrasing it or splitting it into smaller steps, switch models with /model, or start fresh with /new."
+- "My reply was blocked by the provider's content filter. Try rephrasing it, switch models with /model, or start fresh with /new."
+- After tools ran in the same turn: "The model declined to continue after I attempted some tools…" or "My reply was blocked by the provider's content filter after I attempted some tools…", followed by "Some actions may already have taken effect; check their results before retrying."
+- On OpenAI-family providers, the model's own short refusal message (e.g. "I can't help with that.") may be shown instead of the generic line — or, when tools ran, after the disclosure and the "You can rephrase, switch models with /model, or start fresh with /new." line.
+**Check:**
+```
+grep -E '"reason":"(model_refusal|provider_content_filter)"' node_debug.log
+```
+**Diagnosis:** Two different things stop a reply:
+- **A refusal** (`model_refusal`): the model, or the provider's safety classifier, declined. On Claude this is `stop_reason: "refusal"`; it can arrive before any output or part-way through a reply. On OpenAI-family providers it is an explicit refusal message.
+- **A content filter** (`provider_content_filter`): the provider's filter blocked the output (OpenAI `incomplete` with reason `content_filter`, or Chat Completions `finish_reason: content_filter`, which also covers OpenRouter, xAI and Custom). When both appear, it is reported as a content filter.
+
+In both cases SeekerClaw discards everything from the refused reply: partial text is never shown, a tool call in it is never run, and nothing from it is replayed. The turn ends there (no retry, no closing summary), and the task is not resumable. Tool results from EARLIER rounds of the same turn are kept, so actions those tools took may already have happened — which is why the reply says so when any tool was actually run (a denied or cancelled call does not count).
+
+One WARN line per refusal: `[Trace] {"reason":"model_refusal"|"provider_content_filter","phase":"loop"|"summary","category":…,"partialChars":N,"droppedToolCalls":N,"dispatchedTools":N,"model":…,"provider":…,"fallbackReturned":true|false,…}`. `category` is Claude's refusal category when it gave one (e.g. `cyber`); anything that is not a short snake_case word is logged as `other`, and `null` means none was given. No user or model text is ever logged. `fallbackReturned:true` means the notice was produced for the reply, not proof it was delivered.
+
+**Heartbeats and scheduled tasks:**
+- A heartbeat that is refused stays silent (`fallbackReturned:false`) — the owner is never alerted every heartbeat interval.
+- A scheduled agent task (cron) that keeps being refused notifies the owner once, prefixed with the job name, then stays quiet until a run of that job completes normally (`[Cron] refusal notice suppressed (streak)` at DEBUG). If that one notice could not be confirmed as delivered, a later refused run tries again. A refused run is not a job error: the job records `lastStatus: "ok"` with no `lastError` and no error backoff, and `cron_list` shows `lastDelivered: true` only for the run whose notice was sent (`false` while the streak suppresses it).
+
+**Fix:**
+1. Rephrase the request, or split it into smaller, plainer steps. Security work (scanning, exploits, malware analysis) can trip a classifier even when legitimate; describing the context helps.
+2. Switch models with `/model` (a different model or provider may answer).
+3. The refused request stays in the conversation, so the next turn may be refused again. If it keeps happening, start a fresh context with `/new` and restate the request differently.
+4. This is different from the "out of extra usage" 400 above (an HTTP error, auto-retried) and from a sandbox refusal (a tool rejecting a command): see those sections.
 
 ### Claude: "Invalid `signature` in `thinking` block" (400) — auto-healed once per turn (BAT-1664)
 **Symptoms:** On a first-party Claude model (Anthropic API key or Pro/Max sign-in), a tool-using turn briefly fails and then continues on its own; or, rarely, the turn ends with `API error (400): …Invalid signature in thinking block The block is bound to a different conversation…`. Most likely on Fable 5.1, the 5.5 models (Opus, Sonnet, Haiku) and newer, for accounts created on or after 2026-08-31.
@@ -495,13 +523,16 @@ df -h
 ```
 grep -iE "cron|job.*fail|job.*error" node_debug.log
 ```
-Then `cron_list` / `cron_status` show every job and its state.
+Then `cron_list` (pass `includeDisabled: true` to see finished or failed one-shot jobs) shows every job with `lastStatus` and `lastDelivered`; `cron_status` shows only service totals and the next wake time.
 **Diagnosis:** All jobs live in one file, `cron/jobs.json` (with a `cron/jobs.json.bak` backup). A job that failed has a `state.lastError`. Common causes:
 - Telegram send failed (network issue at fire time)
 - Job handler threw an exception
-- Zombie detection triggered (job missed 2+ hour window)
+- The run timed out: `lastError` reads `Job timed out after 300000ms` (agentTurn, 5 min) or `Job timed out after 60000ms` (reminder). A failed agentTurn also sends the owner `⚠️ Scheduled task "<name>" failed: <reason>`.
+- A one-shot job whose time passed while the agent was stopped is not run late: at the next start it is marked `skipped` (its `lastStatus`). Recurring jobs do catch up (up to 5 missed jobs run at once, the rest 5 s apart).
+- `[Cron] WARNING: sendMessage or ownerChatId missing, cannot deliver agentTurn result for job <id>` / `… cannot deliver refusal notice for job <id>` (ERROR): there was nowhere to send it. No owner is set yet (Telegram), or the owner's Discord DM could not be opened at start (`[Discord] DM channel open failed`). The run is recorded as an error. Fix: the owner sends the bot one message (or sets the Owner ID in Settings); on Discord, Stop Agent and then Deploy Agent. `[Cron] WARNING: sendMessage not injected, cannot deliver reminder for job <id>` (ERROR) is a code defect: report it.
+- An agent task that ran but sent nothing, with `lastStatus` ok and no `lastError`: its reply was silent, or the model declined the job's prompt. A refused job tells the owner once (`[<job name>]` and the declined notice), then stays quiet until a run of that job completes normally (`[Cron] refusal notice suppressed (streak)`, DEBUG). Check with `grep -E "\[Cron\] (WARNING|refusal)" node_debug.log`, and see LLM API → "The model declined to answer".
 **Fix:**
-1. `cron_status` (or read `cron/jobs.json`) to see the job's `state.lastError`
+1. Read `cron/jobs.json` to see the job's `state.lastError` (`cron_list` shows `lastStatus` / `lastDelivered` but not the error text)
 2. If the job exists but didn't fire: check that the cron service started (`grep -F "[Cron]" node_debug.log`)
 3. Re-create a job in a bad state with `cron_cancel`, then `cron_create`. Never delete or rewrite `cron/jobs.json` — it holds every job
 

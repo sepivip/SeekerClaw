@@ -71,6 +71,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A declined request now gets a reply instead of silence.** When the model
+  declines a request, or the provider's content filter blocks the reply, you
+  now get a short message saying so, with what to try next (rephrase, switch
+  models with /model, or start fresh with /new). Before, the agent could say
+  nothing at all. A partly written reply that is cut off this way is never
+  shown, and no action from it is ever run. If tools already ran earlier in
+  the same task, the message says some actions may already have taken effect.
+  Works on every provider. Heartbeats stay silent, and a scheduled task that
+  keeps being declined tells you once rather than on every run. (BAT-1705)
 - **Claude no longer fails mid-task over its own reasoning.** Newer Anthropic
   accounts reject a request when reasoning from an earlier step no longer
   matches the conversation it came from, which could end a long tool-using

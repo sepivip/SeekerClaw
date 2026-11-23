@@ -7,6 +7,8 @@ const path = require('path');
 
 const { workDir, log, localTimestamp, getOwnerId } = require('./config');
 const { flattenForLog } = require('./log-safe');
+const { redactSecrets } = require('./security');
+const { buildCronRefusalNotice } = require('./refusal-notice');
 
 // ============================================================================
 // DEPENDENCY INJECTION
@@ -29,8 +31,22 @@ function setGetOwnerChatId(fn) {
     _getOwnerChatId = fn || null;
 }
 
+// BAT-1705 A2′: the plain system send (channel.sendMessageSystem) used for a refusal
+// notice, so the notice goes out as exactly one plain request whose confirmed
+// message ID is proof of delivery. Falls back to _sendMessage when not injected.
+let _sendSystemMessage = null;
+
+function setSendSystemMessage(fn) {
+    if (fn != null && typeof fn !== 'function') {
+        log(`[Cron] WARNING: setSendSystemMessage called with ${typeof fn}, expected function`, 'WARN');
+        return;
+    }
+    _sendSystemMessage = fn || null;
+}
+
 // runAgentTurn is defined in main.js — injected after load via setRunAgentTurn()
-// Signature: async (message, jobId) => string|null (cleaned response or null if silent)
+// Signature: async (message, jobId) => { text: string|null, refusal: object|null }
+// (BAT-1705). A bare string|null (the pre-BAT-1705 shape) is still accepted.
 let _runAgentTurn = null;
 
 function setRunAgentTurn(fn) {
@@ -39,6 +55,80 @@ function setRunAgentTurn(fn) {
         return;
     }
     _runAgentTurn = fn || null;
+}
+
+// ============================================================================
+// REFUSAL STREAK (BAT-1705 A2′)
+// ============================================================================
+// A job whose agent turn the model keeps refusing notifies the owner ONCE per
+// streak, not on every run. The streak lives here, keyed by job id, outside the
+// throwaway `cron:<id>` conversation.
+//  - activeRun holds a fresh opaque token while a run is being awaited; it is
+//    cleared in that run's `finally` (finish, exception or soft timeout) and on
+//    deletion. Every streak read-then-act and every mutation checks
+//    `isLive()` (token equality) — including after an await — so a late result
+//    or a late send acknowledgement from an expired run can never change state,
+//    and a deleted job's continuation can never recreate it.
+//  - A job is marked notified only on POSITIVE delivery evidence: the send
+//    resolved to an object with a non-null messageId for the one-request notice.
+//    Missing, rejected or uncertain acknowledgement leaves it eligible on a
+//    LATER run (no immediate retry).
+//  - The streak resets when a non-refused run completes (a legitimate silent
+//    completion included) — after its delivery succeeded, never before.
+const refusalStreaks = new Map(); // jobId → { notified: true }
+const activeRun = new Map();      // jobId → run token
+
+function _clearRefusalState(jobId) {
+    refusalStreaks.delete(jobId);
+    activeRun.delete(jobId);
+}
+
+/** The agent-turn result in its BAT-1705 shape; a legacy string|null is accepted. */
+function _normalizeTurnResult(r) {
+    if (r && typeof r === 'object') {
+        return { text: typeof r.text === 'string' && r.text ? r.text : null, refusal: r.refusal || null };
+    }
+    return { text: typeof r === 'string' && r ? r : null, refusal: null };
+}
+
+/**
+ * Deliver (or suppress) the refusal notice for one refused run. Returns true only
+ * when delivery was confirmed by a message id. Never throws for a delivery failure
+ * (no "task failed" follow-up send, which would be an immediate retry).
+ */
+async function _deliverRefusalNotice(job, refusal, isLive) {
+    if (!isLive()) {
+        log(`[Cron] refusal after run expired, not sent job=${job.id}`, 'DEBUG');
+        return false;
+    }
+    if (refusalStreaks.has(job.id)) {
+        log(`[Cron] refusal notice suppressed (streak) job=${job.id}`, 'DEBUG');
+        return false;
+    }
+    const send = _sendSystemMessage || _sendMessage;
+    const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
+    if (!send || !ownerChatId) {
+        log(`[Cron] WARNING: sendMessage or ownerChatId missing, cannot deliver refusal notice for job ${job.id}`, 'ERROR');
+        throw new Error('sendMessage/ownerChatId not available for agentTurn delivery');
+    }
+    const text = buildCronRefusalNotice(
+        { jobName: job.name, refusal, dispatchedTools: refusal.dispatchedTools || 0 },
+        { redact: redactSecrets },
+    );
+    let res;
+    try {
+        res = await send(ownerChatId, text);
+    } catch (e) {
+        log(`[Cron] refusal notice delivery failed job=${job.id}`, 'DEBUG');
+        return false;
+    }
+    if (res && typeof res === 'object' && res.messageId != null) {
+        if (isLive()) refusalStreaks.set(job.id, { notified: true });
+        log(`[Cron] refusal notice delivered job=${job.id}`, 'DEBUG');
+        return true;
+    }
+    log(`[Cron] refusal notice delivery unconfirmed job=${job.id}`, 'DEBUG');
+    return false;
 }
 
 // ============================================================================
@@ -332,6 +422,9 @@ const cronService = {
 
     // Error backoff schedule (exponential): 30s, 1min, 5min, 15min, 60min
     ERROR_BACKOFF_MS: [30000, 60000, 300000, 900000, 3600000],
+    // Soft timeout for an agentTurn run (a property, like ERROR_BACKOFF_MS, so a test
+    // can shorten it; BAT-1705 timeout / late-result pins).
+    AGENT_TURN_TIMEOUT_MS,
 
     // Create a new job
     create(input) {
@@ -399,6 +492,7 @@ const cronService = {
         if (idx === -1) return false;
 
         const removed = this.store.jobs.splice(idx, 1)[0];
+        _clearRefusalState(id); // BAT-1705 A2′ §7
         saveCronStore(this.store);
         this._armTimer();
         log(`[Cron] Removed job ${id}: "${flattenForLog(removed.name, 80)}"`, 'INFO');
@@ -604,12 +698,17 @@ const cronService = {
         // Select timeout based on payload kind: agentTurn needs much longer (full AI turn with tools)
         // Use optional chaining — corrupted jobs.json could have null/missing payload
         const payloadKind = job.payload?.kind;
-        const effectiveTimeout = payloadKind === 'agentTurn' ? AGENT_TURN_TIMEOUT_MS : JOB_TIMEOUT_MS;
+        const effectiveTimeout = payloadKind === 'agentTurn' ? this.AGENT_TURN_TIMEOUT_MS : JOB_TIMEOUT_MS;
 
         // Timeout race for job execution.
         // Note: OpenClaw uses AbortController-based job timeouts, but here we only
         // approximate that behavior by racing the execution against a timeout promise;
         // the underlying call is not actually cancelled, we just stop awaiting it.
+        // BAT-1705 A2′: this run's identity. Live exactly while this run is awaited.
+        const runToken = {};
+        if (payloadKind === 'agentTurn') activeRun.set(job.id, runToken);
+        const isLive = () => activeRun.get(job.id) === runToken;
+
         let timeoutId;
         const timeoutPromise = new Promise((_, reject) => {
             timeoutId = setTimeout(() => reject(new Error(`Job timed out after ${effectiveTimeout}ms`)), effectiveTimeout);
@@ -643,14 +742,22 @@ const cronService = {
                 // The entire agentTurn+delivery is wrapped in one race so a hanging
                 // Telegram send doesn't exceed the timeout either.
                 await Promise.race([(async () => {
-                    const result = await _runAgentTurn(job.payload.message, job.id);
-                    // result is cleaned response text, or null if SILENT_REPLY/HEARTBEAT_OK
-                    if (result) {
+                    // { text, refusal }: text is the cleaned response, or null if
+                    // SILENT_REPLY/HEARTBEAT_OK; refusal is set when the model declined
+                    // or the provider filtered the reply (BAT-1705).
+                    const result = _normalizeTurnResult(await _runAgentTurn(job.payload.message, job.id));
+                    if (result.refusal) {
+                        // The returned notice text is ignored: cron sends its own bounded,
+                        // one-request notice, at most once per streak (A2′).
+                        delivered = await _deliverRefusalNotice(job, result.refusal, isLive);
+                    } else if (result.text) {
                         const ownerChatId = _getOwnerChatId ? _getOwnerChatId() : getOwnerId();
                         if (_sendMessage && ownerChatId) {
                             const prefix = job.name ? `**[${job.name}]**\n\n` : '';
-                            await _sendMessage(ownerChatId, prefix + result);
+                            await _sendMessage(ownerChatId, prefix + result.text);
                             delivered = true;
+                            // Reset only after the raced delivery succeeded (Codex 563398e8 pin 2).
+                            if (isLive()) refusalStreaks.delete(job.id);
                         } else {
                             log(`[Cron] WARNING: sendMessage or ownerChatId missing, cannot deliver agentTurn result for job ${job.id}`, 'ERROR');
                             throw new Error('sendMessage/ownerChatId not available for agentTurn delivery');
@@ -659,6 +766,7 @@ const cronService = {
                         // SILENT_REPLY / HEARTBEAT_OK: turn ran successfully but nothing to report.
                         // Don't set delivered=true — no Telegram message was actually sent.
                         log(`[Cron] Agent turn ${job.id} completed with silent response (no delivery)`, 'DEBUG');
+                        if (isLive()) refusalStreaks.delete(job.id); // a silent completion resets too
                     }
                 })(), timeoutPromise]);
                 if (delivered) {
@@ -677,6 +785,9 @@ const cronService = {
             }
         } finally {
             clearTimeout(timeoutId);
+            // BAT-1705 A2′: the run is no longer awaited (finish, exception or soft
+            // timeout) — any late continuation of it must not touch the streak.
+            if (activeRun.get(job.id) === runToken) activeRun.delete(job.id);
         }
 
         const durationMs = Date.now() - startTime;
@@ -718,6 +829,7 @@ const cronService = {
             if (job.deleteAfterRun && status === 'ok') {
                 const idx = this.store.jobs.indexOf(job);
                 if (idx !== -1) this.store.jobs.splice(idx, 1);
+                _clearRefusalState(job.id); // BAT-1705 A2′ §7
             }
         } else {
             // Recurring: compute next run with error backoff
@@ -740,7 +852,10 @@ const cronService = {
 // ============================================================================
 
 module.exports = {
+    // BAT-1705: read-only view of the refusal-streak state, for tests.
+    _refusalStateForTest: () => ({ notified: [...refusalStreaks.keys()], active: [...activeRun.keys()] }),
     setSendMessage,
+    setSendSystemMessage,
     setGetOwnerChatId,
     setRunAgentTurn,
     cronService,

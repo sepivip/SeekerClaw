@@ -56,6 +56,7 @@ SeekerClaw is an Android app built for the Solana Seeker phone (also works on an
 - **MCP support** — Remote MCP (Model Context Protocol) servers via Streamable HTTP. Users add server URLs in Settings; agent discovers and uses tools at startup. Description sanitization, SHA-256 rug-pull detection, untrusted content wrapping, per-server + global rate limiting.
 - **Telegram bot** — HTML formatting (no markdown headers), native blockquotes, bidirectional reactions, file download with vision, file upload (telegram_send_file tool), long message chunking, quoted replies via `[[reply_to_current]]`, emoji rendering fixed, companion-tone message templates (docs/internal/TEMPLATES.md), context-aware `/start`, sent message ID tracking (ring buffer, 24h TTL) + `telegram_send` tool for same-turn delete flows, contextual status messages for long-running tools (🔍 Searching..., ⚙️ Running..., etc.), inline keyboard buttons via `telegram_send` with callback query handling
 - **SILENT_REPLY protocol** — Agent silently drops messages when it has nothing useful to say
+- **Refusals are never silent** (BAT-1705) — a model refusal (Claude `stop_reason: refusal`, OpenAI refusal parts / `message.refusal`) or a provider content filter is normalised at the adapter boundary: the partial reply is discarded, no tool call from it runs, nothing from it is replayed, and the user gets a short notice (with a prior-action caution when tools already ran). Heartbeats stay silent; a refusing cron job notifies once per streak, only on a confirmed delivery
 - **Ephemeral session awareness** — Agent knows context resets on restart
 - **PLATFORM.md auto-generation** — Device state (model, RAM, storage, battery, permissions, wallet) written on every service start
 - **Setup token billing attribution** — Anthropic setup tokens (sk-ant-oat01-*) now work with Sonnet/Opus via CC_BILLING_HEADER in system prompt (BAT-460)
@@ -270,6 +271,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 - **SMS and calls are drafts** — in both editions the agent puts a draft in the notifications; the user taps it and presses Send or Dial. Agent actions that open a screen (camera, app launch, main-wallet signing, adding a contact) need SeekerClaw in front, and otherwise ask the user to open it first (BAT-1409)
 - **js_eval is a guardrail, not an isolation boundary** — it runs in Node's `vm` module, which is not a security boundary. The workspace, module, socket and port guards hold for code that stays inside it; full isolation of `js_eval` is planned (BAT-1409 Phase 2)
 - **No light theme** — Dark only (DarkOps single theme)
+- **A declined request stays in the conversation** — after a refusal the request is kept in history, so the next turn may be declined again; `/new` starts fresh (BAT-1705). There is no automatic switch to another model on a refusal
 
 ## Stats
 

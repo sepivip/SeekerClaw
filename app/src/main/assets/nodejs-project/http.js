@@ -55,7 +55,7 @@ function httpRequest(options, body = null) {
 
 function newClaudeStreamState() {
     return {
-        message: { id: null, type: 'message', role: 'assistant', content: [], model: null, stop_reason: null, usage: {} },
+        message: { id: null, type: 'message', role: 'assistant', content: [], model: null, stop_reason: null, stop_details: null, usage: {} },
         blocks: [], // indexed by content_block index
     };
 }
@@ -117,6 +117,8 @@ function applyClaudeStreamEvent(state, eventType, parsed) {
         case 'message_delta':
             if (parsed.delta) {
                 message.stop_reason = parsed.delta.stop_reason ?? message.stop_reason;
+                // BAT-1705: a refusal's category travels in stop_details (may be null).
+                message.stop_details = parsed.delta.stop_details ?? message.stop_details;
             }
             Object.assign(message.usage, parsed.usage || {});
             // BAT-1664 C4: the final message_delta repeats input_transformations
@@ -358,6 +360,10 @@ function httpOpenAIStreamingRequest(options, body = null) {
             res.setEncoding('utf8');
             const outputItems = {};  // output_index → item skeleton
             const textAccum = {};    // "output_index:content_index" → accumulated text
+            // BAT-1705: model refusal parts, same keying. `refusal.done` carries the
+            // finalized text and REPLACES the deltas; later deltas for a done part are ignored.
+            const refusalAccum = {};
+            const refusalDone = {};
             const funcArgAccum = {}; // output_index → accumulated arguments string
             // item_id → output_index lookup. Codex backend (gpt-5.x reasoning models
             // served via chatgpt.com/backend-api/codex/responses) emits delta events
@@ -385,22 +391,30 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 return null;
             };
 
-            // Build response from accumulated deltas (fallback path)
-            const buildFromAccum = () => {
+            // Build response from accumulated deltas (fallback path). `terminal` is the
+            // server's terminal response object when one arrived (BAT-1705): its status and
+            // incomplete_details are kept, so an `incomplete` / `content_filter` ending is
+            // not rebuilt as `completed`. With no terminal event the status stays `completed`
+            // (unchanged); only explicit refusal parts then mark the result as a refusal.
+            const buildFromAccum = (terminal = null) => {
                 const output = [];
                 const indices = Object.keys(outputItems).map(Number).sort((a, b) => a - b);
                 for (const idx of indices) {
                     const item = outputItems[idx];
                     if (item.type === 'message') {
-                        // Collect all text parts for this output index, sorted by
-                        // content_index so multi-part messages reconstruct in the
-                        // order the server emitted them. textAccum keys are
-                        // "<output_index>:<content_index>" — extract and sort numerically.
+                        // Collect all text and refusal parts for this output index, sorted by
+                        // content_index so multi-part messages reconstruct in the order the
+                        // server emitted them. Keys are "<output_index>:<content_index>".
                         const prefix = `${idx}:`;
-                        const partKeys = Object.keys(textAccum)
-                            .filter(k => k.startsWith(prefix))
-                            .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)));
-                        const content = partKeys.map(k => ({ type: 'output_text', text: textAccum[k] }));
+                        const parts = [];
+                        for (const k of Object.keys(textAccum)) {
+                            if (k.startsWith(prefix)) parts.push({ ci: Number(k.slice(prefix.length)), part: { type: 'output_text', text: textAccum[k] } });
+                        }
+                        for (const k of Object.keys(refusalAccum)) {
+                            if (k.startsWith(prefix)) parts.push({ ci: Number(k.slice(prefix.length)), part: { type: 'refusal', refusal: refusalAccum[k] } });
+                        }
+                        parts.sort((a, b) => a.ci - b.ci);
+                        const content = parts.map(p => p.part);
                         output.push({ ...item, content });
                     } else if (item.type === 'function_call') {
                         output.push({
@@ -411,7 +425,9 @@ function httpOpenAIStreamingRequest(options, body = null) {
                         output.push(item);
                     }
                 }
-                return { output, status: 'completed', usage: accumulatedUsage || {} };
+                const built = { output, status: (terminal && terminal.status) || 'completed', usage: accumulatedUsage || {} };
+                if (terminal && terminal.incomplete_details) built.incomplete_details = terminal.incomplete_details;
+                return built;
             };
 
             res.on('data', chunk => {
@@ -458,6 +474,25 @@ function httpOpenAIStreamingRequest(options, body = null) {
                             break;
                         }
 
+                        case 'response.refusal.delta': {
+                            const oi = resolveOutputIndex(parsed);
+                            if (oi !== null) {
+                                const key = `${oi}:${parsed.content_index ?? 0}`;
+                                if (!refusalDone[key]) refusalAccum[key] = (refusalAccum[key] || '') + (typeof parsed.delta === 'string' ? parsed.delta : '');
+                            }
+                            break;
+                        }
+
+                        case 'response.refusal.done': {
+                            const oi = resolveOutputIndex(parsed);
+                            if (oi !== null) {
+                                const key = `${oi}:${parsed.content_index ?? 0}`;
+                                if (typeof parsed.refusal === 'string') refusalAccum[key] = parsed.refusal;
+                                refusalDone[key] = true;
+                            }
+                            break;
+                        }
+
                         case 'response.function_call_arguments.delta': {
                             const oi = resolveOutputIndex(parsed);
                             if (oi !== null) {
@@ -489,18 +524,28 @@ function httpOpenAIStreamingRequest(options, body = null) {
                                 // without this, buildFromAccum() would lose token accounting.
                                 if (serverResp.usage) accumulatedUsage = serverResp.usage;
                                 if (serverOutput.length === 0 && Object.keys(outputItems).length > 0) {
-                                    settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
+                                    settle(resolve, { status: 200, data: buildFromAccum(serverResp), headers: res.headers });
                                 } else {
                                     settle(resolve, { status: 200, data: parsed, headers: res.headers });
                                 }
                             }
                             return;
 
-                        case 'response.incomplete':
+                        case 'response.incomplete': {
                             clearTimeout(hardTimer);
-                            // Truncated response — use what we have
-                            settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            // Truncated response — use what we have. Same empty-output fallback as
+                            // response.completed, keeping the terminal status + incomplete_details
+                            // (e.g. content_filter) on the rebuilt object (BAT-1705).
+                            const serverResp = parsed.response || parsed;
+                            const serverOutput = Array.isArray(serverResp.output) ? serverResp.output : [];
+                            if (serverResp.usage) accumulatedUsage = serverResp.usage;
+                            if (serverOutput.length === 0 && Object.keys(outputItems).length > 0) {
+                                settle(resolve, { status: 200, data: buildFromAccum(serverResp), headers: res.headers });
+                            } else {
+                                settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            }
                             return;
+                        }
 
                         case 'error': {
                             clearTimeout(hardTimer);
@@ -606,6 +651,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
             // Chat Completions SSE accumulators
             res.setEncoding('utf8');
             let textContent = '';
+            let refusalText = '';    // BAT-1705: streamed delta.refusal (the model's refusal message)
             const toolCalls = {};    // index → { id, name, arguments }
             let finishReason = null;
             let usage = null;
@@ -630,6 +676,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                             role: 'assistant',
                             content: textContent || null,
                             tool_calls: accToolCalls.length > 0 ? accToolCalls : undefined,
+                            ...(refusalText ? { refusal: refusalText } : {}),
                         },
                         finish_reason: finishReason || 'stop',
                     }],
@@ -689,6 +736,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
 
                 // Text content delta
                 if (delta.content) textContent += delta.content;
+                if (typeof delta.refusal === 'string') refusalText += delta.refusal;
 
                 // Tool call deltas — accumulate by index
                 if (delta.tool_calls) {
@@ -738,8 +786,11 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                     if (sseBuffer.trim()) processEvent(sseBuffer);
                 }
                 if (!settled) {
-                    // Stream ended without [DONE] — build from accumulated data
-                    if (textContent || Object.keys(toolCalls).length > 0) {
+                    // Stream ended without [DONE] — build from accumulated data. A refusal or a
+                    // content_filter finish is explicit wire evidence too (BAT-1705): the adapter
+                    // then reports it instead of a transport error. A bare truncated stream (no
+                    // text, tools, refusal or filter) still rejects as before.
+                    if (textContent || Object.keys(toolCalls).length > 0 || refusalText || finishReason === 'content_filter') {
                         settle(resolve, { status: 200, data: buildResponse(), headers: res.headers });
                     } else {
                         const err = new Error('Stream ended before [DONE]');
