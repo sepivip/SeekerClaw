@@ -233,6 +233,18 @@ Node.js itself is not on disk as a binary: it is `libnode.so` inside the APK, lo
 - **Dead declaration:** after 2 consecutive missed checks, it restarts Node.js
 - Constants `CHECK_INTERVAL_MS` and `DEAD_AFTER_CHECKS` in `service/Watchdog.kt` — easy to tune
 
+## Agent Status in the UI (BAT-1724)
+
+The UI (MAIN) process shows the agent's status from `filesDir/service_state`. `:node` writes every status there, with its pid on line 8; MAIN's Stop writes STOPPED. A force-stop, a low-memory kill or an app update kills `:node` without a write, so the file can keep saying RUNNING.
+
+- **MAIN believes RUNNING / STARTING only while the `:node` that wrote it is alive.** It reads `ActivityManager.getRunningAppProcesses()` (`util/NodeLiveness.kt`). A live `:node` with a different pid means the status was written by a dead one. Otherwise the status shows STOPPED.
+- **Keep-on-doubt.** A process list without MAIN's own entry (null, empty or partial), or a failed call, is Unknown, and Unknown shows the file's value.
+- **Display only.** `ServiceState` keeps the raw file status apart from the status it shows. Writes carry the raw value, so the file is never "repaired".
+- **When it re-checks.** The probe runs off the main thread, only for RUNNING / STARTING, cached for 1 s. It re-checks on every `service_state` read: file events, the Dashboard and System 1.5 s catch-up, and the 30 s staleness tick. A death shows within about 2.5 s on those screens, plus scheduling.
+- **Older files** (no line 8) fall back to the process name alone.
+
+This is separate from the Watchdog above, which runs inside `:node` and watches Node.js itself.
+
 ## Mobile-Specific Config
 
 Mobile overrides compared with desktop OpenClaw:

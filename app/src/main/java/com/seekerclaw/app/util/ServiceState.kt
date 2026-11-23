@@ -1,8 +1,12 @@
 package com.seekerclaw.app.util
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.FileObserver
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import com.seekerclaw.app.bridge.UiForeground
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -54,8 +58,124 @@ sealed class ApiUsageData {
 }
 
 object ServiceState {
+    /**
+     * The status shown to the UI. In `:node` it is the raw status. In MAIN (BAT-1724) it is
+     * [effectiveStatus] of the raw status: a RUNNING / STARTING whose `:node` writer is gone shows
+     * STOPPED. It is never written to `service_state` — [writeToFile] writes [raw] only.
+     */
     private val _status = MutableStateFlow(ServiceStatus.STOPPED)
     val status: StateFlow<ServiceStatus> = _status
+
+    /**
+     * BAT-1724: what `service_state` says — the status and the pid of the `:node` process that set
+     * it (null for a file from an older build). One coherent snapshot: the pid changes only with an
+     * explicit `:node` status change ([updateStatus]), never with a counter or timestamp write, so a
+     * new `:node` cannot relabel an old RUNNING as its own before it writes STARTING.
+     */
+    private data class RawStatus(val status: ServiceStatus, val ownerPid: Int?)
+
+    @Volatile private var raw = RawStatus(ServiceStatus.STOPPED, null)
+    private val rawGen = java.util.concurrent.atomic.AtomicLong(0)
+    private val rawLock = Any()
+
+    /** Replaces [raw] (bumping its generation when it changes). Returns true when it changed. */
+    private fun setRaw(next: RawStatus): Boolean = synchronized(rawLock) {
+        if (raw == next) return false
+        raw = next
+        rawGen.incrementAndGet()
+        true
+    }
+
+    // ── BAT-1724 liveness seams (MAIN only) ─────────────────────────────
+    /** Asks the OS whether `:node` is alive. Replaced in tests; restored by [resetForTest]. */
+    @Volatile internal var nodeLivenessProbe: () -> NodeLiveness = { defaultLivenessProbe() }
+
+    /** Monotonic milliseconds for the probe cache (never wall time). */
+    @Volatile internal var elapsedClock: () -> Long = { SystemClock.elapsedRealtime() }
+
+    /** True on the main looper: the probe (a binder call) never runs there. */
+    @Volatile internal var isMainThread: () -> Boolean = {
+        Looper.getMainLooper()?.let { it == Looper.myLooper() } ?: false
+    }
+
+    /** This process's pid, stamped by an explicit `:node` status change. */
+    @Volatile internal var myPid: () -> Int = { android.os.Process.myPid() }
+
+    /** How long one probe answer is reused for the same raw owner. */
+    internal const val LIVENESS_CACHE_MS = 1_000L
+
+    private data class ProbeCache(val ownerPid: Int?, val atMs: Long, val seq: Long, val result: NodeLiveness)
+
+    @Volatile private var probeCache: ProbeCache? = null
+    private val probeSeq = java.util.concurrent.atomic.AtomicLong(0)
+    private val probeCacheLock = Any()
+    @Volatile private var appContext: Context? = null
+    private val recomputeSeq = java.util.concurrent.atomic.AtomicLong(0)
+    private val publishLock = Any()
+    private var lastPublishedSeq = 0L // guarded by publishLock
+
+    private fun defaultLivenessProbe(): NodeLiveness {
+        val ctx = appContext ?: return NodeLiveness.Unknown
+        return try {
+            val am = ctx.getSystemService(ActivityManager::class.java) ?: return NodeLiveness.Unknown
+            NodeLiveness.of(
+                am.runningAppProcesses?.map { UiForeground.Proc(it.processName, it.importance, it.pid) },
+                ctx.packageName,
+            )
+        } catch (_: Exception) {
+            NodeLiveness.Unknown // a SecurityException or a binder failure proves nothing
+        }
+    }
+
+    /**
+     * The liveness answer for [ownerPid], from the cache when it is younger than [LIVENESS_CACHE_MS]
+     * and was taken for the same owner; otherwise a fresh probe. A clock that went backwards
+     * invalidates the cache. A probe that started earlier never replaces the cached answer of
+     * one that started later, so a slow, stale answer cannot be served from the cache.
+     */
+    private fun liveness(ownerPid: Int?): NodeLiveness {
+        val now = elapsedClock()
+        probeCache?.let { c ->
+            val age = now - c.atMs
+            if (c.ownerPid == ownerPid && age in 0 until LIVENESS_CACHE_MS) return c.result
+        }
+        val seq = probeSeq.incrementAndGet()
+        val result = try { nodeLivenessProbe() } catch (_: Exception) { NodeLiveness.Unknown }
+        synchronized(probeCacheLock) {
+            val c = probeCache
+            if (c == null || seq > c.seq) probeCache = ProbeCache(ownerPid, now, seq, result)
+        }
+        return result
+    }
+
+    /**
+     * BAT-1724: republishes [status] from the current [raw] snapshot. `:node` shows the raw status.
+     * MAIN probes only for a raw RUNNING / STARTING, never on the main thread (there it shows the
+     * raw value and schedules an off-main recompute), and publishes only if no newer raw snapshot
+     * or newer recompute has published first — a slow probe can never overwrite fresher state. No
+     * lock is held across the probe.
+     */
+    private fun recomputeStatus(scheduled: Boolean = false) {
+        val seq = recomputeSeq.incrementAndGet()
+        val gen = rawGen.get()
+        val snap = raw
+        val active = snap.status == ServiceStatus.RUNNING || snap.status == ServiceStatus.STARTING
+        val eff = when {
+            ProcessRole.isNode || !active -> snap.status
+            isMainThread() -> {
+                // The scheduled recompute never schedules another, so a misreported thread
+                // cannot loop; it then shows the raw value until the next IO read.
+                if (!scheduled) scope.launch { recomputeStatus(scheduled = true) }
+                snap.status
+            }
+            else -> effectiveStatus(snap.status, snap.ownerPid, liveness(snap.ownerPid))
+        }
+        synchronized(publishLock) {
+            if (rawGen.get() != gen || seq < lastPublishedSeq) return
+            lastPublishedSeq = seq
+            if (_status.value != eff) _status.value = eff
+        }
+    }
 
     // BAT-522 (phase 2): replaces the old `_uptime` StateFlow that was
     // re-written every 1s by SeekerClawService.uptimeJob. Now the service
@@ -159,6 +279,7 @@ object ServiceState {
     /** Sync, no I/O. Sets the file path reference so disk reads can find it. */
     private fun initFileRefs(context: Context) {
         stateFile = File(context.filesDir, "service_state")
+        appContext = context.applicationContext // BAT-1724: the liveness probe's ActivityManager
     }
 
     /**
@@ -174,11 +295,15 @@ object ServiceState {
         if (initialized) return // Fast path — no lock if already done
         synchronized(initLock) {
             if (initialized) return // Double-check inside lock
-            readFromFile()
+            // The file read only: the status recompute (which may make the liveness binder
+            // call, BAT-1724) runs after initLock is released, so a main-thread init() can
+            // never wait on it.
+            try { readStateFileSnapshot() } catch (_: Exception) {}
             checkDailyReset()
             initialized = true
             Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
         }
+        recomputeStatus()
     }
 
     /**
@@ -219,9 +344,16 @@ object ServiceState {
         } catch (_: Exception) {}
     }
 
+    /**
+     * An explicit status change. In `:node` it also adopts this process's pid as the status owner
+     * (BAT-1724); MAIN (its Stop) keeps the owner pid as read and never stamps its own.
+     */
     fun updateStatus(s: ServiceStatus) {
-        _status.value = s
+        synchronized(rawLock) {
+            setRaw(RawStatus(s, if (ProcessRole.isNode) myPid() else raw.ownerPid))
+        }
         writeToFile()
+        recomputeStatus()
     }
 
     /**
@@ -257,7 +389,7 @@ object ServiceState {
     }
 
     fun reset() {
-        _status.value = ServiceStatus.STOPPED
+        synchronized(rawLock) { setRaw(RawStatus(ServiceStatus.STOPPED, raw.ownerPid)) }
         _serviceStartTimeMs.value = 0L
         _messageCount.value = 0
         _messagesToday.value = 0
@@ -266,6 +398,7 @@ object ServiceState {
         _tokensTotal.value = 0L
         clearBridgeToken()
         writeToFile()
+        recomputeStatus()
     }
 
     /**
@@ -425,9 +558,14 @@ object ServiceState {
      * regression: the user would think the agent is healthy when it has
      * actually died.
      *
-     * Cost: 1 small file read every 30s (~2,880/day) — vastly cheaper than
-     * the prior 1Hz poll's 86,400/day, but not "no I/O" as an earlier
-     * iteration of this comment claimed.
+     * BAT-1724: each tick ([tickOnce]) also re-reads `service_state`, so the
+     * MAIN liveness check (a `:node` killed with no file write shows STOPPED)
+     * converges in the background too — within one tick plus the probe cache
+     * ([LIVENESS_CACHE_MS]) and scheduling. Same timer, no new one.
+     *
+     * Cost: 2 small file reads every 30s (~5,760/day) — vastly cheaper than
+     * the prior 1Hz poll's 86,400/day. The liveness probe (a binder call)
+     * runs only while the raw status is RUNNING / STARTING.
      *
      * Once-only via AtomicBoolean.compareAndSet so concurrent startWatching
      * calls (theoretical, defensive) don't double-start the ticker.
@@ -437,16 +575,20 @@ object ServiceState {
         scope.launch {
             while (isActive) {
                 delay(30_000L)
-                // readAgentHealthFile re-derives `stale = (now - fileTime
-                // > 120_000)` on every call, so a 30s tick converges
-                // staleness within ≤30s of the 120s threshold even when
-                // no file events fire. Reading a ~few-hundred-byte file
-                // every 30s is 2,880 reads/day — 30× less than the prior
-                // 1Hz poll's 86,400 — so we keep most of BAT-518's I/O
-                // savings while restoring the safety property.
-                readAgentHealthFile()
+                tickOnce()
             }
         }
+    }
+
+    /**
+     * One staleness tick. readAgentHealthFile re-derives `stale = (now - fileTime > 120_000)` on
+     * every call, so a 30s tick converges staleness within ≤30s of the 120s threshold even when no
+     * file events fire. readFromFile (BAT-1724) re-evaluates whether the `:node` that wrote a
+     * RUNNING / STARTING is still alive.
+     */
+    internal fun tickOnce() {
+        readFromFile()
+        readAgentHealthFile()
     }
 
     /**
@@ -631,12 +773,20 @@ object ServiceState {
      *    displayed uptime as `now - serviceStartTimeMs` while RUNNING,
      *    no live disk writes. Missing on pre-BAT-522 files → defaults
      *    to 0L on read; the next service start populates it.
+     * 8: owner pid (BAT-1724): the `:node` process that set line 0, written
+     *    only when known. Older builds read lines 0–7 and ignore it; a file
+     *    without it reads as owner unknown (name-only liveness fallback).
+     *
+     * Lines 0 and 8 are the RAW status snapshot ([raw]) — never the
+     * effective status MAIN shows — so a display override can never reach
+     * the file.
      */
     private fun writeToFile() {
         val file = stateFile ?: return
         try {
+            val snap = raw
             val data = buildString {
-                appendLine(_status.value.name)
+                appendLine(snap.status.name)
                 // Line 1 is intentionally always 0L (BAT-522 — see file
                 // format docblock). Kept so old pre-BAT-522 builds
                 // running on a freshly-written file still find every
@@ -648,15 +798,25 @@ object ServiceState {
                 appendLine(_tokensToday.value)
                 appendLine(_tokensTotal.value)
                 append(_serviceStartTimeMs.value)
+                snap.ownerPid?.let { append('\n').append(it) }
             }
             // BAT-1409 P1-J: atomic rename (MOVED_TO is in the observer mask), link-safe.
             SafeFs.writeAtomicText(file.parentFile.toPath(), file.toPath(), data)
         } catch (_: Exception) {}
     }
 
+    /**
+     * Re-reads `service_state`, then recomputes the shown status (BAT-1724) on EVERY exit — a
+     * missing or unparseable file still re-evaluates the last coherent raw snapshot.
+     */
     private fun readFromFile() {
+        try { readStateFileSnapshot() } catch (_: Exception) {}
+        recomputeStatus()
+    }
+
+    private fun readStateFileSnapshot() {
         val file = stateFile ?: return
-        try {
+        run {
             if (!SafeFs.existsNoFollow(file.toPath())) return
             val lines = SafeFs.readTextNoFollow(file.parentFile.toPath(), file.toPath()).lines()
             if (lines.size >= 5) {
@@ -666,8 +826,11 @@ object ServiceState {
                 val fileMsgCount = lines[2].toIntOrNull() ?: return
                 val fileMsgToday = lines[3].toIntOrNull() ?: return
                 val fileLastActivity = lines[4].toLongOrNull() ?: return
+                // BAT-1724: line 8, the owner pid; absent (older build) or invalid → unknown.
+                val fileOwnerPid = lines.getOrNull(8)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
 
-                if (_status.value != fileStatus) _status.value = fileStatus
+                // The status and its owner, applied as one snapshot.
+                setRaw(RawStatus(fileStatus, fileOwnerPid))
                 if (_messageCount.value != fileMsgCount) _messageCount.value = fileMsgCount
                 if (_messagesToday.value != fileMsgToday) _messagesToday.value = fileMsgToday
                 if (_lastActivityTime.value != fileLastActivity) _lastActivityTime.value = fileLastActivity
@@ -691,7 +854,7 @@ object ServiceState {
                 } else 0L
                 if (_serviceStartTimeMs.value != fileStartTime) _serviceStartTimeMs.value = fileStartTime
             }
-        } catch (_: Exception) {}
+        } // the caller (readFromFile) catches and then recomputes
     }
 
     private fun readAgentHealthFile() {
@@ -820,6 +983,16 @@ object ServiceState {
 
     internal fun resetForTest() {
         _status.value = ServiceStatus.STOPPED
+        synchronized(rawLock) { raw = RawStatus(ServiceStatus.STOPPED, null); rawGen.incrementAndGet() }
+        synchronized(publishLock) { lastPublishedSeq = 0L }
+        recomputeSeq.set(0L)
+        probeCache = null
+        probeSeq.set(0L)
+        appContext = null
+        nodeLivenessProbe = { defaultLivenessProbe() }
+        elapsedClock = { SystemClock.elapsedRealtime() }
+        isMainThread = { Looper.getMainLooper()?.let { it == Looper.myLooper() } ?: false }
+        myPid = { android.os.Process.myPid() }
         _serviceStartTimeMs.value = 0L
         _messageCount.value = 0
         _messagesToday.value = 0
@@ -835,4 +1008,10 @@ object ServiceState {
     internal fun writeToFileForTest() = writeToFile()
 
     internal fun readFromFileForTest() = readFromFile()
+
+    /** The raw owner pid (BAT-1724), for tests. */
+    internal fun rawOwnerPidForTest(): Int? = raw.ownerPid
+
+    /** Recomputes from the current raw snapshot, as an IO read would (BAT-1724), for tests. */
+    internal fun recomputeStatusForTest() = recomputeStatus()
 }
