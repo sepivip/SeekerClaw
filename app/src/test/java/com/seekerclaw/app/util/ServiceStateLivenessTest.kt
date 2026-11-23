@@ -411,6 +411,36 @@ class ServiceStateLivenessTest {
     }
 
     @Test
+    fun `a newer observation dropped by a generation change is republished on the current snapshot`() {
+        // CodeRabbit on d433eb99: X probes fresh (Absent) for the old generation; meanwhile the raw
+        // snapshot changes (same owner) and its recompute publishes an older cached Alive. X's newer
+        // observation must not be lost at the generation check: it is re-applied to the new snapshot.
+        writeFile("RUNNING", 100)
+        live = NodeLiveness.Alive(100)
+        assertEquals(ServiceStatus.RUNNING, read()) // caches Alive (observation 1)
+
+        val xAtProbe = CountDownLatch(1); val xRelease = CountDownLatch(1)
+        lateinit var x: Thread
+        val calls = AtomicInteger(0)
+        ServiceState.elapsedClock = { if (Thread.currentThread() === x) now + ServiceState.LIVENESS_CACHE_MS else now }
+        ServiceState.nodeLivenessProbe = {
+            if (calls.getAndIncrement() == 0) { xAtProbe.countDown(); xRelease.await(5, TimeUnit.SECONDS) }
+            NodeLiveness.Absent // the process is gone
+        }
+        x = Thread { ServiceState.readFromFileForTest() } // sees the cache expired: fresh probe
+        x.start()
+        assertTrue(xAtProbe.await(5, TimeUnit.SECONDS))
+
+        writeFile("STARTING", 100) // a new raw snapshot, same owner
+        assertEquals("the new snapshot publishes from the older cached Alive", ServiceStatus.STARTING, read())
+
+        xRelease.countDown(); x.join(5_000) // X's newer Absent arrives for the old generation
+        val deadline = System.currentTimeMillis() + 5_000
+        while (ServiceState.status.value != ServiceStatus.STOPPED && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals("the newer observation is re-applied to the current snapshot", ServiceStatus.STOPPED, ServiceState.status.value)
+    }
+
+    @Test
     fun `an older probe completion cannot overwrite a newer one for the same raw status`() {
         writeFile("RUNNING", 100)
         val entered = CountDownLatch(1)

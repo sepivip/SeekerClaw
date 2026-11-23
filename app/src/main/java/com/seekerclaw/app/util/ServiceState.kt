@@ -193,7 +193,14 @@ object ServiceState {
         }
         beforePublishForTest?.invoke()
         synchronized(publishLock) {
-            if (rawGen.get() != gen) return // a newer raw snapshot exists; its own recompute publishes
+            if (rawGen.get() != gen) {
+                // A newer raw snapshot exists. This result is stale for it — but a real observation
+                // made here may be newer than the one the new snapshot published with (CodeRabbit
+                // on d433eb99), so recompute once on the current snapshot: it reuses the cache,
+                // which keeps the newest observation. A raw-only result has nothing to carry.
+                if (obsSeq > 0L) scope.launch { recomputeStatus(scheduled = true) }
+                return
+            }
             if (gen == lastPublishedGen && obsSeq < lastPublishedObs) return // an older observation
             lastPublishedGen = gen
             lastPublishedObs = obsSeq
