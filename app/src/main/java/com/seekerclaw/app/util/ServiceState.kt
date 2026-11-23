@@ -222,7 +222,7 @@ object ServiceState {
             isMainThread() -> {
                 // The scheduled recompute never schedules another, so a misreported thread
                 // cannot loop; it then shows the raw value until the next IO read.
-                if (!scheduled) scope.launch { recomputeStatus(scheduled = true) }
+                if (!scheduled) launchScheduledRecompute()
                 snap.status
             }
             else -> {
@@ -238,7 +238,7 @@ object ServiceState {
                 // made here may be newer than the one the new snapshot published with (CodeRabbit
                 // on d433eb99), so recompute once on the current snapshot: it reuses the cache,
                 // which keeps the newest observation. A raw-only result has nothing to carry.
-                if (obsSeq > 0L) scope.launch { recomputeStatus(scheduled = true) }
+                if (obsSeq > 0L) launchScheduledRecompute()
                 return
             }
             if (gen == lastPublishedGen && obsSeq < lastPublishedObs) return // an older observation
@@ -246,6 +246,16 @@ object ServiceState {
             lastPublishedGen = gen
             lastPublishedObs = obsSeq
             if (_status.value != eff) _status.value = eff
+        }
+    }
+
+    /** Scheduled (off-main) recomputes still running; tests wait for zero before resetting seams. */
+    private val scheduledInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun launchScheduledRecompute() {
+        scheduledInFlight.incrementAndGet()
+        scope.launch {
+            try { recomputeStatus(scheduled = true) } finally { scheduledInFlight.decrementAndGet() }
         }
     }
 
@@ -1125,4 +1135,11 @@ object ServiceState {
 
     /** The first-time restore, as [init] / [startWatching] run it, for tests. */
     internal fun restoreFromDiskForTest() = restoreFromDisk()
+
+    /** Waits (bounded) until no scheduled recompute is running, so it cannot touch the next test's seams. */
+    internal fun awaitScheduledRecomputesForTest(timeoutMs: Long = 6_000): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (scheduledInFlight.get() > 0 && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        return scheduledInFlight.get() == 0
+    }
 }

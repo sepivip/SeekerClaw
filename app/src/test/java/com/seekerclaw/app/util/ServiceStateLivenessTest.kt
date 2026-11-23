@@ -38,6 +38,9 @@ class ServiceStateLivenessTest {
 
     @After
     fun tearDown() {
+        // A scheduled recompute (main-thread read, or a generation-change republish) runs on IO;
+        // let it finish before the seams are reset, so it can never probe into the next test.
+        assertTrue("scheduled recomputes finished", ServiceState.awaitScheduledRecomputesForTest())
         ProcessRole.setForTest(null)
         ServiceState.setStateFileForTest(null)
         ServiceState.resetForTest()
