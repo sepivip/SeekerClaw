@@ -4,31 +4,76 @@ import com.seekerclaw.app.SourceText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.ceil
 
 /**
  * BAT-1725: at the largest system font size (2.0×) the bottom-nav "Settings" label broke across
- * two lines ("Setting" / "s"). The label now stays on one line and shrinks only when it cannot fit.
+ * two lines ("Setting" / "s"). The label now stays on one line and shrinks only when it cannot fit,
+ * re-measuring until it does (hinted glyph advances are not exactly linear in the font size).
  */
 class NavLabelTest {
 
-    @Test
-    fun `a label that fits keeps the user's font scale`() {
-        assertEquals(1f, navLabelShrinkFactor(textWidthPx = 180, maxWidthPx = 240))
-        assertEquals(1f, navLabelShrinkFactor(textWidthPx = 240, maxWidthPx = 240))
+    /** A linear measure: [full] pixels wide at factor 1, rounded up like TextLayoutResult.size. */
+    private fun linear(full: Int): (Float) -> Int = { f -> ceil(full * f).toInt() }
+
+    /**
+     * A hinted-like measure: wider than linear below factor 1 (each of [glyphs] advances rounds up
+     * to a whole pixel), so one proportional shrink lands a little over the slot.
+     */
+    private fun hinted(full: Int, glyphs: Int): (Float) -> Int = { f ->
+        if (f >= 1f) full else ceil(full * f).toInt() + glyphs
+    }
+
+    private fun fits(width: (Float) -> Int, max: Int): Float {
+        val f = navLabelFitFactor(max, width)
+        assertTrue("factor in (0, 1]: $f", f > 0f && f <= 1f)
+        assertTrue("label must fit: width ${width(f)} > slot $max at factor $f", width(f) <= max)
+        return f
     }
 
     @Test
-    fun `a label too wide for its slot shrinks exactly to the slot`() {
+    fun `a label that fits keeps the user's font scale`() {
+        assertEquals(1f, navLabelFitFactor(240, linear(180)))
+        assertEquals(1f, navLabelFitFactor(240, linear(240)))
+        assertEquals(1f, navLabelFitFactor(240, hinted(240, glyphs = 8)))
+    }
+
+    @Test
+    fun `a label too wide for its slot shrinks until it fits`() {
         // The device case: about 1.3x too wide at 2.0x font in a quarter-width slot.
-        val f = navLabelShrinkFactor(textWidthPx = 312, maxWidthPx = 240)
-        assertEquals(240f / 312f, f, 1e-6f)
-        assertTrue("shrunk text must fit: ${312 * f}", 312 * f <= 240f + 1e-3f)
+        fits(linear(312), 240)
+        fits(hinted(312, glyphs = 8), 240)
+    }
+
+    @Test
+    fun `a slot one pixel narrower than the label still fits, for both weights`() {
+        // Normal and Medium weight measure differently; both must fit a slot 1px short of them.
+        for (full in listOf(240, 252)) {
+            fits(linear(full), full - 1)
+            fits(hinted(full, glyphs = 8), full - 1)
+        }
+    }
+
+    @Test
+    fun `a measure that only changes in coarse steps still converges`() {
+        // Hinting can hold the width flat across small factor changes. A 1px-short slot asks for a
+        // ~0.4% shrink each pass; without a minimum step the label never crosses the step at 0.95.
+        val stepped: (Float) -> Int = { f -> if (f > 0.95f) 240 else 200 }
+        fits(stepped, 239)
     }
 
     @Test
     fun `an unknown slot width never shrinks the label`() {
-        assertEquals(1f, navLabelShrinkFactor(textWidthPx = 500, maxWidthPx = 0))
-        assertEquals(1f, navLabelShrinkFactor(textWidthPx = 500, maxWidthPx = -1))
+        assertEquals(1f, navLabelFitFactor(0, linear(500)))
+        assertEquals(1f, navLabelFitFactor(-1, linear(500)))
+    }
+
+    @Test
+    fun `re-measuring is bounded even when nothing fits`() {
+        var calls = 0
+        val f = navLabelFitFactor(10) { calls++; 500 } // never shrinks: a pathological measure
+        assertEquals("one initial measure plus the bounded passes", 1 + NAV_LABEL_FIT_PASSES, calls)
+        assertTrue("still shrank as far as the passes allow: $f", f < 1f)
     }
 
     @Test
@@ -42,16 +87,16 @@ class NavLabelTest {
         val text = callArgs(body, "Text(")
         assertTrue("NavLabel's Text must render one line: maxLines = 1 (got: $text)", text.contains("maxLines = 1"))
         assertTrue("NavLabel's Text must not wrap: softWrap = false (got: $text)", text.contains("softWrap = false"))
-        assertTrue("NavLabel must compute the shrink factor", body.contains("navLabelShrinkFactor("))
+        assertTrue("NavLabel must fit by re-measuring", body.contains("navLabelFitFactor("))
         assertTrue(
             "NavLabel's Text must render the shrunk style when the factor is below 1 (got: $text)",
             text.contains("style = if (factor < 1f) shrunk(base, factor) else base"),
         )
-        // Measured and rendered widths must agree: both use `base`, the merge with LocalTextStyle.
+        // Measured and rendered widths must agree: each pass measures the exact style Text draws.
         assertTrue("NavLabel must measure with LocalTextStyle merged in", body.contains("val base = LocalTextStyle.current.merge("))
         assertTrue(
-            "NavLabel must measure the same style it renders (got: ${callArgs(body, "measure(")})",
-            callArgs(body, "measure(").startsWith("text, base,"),
+            "NavLabel must measure the style it renders at each factor (got: ${callArgs(body, "measure(")})",
+            callArgs(body, "measure(").startsWith("text, if (f < 1f) shrunk(base, f) else base,"),
         )
         val shrunk = SourceText.flat(label.substring(SourceText.functionBody(label, "shrunk")))
         assertTrue("shrunk must scale the font size", shrunk.contains("fontSize = NAV_LABEL_FONT_SIZE * factor"))

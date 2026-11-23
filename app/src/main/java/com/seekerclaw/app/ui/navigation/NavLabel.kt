@@ -14,14 +14,27 @@ import com.seekerclaw.app.ui.theme.RethinkSans
 /** The bottom-nav label size at the system's default font scale. */
 internal val NAV_LABEL_FONT_SIZE = 11.sp
 
+/** Re-measure passes [navLabelFitFactor] may take before it gives up (bounded work per layout). */
+internal const val NAV_LABEL_FIT_PASSES = 6
+
 /**
- * BAT-1725: the factor (0 < f ≤ 1) to multiply the label's font size by so a one-line label of
- * [textWidthPx] fits in [maxWidthPx]. 1 when it already fits, or when the slot width is unknown
- * (unbounded or not positive) — the label is then never shrunk.
+ * BAT-1725: the factor (0 < f ≤ 1) to scale the label by so its one-line width fits [maxWidthPx].
+ * [widthAt] measures the label at a factor with the real text metrics. Width is not exactly linear
+ * in the factor (font hinting rounds glyph advances), so each pass re-measures and shrinks again
+ * — by at least 1% — until it fits, at most [NAV_LABEL_FIT_PASSES] times. 1 when the label already
+ * fits, or when the slot width is unknown (not positive): it is then never shrunk.
  */
-internal fun navLabelShrinkFactor(textWidthPx: Int, maxWidthPx: Int): Float {
-    if (maxWidthPx <= 0 || textWidthPx <= maxWidthPx) return 1f
-    return maxWidthPx.toFloat() / textWidthPx
+internal fun navLabelFitFactor(maxWidthPx: Int, widthAt: (Float) -> Int): Float {
+    if (maxWidthPx <= 0) return 1f
+    var factor = 1f
+    var width = widthAt(factor)
+    var passes = 0
+    while (width > maxWidthPx && passes < NAV_LABEL_FIT_PASSES) {
+        factor *= (maxWidthPx.toFloat() / width).coerceAtMost(0.99f)
+        width = widthAt(factor)
+        passes++
+    }
+    return factor
 }
 
 /**
@@ -43,9 +56,11 @@ internal fun NavLabel(text: String, selected: Boolean) {
     )
     val measurer = rememberTextMeasurer()
     BoxWithConstraints {
-        val bounded = constraints.hasBoundedWidth
-        val measured = measurer.measure(text, base, maxLines = 1, softWrap = false).size.width
-        val factor = navLabelShrinkFactor(measured, if (bounded) constraints.maxWidth else 0)
+        val maxWidth = if (constraints.hasBoundedWidth) constraints.maxWidth else 0
+        // Each pass measures exactly the style Text will draw at that factor.
+        val factor = navLabelFitFactor(maxWidth) { f ->
+            measurer.measure(text, if (f < 1f) shrunk(base, f) else base, maxLines = 1, softWrap = false).size.width
+        }
         Text(
             text = text,
             style = if (factor < 1f) shrunk(base, factor) else base,
@@ -55,7 +70,7 @@ internal fun NavLabel(text: String, selected: Boolean) {
     }
 }
 
-/** [base] scaled by [factor]: the font size and, when set, the letter spacing (so width scales linearly). */
+/** [base] scaled by [factor]: the font size and, when set, the letter spacing (so width scales near-linearly). */
 private fun shrunk(base: TextStyle, factor: Float): TextStyle {
     return base.copy(
         fontSize = NAV_LABEL_FONT_SIZE * factor,
