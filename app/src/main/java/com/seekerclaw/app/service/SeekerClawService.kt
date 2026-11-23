@@ -18,6 +18,7 @@ import com.seekerclaw.app.SeekerClawApplication
 import com.seekerclaw.app.bridge.AndroidBridge
 import com.seekerclaw.app.bridge.NodeControlClient
 import com.seekerclaw.app.config.ConfigManager
+import com.seekerclaw.app.config.ModelRepair
 import com.seekerclaw.app.config.PrefsNames
 import com.seekerclaw.app.state.XaiOAuthDurabilityGate
 import com.seekerclaw.app.state.XaiOAuthTokenStore
@@ -572,7 +573,10 @@ class SeekerClawService : Service() {
         // Owner ID may be blank on first run — this is expected. Node.js auto-detects
         // it from the first Telegram message and persists it via the /config/save-owner
         // bridge callback; the service logs a warning here rather than blocking startup.
-        if (ConfigManager.loadConfig(this)?.telegramOwnerId.isNullOrBlank()) {
+        // BAT-1661: the owner alone, read-only (the same lookup loadConfig uses). A full loadConfig
+        // here would reconcile BEFORE the repair transaction, clamping a valid model the repair has
+        // not decided on yet and committing the result (Codex diff review #1).
+        if (ConfigManager.loadOwnerIdFromFile(this, "telegram").isBlank()) {
             LogCollector.append(
                 "[Service] Owner ID not configured — first Telegram message will claim ownership.",
                 LogLevel.WARN,
@@ -689,22 +693,31 @@ class SeekerClawService : Service() {
         if (!fence.holds()) return abortStart()
 
         // BAT-1155 boot reconcile (amendment 3): convert an armed rotation marker to durable reauth
-        // and clear a stale stop fence — MUST run BEFORE writeConfigJson so the emitted token reflects
+        // and clear a stale stop fence — MUST run BEFORE the config.json emit so the emitted token reflects
         // the conversion (a potentially-consumed refresh token is never handed to the provider).
         reconcileXaiOAuthOnBoot(fence.baseline)
 
         // Write config from encrypted storage (includes bridge token for Node.js)
         // Note: loadConfig() uses SharedPreferences which may be stale in :node process,
-        // but writeConfigJson reads the XML file fresh on first access per process.
+        // but the boot load reads the XML file fresh on first access per process.
         // BAT-1409 P1-D: the channel written for this boot is the one the bridge's owner claim checks.
         // BAT-1409 P1-J (R3): a refused or failed write ends the start on the error path, never in
         // a crash of this process. writeAgentSettingsJson and writePlatformMd log their own failures.
+        // BAT-1661: one model-selection transaction — repair a retired sign-in model (classify or
+        // decide, checked intent, repair, publish config.json + agent_settings.json, then hand off
+        // to the app on a confirmed file: the intent becomes `awaiting_main`). On a busy lock it is
+        // a read-only boot: config.json only, no shared store written.
+        // BAT-1661 v2.12 fold 5′: the selection this boot consumes (the config it emits), compared with
+        // a "restart to apply" notice once the start has SUCCEEDED (RUNNING, below).
+        var consumed: com.seekerclaw.app.config.ModelTuple? = null
         val bootChannel = try {
-            ConfigManager.writeConfigJson(this, bridgeToken).orEmpty()
+            ModelRepair.serviceStart(this) { config ->
+                consumed = com.seekerclaw.app.config.ModelTuple(config.provider, config.authType, config.model)
+                ConfigManager.emitConfigJson(this, config, bridgeToken)
+            }.orEmpty()
         } catch (e: java.io.IOException) {
             return failBeforeNode("CONFIG_WRITE (${e.javaClass.simpleName}: ${e.message})")
         }
-        ConfigManager.writeAgentSettingsJson(this) // non-ephemeral settings for live Node.js reads
 
         // Validate by checking the written file — more reliable than cross-process SharedPreferences
         val workDir = File(filesDir, "workspace").apply { mkdirs() }
@@ -774,6 +787,12 @@ class SeekerClawService : Service() {
         // Mark as running
         ServiceState.updateStatus(ServiceStatus.RUNNING)
         LogCollector.append("[Service] Claw Engine is now RUNNING")
+
+        // BAT-1661 v2.12 fold 5′: a SUCCESSFUL start on the notice's selection clears the "restart to
+        // apply" notice (a failed or aborted boot returned before this point, and STARTING is not
+        // RUNNING). Under the model-selection lock, off the main looper; a notice for another (newer)
+        // selection is never cleared by this boot.
+        consumed?.let { c -> scope.launch { com.seekerclaw.app.config.RestartNotice.clearIfStartedOn(filesDir.toPath(), c) } }
 
         // BAT-582 Phase 3: periodic sweep of stale Burner Wallet cap
         // reservations. Every 30s, any reservation whose expiresAtMs has
@@ -1274,7 +1293,24 @@ class SeekerClawService : Service() {
             // A restart of a live oauth family is just as capable of stranding a rotation
             // as a plain Stop, so it goes through the same gate.
             stopWithDurability(appCtx, attempt = 0) {
-                restartHandler.postDelayed({ start(appCtx) }, delayMs)
+                restartHandler.postDelayed({ startFromRestart(appCtx) }, delayMs)
+            }
+        }
+
+        /**
+         * BAT-1661 (review M2 of v2.12): the restart's start, guarded. On Android 12+ a
+         * `startForegroundService` from an app that is no longer in the foreground throws
+         * (`ForegroundServiceStartNotAllowedException`); posted on the main looper, that would crash
+         * MAIN after the agent was already stopped. This guard makes a failure a logged one.
+         */
+        private fun startFromRestart(appCtx: Context) {
+            try {
+                start(appCtx)
+            } catch (e: Exception) {
+                LogCollector.append(
+                    "[Service] restart: the agent was stopped but could not be started again (${e.javaClass.simpleName}) — start it from the dashboard",
+                    LogLevel.ERROR,
+                )
             }
         }
 

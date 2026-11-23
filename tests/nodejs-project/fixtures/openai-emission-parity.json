@@ -1,0 +1,113 @@
+{
+  "_comment": "BAT-1661 (CodeRabbit on 3240d3c9): PRODUCER parity. For each Settings input, `emitted` is what ConfigManager.emitConfigJson writes for OpenAI (emittedAuthType + openAIConfigFields) and `display` is AppConfig.displayModel (shipped registry; stored model gpt-5.4). ModelDispatchParityTest.kt recomputes both from the producer and fails on any drift; model-dispatch-parity.test.js boots the REAL config.js on `emitted` and fails unless it runs `display`.",
+  "rows": [
+    {
+      "name": "usable key, no sign-in: api_key keeps the stored model",
+      "input": {
+        "authType": "oauth",
+        "openaiApiKey": "sk-proj-PLACEHOLDER",
+        "openaiOAuthToken": "",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "oauth",
+        "openaiApiKey": "sk-proj-PLACEHOLDER"
+      },
+      "display": "gpt-5.4"
+    },
+    {
+      "name": "U+001C plus spaces: Kotlin drops it as blank, so it is never emitted",
+      "input": {
+        "authType": "oauth",
+        "openaiApiKey": "\u001c  ",
+        "openaiOAuthToken": "",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "oauth"
+      },
+      "display": "gpt-6.2-sol"
+    },
+    {
+      "name": "U+2028 only: blank to Kotlin, not emitted",
+      "input": {
+        "authType": "oauth",
+        "openaiApiKey": "\u2028",
+        "openaiOAuthToken": "",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "oauth"
+      },
+      "display": "gpt-6.2-sol"
+    },
+    {
+      "name": "NBSP only: blank to Kotlin, not emitted",
+      "input": {
+        "authType": "oauth",
+        "openaiApiKey": "\u00a0",
+        "openaiOAuthToken": "",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "oauth"
+      },
+      "display": "gpt-6.2-sol"
+    },
+    {
+      "name": "U+FEFF only: emitted, but config.js trims it to nothing",
+      "input": {
+        "authType": "oauth",
+        "openaiApiKey": "\ufeff",
+        "openaiOAuthToken": "",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "oauth",
+        "openaiApiKey": "\ufeff"
+      },
+      "display": "gpt-6.2-sol"
+    },
+    {
+      "name": "usable sign-in, no key: oauth, the read rule's default",
+      "input": {
+        "authType": "oauth",
+        "openaiApiKey": "",
+        "openaiOAuthToken": "oauth-PLACEHOLDER-TOKEN",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "oauth",
+        "openaiOAuthToken": "oauth-PLACEHOLDER-TOKEN"
+      },
+      "display": "gpt-6.2-sol"
+    },
+    {
+      "name": "no key, no sign-in: reconnect-required, the default",
+      "input": {
+        "authType": "oauth",
+        "openaiApiKey": "",
+        "openaiOAuthToken": "",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "oauth"
+      },
+      "display": "gpt-6.2-sol"
+    },
+    {
+      "name": "api_key selected with a key: the stored model",
+      "input": {
+        "authType": "api_key",
+        "openaiApiKey": "sk-proj-PLACEHOLDER",
+        "openaiOAuthToken": "",
+        "model": "gpt-5.4"
+      },
+      "emitted": {
+        "authType": "api_key",
+        "openaiApiKey": "sk-proj-PLACEHOLDER"
+      },
+      "display": "gpt-5.4"
+    }
+  ]
+}

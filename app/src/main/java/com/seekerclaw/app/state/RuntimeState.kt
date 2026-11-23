@@ -68,7 +68,7 @@ data class RuntimeState(
     // down, and it is the value a fresh install with empty prefs actually starts
     // on -- so if the two drift, the registry says one thing and new users get
     // another. Kept in step by ModelRegistryDefaultsTest.
-    val model: String = "claude-opus-5",
+    val model: String = "claude-opus-5-5",
     /**
      * BAT-549 Commit 3b: user-facing toggle for "Extended Thinking".
      * When `true` AND the active model's `reasoningSupport === "yes"`

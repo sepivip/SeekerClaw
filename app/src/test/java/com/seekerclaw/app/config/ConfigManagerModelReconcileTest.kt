@@ -305,4 +305,42 @@ class ConfigManagerModelReconcileTest {
             ),
         )
     }
+
+    // ---- BAT-1661 branch 0: the repair transaction's approved target ----
+
+    private val approved = ModelRepair.ApprovedTarget("openai", "oauth", "gpt-5.3-legacy")
+
+    @Test
+    fun `approved target keeps an unlisted model the repair chose`() {
+        // Inverse case: prefs on a retired id, overlay on a dropped-but-working one. Without the
+        // decision record the clamp would replace the user's working choice with the default.
+        val args = { a: ModelRepair.ApprovedTarget? ->
+            ConfigManager.resolveModelForReconcile(
+                providerChanged = false,
+                authChanged = false,
+                newModel = "gpt-5.3-legacy",
+                prefsModel = "gpt-5.4",
+                effectiveProvider = "openai",
+                effectiveAuth = "oauth",
+                approvedTarget = a,
+            )
+        }
+        assertEquals("gpt-5.3-legacy", args(approved))
+        assertEquals("control: no approval → the defensive clamp", "gpt-5.6-sol", args(null))
+    }
+
+    @Test
+    fun `approved target is ignored when the overlay or the scope differs`() {
+        fun r(newModel: String, provider: String, auth: String) = ConfigManager.resolveModelForReconcile(
+            providerChanged = false,
+            authChanged = false,
+            newModel = newModel,
+            prefsModel = "gpt-5.4",
+            effectiveProvider = provider,
+            effectiveAuth = auth,
+            approvedTarget = approved,
+        )
+        assertEquals("another overlay value is validated as before", "gpt-5.6-sol", r("gpt-other", "openai", "oauth"))
+        assertEquals("another auth", "gpt-5.6-sol", r("gpt-5.3-legacy", "openai", "api_key"))
+    }
 }

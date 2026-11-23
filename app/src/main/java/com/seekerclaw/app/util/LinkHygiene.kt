@@ -551,6 +551,13 @@ class LinkHygiene(
             "xai_oauth.json", "xai_oauth.lock", "xai_oauth.migrated",
             "openai_oauth.json", "openai_oauth.lock", "openai_oauth.migrated", // BAT-1157
             "skill_state.json", "skill_state.init", "skill_state.floor", "skill_state.lock",
+            // BAT-1661: the model-selection lock and the repair intent (written via .kwrite/;
+            // the .tmp name is listed so a planted link there is also refused).
+            "model_selection.lock", "model_repair_intent.json", "model_repair_intent.json.tmp",
+            // BAT-1661 v2.12 (Q16): the reconcile retry record (written via .kwrite/, same rule).
+            "model_reconcile_record.json", "model_reconcile_record.json.tmp",
+            // v2.12 fold 5′: the "restart to apply" notice (same rule).
+            "model_restart_notice.json", "model_restart_notice.json.tmp",
         )
 
         /** Directories Node core reads; walked first and completely in step 2. */

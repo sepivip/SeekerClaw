@@ -37,7 +37,7 @@ function write(p, content) {
  * @param {string} dir absolute fixture workDir
  * @param {object} opts
  * @param {'apikey'|'oauth'} opts.mode
- * @param {string} [opts.model='gpt-5.4']
+ * @param {string} [opts.model='gpt-6.1-sol']
  * @param {string} [opts.apiKey]        api_key mode — real key (live) or placeholder
  * @param {string} [opts.oauthToken]    oauth mode — real token (live) or placeholder
  * @param {string} [opts.oauthRefresh]  optional oauth refresh token
@@ -48,7 +48,7 @@ function seedFixture(dir, opts) {
         mode,
         provider = 'openai',
         authConfig = null,
-        model = 'gpt-5.4',
+        model = 'gpt-6.1-sol',
         apiKey,
         oauthToken,
         oauthRefresh,

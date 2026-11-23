@@ -50,7 +50,9 @@ eq('DEFAULTS.customConfigSignature = null', D.customConfigSignature, null);
 // Existing fields untouched
 eq('DEFAULTS.provider = claude (preserved)', D.provider, 'claude');
 eq('DEFAULTS.authType = api_key (preserved)', D.authType, 'api_key');
-eq('DEFAULTS.model = claude-opus-4-8 (preserved)', D.model, 'claude-opus-4-8');
+// The default model tracks the registry (BAT-1661 v2.11); model-list-v2-11 pins the exact id.
+eq('DEFAULTS.model = the registry claude default', D.model,
+    require('../../app/src/main/assets/nodejs-project/model-catalog').defaultModelForProvider('claude'));
 
 console.log();
 console.log('── Old-shape file loads cleanly (3-field upgrade compat) ──');

@@ -5,8 +5,10 @@ package com.seekerclaw.app.config
  * SELECTED auth, whether a usable sign-in pair exists, and whether an API key is saved.
  *
  * The selection is never rewritten (prefs and runtime_state keep `oauth` after a sign-out or an
- * unreadable record). Node computes the same table in `config.js` from config.json — the
- * `OpenAIAuthParityTest` pins the two to the same rows:
+ * unreadable record). Node computes the same table in `config.js` from config.json (runtime_state's
+ * selection first) — `ModelDispatchParityTest` and `model-dispatch-parity.test.js` pin the two to
+ * the same rows, from one shared table (`tests/nodejs-project/fixtures/model-dispatch-parity.json`).
+ * BAT-1661 uses it as the repair's transport scope (`ModelRepair.transportOf`):
  *
  * | selected | usable sign-in | API key | result     |
  * |----------|----------------|---------|------------|

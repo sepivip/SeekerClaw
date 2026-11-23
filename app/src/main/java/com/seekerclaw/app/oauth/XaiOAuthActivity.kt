@@ -223,7 +223,14 @@ class XaiOAuthActivity : ComponentActivity() {
                             // H5: keep runtime_state.json's xai authType in step with the fresh
                             // sign-in so Node (which reads runtime_state FIRST) can't boot the
                             // (xai, api_key) pair over a valid oauth token.
-                            ConfigManager.syncXaiRuntimeAuthType(appCtx)
+                            // BAT-1661 (CodeRabbit on 444ba220): only a sync that put runtime_state in
+                            // step may be followed by the restart. A restarted boot that still finds
+                            // the old api_key mode there keeps it (D7.3 boot selection), so the agent
+                            // would start on xAI with no key. Not synced: no restart, and the user is
+                            // told to sign out and sign in again, which re-runs the sync (a restart
+                            // alone would not).
+                            val sync = ConfigManager.syncXaiRuntimeAuthType(appCtx)
+                            val synced = sync == ConfigManager.XaiAuthSync.SYNCED
                             // Locked decision 5: recovery is restart-only. Restart :node so it
                             // re-reads config.json and clears any in-memory _refreshDead /
                             // reauthRequired from a prior dead family. D2 makes this restart
@@ -234,15 +241,42 @@ class XaiOAuthActivity : ComponentActivity() {
                             // Kept INSIDE the NonCancellable block (CodeRabbit) so a cancellation
                             // can't leave the store written but :node not restarted (recovery
                             // half-done → stale in-memory dead flag persists until the next boot).
+                            val restartNeeded = ConfigManager.isSetupComplete(appCtx) && !synced
                             if (ConfigManager.isSetupComplete(appCtx)) {
-                                try {
-                                    SeekerClawService.restart(appCtx)
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Could not restart :node after xAI sign-in", e)
+                                if (synced) {
+                                    try {
+                                        SeekerClawService.restart(appCtx)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Could not restart :node after xAI sign-in", e)
+                                    }
+                                } else {
+                                    com.seekerclaw.app.util.LogCollector.append(
+                                        when (sync) {
+                                            ConfigManager.XaiAuthSync.BUSY ->
+                                                "[Config] xAI sign-in saved, agent not restarted: settings busy — sign out, then sign in with Grok again to finish"
+                                            // v2.12 review m3: an unfinished model selection change (or an unreadable retry record, often storage).
+                                            ConfigManager.XaiAuthSync.HELD ->
+                                                "[Config] xAI sign-in saved, agent not restarted: a model selection change is not finished yet (or its retry record cannot be read) — force stop the app (Settings > Apps > SeekerClaw) or restart the phone, then sign out and sign in with Grok again; if this repeats after reopening, check Logs for the reconcile warning (often storage) first"
+                                            else ->
+                                                "[Config] xAI sign-in saved, agent not restarted: runtime_state.json not saved — free storage, then sign out and sign in with Grok again"
+                                        },
+                                        com.seekerclaw.app.util.LogLevel.WARN,
+                                    )
                                 }
                             }
                             writeResultFileStatic(appCtx, requestId, JSONObject().apply {
                                 put("status", "success")
+                                // "busy" or "not_saved": the UI says which (XaiOAuth.kt).
+                                if (restartNeeded) {
+                                    put(
+                                        "restartNeeded",
+                                        when (sync) {
+                                            ConfigManager.XaiAuthSync.BUSY -> "busy"
+                                            ConfigManager.XaiAuthSync.HELD -> "held"
+                                            else -> "not_saved"
+                                        },
+                                    )
+                                }
                             })
                         }
                     }

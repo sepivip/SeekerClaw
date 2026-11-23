@@ -27,7 +27,7 @@ import org.json.JSONObject
  *
  * `SeekerClawService` declares `android:process=":node"`, so the app runs in TWO
  * processes. A Kotlin `object` memo is per-process, so a single eager init would
- * populate one and leave the other empty — `ConfigManager.writeConfigJson` (which
+ * populate one and leave the other empty — `ConfigManager.emitConfigJson` (which
  * feeds the Node session banner) runs in `:node`, while the UI reads run in the main
  * process. Taking a `Context` per call sidesteps process-locality entirely, and both
  * Composable call sites already hold `LocalContext.current`.

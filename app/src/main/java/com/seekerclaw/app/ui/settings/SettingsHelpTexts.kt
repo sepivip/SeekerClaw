@@ -6,13 +6,20 @@ package com.seekerclaw.app.ui.settings
  * Mirror changes in /docs/internal/SETTINGS_INFO.md for review tracking.
  */
 object SettingsHelpTexts {
+    /**
+     * BAT-1661: the toast for a Settings save that did not happen. It names no cause: the save
+     * can be refused with nothing written (the model-selection lock was busy) or fail on storage.
+     */
+    const val SAVE_FAILED_TOAST =
+        "Couldn't save changes. Try again in a moment — if it keeps failing, check free storage."
+
 
     // ── Configuration ──────────────────────────────────────────────
 
     const val PROVIDER =
         "Which AI provider powers your agent.\n\n" +
         "\u2022 Anthropic — Claude models (default). Supports API keys & setup tokens.\n" +
-        "\u2022 OpenAI — GPT & Codex models. API key only.\n\n" +
+        "\u2022 OpenAI — GPT models. API key or ChatGPT sign-in.\n\n" +
         "Both keys are saved — switch freely without losing credentials."
 
     const val OPENAI_API_KEY =
@@ -53,8 +60,8 @@ object SettingsHelpTexts {
 
     const val MODEL =
         "Your agent's brain. Models depend on your provider.\n\n" +
-        "Anthropic examples: Fable 5 (frontier), Opus 4.8 (powerful), Sonnet 4.6 (balanced), Haiku 4.5 (fast).\n" +
-        "OpenAI examples: GPT-5.5 (frontier), GPT-5.4 (flagship), GPT-5.3 Codex (code agent).\n\n" +
+        "Anthropic examples: Fable 5.1 (frontier), Opus 5.5 (powerful), Sonnet 5.5 (balanced), Haiku 5.5 (fast).\n" +
+        "OpenAI examples: GPT-6.2 Astra (frontier), GPT-6.2 Sol (balanced), GPT-6 Luna (fast).\n\n" +
         "Exact options may change over time \u2014 pick your fighter \uD83E\uDDE0"
 
     const val AGENT_NAME =
