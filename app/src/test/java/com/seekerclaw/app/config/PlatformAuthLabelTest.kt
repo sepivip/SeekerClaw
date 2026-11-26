@@ -58,6 +58,17 @@ class PlatformAuthLabelTest {
         assertEquals(ConfigManager.PLATFORM_AUTH_RECONNECT, label(cfg("openai", "oauth")))
     }
 
+    @Test fun `openai values Node normalizes to empty are not usable`() {
+        // U+FEFF is not blank to Kotlin but is trimmed by JS (config.js normalizeSecret), so Node
+        // has no token / no key here. The label must follow Node (nodeUsesSecret), not isNotBlank.
+        val bom = "\uFEFF"
+        assertEquals(ConfigManager.PLATFORM_AUTH_RECONNECT, label(cfg("openai", "oauth", openaiToken = bom)))
+        assertEquals(ConfigManager.PLATFORM_AUTH_FALLBACK, label(cfg("openai", "oauth", openaiKey = "sk-x", openaiToken = bom)))
+        assertEquals(ConfigManager.PLATFORM_AUTH_RECONNECT, label(cfg("openai", "oauth", openaiKey = bom)))
+        // Ordinary values keep their labels.
+        assertEquals("OAuth", label(cfg("openai", "oauth", openaiKey = bom, openaiToken = "tok")))
+    }
+
     @Test fun `openai api_key selection stays API key, even with a stale token`() {
         assertEquals("API key", label(cfg("openai", "api_key", openaiKey = "sk-x")))
         assertEquals("API key", label(cfg("openai", "api_key", openaiKey = "sk-x", openaiToken = "tok")))

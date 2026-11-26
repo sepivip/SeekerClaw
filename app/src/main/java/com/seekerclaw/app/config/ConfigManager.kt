@@ -3793,8 +3793,10 @@ object ConfigManager {
             "openai" -> when (
                 OpenAIAuth.effective(
                     selectedAuth = selected,
-                    hasUsableToken = config.openaiOAuthToken.isNotBlank(),
-                    hasApiKey = config.openaiApiKey.isNotBlank(),
+                    // The display predicate (save, emit and display agree): a value Node's
+                    // normalizeSecret empties is not usable, so it is not "signed in".
+                    hasUsableToken = nodeUsesSecret(config.openaiOAuthToken),
+                    hasApiKey = nodeUsesSecret(config.openaiApiKey),
                 )
             ) {
                 OpenAIAuth.Effective.OAUTH -> "OAuth"
