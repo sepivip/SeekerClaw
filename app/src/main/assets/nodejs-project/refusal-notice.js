@@ -14,6 +14,7 @@
 //   never replaces the prior-tool disclosure.
 
 const { stripSilentReply } = require('./silent-reply');
+const { cleanResponse } = require('./response-clean');
 
 const NOTICE_DECLINED = "I couldn't answer that: the model declined this request. Try rephrasing it or splitting it into smaller steps, switch models with /model, or start fresh with /new.";
 const NOTICE_FILTERED = "My reply was blocked by the provider's content filter. Try rephrasing it, switch models with /model, or start fresh with /new.";
@@ -36,14 +37,37 @@ function categoryForLog(category) {
 }
 
 /**
- * A model's own refusal message, made safe to show: SILENT_REPLY / protocol tokens
- * stripped, trimmed, capped at `max` characters. null when nothing is left.
+ * What survives the delivery path's cleanup: the protocol-token stripping in
+ * message-handler.js `deliverAgentText` (SILENT_REPLY, HEARTBEAT_OK, a
+ * `[[reply_to_current]]` tag) plus the channel's `cleanResponse` (reasoning tags,
+ * where an unclosed `<think>` strips to the end; `[Historical context:]` markers;
+ * repeated lines). Codex 2b68f44a #3: model text or a job label could otherwise
+ * make that cleanup erase the notice, and the turn would end silent.
+ */
+function deliveryVisible(text) {
+    if (typeof text !== 'string') return '';
+    let s = stripSilentReply(
+        text.trim()
+            .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
+    );
+    if (typeof s !== 'string') return '';
+    s = s.replace(/\[\[reply_to_current\]\]/g, '');
+    return cleanResponse(s) || '';
+}
+
+/** True when the delivery cleanup leaves `text` exactly as composed. */
+function survivesDelivery(text) {
+    return typeof text === 'string' && text.trim() !== '' && deliveryVisible(text) === text.trim();
+}
+
+/**
+ * A model's own refusal message, made safe to show: cleaned exactly as the delivery
+ * path will clean it, trimmed, capped at `max` characters. null when nothing visible
+ * is left, so the caller falls back to the fixed wording.
  */
 function sanitizeModelMessage(msg, max = MODEL_MESSAGE_MAX_CHARS) {
     if (typeof msg !== 'string') return null;
-    let s = stripSilentReply(msg);
-    if (typeof s !== 'string') return null;
-    s = s.trim();
+    let s = deliveryVisible(msg);
     if (!s) return null;
     if (s.length > max) s = s.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
     return s;
@@ -77,13 +101,22 @@ function noticeParts(refusal, dispatchedTools, redact = s => s) {
  */
 function buildRefusalNotice(refusal, dispatchedTools = 0, { redact = s => s } = {}) {
     const p = noticeParts(refusal, dispatchedTools, redact);
-    return p.join(p.fixed, p.optional);
+    const full = p.join(p.fixed, p.optional);
+    // The composed notice must reach the user as composed; if the model's text
+    // interacts with the cleanup (e.g. repeats a fixed line), drop it.
+    if (p.optional && !survivesDelivery(full)) return p.join(p.fixed, null);
+    return full;
 }
 
-/** A job name made safe for a one-line label: no control characters, collapsed whitespace. */
+/**
+ * A job name made safe for a one-line label: no control characters, collapsed
+ * whitespace, and no text the delivery cleanup would strip (a `<think>` in the label
+ * would otherwise erase the fixed notice that follows it).
+ */
 function _cleanLabel(name) {
     if (typeof name !== 'string') return '';
-    return name.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const oneLine = name.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return deliveryVisible(oneLine).replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -96,7 +129,9 @@ function _cleanLabel(name) {
  * model's message are bounded or dropped to fit.
  */
 function buildCronRefusalNotice({ jobName, refusal, dispatchedTools = 0 }, { redact = s => s, limit = CRON_NOTICE_MAX_CHARS } = {}) {
-    const fits = s => redact(s).length <= limit;
+    // A candidate is sendable when, redacted, it fits one request AND survives the
+    // delivery cleanup unchanged (Codex 2b68f44a #3).
+    const fits = s => { const r = redact(s); return r.length <= limit && survivesDelivery(r); };
     const p = noticeParts(refusal, dispatchedTools, redact);
     const fixed = redact(p.fixed);
 
@@ -131,6 +166,8 @@ module.exports = {
     MODEL_MESSAGE_MAX_CHARS,
     CRON_NOTICE_MAX_CHARS,
     categoryForLog,
+    deliveryVisible,
+    survivesDelivery,
     sanitizeModelMessage,
     buildRefusalNotice,
     buildCronRefusalNotice,

@@ -135,6 +135,29 @@ async function main() {
         ok('control characters never reach the label', c.startsWith('[a b c]\n\n'), c.slice(0, 20));
     }
 
+    // Codex 2b68f44a #3: a label or model text the delivery cleanup would strip must
+    // never erase the fixed notice. Real cron.js → real telegram.js plain path.
+    {
+        const cases = [
+            ['an unclosed <think> label and model text', '<think>Nightly', '<think>plan'],
+            // Neither part alone trips the cleanup; together the label's `<thinking`
+            // and the message's `>` form a tag that strips to the end.
+            ['a label and message that only combine into a tag', 'a <thinking', 'b > c'],
+            ['a [[reply_to_current]] model message', 'Daily', '[[reply_to_current]]'],
+        ];
+        for (const [label, name, msg] of cases) {
+            const j = job(`clean-${name.length}-${msg.length}`, { name });
+            REQUESTS.length = 0; tgMode = 'ok';
+            SCRIPT = [refused(REFUSAL({ modelMessage: msg }))];
+            await run(j);
+            eq(`${label}: exactly one request`, REQUESTS.length, 1);
+            const sent = REQUESTS[0] ? REQUESTS[0].payload.text : '';
+            ok(`${label}: the fixed notice arrives`, sent.includes(notice.NOTICE_DECLINED), JSON.stringify(sent.slice(0, 160)));
+        }
+        const kept = notice.buildCronRefusalNotice({ jobName: 'Nightly <think>x</think> run', refusal: REFUSAL() });
+        ok('a label keeps its visible words once the stripped text is removed', kept.startsWith('[Nightly run]\n\n'), JSON.stringify(kept.slice(0, 40)));
+    }
+
     // ── 2. streak: suppress, reset after a successful non-refused run, notify again
     console.log('── streak lifecycle ──');
     {

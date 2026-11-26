@@ -59,6 +59,7 @@ const BUNDLE = path.join(REPO_ROOT, 'app', 'src', 'main', 'assets', 'nodejs-proj
 const LOAD_TARGETS = [
     'silent-reply.js',
     'refusal-notice.js',
+    'response-clean.js',
     // BAT-1186: pure anchor-preserving history-trim primitives — no deps, no IO.
     'history-trim.js',
     'turn-goal.js',

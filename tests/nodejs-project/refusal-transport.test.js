@@ -74,6 +74,18 @@ const dat = (data) => `data: ${typeof data === 'string' ? data : JSON.stringify(
 const logMark = () => LOGS.length;
 const logsSince = (m, re) => LOGS.slice(m).filter(l => re.test(l.msg));
 
+/** Every refusal part in a Responses result, across all output items, in order. */
+function refusalParts(data) {
+    const inner = (data && data.response) || data || {};
+    const parts = [];
+    for (const it of (inner.output || [])) {
+        if (it && it.type === 'message' && Array.isArray(it.content)) {
+            for (const p of it.content) if (p && p.type === 'refusal') parts.push(p);
+        }
+    }
+    return parts;
+}
+
 function assertRefused(label, p, kind, extra = {}) {
     ok(`${label}: refusal kind ${kind}`, p.refusal && p.refusal.kind === kind, JSON.stringify(p.refusal));
     ok(`${label}: no text`, p.text === null);
@@ -143,8 +155,10 @@ async function main() {
         eq('the cut-off arguments are never parsed', logsSince(m, /Failed to parse tool arguments/).length, 0);
     }
     {
-        const r = await stream(H.httpChatCompletionsStreamingRequest, chunk({ role: 'assistant', refusal: 'No.' }));
-        ok('a refusal-only stream with no [DONE] resolves (explicit evidence)', r.status === 200);
+        let r;
+        try { r = await stream(H.httpChatCompletionsStreamingRequest, chunk({ role: 'assistant', refusal: 'No.' })); }
+        catch (e) { r = { status: `rejected: ${e.message}`, data: { choices: [{ message: {} }] } }; }
+        ok('a refusal-only stream with no [DONE] resolves (explicit evidence)', r.status === 200, String(r.status));
         assertRefused('refusal without [DONE]', openrouter.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'No.' });
     }
     {
@@ -170,7 +184,7 @@ async function main() {
             + ev('response.refusal.delta', { type: 'response.refusal.delta', item_id: 'msg_a', content_index: 0, delta: ' (late)' })
             + ev('response.completed', { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [], usage: { input_tokens: 3 } } }));
         assertRefused('refusal parts via the accumulator fallback', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: "I can't help with that." });
-        eq('done replaces the deltas; later deltas ignored', r.data.output[1].content, [{ type: 'refusal', refusal: "I can't help with that." }]);
+        eq('done replaces the deltas; later deltas ignored', refusalParts(r.data), [{ type: 'refusal', refusal: "I can't help with that." }]);
         eq('no reasoning-summary fallback, no empty WARN', logsSince(m, /Empty visible response|Falling back to reasoning summary/).length, 0);
     }
     {
@@ -189,9 +203,13 @@ async function main() {
             + added(2, { type: 'function_call', id: 'fc_1', call_id: 'call_9', name: 'shell_exec', arguments: '' })
             + ev('response.function_call_arguments.delta', { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"command":"cu' })
             + ev('response.incomplete', { type: 'response.incomplete', response: { id: 'resp_3', status: 'incomplete', incomplete_details: { reason: 'content_filter' }, output: [] } }));
-        eq('incomplete + content_filter survive the accumulator path', [r.data.status, r.data.incomplete_details], ['incomplete', { reason: 'content_filter' }]);
+        const inner = r.data.response || r.data;
+        eq('incomplete + content_filter: the terminal payload is used as-is', [inner.status, inner.incomplete_details], ['incomplete', { reason: 'content_filter' }]);
+        // Codex 2b68f44a #1: an incomplete stream is never rebuilt from accumulated
+        // items, so the counts describe the terminal payload (empty here), not the
+        // half-streamed text and call.
         assertRefused('content_filter with text + reasoning + cut-off call', openai.fromApiResponse(r.data), 'provider_content_filter',
-            { modelMessage: null, partialChars: 'Sure, first'.length, droppedToolCalls: 1 });
+            { modelMessage: null, partialChars: 0, droppedToolCalls: 0 });
         eq('cut-off arguments never parsed; no fallback; no empty WARN', logsSince(m, /Failed to parse tool arguments|Empty visible response|Falling back to reasoning summary/).length, 0);
     }
     {
@@ -216,6 +234,117 @@ async function main() {
         ok('max_output_tokens is unchanged (max_tokens, not a refusal)', mx.refusal === null && mx.stopReason === 'max_tokens');
         const failed = openai.fromApiResponse({ status: 'failed', error: { code: 'bio_policy' }, output: [] });
         ok('status failed is not classified as a refusal (out of scope)', failed.refusal === null);
+    }
+
+    // ── Codex 2b68f44a #1: a non-refusal incomplete never promotes partial tools ──
+    // Reducer → adapter boundary, real SSE bytes.
+    const textDelta = (id, d) => ev('response.output_text.delta', { type: 'response.output_text.delta', item_id: id, content_index: 0, delta: d });
+    const cutCall = (oi, fcId) => added(oi, { type: 'function_call', id: fcId, call_id: `call_${fcId}`, name: 'shell_exec', arguments: '' })
+        + ev('response.function_call_arguments.delta', { type: 'response.function_call_arguments.delta', item_id: fcId, delta: '{"command":"rm -' });
+    const incomplete = (reason, output = []) => ev('response.incomplete', { type: 'response.incomplete', response: { id: 'resp_i', status: 'incomplete', incomplete_details: { reason }, output } });
+    {
+        const m = logMark();
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_m', role: 'assistant', content: [] })
+            + textDelta('msg_m', 'Running it now')
+            + cutCall(1, 'fc_m')
+            + incomplete('max_output_tokens'));
+        const p = openai.fromApiResponse(r.data);
+        eq('max_output_tokens + cut-off call: no tool calls reach the adapter result', p.toolCalls, []);
+        ok('max_output_tokens + cut-off call: stopReason max_tokens, not tool_use', p.stopReason === 'max_tokens', p.stopReason);
+        ok('max_output_tokens + cut-off call: not a refusal', p.refusal === null);
+        eq('max_output_tokens: the cut-off arguments are never parsed', logsSince(m, /Failed to parse tool arguments/).length, 0);
+    }
+
+    // ── Codex 2b68f44a #2: observed refusal evidence survives assembly ──────────
+    {
+        // Sparse terminal: the completed payload carries only a reasoning item, so the
+        // accumulator is not used; the refusal seen on the stream must still win, and
+        // the accumulated cut-off call must not get through.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, reasoningItem)
+            + added(1, { type: 'message', id: 'msg_s', role: 'assistant', content: [] })
+            + ev('response.refusal.done', { type: 'response.refusal.done', item_id: 'msg_s', content_index: 0, refusal: 'Sparse refusal.' })
+            + cutCall(2, 'fc_s')
+            + ev('response.completed', { type: 'response.completed', response: { id: 'resp_s', status: 'completed', output: [reasoningItem] } }));
+        assertRefused('sparse terminal payload', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'Sparse refusal.' });
+    }
+    {
+        // Missing skeleton: the refusal names an output_index no output_item.added
+        // announced, while other accumulated items (text, a cut-off call) exist.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_k', role: 'assistant', content: [] })
+            + textDelta('msg_k', 'partial')
+            + cutCall(1, 'fc_k')
+            + ev('response.refusal.delta', { type: 'response.refusal.delta', output_index: 5, content_index: 0, delta: 'No skeleton.' })
+            + ev('response.completed', { type: 'response.completed', response: { id: 'resp_k', status: 'completed', output: [] } }));
+        assertRefused('refusal with no message skeleton', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'No skeleton.' });
+    }
+    {
+        // Unresolvable index: item_id never announced and no output_index.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_u', role: 'assistant', content: [] })
+            + ev('response.refusal.delta', { type: 'response.refusal.delta', item_id: 'msg_unknown', content_index: 0, delta: 'Unresolved.' })
+            + ev('response.completed', { type: 'response.completed', response: { id: 'resp_u', status: 'completed', output: [] } }));
+        assertRefused('refusal with an unresolvable index', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'Unresolved.' });
+    }
+    {
+        // A non-filter incomplete with refusal evidence: the refusal wins over the
+        // partial call, which is never promoted.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_q', role: 'assistant', content: [] })
+            + ev('response.refusal.delta', { type: 'response.refusal.delta', item_id: 'msg_q', content_index: 0, delta: 'Truncated refusal.' })
+            + cutCall(1, 'fc_q')
+            + incomplete('max_output_tokens'));
+        assertRefused('max_output_tokens with refusal evidence', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'Truncated refusal.' });
+    }
+    {
+        // Terminal filter priority is kept when refusal evidence was also streamed.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_f', role: 'assistant', content: [] })
+            + ev('response.refusal.delta', { type: 'response.refusal.delta', item_id: 'msg_f', content_index: 0, delta: 'model text' })
+            + incomplete('content_filter'));
+        assertRefused('content_filter beats streamed refusal evidence', openai.fromApiResponse(r.data), 'provider_content_filter', { modelMessage: null });
+    }
+    {
+        // No terminal event and no skeleton at all: explicit refusal evidence still
+        // resolves as a refusal instead of a transport error.
+        let r;
+        try {
+            r = await stream(H.httpOpenAIStreamingRequest,
+                ev('response.refusal.delta', { type: 'response.refusal.delta', output_index: 0, content_index: 0, delta: 'Bare refusal.' }));
+        } catch (e) { r = { status: `rejected: ${e.message}`, data: {} }; }
+        ok('no terminal, no skeleton: explicit refusal resolves', r.status === 200, String(r.status));
+        assertRefused('refusal with no terminal and no skeleton', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'Bare refusal.' });
+    }
+    {
+        // The server payload already carries the refusal part: it is authoritative and
+        // the streamed evidence is not added a second time.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_d2', role: 'assistant', content: [] })
+            + ev('response.refusal.done', { type: 'response.refusal.done', item_id: 'msg_d2', content_index: 0, refusal: 'Once.' })
+            + ev('response.completed', { type: 'response.completed', response: { id: 'resp_d2', status: 'completed', output: [
+                { type: 'message', id: 'msg_d2', role: 'assistant', content: [{ type: 'refusal', refusal: 'Once.' }] }] } }));
+        eq('a server refusal part is not duplicated by streamed evidence', refusalParts(r.data).length, 1);
+        assertRefused('server refusal part plus streamed evidence', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'Once.' });
+    }
+    {
+        // An unwrapped terminal payload (no `response` envelope) gets the evidence too.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_w', role: 'assistant', content: [] })
+            + ev('response.refusal.delta', { type: 'response.refusal.delta', item_id: 'msg_w', content_index: 0, delta: 'Unwrapped.' })
+            + cutCall(1, 'fc_w')
+            + ev('response.incomplete', { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] }));
+        assertRefused('unwrapped incomplete payload with refusal evidence', openai.fromApiResponse(r.data), 'model_refusal', { modelMessage: 'Unwrapped.' });
+    }
+    {
+        // A normal completed stream with no refusal evidence is untouched.
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_n', role: 'assistant', content: [] })
+            + textDelta('msg_n', 'All good.')
+            + ev('response.completed', { type: 'response.completed', response: { id: 'resp_n', status: 'completed', output: [] } }));
+        const p = openai.fromApiResponse(r.data);
+        ok('no refusal evidence: the accumulator path is unchanged', p.refusal === null && p.text === 'All good.' && refusalParts(r.data).length === 0);
     }
 
     // ── xAI and Custom inherit ──────────────────────────────────────────────
