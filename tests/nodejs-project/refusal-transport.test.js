@@ -128,6 +128,26 @@ async function main() {
         assertRefused('mid-stream refusal after text + cut-off tool_use', claude.fromApiResponse(r.data), 'model_refusal',
             { category: 'cyber', partialChars: 'Here is how to'.length, droppedToolCalls: 1 });
     }
+    // Real wire bytes: captured (sanitized) by tests/live/anthropic/refusal.probe.js on
+    // 2026-11-26, claude-opus-5, BAT-1664 repro, one capture per auth path. Both paths
+    // refused before any output with category "reasoning_extraction" and an
+    // `explanation` (the API-key one is addressed to API integrators). The explanation
+    // must never become the user-facing model message. CRLF is normalised because a
+    // Windows checkout with core.autocrlf rewrites the fixture's LF wire bytes, and
+    // the local server's half-body split could otherwise land inside a CRLF pair.
+    for (const mode of ['apikey', 'setup_token']) {
+        const file = path.join(__dirname, 'fixtures', `claude-refusal-live-${mode}.sse`);
+        const bytes = require('fs').readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+        const r = await stream(H.httpStreamingRequest, bytes);
+        ok(`live ${mode}: stream settles 200`, r.status === 200, `status ${r.status}`);
+        ok(`live ${mode}: stop_details.explanation present on the wire`,
+            !!(r.data.stop_details && typeof r.data.stop_details.explanation === 'string'));
+        const p = claude.fromApiResponse(r.data);
+        assertRefused(`live ${mode} refusal`, p, 'model_refusal',
+            { category: 'reasoning_extraction', partialChars: 0, droppedToolCalls: 0, modelMessage: null });
+        ok(`live ${mode}: explanation not exposed anywhere in the parsed result`,
+            !JSON.stringify(p).includes('Terms of Service'));
+    }
     {
         const p = claude.fromApiResponse({ content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn', usage: {} });
         ok('Claude end_turn is not a refusal', p.refusal === null && p.text === 'hi');
