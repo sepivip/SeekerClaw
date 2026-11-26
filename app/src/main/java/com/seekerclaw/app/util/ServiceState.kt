@@ -1,8 +1,12 @@
 package com.seekerclaw.app.util
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.FileObserver
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import com.seekerclaw.app.bridge.UiForeground
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -54,8 +58,206 @@ sealed class ApiUsageData {
 }
 
 object ServiceState {
+    /**
+     * The status shown to the UI. In `:node` it is the raw status. In MAIN (BAT-1724) it is
+     * [effectiveStatus] of the raw status: a RUNNING / STARTING whose `:node` writer is gone shows
+     * STOPPED. It is never written to `service_state` — [writeToFile] writes [raw] only.
+     */
     private val _status = MutableStateFlow(ServiceStatus.STOPPED)
     val status: StateFlow<ServiceStatus> = _status
+
+    /**
+     * BAT-1724: what `service_state` says — the status and the pid of the `:node` process that set
+     * it (null for a file from an older build). One coherent snapshot: the pid changes only with an
+     * explicit `:node` status change ([updateStatus]), never with a counter or timestamp write, so a
+     * new `:node` cannot relabel an old RUNNING as its own before it writes STARTING.
+     */
+    private data class RawStatus(val status: ServiceStatus, val ownerPid: Int?)
+
+    @Volatile private var raw = RawStatus(ServiceStatus.STOPPED, null)
+    private val rawGen = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * Guards [raw], [rawGen] and the publication of [status] together (Codex e0db6a17 #2): a
+     * recompute validates its generation and publishes in one critical section, so no raw
+     * replacement can land between the check and the write. Never held across a binder call or
+     * file I/O.
+     */
+    private val rawLock = Any()
+
+    /**
+     * Serialises every transition between [raw] and `service_state` (Codex e0db6a17 #2): a file
+     * read and its commit, and a status change with its write. Two overlapping reads therefore
+     * commit in the order they read, so an older read can never land after a newer snapshot. Held
+     * across file I/O only — never across the liveness probe or the publication.
+     * Lock order: initLock → fileLock → rawLock.
+     */
+    private val fileLock = Any()
+
+    /** Replaces [raw] (bumping its generation when it changes). Returns true when it changed. */
+    private fun setRaw(next: RawStatus): Boolean = synchronized(rawLock) {
+        if (raw == next) return false
+        raw = next
+        rawGen.incrementAndGet()
+        true
+    }
+
+    // ── BAT-1724 liveness seams (MAIN only) ─────────────────────────────
+    /** Asks the OS whether `:node` is alive. Replaced in tests; restored by [resetForTest]. */
+    @Volatile internal var nodeLivenessProbe: () -> NodeLiveness = { defaultLivenessProbe() }
+
+    /** Monotonic milliseconds for the probe cache (never wall time). */
+    @Volatile internal var elapsedClock: () -> Long = { SystemClock.elapsedRealtime() }
+
+    /** True on the main looper: the probe (a binder call) never runs there. */
+    @Volatile internal var isMainThread: () -> Boolean = {
+        Looper.getMainLooper()?.let { it == Looper.myLooper() } ?: false
+    }
+
+    /** This process's pid, stamped by an explicit `:node` status change. */
+    @Volatile internal var myPid: () -> Int = { android.os.Process.myPid() }
+
+    /** How long one probe answer is reused for the same raw owner. */
+    internal const val LIVENESS_CACHE_MS = 1_000L
+
+    private data class ProbeCache(val ownerPid: Int?, val atMs: Long, val seq: Long, val result: NodeLiveness)
+
+    @Volatile private var probeCache: ProbeCache? = null
+    private val probeSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * Serialises fresh probes (Codex e0db6a17 #3). The sequence is taken in the same critical
+     * section as the OS sample, so sequence order IS sampling order. Independent of every other
+     * lock; only off-main recomputes ever wait on it.
+     */
+    private val probeLock = Any()
+    @Volatile private var appContext: Context? = null
+
+    // Race hooks for tests; all null in production.
+    /** Runs just before a recompute takes [rawLock] to publish. */
+    @Volatile internal var beforePublishForTest: (() -> Unit)? = null
+
+    /** Runs under [rawLock], after the generation check and before the write. */
+    @Volatile internal var afterPublishCheckForTest: (() -> Unit)? = null
+
+    /** Runs under [fileLock], after `service_state` was read and before it is committed. */
+    @Volatile internal var afterFileReadForTest: (() -> Unit)? = null
+
+    /** Runs after the first restore released initLock and before it publishes. */
+    @Volatile internal var afterRestoreForTest: (() -> Unit)? = null
+
+    /**
+     * A liveness answer and its observation sequence: when the OS was actually asked (a cache hit
+     * carries the sequence of the probe that filled the cache). 0 = no observation (raw shown).
+     */
+    private data class Observation(val result: NodeLiveness, val seq: Long)
+
+    // Publication order (CodeRabbit on 18de5316 / 3f3dc8d5): within one raw generation, a result
+    // is published only if its observation is at least as new as the last published one — so an
+    // older observation, fresh or cached, never replaces a newer one, whichever recompute started
+    // first. A new raw generation always publishes (its first value may be the raw status).
+    private var lastPublishedGen = -1L // guarded by rawLock
+    private var lastPublishedObs = 0L // guarded by rawLock
+
+    private fun defaultLivenessProbe(): NodeLiveness {
+        val ctx = appContext ?: return NodeLiveness.Unknown
+        return try {
+            val am = ctx.getSystemService(ActivityManager::class.java) ?: return NodeLiveness.Unknown
+            NodeLiveness.of(
+                am.runningAppProcesses?.map { UiForeground.Proc(it.processName, it.importance, it.pid) },
+                ctx.packageName,
+            )
+        } catch (_: Exception) {
+            NodeLiveness.Unknown // a SecurityException or a binder failure proves nothing
+        }
+    }
+
+    /**
+     * The liveness answer for [ownerPid], from the cache when it is younger than [LIVENESS_CACHE_MS]
+     * and was taken for the same owner; otherwise a fresh probe. A clock that went backwards
+     * invalidates the cache. Every answer — fresh or cached — carries its observation sequence,
+     * and [recomputeStatus] orders publication by it, so a stale answer is never shown over a
+     * newer one (CodeRabbit on 18de5316 / 3f3dc8d5).
+     *
+     * Fresh probes run one at a time under [probeLock], taking their sequence in the same critical
+     * section as the OS sample, so a higher sequence always means a later sample and the cache
+     * always holds the newest one (Codex e0db6a17 #3). A recompute that waited for the lock
+     * re-checks the cache and reuses the answer just taken, instead of probing again.
+     */
+    private fun liveness(ownerPid: Int?): Observation {
+        cachedLiveness(ownerPid, elapsedClock())?.let { return it }
+        synchronized(probeLock) {
+            val now = elapsedClock()
+            cachedLiveness(ownerPid, now)?.let { return it }
+            val seq = probeSeq.incrementAndGet()
+            val result = try { nodeLivenessProbe() } catch (_: Exception) { NodeLiveness.Unknown }
+            probeCache = ProbeCache(ownerPid, now, seq, result)
+            return Observation(result, seq)
+        }
+    }
+
+    private fun cachedLiveness(ownerPid: Int?, now: Long): Observation? {
+        val c = probeCache ?: return null
+        val age = now - c.atMs
+        return if (c.ownerPid == ownerPid && age in 0 until LIVENESS_CACHE_MS) Observation(c.result, c.seq) else null
+    }
+
+    /**
+     * BAT-1724: republishes [status] from the current [raw] snapshot. `:node` shows the raw status.
+     * MAIN probes only for a raw RUNNING / STARTING, never on the main thread (there it shows the
+     * raw value and schedules an off-main recompute). It publishes only for the current raw
+     * snapshot (generation check) and only if its liveness observation is at least as new as the
+     * last one published for that snapshot — so neither a slow probe nor a stale cache hit can
+     * overwrite fresher state, whichever recompute started first. The generation and its snapshot
+     * are captured together, and validated and published together, under [rawLock], which also
+     * guards every raw replacement (Codex e0db6a17 #2). No lock but [probeLock] is held across
+     * the probe.
+     */
+    private fun recomputeStatus(scheduled: Boolean = false) {
+        val (gen, snap) = synchronized(rawLock) { rawGen.get() to raw }
+        val active = snap.status == ServiceStatus.RUNNING || snap.status == ServiceStatus.STARTING
+        var obsSeq = 0L // no observation: the raw status is shown
+        val eff = when {
+            ProcessRole.isNode || !active -> snap.status
+            isMainThread() -> {
+                // The scheduled recompute never schedules another, so a misreported thread
+                // cannot loop; it then shows the raw value until the next IO read.
+                if (!scheduled) launchScheduledRecompute()
+                snap.status
+            }
+            else -> {
+                val obs = liveness(snap.ownerPid)
+                obsSeq = obs.seq
+                effectiveStatus(snap.status, snap.ownerPid, obs.result)
+            }
+        }
+        beforePublishForTest?.invoke()
+        synchronized(rawLock) {
+            if (rawGen.get() != gen) {
+                // A newer raw snapshot exists. This result is stale for it — but a real observation
+                // made here may be newer than the one the new snapshot published with (CodeRabbit
+                // on d433eb99), so recompute once on the current snapshot: it reuses the cache,
+                // which keeps the newest observation. A raw-only result has nothing to carry.
+                if (obsSeq > 0L) launchScheduledRecompute()
+                return
+            }
+            if (gen == lastPublishedGen && obsSeq < lastPublishedObs) return // an older observation
+            afterPublishCheckForTest?.invoke()
+            lastPublishedGen = gen
+            lastPublishedObs = obsSeq
+            if (_status.value != eff) _status.value = eff
+        }
+    }
+
+    /** Scheduled (off-main) recomputes still running; tests wait for zero before resetting seams. */
+    private val scheduledInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun launchScheduledRecompute() {
+        scheduledInFlight.incrementAndGet()
+        scope.launch {
+            try { recomputeStatus(scheduled = true) } finally { scheduledInFlight.decrementAndGet() }
+        }
+    }
 
     // BAT-522 (phase 2): replaces the old `_uptime` StateFlow that was
     // re-written every 1s by SeekerClawService.uptimeJob. Now the service
@@ -159,6 +361,7 @@ object ServiceState {
     /** Sync, no I/O. Sets the file path reference so disk reads can find it. */
     private fun initFileRefs(context: Context) {
         stateFile = File(context.filesDir, "service_state")
+        appContext = context.applicationContext // BAT-1724: the liveness probe's ActivityManager
     }
 
     /**
@@ -174,11 +377,18 @@ object ServiceState {
         if (initialized) return // Fast path — no lock if already done
         synchronized(initLock) {
             if (initialized) return // Double-check inside lock
-            readFromFile()
+            // The file read only: the status recompute (which may make the liveness binder
+            // call, BAT-1724) runs after initLock is released, so a main-thread init() can
+            // never wait on it.
+            try { readStateFileSnapshot() } catch (_: Exception) {}
             checkDailyReset()
             initialized = true
             Log.i(TAG, "init: restored msgs=${_messageCount.value} today=${_messagesToday.value} tokens=${_tokensTotal.value}")
         }
+        // [raw] is authoritative from here, but [status] is not published until the recompute
+        // below — so decisions taken right after init() read [raw] (see [markStoppedUnlessError]).
+        afterRestoreForTest?.invoke()
+        recomputeStatus()
     }
 
     /**
@@ -219,9 +429,33 @@ object ServiceState {
         } catch (_: Exception) {}
     }
 
+    /**
+     * An explicit status change. In `:node` it also adopts this process's pid as the status owner
+     * (BAT-1724); MAIN (its Stop) keeps the owner pid as read and never stamps its own.
+     */
     fun updateStatus(s: ServiceStatus) {
-        _status.value = s
-        writeToFile()
+        synchronized(fileLock) {
+            setRaw(RawStatus(s, if (ProcessRole.isNode) myPid() else raw.ownerPid))
+            writeToFile()
+        }
+        recomputeStatus()
+    }
+
+    /**
+     * Sets STOPPED unless the status is ERROR — decided on the raw snapshot and applied in one step
+     * (Codex e0db6a17 #1). Stop paths must use this, not `status.value != ERROR`: right after a
+     * concurrent first restore, [status] can still hold its default STOPPED while [raw] already
+     * holds the restored ERROR, and writing STOPPED then would erase the persisted ERROR.
+     */
+    fun markStoppedUnlessError() {
+        val changed = synchronized(fileLock) {
+            val cur = raw
+            if (cur.status == ServiceStatus.ERROR) return@synchronized false
+            setRaw(RawStatus(ServiceStatus.STOPPED, if (ProcessRole.isNode) myPid() else cur.ownerPid))
+            writeToFile()
+            true
+        }
+        if (changed) recomputeStatus()
     }
 
     /**
@@ -257,15 +491,18 @@ object ServiceState {
     }
 
     fun reset() {
-        _status.value = ServiceStatus.STOPPED
-        _serviceStartTimeMs.value = 0L
-        _messageCount.value = 0
-        _messagesToday.value = 0
-        _lastActivityTime.value = 0L
-        _tokensToday.value = 0L
-        _tokensTotal.value = 0L
-        clearBridgeToken()
-        writeToFile()
+        synchronized(fileLock) {
+            setRaw(RawStatus(ServiceStatus.STOPPED, raw.ownerPid))
+            _serviceStartTimeMs.value = 0L
+            _messageCount.value = 0
+            _messagesToday.value = 0
+            _lastActivityTime.value = 0L
+            _tokensToday.value = 0L
+            _tokensTotal.value = 0L
+            clearBridgeToken()
+            writeToFile()
+        }
+        recomputeStatus()
     }
 
     /**
@@ -425,9 +662,14 @@ object ServiceState {
      * regression: the user would think the agent is healthy when it has
      * actually died.
      *
-     * Cost: 1 small file read every 30s (~2,880/day) — vastly cheaper than
-     * the prior 1Hz poll's 86,400/day, but not "no I/O" as an earlier
-     * iteration of this comment claimed.
+     * BAT-1724: each tick ([tickOnce]) also re-reads `service_state`, so the
+     * MAIN liveness check (a `:node` killed with no file write shows STOPPED)
+     * converges in the background too — within one tick plus the probe cache
+     * ([LIVENESS_CACHE_MS]) and scheduling. Same timer, no new one.
+     *
+     * Cost: 2 small file reads every 30s (~5,760/day) — vastly cheaper than
+     * the prior 1Hz poll's 86,400/day. The liveness probe (a binder call)
+     * runs only while the raw status is RUNNING / STARTING.
      *
      * Once-only via AtomicBoolean.compareAndSet so concurrent startWatching
      * calls (theoretical, defensive) don't double-start the ticker.
@@ -437,16 +679,20 @@ object ServiceState {
         scope.launch {
             while (isActive) {
                 delay(30_000L)
-                // readAgentHealthFile re-derives `stale = (now - fileTime
-                // > 120_000)` on every call, so a 30s tick converges
-                // staleness within ≤30s of the 120s threshold even when
-                // no file events fire. Reading a ~few-hundred-byte file
-                // every 30s is 2,880 reads/day — 30× less than the prior
-                // 1Hz poll's 86,400 — so we keep most of BAT-518's I/O
-                // savings while restoring the safety property.
-                readAgentHealthFile()
+                tickOnce()
             }
         }
+    }
+
+    /**
+     * One staleness tick. readAgentHealthFile re-derives `stale = (now - fileTime > 120_000)` on
+     * every call, so a 30s tick converges staleness within ≤30s of the 120s threshold even when no
+     * file events fire. readFromFile (BAT-1724) re-evaluates whether the `:node` that wrote a
+     * RUNNING / STARTING is still alive.
+     */
+    internal fun tickOnce() {
+        readFromFile()
+        readAgentHealthFile()
     }
 
     /**
@@ -631,12 +877,22 @@ object ServiceState {
      *    displayed uptime as `now - serviceStartTimeMs` while RUNNING,
      *    no live disk writes. Missing on pre-BAT-522 files → defaults
      *    to 0L on read; the next service start populates it.
+     * 8: owner pid (BAT-1724): the `:node` process that set line 0, written
+     *    only when known. Older builds read lines 0–7 and ignore it; a file
+     *    without it reads as owner unknown (name-only liveness fallback).
+     *
+     * Lines 0 and 8 are the RAW status snapshot ([raw]) — never the
+     * effective status MAIN shows — so a display override can never reach
+     * the file.
      */
-    private fun writeToFile() {
+    private fun writeToFile() { synchronized(fileLock) { writeToFileLocked() } }
+
+    private fun writeToFileLocked() {
         val file = stateFile ?: return
         try {
+            val snap = raw
             val data = buildString {
-                appendLine(_status.value.name)
+                appendLine(snap.status.name)
                 // Line 1 is intentionally always 0L (BAT-522 — see file
                 // format docblock). Kept so old pre-BAT-522 builds
                 // running on a freshly-written file still find every
@@ -648,17 +904,31 @@ object ServiceState {
                 appendLine(_tokensToday.value)
                 appendLine(_tokensTotal.value)
                 append(_serviceStartTimeMs.value)
+                snap.ownerPid?.let { append('\n').append(it) }
             }
             // BAT-1409 P1-J: atomic rename (MOVED_TO is in the observer mask), link-safe.
             SafeFs.writeAtomicText(file.parentFile.toPath(), file.toPath(), data)
         } catch (_: Exception) {}
     }
 
+    /**
+     * Re-reads `service_state`, then recomputes the shown status (BAT-1724) on EVERY exit — a
+     * missing or unparseable file still re-evaluates the last coherent raw snapshot.
+     */
     private fun readFromFile() {
+        try { readStateFileSnapshot() } catch (_: Exception) {}
+        recomputeStatus()
+    }
+
+    /** Reads `service_state` and commits it, under [fileLock] so reads commit in the order they read. */
+    private fun readStateFileSnapshot() { synchronized(fileLock) { readStateFileSnapshotLocked() } }
+
+    private fun readStateFileSnapshotLocked() {
         val file = stateFile ?: return
-        try {
+        run {
             if (!SafeFs.existsNoFollow(file.toPath())) return
             val lines = SafeFs.readTextNoFollow(file.parentFile.toPath(), file.toPath()).lines()
+            afterFileReadForTest?.invoke()
             if (lines.size >= 5) {
                 val fileStatus = try { ServiceStatus.valueOf(lines[0]) } catch (_: Exception) { return }
                 // lines[1] is the deprecated uptime field — read but
@@ -666,8 +936,11 @@ object ServiceState {
                 val fileMsgCount = lines[2].toIntOrNull() ?: return
                 val fileMsgToday = lines[3].toIntOrNull() ?: return
                 val fileLastActivity = lines[4].toLongOrNull() ?: return
+                // BAT-1724: line 8, the owner pid; absent (older build) or invalid → unknown.
+                val fileOwnerPid = lines.getOrNull(8)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
 
-                if (_status.value != fileStatus) _status.value = fileStatus
+                // The status and its owner, applied as one snapshot.
+                setRaw(RawStatus(fileStatus, fileOwnerPid))
                 if (_messageCount.value != fileMsgCount) _messageCount.value = fileMsgCount
                 if (_messagesToday.value != fileMsgToday) _messagesToday.value = fileMsgToday
                 if (_lastActivityTime.value != fileLastActivity) _lastActivityTime.value = fileLastActivity
@@ -691,7 +964,7 @@ object ServiceState {
                 } else 0L
                 if (_serviceStartTimeMs.value != fileStartTime) _serviceStartTimeMs.value = fileStartTime
             }
-        } catch (_: Exception) {}
+        } // the caller (readFromFile) catches and then recomputes
     }
 
     private fun readAgentHealthFile() {
@@ -820,6 +1093,21 @@ object ServiceState {
 
     internal fun resetForTest() {
         _status.value = ServiceStatus.STOPPED
+        synchronized(rawLock) {
+            raw = RawStatus(ServiceStatus.STOPPED, null); rawGen.incrementAndGet()
+            lastPublishedGen = -1L; lastPublishedObs = 0L
+        }
+        probeCache = null
+        beforePublishForTest = null
+        afterPublishCheckForTest = null
+        afterFileReadForTest = null
+        afterRestoreForTest = null
+        probeSeq.set(0L)
+        appContext = null
+        nodeLivenessProbe = { defaultLivenessProbe() }
+        elapsedClock = { SystemClock.elapsedRealtime() }
+        isMainThread = { Looper.getMainLooper()?.let { it == Looper.myLooper() } ?: false }
+        myPid = { android.os.Process.myPid() }
         _serviceStartTimeMs.value = 0L
         _messageCount.value = 0
         _messagesToday.value = 0
@@ -835,4 +1123,23 @@ object ServiceState {
     internal fun writeToFileForTest() = writeToFile()
 
     internal fun readFromFileForTest() = readFromFile()
+
+    /** The raw owner pid (BAT-1724), for tests. */
+    internal fun rawOwnerPidForTest(): Int? = raw.ownerPid
+
+    /** Recomputes from the current raw snapshot, as an IO read would (BAT-1724), for tests. */
+    internal fun recomputeStatusForTest() = recomputeStatus()
+
+    /** The raw status (BAT-1724), for tests. */
+    internal fun rawStatusForTest(): ServiceStatus = raw.status
+
+    /** The first-time restore, as [init] / [startWatching] run it, for tests. */
+    internal fun restoreFromDiskForTest() = restoreFromDisk()
+
+    /** Waits (bounded) until no scheduled recompute is running, so it cannot touch the next test's seams. */
+    internal fun awaitScheduledRecomputesForTest(timeoutMs: Long = 6_000): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (scheduledInFlight.get() > 0 && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        return scheduledInFlight.get() == 0
+    }
 }

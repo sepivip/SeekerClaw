@@ -235,7 +235,7 @@ The `/model` and `/provider` commands shipped functional but invisible — devic
   - All existing tools (read, write, web_fetch, etc.) already work within the Node.js process — they don't shell out
 - **Logs:** Node writes `node_debug.log` (workspace/) via `log()` in `LEVEL|epochMs|message` format, continuously rotated at ~5MB (previous kept as `.old`, no carryover). A Kotlin FileObserver forwarder (SeekerClawService) mirrors new lines into `service_logs` (filesDir) — a 300-line in-memory ring surfaced in the Logs screen, plus a 1MB→512KB compacted file. `service_logs` is a bounded diagnostic mirror, NOT an authoritative replica; `node_debug.log` is the full Node transcript.
 - **Battery:** On first launch after setup, show dialog explaining battery optimization exemption, then call `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`.
-- **ServiceState:** Singleton with `StateFlow<ServiceStatus>` (STOPPED, STARTING, RUNNING, ERROR), uptime, and message count. UI observes these flows.
+- **ServiceState:** Singleton with `StateFlow<ServiceStatus>` (STOPPED, STARTING, RUNNING, ERROR), uptime, and message count. UI observes these flows. In the UI process the status is checked against the live `:node` process (BAT-1724): a RUNNING whose writer was force-stopped or killed shows STOPPED. The file itself is never rewritten. See *Agent Status in the UI* in `docs/internal/ARCHITECTURE.md`.
 - **Metrics:** Message count, uptime, and response times tracked locally on-device. Usage analytics (Firebase) tracks feature usage, service health, and model selection — no personal data, no messages, no wallet keys. Fully optional — users can disable in Settings.
 
 ## What NOT to Build (v1)

@@ -1071,9 +1071,8 @@ class SeekerClawService : Service() {
         // post-start delete is a scope coroutine that the cancel above may have dropped.
         deleteEphemeralConfig()
         // Preserve ERROR status (e.g., owner not configured) — only reset to STOPPED on clean exits.
-        if (ServiceState.status.value != ServiceStatus.ERROR) {
-            ServiceState.updateStatus(ServiceStatus.STOPPED)
-        }
+        // Decided on the raw snapshot in one step (BAT-1724, Codex e0db6a17 #1).
+        ServiceState.markStoppedUnlessError()
         // BAT-522: clear the persisted start timestamp so the next UI
         // launch derives uptime=0 until the service is started again.
         ServiceState.setServiceStartTimeMs(0L)
@@ -1453,9 +1452,9 @@ class SeekerClawService : Service() {
             runCatching {
                 ServiceState.init(appCtx)
                 // Mirror the same guard as onDestroy() — don't wipe ERROR status on a user-stop.
-                if (ServiceState.status.value != ServiceStatus.ERROR) {
-                    ServiceState.updateStatus(ServiceStatus.STOPPED)
-                }
+                // Read from the raw snapshot, not status.value: right after a concurrent first
+                // restore the shown status can still be its default (BAT-1724, Codex e0db6a17 #1).
+                ServiceState.markStoppedUnlessError()
                 // BAT-522: clear the persisted start timestamp so the next UI
                 // launch derives uptime=0 until the service is started again.
                 ServiceState.setServiceStartTimeMs(0L)
