@@ -227,9 +227,34 @@ function toApiMessages(messages, activeModel, requestOptions) {
  */
 function fromApiResponse(raw) {
     const choice = raw.choices?.[0];
-    if (!choice) return { text: null, toolCalls: [], reasoningBlocks: [], stopReason: 'end_turn', usage: raw.usage || {} };
+    if (!choice) return { text: null, toolCalls: [], reasoningBlocks: [], stopReason: 'end_turn', usage: raw.usage || {}, refusal: null };
 
     const message = choice.message || {};
+
+    // BAT-1705: refusal / content-filter detection runs FIRST, before tool-call
+    // mapping (a filtered call's cut-off arguments would otherwise be parsed and run).
+    // `finish_reason: content_filter` wins over `message.refusal` and then surfaces
+    // no model message (Codex d957651e #4). xAI and Custom (chat format) inherit this.
+    const isFilter = choice.finish_reason === 'content_filter';
+    const refusalMsg = (typeof message.refusal === 'string' && message.refusal) ? message.refusal : null;
+    if (isFilter || refusalMsg) {
+        const kind = isFilter ? 'provider_content_filter' : 'model_refusal';
+        return {
+            text: null,
+            toolCalls: [],
+            reasoningBlocks: [],
+            stopReason: kind,
+            usage: raw.usage || {},
+            refusal: {
+                kind,
+                category: null,
+                modelMessage: isFilter ? null : refusalMsg,
+                partialChars: typeof message.content === 'string' ? message.content.length : 0,
+                droppedToolCalls: Array.isArray(message.tool_calls) ? message.tool_calls.length : 0,
+            },
+        };
+    }
+
     const text = message.content || null;
 
     const toolCalls = (message.tool_calls || []).map((tc, idx) => {
@@ -283,9 +308,9 @@ function fromApiResponse(raw) {
     let stopReason = 'end_turn';
     if (toolCalls.length > 0 || fr === 'tool_calls') stopReason = 'tool_use';
     else if (fr === 'length') stopReason = 'max_tokens';
-    else if (fr === 'content_filter') stopReason = 'content_filter';
+    // (finish_reason 'content_filter' returned above as a provider_content_filter refusal.)
 
-    return { text, toolCalls, reasoningBlocks, stopReason, usage: raw.usage || {} };
+    return { text, toolCalls, reasoningBlocks, stopReason, usage: raw.usage || {}, refusal: null };
 }
 
 // ── System prompt ───────────────────────────────────────────────────────────

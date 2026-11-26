@@ -186,7 +186,7 @@ const {
 // ============================================================================
 
 const {
-    setSendMessage, setGetOwnerChatId, setRunAgentTurn, cronService,
+    setSendMessage, setSendSystemMessage, setGetOwnerChatId, setRunAgentTurn, cronService,
 } = require('./cron');
 
 // ============================================================================
@@ -281,6 +281,8 @@ const createStatusReactionController = (chatId, msgId) => channel.createStatusRe
 
 // Wire sendMessage + ownerChatId into cron.js so reminders can be delivered
 setSendMessage((chatId, text) => channel.sendMessage(chatId, text));
+// BAT-1705 A2′: cron refusal notices go out plain, as one request (confirmed by its message id).
+setSendSystemMessage((chatId, text) => channel.sendMessageSystem(chatId, text));
 setGetOwnerChatId(() => channel.getOwnerChatId());
 
 // ============================================================================
@@ -1129,7 +1131,12 @@ async function runCronAgentTurn(message, jobId) {
 
     try {
         const prompt = `[cron:${jobId}] ${message}\n\nCurrent time: ${localTimestamp()}`;
-        const response = await chat(cronChatId, prompt);
+        // BAT-1705 A2′: the refusal travels as explicit metadata, never inferred
+        // from the notice text; cron.js decides whether to notify (once per streak).
+        let refusal = null;
+        const response = await chat(cronChatId, prompt, {
+            onTurnOutcome: (o) => { refusal = (o && o.refusal) || null; },
+        });
 
         // Strip protocol tokens (same pattern as heartbeat probe)
         const cleaned = stripSilentReply(
@@ -1137,12 +1144,12 @@ async function runCronAgentTurn(message, jobId) {
                 .replace(/(?:^|\s+|\*+)HEARTBEAT_OK\s*$/gi, '').replace(/\bHEARTBEAT_OK\b/gi, '')
         );
 
-        if (!cleaned) {
+        if (!cleaned && !refusal) {
             log(`[Cron] Agent turn ${jobId} returned silent response`, 'DEBUG');
-            return null;
+            return { text: null, refusal: null };
         }
 
-        return cleaned;
+        return { text: cleaned || null, refusal };
     } finally {
         // Always clean up the isolated session to prevent memory leaks.
         // conversations and sessionTracking are keyed by chatId — deleting

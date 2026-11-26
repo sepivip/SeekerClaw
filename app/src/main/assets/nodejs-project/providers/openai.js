@@ -201,6 +201,16 @@ function fromApiResponse(raw) {
     const turnId = (resp && typeof resp.id === 'string') ? resp.id : null;
     const sourceModel = (resp && typeof resp.model === 'string') ? resp.model : null;
 
+    // BAT-1705: refusal / content-filter detection runs FIRST — before tool-call
+    // mapping (whose argument-parse WARN a cut-off call would trip), the reasoning-
+    // summary fallback, and the "Empty visible response" WARN. A refused or filtered
+    // response yields nothing to show, execute or replay. A content filter wins over a
+    // refusal part, and then no model message is surfaced (Codex d957651e #4).
+    const refusal = _detectResponsesRefusal(resp);
+    if (refusal) {
+        return { text: null, toolCalls: [], reasoningBlocks: [], stopReason: refusal.kind, usage: resp.usage || {}, refusal };
+    }
+
     for (const item of (resp.output || [])) {
         // Text output items (the user-facing answer)
         if (item.type === 'message' && item.content) {
@@ -235,8 +245,12 @@ function fromApiResponse(raw) {
                 wire: item, // verbatim; preserves encrypted_content byte-exact
             });
         }
-        // Function call output items
-        if (item.type === 'function_call') {
+        // Function call output items. A call the server marks `status: 'incomplete'`
+        // was cut off (e.g. max_output_tokens) and is never executed (BAT-1705,
+        // CodeRabbit on #472): its arguments are partial. Only 'incomplete' is
+        // excluded — skeletons rebuilt from a stream carry 'in_progress' even when
+        // the call finished, so a stricter check would drop real tool calls.
+        if (item.type === 'function_call' && item.status !== 'incomplete') {
             let input = {};
             try {
                 input = typeof item.arguments === 'string'
@@ -280,7 +294,49 @@ function fromApiResponse(raw) {
         else stopReason = 'max_tokens'; // any incomplete = truncation
     }
 
-    return { text, toolCalls, reasoningBlocks, stopReason, usage: resp.usage || {} };
+    return { text, toolCalls, reasoningBlocks, stopReason, usage: resp.usage || {}, refusal: null };
+}
+
+/**
+ * BAT-1705: a Responses refusal or content filter, or null.
+ * - `status: 'incomplete'` with `incomplete_details.reason === 'content_filter'`
+ *   → provider_content_filter (modelMessage null).
+ * - otherwise any `{ type: 'refusal' }` content part → model_refusal, with
+ *   modelMessage = the joined refusal text (null if empty).
+ * Other incomplete reasons (max_output_tokens, …) are not refusals.
+ */
+function _detectResponsesRefusal(resp) {
+    const output = Array.isArray(resp && resp.output) ? resp.output : [];
+    const isFilter = resp && resp.status === 'incomplete'
+        && resp.incomplete_details && resp.incomplete_details.reason === 'content_filter';
+    let hasRefusalPart = false;
+    const refusalText = [];
+    let partialChars = 0;
+    let droppedToolCalls = 0;
+    for (const item of output) {
+        if (!item) continue;
+        if (item.type === 'message' && Array.isArray(item.content)) {
+            for (const part of item.content) {
+                if (!part) continue;
+                if (part.type === 'refusal') {
+                    hasRefusalPart = true;
+                    if (typeof part.refusal === 'string' && part.refusal) refusalText.push(part.refusal);
+                } else if (part.type === 'output_text' && typeof part.text === 'string') {
+                    partialChars += part.text.length;
+                }
+            }
+        } else if (item.type === 'function_call') {
+            droppedToolCalls++;
+        }
+    }
+    if (!isFilter && !hasRefusalPart) return null;
+    return {
+        kind: isFilter ? 'provider_content_filter' : 'model_refusal',
+        category: null,
+        modelMessage: isFilter ? null : (refusalText.join('') || null),
+        partialChars,
+        droppedToolCalls,
+    };
 }
 
 // ── System prompt ───────────────────────────────────────────────────────────

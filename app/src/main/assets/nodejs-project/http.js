@@ -55,7 +55,7 @@ function httpRequest(options, body = null) {
 
 function newClaudeStreamState() {
     return {
-        message: { id: null, type: 'message', role: 'assistant', content: [], model: null, stop_reason: null, usage: {} },
+        message: { id: null, type: 'message', role: 'assistant', content: [], model: null, stop_reason: null, stop_details: null, usage: {} },
         blocks: [], // indexed by content_block index
     };
 }
@@ -117,6 +117,8 @@ function applyClaudeStreamEvent(state, eventType, parsed) {
         case 'message_delta':
             if (parsed.delta) {
                 message.stop_reason = parsed.delta.stop_reason ?? message.stop_reason;
+                // BAT-1705: a refusal's category travels in stop_details (may be null).
+                message.stop_details = parsed.delta.stop_details ?? message.stop_details;
             }
             Object.assign(message.usage, parsed.usage || {});
             // BAT-1664 C4: the final message_delta repeats input_transformations
@@ -358,6 +360,20 @@ function httpOpenAIStreamingRequest(options, body = null) {
             res.setEncoding('utf8');
             const outputItems = {};  // output_index → item skeleton
             const textAccum = {};    // "output_index:content_index" → accumulated text
+            // BAT-1705: model refusal parts, kept as typed evidence INDEPENDENT of item
+            // reconstruction (Codex 2b68f44a #2): a part whose index can't be resolved, a
+            // part with no message skeleton, and a sparse terminal payload must not lose
+            // it. Keyed "output_index:content_index" when resolvable, else
+            // "item:<item_id>:<content_index>"; insertion order = server emission order.
+            // `refusal.done` carries the finalized text and REPLACES the deltas; later
+            // deltas for a done part are ignored.
+            const refusalAccum = new Map();
+            const refusalDone = new Set();
+            const refusalKey = (p) => {
+                const ci = p.content_index ?? 0;
+                const oi = resolveOutputIndex(p);
+                return oi !== null ? `${oi}:${ci}` : `item:${typeof p.item_id === 'string' ? p.item_id : ''}:${ci}`;
+            };
             const funcArgAccum = {}; // output_index → accumulated arguments string
             // item_id → output_index lookup. Codex backend (gpt-5.x reasoning models
             // served via chatgpt.com/backend-api/codex/responses) emits delta events
@@ -385,8 +401,11 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 return null;
             };
 
-            // Build response from accumulated deltas (fallback path)
-            const buildFromAccum = () => {
+            // Build response from accumulated deltas (fallback path, completed or no
+            // terminal event only). `terminal` is the server's `response.completed` object
+            // when one arrived; its status is kept. Refusal evidence is NOT reconstructed
+            // here: withRefusalEvidence() attaches it to whatever result is settled.
+            const buildFromAccum = (terminal = null) => {
                 const output = [];
                 const indices = Object.keys(outputItems).map(Number).sort((a, b) => a - b);
                 for (const idx of indices) {
@@ -411,7 +430,26 @@ function httpOpenAIStreamingRequest(options, body = null) {
                         output.push(item);
                     }
                 }
-                return { output, status: 'completed', usage: accumulatedUsage || {} };
+                return { output, status: (terminal && terminal.status) || 'completed', usage: accumulatedUsage || {} };
+            };
+
+            // Attach observed refusal evidence to the result about to be settled (BAT-1705,
+            // Codex 2b68f44a #2). When the payload already carries a refusal part, the
+            // server's own output is authoritative and nothing is added. Otherwise one
+            // synthesized assistant message holding every observed refusal part is
+            // appended; the adapter's refusal detection then wins over any tool or text
+            // in the payload, so nothing ordinary is promoted. A content_filter terminal
+            // status is left untouched and keeps its priority in the adapter.
+            const withRefusalEvidence = (data) => {
+                if (refusalAccum.size === 0 || !data || typeof data !== 'object') return data;
+                const inner = (data.response && typeof data.response === 'object') ? data.response : data;
+                const output = Array.isArray(inner.output) ? inner.output : [];
+                const hasRefusalPart = output.some(it => it && it.type === 'message' && Array.isArray(it.content)
+                    && it.content.some(p => p && p.type === 'refusal'));
+                if (hasRefusalPart) return data;
+                const content = [...refusalAccum.values()].map(r => ({ type: 'refusal', refusal: r }));
+                const merged = { ...inner, output: [...output, { type: 'message', role: 'assistant', content }] };
+                return inner === data ? merged : { ...data, response: merged };
             };
 
             res.on('data', chunk => {
@@ -458,6 +496,20 @@ function httpOpenAIStreamingRequest(options, body = null) {
                             break;
                         }
 
+                        case 'response.refusal.delta': {
+                            const key = refusalKey(parsed);
+                            if (!refusalDone.has(key)) refusalAccum.set(key, (refusalAccum.get(key) || '') + (typeof parsed.delta === 'string' ? parsed.delta : ''));
+                            break;
+                        }
+
+                        case 'response.refusal.done': {
+                            const key = refusalKey(parsed);
+                            if (typeof parsed.refusal === 'string') refusalAccum.set(key, parsed.refusal);
+                            else if (!refusalAccum.has(key)) refusalAccum.set(key, '');
+                            refusalDone.add(key);
+                            break;
+                        }
+
                         case 'response.function_call_arguments.delta': {
                             const oi = resolveOutputIndex(parsed);
                             if (oi !== null) {
@@ -489,17 +541,20 @@ function httpOpenAIStreamingRequest(options, body = null) {
                                 // without this, buildFromAccum() would lose token accounting.
                                 if (serverResp.usage) accumulatedUsage = serverResp.usage;
                                 if (serverOutput.length === 0 && Object.keys(outputItems).length > 0) {
-                                    settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
+                                    settle(resolve, { status: 200, data: withRefusalEvidence(buildFromAccum(serverResp)), headers: res.headers });
                                 } else {
-                                    settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                                    settle(resolve, { status: 200, data: withRefusalEvidence(parsed), headers: res.headers });
                                 }
                             }
                             return;
 
                         case 'response.incomplete':
                             clearTimeout(hardTimer);
-                            // Truncated response — use what we have
-                            settle(resolve, { status: 200, data: parsed, headers: res.headers });
+                            // Truncated response — use the terminal payload as-is (never rebuilt
+                            // from accumulated items: a cut-off function_call must not become an
+                            // executable tool, Codex 2b68f44a #1). Only explicit refusal evidence
+                            // is attached (BAT-1705); a content_filter status is already on it.
+                            settle(resolve, { status: 200, data: withRefusalEvidence(parsed), headers: res.headers });
                             return;
 
                         case 'error': {
@@ -523,7 +578,11 @@ function httpOpenAIStreamingRequest(options, body = null) {
                 if (!settled) {
                     // Stream ended without response.completed — build from accumulated deltas
                     if (Object.keys(outputItems).length > 0) {
-                        settle(resolve, { status: 200, data: buildFromAccum(), headers: res.headers });
+                        settle(resolve, { status: 200, data: withRefusalEvidence(buildFromAccum()), headers: res.headers });
+                    } else if (refusalAccum.size > 0) {
+                        // BAT-1705: explicit refusal wire evidence with no item skeleton —
+                        // reported as a refusal, not as a transport error.
+                        settle(resolve, { status: 200, data: withRefusalEvidence({ output: [], status: 'completed', usage: accumulatedUsage || {} }), headers: res.headers });
                     } else if (parsedEventCount === 0 && sseBuffer.length > 0) {
                         // We assumed SSE (Codex header-less case) but the body never produced
                         // a single parseable SSE event. Keep the error message generic so
@@ -606,6 +665,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
             // Chat Completions SSE accumulators
             res.setEncoding('utf8');
             let textContent = '';
+            let refusalText = '';    // BAT-1705: streamed delta.refusal (the model's refusal message)
             const toolCalls = {};    // index → { id, name, arguments }
             let finishReason = null;
             let usage = null;
@@ -630,6 +690,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                             role: 'assistant',
                             content: textContent || null,
                             tool_calls: accToolCalls.length > 0 ? accToolCalls : undefined,
+                            ...(refusalText ? { refusal: refusalText } : {}),
                         },
                         finish_reason: finishReason || 'stop',
                     }],
@@ -689,6 +750,7 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
 
                 // Text content delta
                 if (delta.content) textContent += delta.content;
+                if (typeof delta.refusal === 'string') refusalText += delta.refusal;
 
                 // Tool call deltas — accumulate by index
                 if (delta.tool_calls) {
@@ -738,8 +800,11 @@ function httpChatCompletionsStreamingRequest(options, body = null) {
                     if (sseBuffer.trim()) processEvent(sseBuffer);
                 }
                 if (!settled) {
-                    // Stream ended without [DONE] — build from accumulated data
-                    if (textContent || Object.keys(toolCalls).length > 0) {
+                    // Stream ended without [DONE] — build from accumulated data. A refusal or a
+                    // content_filter finish is explicit wire evidence too (BAT-1705): the adapter
+                    // then reports it instead of a transport error. A bare truncated stream (no
+                    // text, tools, refusal or filter) still rejects as before.
+                    if (textContent || Object.keys(toolCalls).length > 0 || refusalText || finishReason === 'content_filter') {
                         settle(resolve, { status: 200, data: buildResponse(), headers: res.headers });
                     } else {
                         const err = new Error('Stream ended before [DONE]');

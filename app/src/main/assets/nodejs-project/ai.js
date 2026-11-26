@@ -41,6 +41,7 @@ const { getAdapter } = require('./providers');
 const { rateLimitRefusal, runWithoutConfirm } = require('./tool-rate-limit'); // BAT-1409 P1-H
 const { androidBridgeCall } = require('./bridge');
 const { stripSilentReply, TOKEN: SILENT_REPLY_TOKEN } = require('./silent-reply');
+const refusalNotice = require('./refusal-notice');
 
 const {
     loadSoul, loadBootstrap, loadIdentity, loadUser,
@@ -1234,6 +1235,7 @@ function buildSystemBlocks(matchedSkills = [], chatId = null, activeModel = MODE
     lines.push('2. Use /reset to wipe conversation without backup (nuclear option)');
     lines.push('3. Tool-use loop protection: max 35 tool-call rounds per turn by default (Settings → Configuration → Max Agent Steps Per Turn, 10–100) — if you hit this, summarize progress and ask the user to continue');
     lines.push('3b. Context limit (Claude): if a turn ended with "I stopped before sending: this conversation has reached the model\'s context limit" (log reason `context_budget_exceeded`), the newest results alone were too big to send even after trimming. Suggest a smaller step or /new; /resume may hit the same limit. See DIAGNOSTICS.md → "turn stopped at the context limit".');
+    lines.push('3c. Declined / filtered reply: if a turn ended with "model declined" or "blocked by the provider\'s content filter" — or, on OpenAI-family providers, with only the model\'s own short refusal — (log reason `model_refusal` / `provider_content_filter`), nothing from that reply was shown or run; earlier tools in the turn may have acted. Suggest rephrasing, /model, or /new. See DIAGNOSTICS.md → "The model declined to answer".');
     lines.push('4. **Identical-call loop detector:** If you call the exact same tool with the same arguments 3 times in a turn, you get a warning injected. At 5 identical calls, the loop is broken and you must respond with text only. This is automatic — if you see a loop-break message, explain what you were trying to do and ask the user for guidance.');
     lines.push('');
     lines.push('**If a tool fails:**');
@@ -2895,7 +2897,27 @@ function ageToolResults(messages, turnId, endExclusive) {
 // CHAT
 // ============================================================================
 
+/**
+ * One agent turn. BAT-1705: `options.onTurnOutcome({ refusal })` is called exactly
+ * once when the turn finishes without throwing — `refusal` is null, or
+ * `{ kind, category, modelMessage, dispatchedTools }` when the model declined or the
+ * provider's content filter blocked the reply. Callers that must act on a refusal
+ * (cron's streak, BAT-1705 A2′) read it here, never by matching the notice text.
+ */
 async function chat(chatId, userMessage, options = {}) {
+    const outcome = { refusal: null };
+    const result = await _chatTurn(chatId, userMessage, options, outcome);
+    if (typeof options.onTurnOutcome === 'function') {
+        try {
+            options.onTurnOutcome({ refusal: outcome.refusal });
+        } catch (e) {
+            log(`[Refusal] onTurnOutcome threw: ${e && e.message ? e.message : String(e)}`, 'DEBUG');
+        }
+    }
+    return result;
+}
+
+async function _chatTurn(chatId, userMessage, options, outcome) {
     // Mark active immediately to prevent idle timer triggering during in-flight API calls
     const track = getSessionTrack(chatId);
     track.lastMessageTime = Date.now();
@@ -3084,6 +3106,44 @@ async function chat(chatId, userMessage, options = {}) {
     // scope, so capture the final response's blocks here so the
     // addToConversation(final) at end-of-turn can persist them.
     let lastParsedReasoningBlocks = [];
+    // BAT-1705 A1: tools actually handed to the executor this turn (incremented
+    // immediately before each _deps.executeTool call). Denied, blocked, cancelled,
+    // rate-limited, skipped and LoopDetector-ignored calls never count. This — not
+    // stepCount, which counts tool-REQUESTING responses — decides whether a refusal
+    // notice must disclose that some actions may already have taken effect.
+    let dispatchedTools = 0;
+
+    // BAT-1705: the exit for a refused / content-filtered response (in the tool loop
+    // or the closing summary call). The refused response is never pushed, executed,
+    // replayed or summarised; the turn ends here. Task + checkpoints are cleared even
+    // at stepCount 0 — resuming would only resend the refused content (D4). A
+    // heartbeat writes no notice or payload to history and alerts nobody (A3).
+    const _finishRefusedTurn = (refusal, phase) => {
+        const isHeartbeat = options.synthetic === 'heartbeat' || chatId === '__heartbeat__';
+        const category = refusalNotice.categoryForLog(refusal.category);
+        outcome.refusal = { kind: refusal.kind, category, modelMessage: refusal.modelMessage ?? null, dispatchedTools };
+        log(`[Trace] ${JSON.stringify({
+            turnId, taskId, chatId: String(chatId || ''), stepCount, reason: refusal.kind, phase, category,
+            partialChars: refusal.partialChars || 0, droppedToolCalls: refusal.droppedToolCalls || 0, dispatchedTools,
+            model: activeModel, provider: adapter.id, fallbackReturned: !isHeartbeat,
+        })}`, 'WARN');
+        clearActiveTask(chatId);
+        cleanupChatCheckpoints(chatId);
+        if (isHeartbeat) return SILENT_REPLY_TOKEN;
+        const reply = refusalNotice.buildRefusalNotice(refusal, dispatchedTools, { redact: redactSecrets });
+        addToConversation(chatId, 'assistant', reply, null, _turnAnchor); // BAT-1186 (A9)
+        {
+            const trk = getSessionTrack(chatId);
+            trk.lastMessageTime = Date.now();
+            trk.messageCount++;
+            scheduleIdleSummary(chatId);
+            const sinceLastSummary = Date.now() - (trk.lastSummaryTime || trk.firstMessageTime || Date.now());
+            if (trk.messageCount >= CHECKPOINT_MESSAGES || sinceLastSummary > CHECKPOINT_INTERVAL_MS) {
+                saveSessionSummary(chatId, 'checkpoint').catch(e => log(`[SessionSummary] ${e.message}`, 'DEBUG'));
+            }
+        }
+        return reply;
+    };
     // Read maxStepsPerTurn from agent_settings.json each turn so the user's
     // Settings change takes effect on the next chat() call (no service restart).
     // Mirrors getHeartbeatIntervalMs() in main.js. Clamped to [10, 100]; invalid
@@ -3737,6 +3797,12 @@ async function chat(chatId, userMessage, options = {}) {
             // BAT-1664 C4: what the API did to replayed thinking (counts only).
             try { _logInputTransformations(parsed.inputTransformations, activeModel); }
             catch (e) { log(`[ThinkingBinding] input_transformations log failed: ${e && e.message ? e.message : String(e)}`, 'DEBUG'); }
+            // BAT-1705: a refused / filtered response ends the turn HERE — before it is
+            // pushed into messages, snapshotted, interim-sent or any of its tool calls
+            // run. Returning (not break) also skips the closing summary call and the
+            // "Done — took N steps" fallback. Covers the LoopDetector forced-final round,
+            // which is this same call.
+            if (parsed.refusal) return _finishRefusedTurn(parsed.refusal, 'loop');
             // Keep raw response for fallback text extraction later
             response = res.data;
             response._parsed = parsed;
@@ -3910,6 +3976,7 @@ async function chat(chatId, userMessage, options = {}) {
                             if (confirmed) {
                                 const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                                 try {
+                                    dispatchedTools++; // BAT-1705 A1
                                     result = await _deps.executeTool(toolUse.name, toolUse.input, chatId);
                                     if (_deps.lastToolUseTime) _deps.lastToolUseTime.set(toolUse.name, Date.now());
                                 } finally {
@@ -3927,6 +3994,7 @@ async function chat(chatId, userMessage, options = {}) {
                         result = await runWithoutConfirm(toolUse.name, async () => {
                             const status = deferStatus(chatId, TOOL_STATUS_MAP[toolUse.name]);
                             try {
+                                dispatchedTools++; // BAT-1705 A1 (only reached when not rate-limited)
                                 return await _deps.executeTool(toolUse.name, toolUse.input, chatId);
                             } finally {
                                 await status.cleanup();
@@ -4217,6 +4285,8 @@ async function chat(chatId, userMessage, options = {}) {
 
             if (summaryRes.status === 200) {
                 const summaryParsed = adapter.fromApiResponse(summaryRes.data);
+                // BAT-1705: a refused closing summary is handled like a refused round.
+                if (summaryParsed.refusal) return _finishRefusedTurn(summaryParsed.refusal, 'summary');
                 if (summaryParsed.text) {
                     // Use the centralized strip helper so we catch envelope/wrap/glued
                     // forms — not just the literal 'SILENT_REPLY' string.
@@ -4268,7 +4338,7 @@ async function chat(chatId, userMessage, options = {}) {
             // A text-only response (e.g. failed resume attempt) should not wipe checkpoints.
             if (stepCount > 0) cleanupChatCheckpoints(chatId);
             addToConversation(chatId, 'assistant', '[No response generated]', null, _turnAnchor); // BAT-1186 (A9)
-            log(`No text content in response (no tools used), returning ${SILENT_REPLY_TOKEN}`, 'DEBUG');
+            log(`No text content in response (no tools used, stopReason=${parsed.stopReason || 'unknown'}), returning ${SILENT_REPLY_TOKEN}`, 'DEBUG');
             return SILENT_REPLY_TOKEN;
         }
         const assistantMessage = textContent.text;

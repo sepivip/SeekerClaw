@@ -21,6 +21,8 @@ Core CommonJS modules in `nodejs-project/`:
 | `memory.js` | Soul, memory, heartbeat management |
 | `security.js` | Secret redaction, prompt injection defense |
 | `bridge.js` | Android bridge HTTP client |
+| `refusal-notice.js` | What the user is told when the model declines or a content filter blocks the reply (BAT-1705); pure, shared by ai.js and cron.js |
+| `response-clean.js` | The cleanup a reply passes before a channel sends it (reasoning tags, markers, repeated lines); pure, used by telegram.js and refusal-notice.js |
 
 Also present: `sql-wasm.js` (third-party SQL.js WASM bundle, not a SeekerClaw module).
 
@@ -30,12 +32,12 @@ Also present: `sql-wasm.js` (third-party SQL.js WASM bundle, not a SeekerClaw mo
 main.js (orchestrator)
 ├── message-handler.js ← telegram, ai, tools, memory, cron
 ├── tools.js ← config, security, bridge, memory, cron, database, solana, web, telegram, ai, skills
-├── ai.js ← config, telegram, web, bridge, memory, skills, database
+├── ai.js ← config, telegram, web, bridge, memory, skills, database, refusal-notice
 ├── mcp-client.js (standalone)
 ├── solana.js ← config, web, bridge
-├── telegram.js ← config, web
+├── telegram.js ← config, web, response-clean
 ├── database.js ← config, memory
-├── cron.js ← config
+├── cron.js ← config, security, refusal-notice
 ├── skills.js ← config
 ├── web.js ← config
 ├── memory.js ← config

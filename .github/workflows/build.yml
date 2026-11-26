@@ -117,6 +117,10 @@ jobs:
             claude-adaptive-thinking \
             claude-thinking-binding \
             claude-stable-history \
+            refusal-transport \
+            refusal-chat \
+            cron-refusal-streak \
+            refusal-delivery \
             model-catalog \
             retired-model-read-rule \
             model-list-v2-11 \
