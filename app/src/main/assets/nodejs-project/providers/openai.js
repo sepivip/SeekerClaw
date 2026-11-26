@@ -245,8 +245,12 @@ function fromApiResponse(raw) {
                 wire: item, // verbatim; preserves encrypted_content byte-exact
             });
         }
-        // Function call output items
-        if (item.type === 'function_call') {
+        // Function call output items. A call the server marks `status: 'incomplete'`
+        // was cut off (e.g. max_output_tokens) and is never executed (BAT-1705,
+        // CodeRabbit on #472): its arguments are partial. Only 'incomplete' is
+        // excluded — skeletons rebuilt from a stream carry 'in_progress' even when
+        // the call finished, so a stricter check would drop real tool calls.
+        if (item.type === 'function_call' && item.status !== 'incomplete') {
             let input = {};
             try {
                 input = typeof item.arguments === 'string'

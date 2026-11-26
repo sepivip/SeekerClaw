@@ -256,6 +256,34 @@ async function main() {
         eq('max_output_tokens: the cut-off arguments are never parsed', logsSince(m, /Failed to parse tool arguments/).length, 0);
     }
 
+    {
+        // CodeRabbit on #472: the server's own incomplete payload carries the cut-off
+        // call with status "incomplete". It is never mapped to a tool.
+        const m = logMark();
+        const r = await stream(H.httpOpenAIStreamingRequest,
+            added(0, { type: 'message', id: 'msg_t', role: 'assistant', content: [] })
+            + textDelta('msg_t', 'Running it')
+            + cutCall(1, 'fc_t')
+            + incomplete('max_output_tokens', [
+                { type: 'message', id: 'msg_t', role: 'assistant', status: 'incomplete', content: [{ type: 'output_text', text: 'Running it' }] },
+                { type: 'function_call', id: 'fc_t', call_id: 'call_fc_t', name: 'shell_exec', arguments: '{"command":"rm -', status: 'incomplete' }]));
+        const p = openai.fromApiResponse(r.data);
+        eq('server incomplete payload with a cut-off call: no tool calls', p.toolCalls, []);
+        ok('server incomplete payload with a cut-off call: max_tokens, text kept', p.stopReason === 'max_tokens' && p.text === 'Running it', `${p.stopReason} ${JSON.stringify(p.text)}`);
+        eq('server incomplete payload: the cut-off arguments are never parsed', logsSince(m, /Failed to parse tool arguments/).length, 0);
+        // Controls: a finished call is still mapped, and so is a skeleton rebuilt
+        // from a stream, which carries status "in_progress" even when it finished.
+        const done = openai.fromApiResponse({ status: 'completed', output: [
+            { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{"path":"a"}', status: 'completed' },
+            { type: 'function_call', call_id: 'c2', name: 'read', arguments: '{"path":"b"}', status: 'in_progress' }] });
+        eq('completed and rebuilt (in_progress) calls are still tool calls', done.toolCalls.map(t => t.id), ['c1', 'c2']);
+        const mixed = openai.fromApiResponse({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [
+            { type: 'function_call', call_id: 'ok1', name: 'read', arguments: '{"path":"a"}', status: 'completed' },
+            { type: 'function_call', call_id: 'cut1', name: 'shell_exec', arguments: '{"command":"rm -', status: 'incomplete' }] });
+        ok('mixed incomplete payload: only the finished call is kept', JSON.stringify(mixed.toolCalls.map(t => t.id)) === '["ok1"]' && mixed.stopReason === 'tool_use',
+            `${JSON.stringify(mixed.toolCalls.map(t => t.id))} ${mixed.stopReason}`);
+    }
+
     // ── Codex 2b68f44a #2: observed refusal evidence survives assembly ──────────
     {
         // Sparse terminal: the completed payload carries only a reasoning item, so the
