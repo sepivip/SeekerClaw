@@ -11,14 +11,14 @@ const {
 const tools = [
     {
         name: 'cron_create',
-        description: 'Create a scheduled job. Two kinds: "agentTurn" runs a full AI turn with tools (for tasks needing research, analysis, monitoring — costs API tokens per execution), "reminder" sends raw text to Telegram (for simple alerts — zero cost). Supports one-shot ("in 30 minutes", "tomorrow at 9am") and recurring ("every 2 hours"). Recurring agentTurn jobs require a minimum 15-minute interval.',
+        description: 'Create a scheduled job. Two kinds: "agentTurn" runs a full AI turn with tools (for tasks needing research, analysis, monitoring — costs API tokens per execution), "reminder" sends raw text to the owner\'s chat, Telegram or Discord (for simple alerts — zero cost). Supports one-shot ("in 30 minutes", "tomorrow at 9am") and recurring ("every 2 hours"). Recurring agentTurn jobs require a minimum 15-minute interval.',
         input_schema: {
             type: 'object',
             properties: {
                 name: { type: 'string', description: 'Short name for the job (e.g., "Daily SOL price check")' },
                 message: { type: 'string', description: 'For agentTurn: the task instruction (you will execute this as an AI turn with full tool access). For reminder: the text to deliver.' },
                 time: { type: 'string', description: 'When to fire: "in 30 minutes", "tomorrow at 9am", "every 2 hours", "at 3pm"' },
-                kind: { type: 'string', enum: ['reminder', 'agentTurn'], description: 'Job type: "agentTurn" runs a full AI turn with tools (default for tasks needing intelligence), "reminder" sends text directly to Telegram (default for simple notifications). Default: "reminder".' },
+                kind: { type: 'string', enum: ['reminder', 'agentTurn'], description: 'Job type: "agentTurn" runs a full AI turn with tools (default for tasks needing intelligence), "reminder" sends text directly to the owner\'s chat, Telegram or Discord (default for simple notifications). Default: "reminder".' },
                 deleteAfterRun: { type: 'boolean', description: 'If true, delete the job after it runs (default: false for one-shot, N/A for recurring)' }
             },
             required: ['message', 'time']

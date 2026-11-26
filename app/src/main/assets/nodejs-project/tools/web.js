@@ -36,7 +36,7 @@ const tools = [
     },
     {
         name: 'web_fetch',
-        description: 'Fetch a URL with full HTTP support. Returns markdown (HTML), JSON, or text (up to 50K chars). Supports custom headers (Bearer auth), methods (POST/PUT/DELETE), and request bodies for authenticated API calls.',
+        description: 'Fetch an HTTPS URL (http://, localhost and private/local IP addresses — 10.x, 172.16–31.x, 192.168.x, link-local — are refused; 30 s timeout, up to 5 redirects; a non-2xx status returns an error, not the body). Returns markdown (HTML), JSON, or text (up to 50K chars). Supports custom headers (Bearer auth), methods (POST/PUT/DELETE), and request bodies for authenticated API calls.',
         input_schema: {
             type: 'object',
             properties: {

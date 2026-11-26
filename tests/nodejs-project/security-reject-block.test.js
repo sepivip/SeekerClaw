@@ -46,9 +46,18 @@ check('byte-for-byte block for a drainer code', () => {
     assert.strictEqual(block, expected);
 });
 
-check('guidance: token_2022_*_unsupported → main wallet (MWA) fallback', () => {
-    assert.ok(/main wallet \(MWA\)/i.test(securityRejectGuidance('token_2022_send_unsupported')));
+check('guidance: token_2022_extension_unsupported → main wallet (MWA) fallback', () => {
     assert.ok(/main wallet \(MWA\)/i.test(securityRejectGuidance('token_2022_extension_unsupported')));
+});
+
+// SAB-AUDIT-v55 gap 4: a Token-2022 SEND is refused on every source, main included
+// (solana_send_token refuses the mint before any routing), so a main-wallet retry is
+// refused again. The guidance must point at the user's own wallet app instead.
+check('guidance: token_2022_send_unsupported → own wallet app, never a main-wallet / MWA retry', () => {
+    const g = securityRejectGuidance('token_2022_send_unsupported');
+    assert.ok(/wallet app/i.test(g), 'must point at the wallet app');
+    assert.ok(/Do NOT retry/i.test(g), 'must say do-not-retry');
+    assert.ok(!/MWA|retry the action from your main wallet/i.test(g), 'must NOT suggest a main-wallet retry');
 });
 
 check('guidance: simulation_delta_mismatch has its own specific message', () => {

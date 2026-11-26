@@ -1092,7 +1092,7 @@ function validateExpectedDeltaShape(expectedDelta) {
                     || typeof cfg.transferFeeBps !== 'number'
                     || cfg.transferFeeBps < 0 || cfg.transferFeeBps > 10000) {
                     return reject('token_2022_send_unsupported',
-                        'Token-2022 solana_send requires expectedDelta.tokenStandardConfig.transferFeeBps (0..10000). Route to main wallet until per-mint config is wired.');
+                        'Token-2022 solana_send requires expectedDelta.tokenStandardConfig.transferFeeBps (0..10000). SeekerClaw cannot send Token-2022 tokens from any wallet yet.');
                 }
             }
             return accept();

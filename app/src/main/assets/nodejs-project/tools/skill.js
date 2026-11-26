@@ -46,7 +46,7 @@ const tools = [
     },
     {
         name: 'skill_install',
-        description: 'Install or update a skill from a URL or raw markdown content. Parses frontmatter, validates required fields (name, description), checks existing version, and writes to skills/{name}/SKILL.md atomically. The full file content never enters the conversation — only a one-line summary is returned: "Installed {name} v{version} — triggers: {list}". Use this instead of web_fetch + write when installing skills.',
+        description: 'Install or update a skill from a URL or raw markdown content. Parses frontmatter, validates required fields (name, description), checks existing version, and writes to skills/{name}/SKILL.md atomically. The full file content never enters the conversation — only a one-line summary is returned: Skill "{name}" v{version} installed — triggers: {list} (or "updated v{old} → v{new}", or "installed (replaced)"; an equal or older version returns "… already installed … skipped" instead). Limits: 1 MB, HTTPS URLs only; content with prompt-injection patterns is refused ("Skill install blocked: suspicious content detected"). Use this instead of web_fetch + write when installing skills.',
         input_schema: {
             type: 'object',
             properties: {

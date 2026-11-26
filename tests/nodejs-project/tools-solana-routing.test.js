@@ -1038,6 +1038,19 @@ function _burnerOff() {
         assert.ok(!bridgeCalls.find(c => c.endpoint === '/burner/sign-transaction'), 'must not sign on Token-2022');
     });
 
+    // SAB-AUDIT-v55 gap 4: the agent's guidance ("send it from your own wallet app; do not
+    // retry with source=main") rests on this — source="main" is refused too, before routing.
+    await check('solana_send_token: Token-2022 mint with source="main" → token_2022_send_unsupported, nothing signed', async () => {
+        _burnerOn();
+        mockAccountInfoFn = (pk) => pk === _USDC ? _mintAccountInfo(_TKN_2022_PROGRAM, 6) : _tokenAccountInfo();
+        const before = bridgeCalls.length;
+        const r = await tools.handlers.solana_send_token({ to: _RCPT, mint: _USDC, amount: '1', source: 'main' });
+        assert.strictEqual(r.error, 'token_2022_send_unsupported', JSON.stringify(r));
+        const after = bridgeCalls.slice(before).map(c => c.endpoint);
+        assert.ok(!after.some(e => /sign|reserve/i.test(e)), `no signing or reservation: ${JSON.stringify(after)}`);
+        assert.ok(/wallet app/i.test(r.reason) && !/MWA/.test(r.reason), `reason points at the wallet app, not an MWA retry: ${r.reason}`);
+    });
+
     await check('solana_send_token: non-Token-program mint owner → unsupported_mint', async () => {
         _burnerOn();
         mockAccountInfoFn = (pk) => pk === _BONK ? _mintAccountInfo('11111111111111111111111111111111', 5) : _tokenAccountInfo();

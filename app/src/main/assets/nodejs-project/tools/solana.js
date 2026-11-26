@@ -139,7 +139,7 @@ function _extractFeePayerBase58(txBase64) {
 const tools = [
     {
         name: 'solana_balance',
-        description: 'Get SOL balance and SPL token balances (classic SPL + Token-2022 standards) for a Solana wallet address. Each token carries a tokenStandard field ("classic" | "token_2022"). Token-2022 tokens (e.g. PYUSD) are visible and swappable but CANNOT be sent via solana_send_token — route direct sends to the main wallet / wallet app. If the result has balanceIncomplete:true (failedTokenStandards lists which program could not be read), do NOT tell the user they hold none of a token — the balance is partial; suggest retrying.',
+        description: 'Get SOL balance and SPL token balances (classic SPL + Token-2022 standards) for a Solana wallet address. Each token carries a tokenStandard field ("classic" | "token_2022"). Token-2022 tokens (e.g. PYUSD) are visible and swappable but CANNOT be sent via solana_send_token from any source, main included — the user sends those from their own wallet app. If the result has balanceIncomplete:true (failedTokenStandards lists which program could not be read), do NOT tell the user they hold none of a token — the balance is partial; suggest retrying.',
         input_schema: {
             type: 'object',
             properties: {
@@ -181,7 +181,7 @@ const tools = [
     },
     {
         name: 'solana_send_token',
-        description: 'Send an SPL token (USDC, USDT, BONK, any classic SPL mint) from the Burner OR Main wallet. Use this for ANY non-SOL token transfer — `solana_send` is native-SOL only. Provide the token `mint` (base58) and `amount` as a decimal STRING in token units (e.g. "1.5"). Token-2022 mints are not supported autonomously yet (they route to the main wallet / wallet app). **Routing (BAT-582 caps)**: source="auto" (default) — USDC under the burner per-tx + daily cap signs silently from the **Burner** (no popup); ANY non-USDC token prompts the **Main wallet** (MWA popup); USDC over the cap is refused (`burner_cap_exceeded`) — retry with source="main". Use source="main" to force MWA. Use source="burner" to force the burner (USDC only — other tokens are rejected). The recipient\'s associated token account is created automatically if missing (the sending wallet pays the ~0.002 SOL rent). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
+        description: 'Send an SPL token (USDC, USDT, BONK, any classic SPL mint) from the Burner OR Main wallet. Use this for ANY non-SOL token transfer — `solana_send` is native-SOL only. Provide the token `mint` (base58) and `amount` as a decimal STRING in token units (e.g. "1.5"). Token-2022 mints are refused for every source, main included (token_2022_send_unsupported): the user sends those from their own wallet app — do not retry with source="main". **Routing (BAT-582 caps)**: source="auto" (default) — USDC under the burner per-tx + daily cap signs silently from the **Burner** (no popup); ANY non-USDC token prompts the **Main wallet** (MWA popup); USDC over the cap is refused (`burner_cap_exceeded`) — retry with source="main". Use source="main" to force MWA. Use source="burner" to force the burner (USDC only — other tokens are rejected). The recipient\'s associated token account is created automatically if missing (the sending wallet pays the ~0.002 SOL rent). Show the recipient + amount; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
         input_schema: {
             type: 'object',
             properties: {
@@ -224,7 +224,7 @@ const tools = [
     },
     {
         name: 'solana_swap',
-        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; burner not configured -> Main wallet popup; over cap -> refused (`burner_cap_exceeded`): lower the amount, or the user raises caps in Settings → Burner Wallet. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL autonomously, under caps + a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it, then call solana_swap — the system gate handles approval per policy) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. **Conversion quote flakiness (BAT-1062)**: error:"conversion_quote_unverifiable" with retryable:true means Jupiter returned routes without a readable price-impact/minOut (intermittent, NOT high impact) — also auto-re-quoted internally; if still returned, ask the user to retry, do NOT route to main. (A genuine readable >1% impact stays terminal → main wallet.) Always show the quote first; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
+        description: 'Swap tokens using Jupiter Ultra (gasless, no SOL needed for fees). **Routing (BAT-582)**: under burner per-tx + daily caps for the input asset -> silent burner sign; burner not configured -> Main wallet popup; over cap -> refused (`burner_cap_exceeded`): lower the amount, or the user raises caps in Settings → Burner Wallet. **Conversions (BAT-1057)**: the burner can also convert a token it already HOLDS (incl. fee-free Token-2022 like PYUSD) back to USDC/SOL from the burner (after ONE confirmation from the system gate — spending a non-cap token is never silent), with the order\'s minimum output held to the burner USDC/SOL caps and a 1% price-impact limit; fee-bearing/unverifiable Token-2022 or high-impact conversions are refused with guidance to use the main wallet app. **Slippage (BAT-1061)**: a burner swap that signs but fails on-chain with a transient slippage/price-check error (0x1771) is auto-re-quoted + retried internally (bounded); if it still returns error:"execute_failed" with retryable:true, the market moved — ask the user to retry via a FRESH solana_quote (show it, then call solana_swap — the system gate handles approval per policy) before calling solana_swap again, do NOT call it a burner/Token-2022 limitation or route to main. **Conversion quote flakiness (BAT-1062)**: error:"conversion_quote_unverifiable" with retryable:true means Jupiter returned routes without a readable price-impact/minOut (intermittent, NOT high impact) — also auto-re-quoted internally; if still returned, ask the user to retry, do NOT route to main. (A genuine readable >1% impact stays terminal → main wallet.) Always show the quote first; do NOT run your own yes/no confirmation or Telegram Confirm/Cancel buttons — the system confirmation gate asks the user for YES when policy requires it.',
         input_schema: {
             type: 'object',
             properties: {
@@ -1529,7 +1529,8 @@ const handlers = {
     },
 
     // BAT-1036: autonomous classic-SPL token transfer from burner OR main.
-    // Token-2022 is fail-closed (route to main/MWA). The on-chain mint triple-pin
+    // Token-2022 is fail-closed on EVERY source, main included (the user sends it from
+    // their own wallet app; SAB-AUDIT-v55 gap 4). The on-chain mint triple-pin
     // (program-owner + decimals, + canonical-USDC decimals==6) runs BEFORE any
     // routing / reserve / build / sign, so a bad mint costs ZERO mutating calls
     // (read-only getAccountInfo / burner-status hydration only). Mirrors the
@@ -1564,7 +1565,7 @@ const handlers = {
         if (mv.owner === TOKEN_2022_PROGRAM) {
             return {
                 error: 'token_2022_send_unsupported',
-                reason: 'This is a Token-2022 mint. Autonomous Token-2022 transfers are not supported yet — send it from your main wallet (MWA) / wallet app instead.',
+                reason: 'This is a Token-2022 mint. SeekerClaw cannot send Token-2022 tokens from any wallet yet, the main wallet included — send it yourself from your wallet app. Do not retry with source="main".',
             };
         }
         if (mv.owner !== TOKEN_PROGRAM) {
