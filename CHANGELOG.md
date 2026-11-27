@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-27
+
 > **A security release.** The agent now works inside clearer limits: texts and
 > calls become drafts you send yourself, files and shell commands stay inside
 > the agent's workspace, and the app's internal connections are closed to agent

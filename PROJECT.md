@@ -277,17 +277,17 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Metric | Count |
 |--------|-------|
-| Total commits | 768 |
-| PRs merged | 364 (of 407 opened) |
+| Total commits | 836 |
+| PRs merged | 376 (of 419 opened) |
 | AI Providers | 5 (Claude, OpenAI, OpenRouter, xAI/Grok, Custom) |
 | Tools | 64 built-in on Telegram, 60 on Discord (18 Solana/Jupiter, 13 Android bridge, 6 memory, 6 file, 5 cron, 4 telegram [Telegram channel only], 3 system, 2 web, 2 skill, 2 wallet [wallet_status, wallet_set_caps], 1 session, 1 env, 1 agent_pay [x402]) + MCP dynamic |
 | Skills | 22 bundled (incl. paysh-catalog + burner-wallet); user-installed skills live on the device and are not counted |
 | Paysh-catalog entries | 44 across 10 services (OPT-IN only; 63 unsupported with structured "why not" reasons) |
-| Android Bridge endpoints | 42 (33 core routes in `AndroidBridge.kt` incl. `/ping`, plus 9 burner-wallet and Jupiter order-ownership routes in `BurnerBridgeEndpoints.kt`) |
+| Android Bridge endpoints | 43 (34 core routes in `AndroidBridge.kt` incl. `/ping`, plus 9 burner-wallet and Jupiter order-ownership routes in `BurnerBridgeEndpoints.kt`) |
 | Telegram commands | 17 (`/start` + 16 `/`-menu commands; aliases `/commands` → `/help` and `/skills` → `/skill` not counted) |
 | Channels | 2 (Telegram + Discord) |
-| Lines of JS | ~41,600 (81 agent source files: 39 top-level modules incl. main.js / message-handler.js / ai.js, tools/ [13 tool modules], providers/ [5 adapters], wallet/, payment/, confirmation/, jupiter/, caps/; excludes node_modules, vendored sql-wasm.js + markdown-it, and tests) |
-| Lines of Kotlin | ~37,500 (93 files in app/src/main/java; excludes ~10,000 lines of unit tests) |
+| Lines of JS | ~45,600 (93 agent source files: 47 top-level modules incl. main.js / message-handler.js / ai.js, tools/ [13 tool modules + index + 4 shell/send helpers], providers/ [5 adapters + index], wallet/, payment/, confirmation/, jupiter/, caps/; excludes node_modules, vendored sql-wasm.js + markdown-it, and tests) |
+| Lines of Kotlin | ~47,100 (122 files in app/src/main/java; excludes ~25,200 lines of unit tests) |
 | SQL.js tables | 5 (api_request_log, chunks, files, meta, sessions) |
 | Themes | 1 (DarkOps only) |
 
@@ -321,6 +321,7 @@ User (Telegram/Discord) <--HTTPS/WSS--> Channel API <--polling/WS--> Node.js Gat
 
 | Date | Feature | PR |
 |------|---------|-----|
+| 2026-11-27 | **Release: v2.4.0** — a security release with model updates: texts and calls become notification drafts the user sends (SMS/phone permissions removed), files, `js_eval` and shell commands stay inside the workspace, the app's internal ports are closed to agent code, and start-up verifies the agent bundle (BAT-1409); GPT-6.2 Sol and Opus 5.5 are the new OpenAI and Anthropic defaults, with ChatGPT sign-in moved off models it no longer serves (BAT-1661); the ChatGPT sign-in has its own token store (BAT-1157); Claude replays only current-turn reasoning and checks request size before sending (BAT-1664); a declined request always gets a reply (BAT-1705); a full disk can no longer erase agent memory (BAT-1734); the dashboard shows a stopped agent as Offline (BAT-1724); the agent reports how it is really connected (BAT-1728) and its self-knowledge matches the app (BAT-1727, SAB-AUDIT-v55 full + v56); live-test credentials come from 1Password (BAT-1714). | #459, #462, #463, #465, #466, #467, #468, #470, #471, #472, #473, #474 |
 | 2026-09-10 | **Release: v2.3.1** — packaging release with no functional changes from 2.3.0: version raised to 2.3.1 (version code 25) so the Google Play and Solana dApp Store builds carry the same version and version code. Provider setups, agent memory and settings are unchanged. | direct |
 | 2026-09-07 | **Release: v2.3.0** — four new models and newer defaults, plus fixes to things the app was quietly getting wrong about itself: Opus 5 (new Anthropic default) + Fable 5.1 (BAT-1315), Grok 4.6 (new xAI default, BAT-1316) and opt-in GPT-6 Astra, with the picker trimmed to the newest two per family (an already-selected older model keeps working); one SMS/call confirmation instead of two (BAT-1306), a `/version` that reports the running build (BAT-1309), build details that always match the running build (BAT-1293), a turn rejected for malformed reasoning no longer loops on its own saved progress (BAT-1290), the user's instruction kept on long tasks (BAT-1186), interrupted tasks resume the right goal (BAT-1283), Android 16 target (BAT-1187), UX polish pass + message text stripped from shared logs (BAT-1247), and the Google Play bundle verified before release (BAT-1308). | #446, #448, #449, #450, #452, #453, #457, #458 |
 | 2026-09-07 | Feat: **GPT-6 Astra in the OpenAI model picker** (BAT-1315 follow-up) — the generation above the GPT-5.6 family, verified live on both auth paths (API key on `/v1/responses`, ChatGPT sign-in on the Codex endpoint), so it joins the shared model list with no per-auth override. It heads the picker as the most capable option but is deliberately **not** the default: at $10 / $50 per MTok it costs 2.5× GPT-5.6 Sol ($4 / $20), which stays the default, so switching is an explicit opt-in. On-device context cap 200K, same as the rest of the OpenAI line. | #458 |
