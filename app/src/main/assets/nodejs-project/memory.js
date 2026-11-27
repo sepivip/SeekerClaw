@@ -171,9 +171,11 @@ function appendDailyMemory(content) {
     // leaves no partial entry behind. appendFileSync cannot be made all-or-nothing. Bytes, not
     // text: the existing file is copied exactly, as an append would leave it.
     // Known trade-off: this is read-then-replace, so a write to this file that completes between
-    // the read and the rename is lost. Agent writers cannot interleave (all are synchronous on the
-    // one Node thread); only an async fs write left running by the agent's own js_eval could land
-    // in that window. memory_save has been read-then-write since before BAT-1734.
+    // the read and the rename is lost. The in-process writers (daily_note, memory_save, write,
+    // edit) are synchronous on the one Node thread, so they cannot land in that window. Writers
+    // outside it can: an async fs write left running by js_eval, or a shell_exec child process
+    // (cp, mv, sed) still running from another turn, e.g. a cron turn, which runs alongside chat
+    // turns. memory_save has been read-then-write since before BAT-1734.
     const existing = fs.existsSync(dailyPath) ? fs.readFileSync(dailyPath) : Buffer.alloc(0);
     writeFileAtomicSync(dailyPath, Buffer.concat([existing, Buffer.from(entry, 'utf8')]));
     log('Daily memory updated', 'DEBUG');
