@@ -170,6 +170,10 @@ function appendDailyMemory(content) {
     // BAT-1734: rewrite the (small) daily file atomically instead of appending, so a failed note
     // leaves no partial entry behind. appendFileSync cannot be made all-or-nothing. Bytes, not
     // text: the existing file is copied exactly, as an append would leave it.
+    // Known trade-off: this is read-then-replace, so a write to this file that completes between
+    // the read and the rename is lost. Agent writers cannot interleave (all are synchronous on the
+    // one Node thread); only an async fs write left running by the agent's own js_eval could land
+    // in that window. memory_save has been read-then-write since before BAT-1734.
     const existing = fs.existsSync(dailyPath) ? fs.readFileSync(dailyPath) : Buffer.alloc(0);
     writeFileAtomicSync(dailyPath, Buffer.concat([existing, Buffer.from(entry, 'utf8')]));
     log('Daily memory updated', 'DEBUG');
