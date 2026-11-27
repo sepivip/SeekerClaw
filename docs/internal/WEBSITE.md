@@ -91,7 +91,7 @@ and tells you what went wrong instead of failing silently.
 
 ### 3. Social & Messaging (icon: chat)
 Telegram and Discord integration with reactions, file sharing, and vision analysis.
-Send SMS, make calls, manage contacts — your agent handles it all.
+Draft texts and calls you send with one tap, manage contacts — your agent handles it all.
 
 ### 4. Deep Device Control (icon: terminal)
 GPS location, camera with AI vision, app launching, clipboard, battery
@@ -217,7 +217,7 @@ reminders, research, and more. Export, import, and share skills as files.
 - NFT holdings viewer (Helius DAS API — regular + compressed NFTs)
 - Cron agent turns — scheduled jobs run full AI conversations
 - Session memory — agent remembers context across restarts
-- Multi-provider support (Claude + OpenAI + OpenRouter + xAI Grok + Custom OpenAI-compatible gateways) — newest models include Claude Opus 5 and Fable 5.1, GPT-6 Astra, and Grok 4.6
+- Multi-provider support (Claude + OpenAI + OpenRouter + xAI Grok + Custom OpenAI-compatible gateways) — newest models include Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5, GPT-6.2 Sol and Astra, and Grok 4.6
 - OAuth / ChatGPT subscription auth — connect your Claude Max or ChatGPT plan instead of paying per token
 - User-managed env vars — skill `requires.env` gates unlocked, paste-`.env` bulk import
 - Extended thinking on every provider (Anthropic, OpenAI, OpenRouter, Custom) — survives tool calls + `/resume`

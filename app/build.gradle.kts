@@ -52,8 +52,8 @@ fun signingProp(localKey: String, envKey: String): String? =
 // No product flavor or build type overrides versionName/versionCode (only
 // DISTRIBUTION/STORE_NAME and signing configs differ), so defaultConfig is the
 // sole definition and these four lines are the only place any of them appear.
-val appVersionName = "2.3.1"
-val appVersionCode = 25
+val appVersionName = "2.4.0"
+val appVersionCode = 26
 val openclawVersion = "2026.4.10"
 val nodejsVersion = "18 LTS"
 
