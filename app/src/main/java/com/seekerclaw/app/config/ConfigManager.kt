@@ -3773,6 +3773,51 @@ object ConfigManager {
     // ==================== Platform Info ====================
 
     /**
+     * BAT-1728: PLATFORM.md's `Auth:` line — how the agent will actually reach the provider, not
+     * only the saved choice. The agent reads this file about itself, so a saved "oauth" that is
+     * running on the API key must not say "OAuth".
+     *
+     * - Claude: setup token or API key, as selected.
+     * - OpenAI: the [OpenAIAuth] table on the same inputs [emitConfigJson] gives Node (the sign-in
+     *   token and the API key in this config), so the label is the transport Node picks.
+     * - xAI: [emittedAuthType] — a fresh oauth selection with no token runs on the API key; a dead
+     *   sign-in (reauth required) stays oauth and the agent asks the user to reconnect.
+     *
+     * The common cases keep the old labels ("OAuth", "API key"). Pure, no I/O.
+     */
+    internal fun platformAuthLabel(config: AppConfig?): String {
+        if (config == null) return "API key"
+        val selected = config.authType
+        return when (config.provider) {
+            "claude" -> if (selected == "setup_token") "Pro/Max Setup Token" else "API key"
+            "openai" -> when (
+                OpenAIAuth.effective(
+                    selectedAuth = selected,
+                    // The display predicate (save, emit and display agree): a value Node's
+                    // normalizeSecret empties is not usable, so it is not "signed in".
+                    hasUsableToken = nodeUsesSecret(config.openaiOAuthToken),
+                    hasApiKey = nodeUsesSecret(config.openaiApiKey),
+                )
+            ) {
+                OpenAIAuth.Effective.OAUTH -> "OAuth"
+                OpenAIAuth.Effective.API_KEY ->
+                    if (selected == "oauth") PLATFORM_AUTH_FALLBACK else "API key"
+                OpenAIAuth.Effective.RECONNECT -> PLATFORM_AUTH_RECONNECT
+            }
+            "xai" -> when {
+                selected != "oauth" -> "API key"
+                emittedAuthType(config) == "api_key" -> PLATFORM_AUTH_FALLBACK
+                config.xaiOAuthReauthRequired -> PLATFORM_AUTH_RECONNECT
+                else -> "OAuth"
+            }
+            else -> "API key"
+        }
+    }
+
+    internal const val PLATFORM_AUTH_FALLBACK = "API key (fallback: sign-in selected but not available)"
+    internal const val PLATFORM_AUTH_RECONNECT = "OAuth (not signed in: reconnect in Settings)"
+
+    /**
      * Generate PLATFORM.md with current device state.
      * Written on every service start so the agent has fresh device awareness.
      */
@@ -3843,12 +3888,7 @@ object ConfigManager {
             "xai" -> "xAI"
             else -> "Anthropic"
         }
-        // Auth type is relevant for Claude (api_key vs setup_token) and OAuth-capable providers.
-        val authLabel = when (provider) {
-            "claude" -> if (config?.authType == "setup_token") "Pro/Max Setup Token" else "API key"
-            "openai", "xai" -> if (config?.authType == "oauth") "OAuth" else "API key"
-            else -> "API key"
-        }
+        val authLabel = platformAuthLabel(config)
         val aiModel = config?.model ?: "claude-opus-5-5" // BAT-1315; pinned by ModelDefaultCopiesDriftTest
 
         // Timestamp

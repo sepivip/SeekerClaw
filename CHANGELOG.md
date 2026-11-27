@@ -119,6 +119,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Reset Config finishes or tells you what's left.** If it cannot confirm that
   a sign-in was removed, it keeps your settings, says what was and wasn't
   cleared, and offers Retry. A sign-in can't complete in the middle of a reset.
+- **The dashboard shows when the agent has stopped.** If the agent stops
+  without a Stop from the dashboard, for example after a force stop or an app
+  update, the dashboard now shows it as Offline and offers Deploy Agent,
+  instead of still showing it as Online. (BAT-1724)
+- **The Settings tab label fits at the largest font size** instead of wrapping
+  onto two lines. (BAT-1725)
+- **The agent says how it is really connected.** When ChatGPT or Grok sign-in
+  is selected but not available and the agent runs on your saved API key, it
+  now says so, instead of reporting that it is signed in. (BAT-1728)
+- **More accurate answers about the agent itself.** Its guidance now matches
+  the app on Token-2022 sends, burner conversions, which web addresses
+  `web_fetch` can open, what scheduled tasks record, and what happens on Stop,
+  and it can explain many more of the lines on the Logs screen. (BAT-1727)
 
 ## [2.3.1] - 2026-09-10
 

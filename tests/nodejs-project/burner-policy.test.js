@@ -1853,6 +1853,10 @@ async function runAsync(name, fn) {
         assert.strictEqual(r.error, 'token_2022_send_unsupported');
         assert.strictEqual(r.class, 'security');
         assert.match(r.reason, /transferFeeBps/);
+        // SAB-AUDIT-v55 gap 4: the security block prints this reason verbatim above its
+        // "Do NOT retry; use your wallet app" step, and a Token-2022 send is refused on
+        // every source — so the reason must never point at a main-wallet / MWA retry.
+        assert.ok(!/main wallet|MWA/i.test(r.reason), `reason must not suggest a main-wallet retry: ${r.reason}`);
     });
     check('rejects Token-2022 solana_send with invalid transferFeeBps (>10000)', () => {
         const r = policy._validateExpectedDeltaShape({

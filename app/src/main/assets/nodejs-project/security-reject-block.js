@@ -24,18 +24,28 @@
 // 2000-char limit. Telegram/console are larger still.
 const SECURITY_REJECT_REASON_CAP = 1200;
 
-// Codes that are a known fail-closed LIMITATION (not a suspicious tx) — for
-// these only, the correct guidance IS the main-wallet (MWA) fallback. Mirrors
+// Codes that are a known fail-closed LIMITATION (not a suspicious tx). Mirrors
 // the DIAGNOSTICS.md / ai.js door exception for the token_2022_* codes.
+// - token_2022_extension_unsupported: the main wallet (MWA) can still do it, so
+//   the guidance IS the MWA fallback.
+// - token_2022_send_unsupported: a Token-2022 SEND is refused on every source,
+//   main included (solana_send_token refuses the mint before any routing), so a
+//   main-wallet retry would only be refused again. The user sends it from their
+//   own wallet app (SAB-AUDIT-v55 gap 4).
 const MWA_FALLBACK_CODES = new Set([
-    'token_2022_send_unsupported',
     'token_2022_extension_unsupported',
+]);
+const WALLET_APP_ONLY_CODES = new Set([
+    'token_2022_send_unsupported',
 ]);
 
 // Fixed, code-mapped next-step guidance. Unknown security codes fall through to
 // the class default — so a future security code (e.g. BAT-1027's
 // drainer_undeclared_burner_ata) renders gracefully without a table edit.
 function securityRejectGuidance(code) {
+    if (WALLET_APP_ONLY_CODES.has(code)) {
+        return 'SeekerClaw cannot send Token-2022 tokens from any wallet yet, the main wallet included. Do NOT retry; the user sends it themselves from their wallet app.';
+    }
     if (MWA_FALLBACK_CODES.has(code)) {
         return 'This token is not autonomously supported by the burner. Retry the action from your main wallet (MWA) instead.';
     }
@@ -77,6 +87,7 @@ function buildSecurityRejectBlock(code, reason) {
 module.exports = {
     SECURITY_REJECT_REASON_CAP,
     MWA_FALLBACK_CODES,
+    WALLET_APP_ONLY_CODES,
     securityRejectGuidance,
     buildSecurityRejectBlock,
 };
