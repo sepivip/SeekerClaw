@@ -70,6 +70,8 @@ const LOAD_TARGETS = [
     'model-catalog.js',
     // BAT-1409 P1-E: pure path rule (fs + path only, no config.js, no IO at load).
     'workspace-path.js',
+    // BAT-1734: all-or-nothing file writes (fs + path + crypto only, nothing runs at load).
+    'atomic-write.js',
     // BAT-1409 P1-F: js_eval guards (no config.js; nothing runs at load) and the process-wide
     // socket guards (patches only when install() is called).
     'js-eval-guard.js',

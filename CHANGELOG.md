@@ -71,6 +71,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A full disk can no longer erase your agent's memory.** If storage ran out
+  while the agent was saving to its long-term memory, the memory file could be
+  left cut short or empty. Saving memory, daily notes and workspace files is
+  now all-or-nothing: a save that fails leaves the file exactly as it was, and
+  the agent can retry once space is freed. (BAT-1734)
 - **A declined request now gets a reply instead of silence.** When the model
   declines a request, or the provider's content filter blocks the reply, you
   now get a short message saying so, with what to try next (rephrase, switch

@@ -9,6 +9,7 @@ const {
 } = require('../config');
 
 const channel = require('../channel');
+const { writeFileAtomicSync } = require('../atomic-write');
 
 const {
     redactSecrets, rebuildRedactPatterns, detectSuspiciousPatterns,
@@ -216,7 +217,9 @@ const handlers = {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-        fs.writeFileSync(filePath, input.content, 'utf8');
+        // BAT-1734: all-or-nothing, so a failed write (ENOSPC) never leaves MEMORY.md, SOUL.md or
+        // any other workspace file truncated.
+        writeFileAtomicSync(filePath, input.content);
 
         // BAT-236: If agent wrote to workspace root agent_settings.json, re-sync API keys
         if (filePath === path.join(workDir, AGENT_SETTINGS_FILE)) {
@@ -272,7 +275,7 @@ const handlers = {
             }
         }
 
-        fs.writeFileSync(filePath, content, 'utf8');
+        writeFileAtomicSync(filePath, content); // BAT-1734: all-or-nothing, as in write
 
         // BAT-236: If agent edited workspace root agent_settings.json, re-sync API keys
         if (filePath === path.join(workDir, AGENT_SETTINGS_FILE)) {
