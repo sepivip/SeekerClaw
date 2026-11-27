@@ -490,7 +490,7 @@ grep -iE "WebSearch.*failed|search error" node_debug.log
 ## Memory
 
 ### memory_save Fails (Filesystem Full)
-**Symptoms:** `memory_save` or `daily_note` returns `error: "Tool execution failed: ENOSPC: no space left on device…"` (logged as `[ToolError]`). The write did not complete, and the file may be damaged: `memory_save` rewrites MEMORY.md in place, so it can be left cut short, and `daily_note` can leave a partial entry at the end of today's file. Free storage first, then read the file and repair it before retrying.
+**Symptoms:** `memory_save`, `daily_note`, `write` or `edit` returns `error: "Tool execution failed: ENOSPC: no space left on device…"` (logged as `[ToolError]`). Nothing was saved, and the file is unchanged: these tools write a temporary copy and swap it in only when it is complete, so a failure leaves MEMORY.md, today's daily file or the edited file exactly as it was. Free storage first, then retry the save. A leftover file whose name is the original's plus `.<id>.tmp` (for example `MEMORY.md.4211.9f3a01c2.tmp`) comes from a write interrupted by a crash; it is never read as memory and can be deleted.
 **Check:**
 ```
 grep -iE "memory_save|ENOSPC|disk.*full|write.*fail" node_debug.log

@@ -143,6 +143,7 @@ jobs:
             reasoning-pipeline \
             module-paths-preamble \
             file-tools-confinement \
+            atomic-write \
             js-eval-confinement \
             bridge-port-guard \
             shell-grammar \

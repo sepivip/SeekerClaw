@@ -47,6 +47,7 @@ const {
     loadSoul, loadBootstrap, loadIdentity, loadUser,
     loadMemory, loadDailyMemory,
 } = require('./memory');
+const { writeFileAtomicSync } = require('./atomic-write'); // BAT-1734
 
 const { findMatchingSkills, loadSkills } = require('./skills');
 const { getDb, markDbDirty, markDbSummaryDirty, indexMemoryFiles, saveSession, getRecentSessions } = require('./database');
@@ -629,7 +630,8 @@ async function saveSessionSummary(chatId, trigger, { force = false, skipIndex = 
         const archiveModel = resolveActiveModel();
         const header = `# Session Summary — ${localTimestamp()}\n\n`;
         const meta = `> Trigger: ${trigger} | Exchanges: ${track.messageCount} | Model: ${archiveModel}\n\n`;
-        fs.writeFileSync(finalPath, header + meta + redactSecrets(summary) + '\n', 'utf8');
+        // BAT-1734: all-or-nothing, so a full disk never leaves a partial summary to be indexed.
+        writeFileAtomicSync(finalPath, header + meta + redactSecrets(summary) + '\n');
 
         log(`[SessionSummary] Saved: ${path.basename(finalPath)} (trigger: ${trigger})`, 'DEBUG');
 

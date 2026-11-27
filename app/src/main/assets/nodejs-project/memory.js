@@ -9,6 +9,7 @@ const {
     workDir, log, localTimestamp, localDateStr,
     SOUL_PATH, MEMORY_PATH, HEARTBEAT_PATH, MEMORY_DIR,
 } = require('./config');
+const { writeFileAtomicSync } = require('./atomic-write');
 
 // ============================================================================
 // DATABASE INJECTION (db lives in main.js, injected via setDb())
@@ -142,8 +143,10 @@ function loadMemory() {
     return '';
 }
 
+// BAT-1734: all-or-nothing. A failed save (e.g. ENOSPC) throws and leaves the previous MEMORY.md
+// byte for byte; writeFileSync truncated it first and could leave it short or empty.
 function saveMemory(content) {
-    fs.writeFileSync(MEMORY_PATH, content, 'utf8');
+    writeFileAtomicSync(MEMORY_PATH, content);
     log('Memory updated', 'DEBUG');
 }
 
@@ -164,7 +167,11 @@ function appendDailyMemory(content) {
     const dailyPath = getDailyMemoryPath();
     const timestamp = new Date().toLocaleTimeString();
     const entry = `\n## ${timestamp}\n${content}\n`;
-    fs.appendFileSync(dailyPath, entry, 'utf8');
+    // BAT-1734: rewrite the (small) daily file atomically instead of appending, so a failed note
+    // leaves no partial entry behind. appendFileSync cannot be made all-or-nothing. Bytes, not
+    // text: the existing file is copied exactly, as an append would leave it.
+    const existing = fs.existsSync(dailyPath) ? fs.readFileSync(dailyPath) : Buffer.alloc(0);
+    writeFileAtomicSync(dailyPath, Buffer.concat([existing, Buffer.from(entry, 'utf8')]));
     log('Daily memory updated', 'DEBUG');
 }
 
